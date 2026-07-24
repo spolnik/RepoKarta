@@ -148,3 +148,44 @@ func TestIndexConfigurationChangeQueuesRepositoriesOnce(t *testing.T) {
 		t.Fatalf("index state = %q, want ready", repositories[0].IndexState)
 	}
 }
+
+func TestSyncRepositoriesCanonicalizesDuplicatesAndRemovesStaleRows(t *testing.T) {
+	storage, err := Open(filepath.Join(t.TempDir(), "repokarta.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer storage.Close()
+
+	root := t.TempDir()
+	currentPath := filepath.Join(root, "current")
+	aliasPath := filepath.Join(root, "nested", "..", "current")
+	stalePath := filepath.Join(root, "stale")
+	now := time.Now()
+	if err := storage.SyncRepositories(context.Background(), []catalog.Repository{
+		{Name: "duplicate", Path: currentPath, ScanState: "ready", DiscoveredAt: now},
+		{Name: "duplicate", Path: aliasPath, ScanState: "ready", DiscoveredAt: now},
+		{Name: "stale", Path: stalePath, ScanState: "ready", DiscoveredAt: now},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	repositories, err := storage.ListRepositories(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repositories) != 2 {
+		t.Fatalf("initial repositories = %#v, want one canonical duplicate and one stale row", repositories)
+	}
+
+	if err := storage.SyncRepositories(context.Background(), []catalog.Repository{
+		{Name: "duplicate", Path: aliasPath, ScanState: "ready", DiscoveredAt: now},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	repositories, err = storage.ListRepositories(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repositories) != 1 || repositories[0].Path != canonicalRepositoryPath(currentPath) {
+		t.Fatalf("reconciled repositories = %#v", repositories)
+	}
+}

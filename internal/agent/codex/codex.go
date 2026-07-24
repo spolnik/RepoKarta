@@ -65,7 +65,11 @@ func (a *Adapter) Status(ctx context.Context) agent.Status {
 	if status.Authenticated {
 		status.Detail = "Uses your existing ChatGPT/Codex login"
 	} else {
-		status.Detail = strings.TrimSpace(string(output))
+		detail := strings.TrimSpace(string(output))
+		if detail == "" {
+			detail = "Run `codex login` from the same account and environment that launches RepoKarta"
+		}
+		status.Detail = "Not authenticated in RepoKarta's launch context. " + detail
 	}
 	return status
 }

@@ -5,6 +5,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"time"
 
 	"github.com/spolnik/RepoKarta/internal/catalog"
@@ -153,6 +156,7 @@ func (s *Store) Close() error {
 // SyncRepositories updates discovered repositories without discarding existing
 // indexing state. Repositories no longer below the configured root are removed.
 func (s *Store) SyncRepositories(ctx context.Context, repositories []catalog.Repository) error {
+	repositories = reconcileRepositoryPaths(repositories)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -222,6 +226,40 @@ ON CONFLICT(path) DO UPDATE SET
 	}
 
 	return tx.Commit()
+}
+
+func reconcileRepositoryPaths(repositories []catalog.Repository) []catalog.Repository {
+	reconciled := make([]catalog.Repository, 0, len(repositories))
+	seen := make(map[string]struct{}, len(repositories))
+	for _, repository := range repositories {
+		repository.Path = canonicalRepositoryPath(repository.Path)
+		key := repositoryPathKey(repository.Path)
+		if _, duplicate := seen[key]; duplicate {
+			continue
+		}
+		seen[key] = struct{}{}
+		reconciled = append(reconciled, repository)
+	}
+	return reconciled
+}
+
+func canonicalRepositoryPath(path string) string {
+	path = filepath.Clean(path)
+	if absolute, err := filepath.Abs(path); err == nil {
+		path = absolute
+	}
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = filepath.Clean(resolved)
+	}
+	return path
+}
+
+func repositoryPathKey(path string) string {
+	path = filepath.ToSlash(filepath.Clean(path))
+	if runtime.GOOS == "windows" {
+		return strings.ToLower(path)
+	}
+	return path
 }
 
 // ReplaceRepositories is retained for compatibility with the M0 API.

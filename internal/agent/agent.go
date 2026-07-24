@@ -12,6 +12,7 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // EventType identifies one streamed conversation event.
@@ -217,7 +218,7 @@ func (m *Manager) Send(ctx context.Context, request TurnRequest, emit func(Event
 		return emit(Event{Type: EventInterrupted, ConversationID: conversationID})
 	} else if err != nil {
 		m.dropConversation(conversationID, conversation)
-		return err
+		return m.providerSessionError(ctx, conversation.provider, err)
 	}
 	if m.citations != nil {
 		sources := m.citations.List(conversationID)
@@ -282,7 +283,7 @@ func (m *Manager) conversation(ctx context.Context, request TurnRequest) (*manag
 		return nil, "", fmt.Errorf("%s is not available: %s", status.Name, status.Detail)
 	}
 	if !status.Authenticated {
-		return nil, "", fmt.Errorf("%s is not authenticated: %s", status.Name, status.Detail)
+		return nil, "", fmt.Errorf("%s is not authenticated in RepoKarta's launch context: %s", status.Name, status.Detail)
 	}
 	if len(request.Images) > 0 && !status.ImageInput {
 		return nil, "", fmt.Errorf("%s does not support image input", status.Name)
@@ -303,7 +304,17 @@ func (m *Manager) conversation(ctx context.Context, request TurnRequest) (*manag
 		MCPToken:       m.mcpToken,
 	})
 	if err != nil {
-		return nil, "", err
+		probeContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		refreshed := adapter.Status(probeContext)
+		cancel()
+		switch {
+		case !refreshed.Available:
+			return nil, "", fmt.Errorf("%s became unavailable in RepoKarta's launch context: %s", status.Name, refreshed.Detail)
+		case !refreshed.Authenticated:
+			return nil, "", fmt.Errorf("%s is not authenticated in RepoKarta's launch context: %s", status.Name, refreshed.Detail)
+		default:
+			return nil, "", fmt.Errorf("start %s in RepoKarta's launch context: %w", status.Name, err)
+		}
 	}
 	conversation := &managedConversation{
 		provider:   adapter.ID(),
@@ -317,6 +328,27 @@ func (m *Manager) conversation(ctx context.Context, request TurnRequest) (*manag
 	m.conversations[conversationID] = conversation
 	m.mu.Unlock()
 	return conversation, conversationID, nil
+}
+
+func (m *Manager) providerSessionError(ctx context.Context, providerID string, sessionError error) error {
+	if errors.Is(sessionError, context.Canceled) || errors.Is(sessionError, context.DeadlineExceeded) {
+		return sessionError
+	}
+	adapter := m.adapter(providerID)
+	if adapter == nil {
+		return sessionError
+	}
+	probeContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	status := adapter.Status(probeContext)
+	cancel()
+	switch {
+	case !status.Available:
+		return fmt.Errorf("%s became unavailable in RepoKarta's launch context: %s", status.Name, status.Detail)
+	case !status.Authenticated:
+		return fmt.Errorf("%s is not authenticated in RepoKarta's launch context: %s", status.Name, status.Detail)
+	default:
+		return sessionError
+	}
 }
 
 func contains(values []string, target string) bool {

@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -190,6 +191,109 @@ func TestManagerRejectsProviderSwitch(t *testing.T) {
 	}, func(Event) error { return nil })
 	if err == nil {
 		t.Fatal("expected provider switch error")
+	}
+}
+
+type changingAuthAdapter struct {
+	statuses    []bool
+	statusCalls int
+	startCalls  int
+	startError  error
+	sendError   error
+}
+
+func (a *changingAuthAdapter) ID() string { return "changing-auth" }
+
+func (a *changingAuthAdapter) Status(context.Context) Status {
+	index := min(a.statusCalls, len(a.statuses)-1)
+	a.statusCalls++
+	authenticated := len(a.statuses) > 0 && a.statuses[index]
+	return Status{
+		ID:            a.ID(),
+		Name:          "Changing Auth",
+		Available:     true,
+		Authenticated: authenticated,
+		Detail:        "authentication follows the process that launched RepoKarta",
+	}
+}
+
+func (a *changingAuthAdapter) Start(context.Context, SessionConfig) (Session, error) {
+	a.startCalls++
+	if a.startError != nil {
+		return nil, a.startError
+	}
+	return &failingAuthSession{sendError: a.sendError}, nil
+}
+
+type failingAuthSession struct {
+	sendError error
+}
+
+func (s *failingAuthSession) Send(context.Context, Turn, func(Event) error) error {
+	return s.sendError
+}
+
+func (*failingAuthSession) Interrupt(context.Context) error { return nil }
+func (*failingAuthSession) Close() error                    { return nil }
+
+func TestManagerRechecksCachedProviderReadinessForNewConversation(t *testing.T) {
+	adapter := &changingAuthAdapter{statuses: []bool{true, false}}
+	manager := NewManager("", "", "", adapter)
+	defer manager.Close()
+
+	statuses := manager.Statuses(context.Background())
+	if len(statuses) != 1 || !statuses[0].Authenticated {
+		t.Fatalf("initial statuses = %#v", statuses)
+	}
+	err := manager.Send(context.Background(), TurnRequest{
+		Provider: adapter.ID(),
+		Message:  "hello",
+	}, func(Event) error { return nil })
+	if err == nil || !strings.Contains(err.Error(), "launch context") {
+		t.Fatalf("send error = %v, want launch-context authentication error", err)
+	}
+	if adapter.statusCalls != 2 || adapter.startCalls != 0 {
+		t.Fatalf("status calls = %d, start calls = %d", adapter.statusCalls, adapter.startCalls)
+	}
+}
+
+func TestManagerRechecksAuthenticationAfterProviderStartupFailure(t *testing.T) {
+	adapter := &changingAuthAdapter{
+		statuses:   []bool{true, false},
+		startError: errors.New("provider stream ended"),
+	}
+	manager := NewManager("", "", "", adapter)
+	defer manager.Close()
+
+	err := manager.Send(context.Background(), TurnRequest{
+		Provider: adapter.ID(),
+		Message:  "hello",
+	}, func(Event) error { return nil })
+	if err == nil || !strings.Contains(err.Error(), "not authenticated in RepoKarta's launch context") {
+		t.Fatalf("send error = %v, want refreshed launch-context authentication error", err)
+	}
+	if adapter.statusCalls != 2 || adapter.startCalls != 1 {
+		t.Fatalf("status calls = %d, start calls = %d", adapter.statusCalls, adapter.startCalls)
+	}
+}
+
+func TestManagerRechecksAuthenticationAfterProviderSessionFailure(t *testing.T) {
+	adapter := &changingAuthAdapter{
+		statuses:  []bool{true, false},
+		sendError: errors.New("provider stream ended"),
+	}
+	manager := NewManager("", "", "", adapter)
+	defer manager.Close()
+
+	err := manager.Send(context.Background(), TurnRequest{
+		Provider: adapter.ID(),
+		Message:  "hello",
+	}, func(Event) error { return nil })
+	if err == nil || !strings.Contains(err.Error(), "not authenticated in RepoKarta's launch context") {
+		t.Fatalf("send error = %v, want refreshed launch-context authentication error", err)
+	}
+	if adapter.statusCalls != 2 || adapter.startCalls != 1 {
+		t.Fatalf("status calls = %d, start calls = %d", adapter.statusCalls, adapter.startCalls)
 	}
 }
 

@@ -10,6 +10,8 @@ M2 conversation slice:
 
 - regular, linked-worktree, and bare Git repository discovery;
 - origin, default revision, HEAD, scan, and index metadata in SQLite;
+- canonical path reconciliation that removes stale and duplicate catalogue rows
+  on every discovery;
 - native Zoekt indexing on Windows amd64, macOS arm64, and Linux;
 - incremental reindexing when a repository HEAD changes;
 - literal, regular-expression, and native Zoekt query modes;
@@ -82,9 +84,11 @@ Search works without an AI provider or API key. Literal mode is the default;
 regular-expression mode treats the whole query as a regex; Zoekt mode exposes
 boolean, `repo:`, `lang:`, `file:`, `sym:`, and other native Zoekt syntax.
 RepoKarta enables symbol indexing automatically when `universal-ctags` is on
-`PATH` (or `CTAGS_COMMAND` is set). If it is not available, `sym:` searches
-return a machine-readable and visible warning instead of a misleading silent
-zero.
+`PATH`, or when `ctags`/`CTAGS_COMMAND` identifies itself as Universal Ctags via
+`--version`. This supports Homebrew's `ctags` name without accidentally enabling
+the BSD ctags shipped by macOS. If Universal Ctags is unavailable, `sym:`
+searches return a machine-readable and visible warning instead of a misleading
+silent zero.
 
 ## JSON API and MCP
 
@@ -131,6 +135,13 @@ RepoKarta never receives the provider password or subscription credential. It
 starts the installed harness as a child process and gives it a temporary bearer
 token for RepoKarta's local MCP endpoint. The browser shows whether each
 provider is installed and authenticated.
+
+Provider authentication is inherited from the account, environment, and process
+tree that launched RepoKarta. Starting it from another agent, `launchd`, a
+service, or CI can therefore show Claude or Codex as logged out even when an
+interactive terminal is logged in. RepoKarta rechecks authentication when each
+new conversation starts and again after a harness startup failure; launch it
+from the same session where `codex login` or `claude auth login` succeeds.
 
 Override CLI discovery when needed:
 

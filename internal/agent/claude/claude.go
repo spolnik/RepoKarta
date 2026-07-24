@@ -70,7 +70,7 @@ func (a *Adapter) Status(ctx context.Context) agent.Status {
 				status.Detail += " (" + auth.AuthMethod + ")"
 			}
 		} else {
-			status.Detail = "Run `claude auth login` to connect your account"
+			status.Detail = "Not authenticated in RepoKarta's launch context. Run `claude auth login` from the same account and environment that launches RepoKarta"
 		}
 		return status
 	}

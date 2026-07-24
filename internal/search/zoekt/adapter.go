@@ -59,16 +59,35 @@ func New(indexDirectory string) (*Adapter, error) {
 }
 
 func discoverCTags() string {
-	candidates := []string{strings.TrimSpace(os.Getenv("CTAGS_COMMAND")), "universal-ctags"}
+	return discoverCTagsWith(
+		strings.TrimSpace(os.Getenv("CTAGS_COMMAND")),
+		exec.LookPath,
+		isUniversalCTags,
+	)
+}
+
+func discoverCTagsWith(configured string, lookPath func(string) (string, error), verify func(string) bool) string {
+	candidates := []string{configured, "universal-ctags", "ctags"}
 	for _, candidate := range candidates {
 		if candidate == "" {
 			continue
 		}
-		if resolved, err := exec.LookPath(candidate); err == nil {
+		if resolved, err := lookPath(candidate); err == nil && verify(resolved) {
 			return resolved
 		}
 	}
 	return ""
+}
+
+func isUniversalCTags(command string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, command, "--version").CombinedOutput()
+	return err == nil && isUniversalCTagsVersion(output)
+}
+
+func isUniversalCTagsVersion(output []byte) bool {
+	return strings.Contains(strings.ToLower(string(output)), "universal ctags")
 }
 
 // IndexConfiguration changes when existing shards must be rebuilt.

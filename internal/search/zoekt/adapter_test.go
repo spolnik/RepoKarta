@@ -19,6 +19,66 @@ func TestDiscoverCTagsTreatsMissingConfiguredCommandAsUnavailable(t *testing.T) 
 	}
 }
 
+func TestDiscoverCTagsAcceptsHomebrewNameOnlyWhenItIsUniversal(t *testing.T) {
+	paths := map[string]string{
+		"universal-ctags": "",
+		"ctags":           "/opt/homebrew/bin/ctags",
+	}
+	found := discoverCTagsWith(
+		"",
+		func(candidate string) (string, error) {
+			if path := paths[candidate]; path != "" {
+				return path, nil
+			}
+			return "", exec.ErrNotFound
+		},
+		func(command string) bool { return command == "/opt/homebrew/bin/ctags" },
+	)
+	if found != "/opt/homebrew/bin/ctags" {
+		t.Fatalf("discoverCTagsWith() = %q, want Homebrew ctags", found)
+	}
+}
+
+func TestDiscoverCTagsRejectsBSDCTagsAndContinues(t *testing.T) {
+	found := discoverCTagsWith(
+		"/usr/bin/ctags",
+		func(candidate string) (string, error) {
+			switch candidate {
+			case "/usr/bin/ctags", "ctags":
+				return "/usr/bin/ctags", nil
+			case "universal-ctags":
+				return "/usr/local/bin/universal-ctags", nil
+			default:
+				return "", exec.ErrNotFound
+			}
+		},
+		func(command string) bool { return command == "/usr/local/bin/universal-ctags" },
+	)
+	if found != "/usr/local/bin/universal-ctags" {
+		t.Fatalf("discoverCTagsWith() = %q, want verified Universal Ctags", found)
+	}
+}
+
+func TestUniversalCTagsVersionDetectionRejectsBSDAndExuberant(t *testing.T) {
+	tests := []struct {
+		name   string
+		output string
+		want   bool
+	}{
+		{name: "universal", output: "Universal Ctags 6.2.0, Copyright (C) Universal Ctags Team", want: true},
+		{name: "homebrew universal", output: "Universal Ctags 6.1.0(p6.1.20240630.0)", want: true},
+		{name: "bsd", output: "usage: ctags [-BFadtuwvx] [-f tagsfile] file ...", want: false},
+		{name: "exuberant", output: "Exuberant Ctags 5.8, Copyright (C) 1996-2009 Darren Hiebert", want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := isUniversalCTagsVersion([]byte(test.output)); got != test.want {
+				t.Fatalf("isUniversalCTagsVersion(%q) = %v, want %v", test.output, got, test.want)
+			}
+		})
+	}
+}
+
 func TestAdapterIndexesAndSearchesRepositoryOnNativePlatform(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git is not installed")
