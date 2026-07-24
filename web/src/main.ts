@@ -193,6 +193,13 @@ type DebugLogger = {
   open: () => void;
 };
 
+type MermaidAPI = typeof import("mermaid")["default"];
+
+let mermaidLoader: Promise<MermaidAPI> | undefined;
+let mermaidRenderQueue: Promise<void> = Promise.resolve();
+let mermaidDiagramID = 0;
+const markdownRenderRevisions = new WeakMap<HTMLElement, number>();
+
 function describeError(error: unknown): Record<string, unknown> {
   if (error instanceof Error) {
     return {
@@ -364,7 +371,102 @@ async function probeServerHealth(debug: DebugLogger): Promise<void> {
   }
 }
 
-function renderAssistantMarkdown(target: HTMLElement, markdown: string): void {
+async function loadMermaid(): Promise<MermaidAPI> {
+  if (!mermaidLoader) {
+    mermaidLoader = import("mermaid")
+      .then(({ default: mermaid }) => {
+        mermaid.initialize({
+          startOnLoad: false,
+          securityLevel: "strict",
+          suppressErrorRendering: true,
+          maxTextSize: 50_000,
+          maxEdges: 500,
+          htmlLabels: false,
+          theme: "base",
+          themeVariables: {
+            background: "#080b10",
+            primaryColor: "#111827",
+            primaryTextColor: "#e2e8f0",
+            primaryBorderColor: "#34d399",
+            lineColor: "#64748b",
+            secondaryColor: "#1e1b4b",
+            tertiaryColor: "#101318",
+            noteBkgColor: "#172033",
+            noteBorderColor: "#8b5cf6",
+            noteTextColor: "#e2e8f0",
+            fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif"
+          },
+          flowchart: {
+            htmlLabels: false,
+            useMaxWidth: true
+          },
+          sequence: {
+            useMaxWidth: true
+          }
+        });
+        return mermaid;
+      })
+      .catch((error: unknown) => {
+        mermaidLoader = undefined;
+        throw error;
+      });
+  }
+  return mermaidLoader;
+}
+
+async function renderMermaidDiagram(
+  target: HTMLElement,
+  canvas: HTMLElement,
+  source: string,
+  revision: number,
+  index: number,
+  debug?: DebugLogger
+): Promise<void> {
+  const started = performance.now();
+  try {
+    const mermaid = await loadMermaid();
+    const result = await mermaid.render(`repokarta-mermaid-${++mermaidDiagramID}`, source);
+    if (markdownRenderRevisions.get(target) !== revision || !canvas.isConnected) {
+      return;
+    }
+    // Strict mode is locked in the site config, so diagram directives cannot
+    // enable HTML labels or click actions in this generated SVG.
+    canvas.innerHTML = result.svg;
+    canvas.classList.remove("mermaid-diagram-loading");
+    canvas.setAttribute("aria-label", `${result.diagramType} diagram`);
+    debug?.add("info", "chat.diagram.rendered", {
+      index,
+      type: result.diagramType,
+      duration_ms: Math.round(performance.now() - started)
+    });
+  } catch (error: unknown) {
+    if (markdownRenderRevisions.get(target) !== revision || !canvas.isConnected) {
+      return;
+    }
+    canvas.classList.remove("mermaid-diagram-loading");
+    canvas.classList.add("mermaid-diagram-error");
+    canvas.removeAttribute("role");
+    canvas.textContent = "This Mermaid diagram could not be rendered. Its source is available below.";
+    const sourceDetails = canvas.parentElement?.querySelector<HTMLDetailsElement>(".mermaid-diagram-source");
+    if (sourceDetails) {
+      sourceDetails.open = true;
+    }
+    debug?.add("warn", "chat.diagram.render-failed", {
+      index,
+      error_type: error instanceof Error ? error.name : "UnknownError",
+      duration_ms: Math.round(performance.now() - started)
+    });
+  }
+}
+
+function renderAssistantMarkdown(
+  target: HTMLElement,
+  markdown: string,
+  debug?: DebugLogger,
+  renderDiagrams = false
+): void {
+  const revision = (markdownRenderRevisions.get(target) ?? 0) + 1;
+  markdownRenderRevisions.set(target, revision);
   const rendered = marked.parse(markdown, {
     async: false,
     breaks: false,
@@ -381,7 +483,40 @@ function renderAssistantMarkdown(target: HTMLElement, markdown: string): void {
     link.rel = "noopener noreferrer";
     link.classList.add("conversation-source-link");
   });
-  target.querySelectorAll<HTMLElement>("pre code").forEach((code) => {
+  target.querySelectorAll<HTMLElement>("pre code").forEach((code, index) => {
+    if (code.classList.contains("language-mermaid")) {
+      if (!renderDiagrams) {
+        return;
+      }
+      const pre = code.closest("pre");
+      if (!pre) {
+        return;
+      }
+      const source = code.textContent ?? "";
+      const figure = document.createElement("figure");
+      figure.className = "mermaid-diagram";
+      const canvas = document.createElement("div");
+      canvas.className = "mermaid-diagram-canvas mermaid-diagram-loading";
+      canvas.setAttribute("role", "img");
+      canvas.setAttribute("aria-label", "Rendering Mermaid diagram");
+      canvas.textContent = "Rendering diagram…";
+      const sourceDetails = document.createElement("details");
+      sourceDetails.className = "mermaid-diagram-source";
+      const sourceSummary = document.createElement("summary");
+      sourceSummary.textContent = "View Mermaid source";
+      sourceDetails.append(sourceSummary, pre.cloneNode(true));
+      figure.append(canvas, sourceDetails);
+      pre.replaceWith(figure);
+      mermaidRenderQueue = mermaidRenderQueue.then(
+        () => renderMermaidDiagram(target, canvas, source, revision, index + 1, debug)
+      );
+      return;
+    }
+    const languageClass = Array.from(code.classList).find((className) => className.startsWith("language-"));
+    const language = languageClass?.slice("language-".length);
+    if (language && !hljs.getLanguage(language)) {
+      return;
+    }
     hljs.highlightElement(code);
   });
 }
@@ -662,7 +797,7 @@ function enableConversations(debug?: DebugLogger): void {
             deltaEvents++;
             answerCharacters += message.text.length;
             answerText += message.text;
-            renderAssistantMarkdown(answer, answerText);
+            renderAssistantMarkdown(answer, answerText, debug);
           } else if (message.type === "sources" && message.sources?.length) {
             debug?.add("info", "chat.stream.sources", {
               count: message.sources.length
@@ -684,6 +819,9 @@ function enableConversations(debug?: DebugLogger): void {
             }
           } else if (message.type === "done") {
             streamCompleted = true;
+            if (answer) {
+              renderAssistantMarkdown(answer, answerText, debug, true);
+            }
             debug?.add("info", "chat.stream.completed", {
               delta_events: deltaEvents,
               answer_characters: answerCharacters,
@@ -700,6 +838,9 @@ function enableConversations(debug?: DebugLogger): void {
         messages.scrollTop = messages.scrollHeight;
         if (done) {
           if (!streamCompleted) {
+            if (answer) {
+              renderAssistantMarkdown(answer, answerText, debug, true);
+            }
             debug?.add("warn", "chat.stream.closed-without-done", {
               delta_events: deltaEvents,
               answer_characters: answerCharacters

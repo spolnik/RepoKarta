@@ -314,6 +314,87 @@ a.brand-mark:hover,
   line-height: 1.35rem;
 }
 
+.mermaid-diagram {
+  max-width: 100%;
+  margin: 0.9rem 0;
+  overflow: hidden;
+  border: 1px solid rgb(52 211 153 / 0.14);
+  border-radius: 0.72rem;
+  background:
+    radial-gradient(circle at 50% 0%, rgb(52 211 153 / 0.055), transparent 44%),
+    rgb(2 6 23 / 0.66);
+}
+
+.mermaid-diagram-canvas {
+  min-height: 8rem;
+  overflow: auto;
+  padding: 1rem;
+}
+
+.mermaid-diagram-canvas svg {
+  display: block;
+  width: 100%;
+  min-width: 28rem;
+  height: auto;
+  margin: 0 auto;
+}
+
+.mermaid-diagram-loading,
+.mermaid-diagram-error {
+  display: grid;
+  min-width: 0;
+  place-items: center;
+  color: rgb(100 116 139);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  text-align: center;
+}
+
+.mermaid-diagram-loading {
+  animation: mermaid-pulse 1.4s ease-in-out infinite;
+}
+
+.mermaid-diagram-error {
+  color: rgb(251 191 36);
+}
+
+.mermaid-diagram-source {
+  border-top: 1px solid rgb(255 255 255 / 0.055);
+  color: rgb(100 116 139);
+  font-family: var(--font-mono);
+  font-size: 0.64rem;
+}
+
+.mermaid-diagram-source summary {
+  cursor: pointer;
+  padding: 0.55rem 0.75rem;
+  transition: color 150ms ease;
+  user-select: none;
+}
+
+.mermaid-diagram-source summary:hover {
+  color: rgb(167 139 250);
+}
+
+.conversation-message-assistant .conversation-content .mermaid-diagram-source pre {
+  margin: 0;
+  border: 0;
+  border-top: 1px solid rgb(255 255 255 / 0.04);
+  border-radius: 0;
+  background: rgb(0 0 0 / 0.18);
+}
+
+@keyframes mermaid-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
 .conversation-message-assistant .conversation-content blockquote {
   margin: 0.8rem 0;
   border-left: 2px solid rgb(167 139 250 / 0.5);
