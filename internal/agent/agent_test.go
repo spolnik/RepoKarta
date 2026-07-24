@@ -8,17 +8,25 @@ import (
 type fakeAdapter struct {
 	id       string
 	started  int
+	configs  []SessionConfig
 	sessions []*fakeSession
 }
 
 func (a *fakeAdapter) ID() string { return a.id }
 
 func (a *fakeAdapter) Status(context.Context) Status {
-	return Status{ID: a.id, Name: a.id, Available: true, Authenticated: true}
+	return Status{
+		ID:            a.id,
+		Name:          a.id,
+		Available:     true,
+		Authenticated: true,
+		Efforts:       []string{"low", "high"},
+	}
 }
 
-func (a *fakeAdapter) Start(_ context.Context, _ SessionConfig) (Session, error) {
+func (a *fakeAdapter) Start(_ context.Context, config SessionConfig) (Session, error) {
 	a.started++
+	a.configs = append(a.configs, config)
 	session := &fakeSession{}
 	a.sessions = append(a.sessions, session)
 	return session, nil
@@ -47,6 +55,8 @@ func TestManagerReusesEphemeralProviderSession(t *testing.T) {
 	var first []Event
 	err := manager.Send(context.Background(), TurnRequest{
 		Provider: "test",
+		Model:    "test-model",
+		Effort:   "high",
 		Message:  "one",
 	}, func(event Event) error {
 		first = append(first, event)
@@ -75,8 +85,29 @@ func TestManagerReusesEphemeralProviderSession(t *testing.T) {
 	if adapter.started != 1 {
 		t.Fatalf("provider started %d sessions, want 1", adapter.started)
 	}
+	if config := adapter.configs[0]; config.Model != "test-model" || config.Effort != "high" {
+		t.Fatalf("provider config = %#v", config)
+	}
 	if got := adapter.sessions[0].prompts; len(got) != 2 || got[0] != "one" || got[1] != "two" {
 		t.Fatalf("unexpected prompts: %#v", got)
+	}
+}
+
+func TestManagerRejectsUnsupportedEffort(t *testing.T) {
+	adapter := &fakeAdapter{id: "test"}
+	manager := NewManager("", "", "", adapter)
+	defer manager.Close()
+
+	err := manager.Send(context.Background(), TurnRequest{
+		Provider: "test",
+		Effort:   "ultra",
+		Message:  "hello",
+	}, func(Event) error { return nil })
+	if err == nil {
+		t.Fatal("expected unsupported effort error")
+	}
+	if adapter.started != 0 {
+		t.Fatalf("provider started %d sessions, want 0", adapter.started)
 	}
 }
 

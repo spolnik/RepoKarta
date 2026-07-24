@@ -32,7 +32,13 @@ type Adapter struct {
 func (a *Adapter) ID() string { return "claude" }
 
 func (a *Adapter) Status(ctx context.Context) agent.Status {
-	status := agent.Status{ID: a.ID(), Name: "Anthropic Claude"}
+	status := agent.Status{
+		ID:               a.ID(),
+		Name:             "Anthropic Claude",
+		Models:           []string{"sonnet", "opus"},
+		ModelPlaceholder: "sonnet, opus, or full model ID",
+		Efforts:          []string{"low", "medium", "high", "xhigh", "max"},
+	}
 	command, err := localcommand.Resolve(a.Command, "claude")
 	if err != nil {
 		status.Detail = "Claude Code CLI was not found"
@@ -85,22 +91,7 @@ func (a *Adapter) Start(ctx context.Context, config agent.SessionConfig) (agent.
 	if err != nil {
 		return nil, err
 	}
-	arguments := []string{
-		"-p",
-		"--input-format", "stream-json",
-		"--output-format", "stream-json",
-		"--include-partial-messages",
-		"--verbose",
-		"--no-session-persistence",
-		"--strict-mcp-config",
-		"--mcp-config", string(mcpConfig),
-		"--permission-mode", "plan",
-		"--disallowed-tools", "Bash", "Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch",
-		"--system-prompt", providerInstructions,
-	}
-	if config.Model != "" {
-		arguments = append(arguments, "--model", config.Model)
-	}
+	arguments := commandArguments(config, string(mcpConfig))
 
 	process := exec.CommandContext(context.WithoutCancel(ctx), command, arguments...)
 	process.Dir = config.RepositoryRoot
@@ -128,6 +119,29 @@ func (a *Adapter) Start(ctx context.Context, config agent.SessionConfig) (agent.
 	}
 	go s.read(stdout)
 	return s, nil
+}
+
+func commandArguments(config agent.SessionConfig, mcpConfig string) []string {
+	arguments := []string{
+		"-p",
+		"--input-format", "stream-json",
+		"--output-format", "stream-json",
+		"--include-partial-messages",
+		"--verbose",
+		"--no-session-persistence",
+		"--strict-mcp-config",
+		"--mcp-config", mcpConfig,
+		"--permission-mode", "plan",
+		"--disallowed-tools", "Bash", "Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch",
+		"--system-prompt", providerInstructions,
+	}
+	if config.Model != "" {
+		arguments = append(arguments, "--model", config.Model)
+	}
+	if config.Effort != "" {
+		arguments = append(arguments, "--effort", config.Effort)
+	}
+	return arguments
 }
 
 type session struct {

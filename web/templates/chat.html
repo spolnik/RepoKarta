@@ -69,7 +69,14 @@
                 </label>
                 <label class="conversation-control">
                   <span>Model</span>
-                  <input id="conversation-model" name="model" placeholder="Provider default">
+                  <input id="conversation-model" name="model" list="conversation-model-options" maxlength="200" placeholder="Provider default" autocomplete="off" disabled>
+                  <datalist id="conversation-model-options"></datalist>
+                </label>
+                <label class="conversation-control">
+                  <span>Effort</span>
+                  <select id="conversation-effort" name="effort" disabled>
+                    <option value="">Provider default</option>
+                  </select>
                 </label>
                 <button id="conversation-submit" class="search-button ml-auto" type="submit" disabled>Ask RepoKarta</button>
               </div>

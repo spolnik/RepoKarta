@@ -35,7 +35,12 @@ type Adapter struct {
 func (a *Adapter) ID() string { return "codex" }
 
 func (a *Adapter) Status(ctx context.Context) agent.Status {
-	status := agent.Status{ID: a.ID(), Name: "OpenAI Codex"}
+	status := agent.Status{
+		ID:               a.ID(),
+		Name:             "OpenAI Codex",
+		ModelPlaceholder: "Codex model ID or provider default",
+		Efforts:          []string{"minimal", "low", "medium", "high", "xhigh", "max", "ultra"},
+	}
 	command, err := localcommand.Resolve(a.Command, "codex")
 	if err != nil {
 		status.Detail = "Codex CLI was not found"
@@ -83,6 +88,7 @@ type session struct {
 	notifications chan rpcMessage
 	readError     chan error
 	threadID      string
+	effort        string
 	closeOnce     sync.Once
 }
 
@@ -131,6 +137,7 @@ func startSession(ctx context.Context, command string, config agent.SessionConfi
 		pending:       make(map[string]chan rpcMessage),
 		notifications: make(chan rpcMessage, 128),
 		readError:     make(chan error, 1),
+		effort:        config.Effort,
 	}
 	go s.read(stdout)
 
@@ -186,13 +193,7 @@ func (s *session) Send(ctx context.Context, prompt string, emit func(agent.Event
 			ID string `json:"id"`
 		} `json:"turn"`
 	}
-	if err := s.call(ctx, "turn/start", map[string]any{
-		"threadId": s.threadID,
-		"input": []map[string]any{{
-			"type": "text",
-			"text": prompt,
-		}},
-	}, &started); err != nil {
+	if err := s.call(ctx, "turn/start", turnStartParams(s.threadID, prompt, s.effort), &started); err != nil {
 		return fmt.Errorf("start Codex turn: %w", err)
 	}
 	turnID := started.Turn.ID
@@ -239,6 +240,20 @@ func (s *session) Send(ctx context.Context, prompt string, emit func(agent.Event
 			}
 		}
 	}
+}
+
+func turnStartParams(threadID, prompt, effort string) map[string]any {
+	params := map[string]any{
+		"threadId": threadID,
+		"input": []map[string]any{{
+			"type": "text",
+			"text": prompt,
+		}},
+	}
+	if effort != "" {
+		params["effort"] = effort
+	}
+	return params
 }
 
 func (s *session) call(ctx context.Context, method string, params any, result any) error {

@@ -174,6 +174,9 @@ type ProviderStatus = {
   available: boolean;
   authenticated: boolean;
   detail?: string;
+  models?: string[];
+  model_placeholder?: string;
+  efforts?: string[];
 };
 
 function renderAssistantMarkdown(target: HTMLElement, markdown: string): void {
@@ -219,20 +222,58 @@ function enableConversations(): void {
   const empty = document.querySelector<HTMLElement>("[data-conversation-empty]");
   const provider = document.querySelector<HTMLSelectElement>("#conversation-provider");
   const model = document.querySelector<HTMLInputElement>("#conversation-model");
+  const modelOptions = document.querySelector<HTMLDataListElement>("#conversation-model-options");
+  const effort = document.querySelector<HTMLSelectElement>("#conversation-effort");
   const input = document.querySelector<HTMLTextAreaElement>("#conversation-message");
   const submit = document.querySelector<HTMLButtonElement>("#conversation-submit");
   const detail = document.querySelector<HTMLElement>("#provider-detail");
   const newConversation = document.querySelector<HTMLButtonElement>("[data-new-conversation]");
-  if (!form || !messages || !provider || !model || !input || !submit || !detail || !newConversation) {
+  if (!form || !messages || !provider || !model || !modelOptions || !effort || !input || !submit || !detail || !newConversation) {
     return;
   }
 
   let conversationID = "";
   let busy = false;
   let statuses: ProviderStatus[] = [];
+  let configuredProviderID = "";
+  const providerPreferences = new Map<string, { model: string; effort: string }>();
 
-  const updateProviderDetail = (): void => {
+  const configureProvider = (): void => {
+    if (configuredProviderID) {
+      providerPreferences.set(configuredProviderID, {
+        model: model.value,
+        effort: effort.value
+      });
+    }
+    configuredProviderID = provider.value;
     const status = statuses.find((candidate) => candidate.id === provider.value);
+    const preferences = providerPreferences.get(provider.value);
+
+    model.value = preferences?.model ?? "";
+    model.placeholder = status?.model_placeholder ?? "Provider default";
+    modelOptions.replaceChildren();
+    for (const modelID of status?.models ?? []) {
+      const option = document.createElement("option");
+      option.value = modelID;
+      modelOptions.append(option);
+    }
+
+    effort.replaceChildren();
+    const defaultEffort = document.createElement("option");
+    defaultEffort.value = "";
+    defaultEffort.textContent = "Provider default";
+    effort.append(defaultEffort);
+    for (const effortID of status?.efforts ?? []) {
+      const option = document.createElement("option");
+      option.value = effortID;
+      option.textContent = effortID.charAt(0).toUpperCase() + effortID.slice(1);
+      effort.append(option);
+    }
+    effort.value = status?.efforts?.includes(preferences?.effort ?? "") ? preferences?.effort ?? "" : "";
+
+    const ready = Boolean(status?.available && status.authenticated);
+    model.disabled = !ready;
+    effort.disabled = !ready || !status?.efforts?.length;
     detail.textContent = status?.detail ?? "Choose an authenticated local provider.";
   };
 
@@ -258,13 +299,13 @@ function enableConversations(): void {
       provider.value = firstReady?.id ?? "";
       provider.disabled = !firstReady;
       submit.disabled = !firstReady;
-      updateProviderDetail();
+      configureProvider();
     })
     .catch((error: unknown) => {
       detail.textContent = error instanceof Error ? error.message : "Could not check providers.";
     });
 
-  provider.addEventListener("change", updateProviderDetail);
+  provider.addEventListener("change", configureProvider);
   document.querySelectorAll<HTMLButtonElement>("[data-chat-prompt]").forEach((button) => {
     button.addEventListener("click", () => {
       input.value = button.dataset.chatPrompt ?? "";
@@ -281,7 +322,9 @@ function enableConversations(): void {
   newConversation.addEventListener("click", () => {
     conversationID = "";
     provider.disabled = false;
+    const status = statuses.find((candidate) => candidate.id === provider.value);
     model.disabled = false;
+    effort.disabled = !status?.efforts?.length;
     messages.replaceChildren();
     const replacement = document.createElement("div");
     replacement.className = "conversation-empty";
@@ -298,6 +341,10 @@ function enableConversations(): void {
       return;
     }
     busy = true;
+    providerPreferences.set(provider.value, {
+      model: model.value,
+      effort: effort.value
+    });
     submit.disabled = true;
     submit.textContent = "Thinking…";
     empty?.remove();
@@ -321,6 +368,7 @@ function enableConversations(): void {
           conversation_id: conversationID,
           provider: provider.value,
           model: model.value.trim(),
+          effort: effort.value,
           message: question
         })
       });
@@ -344,6 +392,7 @@ function enableConversations(): void {
             conversationID = message.conversation_id;
             provider.disabled = true;
             model.disabled = true;
+            effort.disabled = true;
           } else if (message.type === "delta" && message.text && answer) {
             answerText += message.text;
             renderAssistantMarkdown(answer, answerText);

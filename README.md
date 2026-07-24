@@ -141,7 +141,10 @@ go run ./cmd/repokarta serve `
   C:\Work\ghorg
 ```
 
-The model field is optional; leaving it empty uses the provider's default.
+Model and effort are configured per provider before a conversation starts.
+Leaving either field on its default lets the selected harness choose. RepoKarta
+passes Codex effort through app-server turn configuration and Claude effort
+through Claude Code's `--effort` option.
 Conversation state lives only in memory for this first slice and disappears
 when RepoKarta stops.
 

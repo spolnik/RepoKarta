@@ -40,18 +40,21 @@ type Event struct {
 
 // Status describes whether a local provider harness is usable.
 type Status struct {
-	ID            string   `json:"id"`
-	Name          string   `json:"name"`
-	Available     bool     `json:"available"`
-	Authenticated bool     `json:"authenticated"`
-	Detail        string   `json:"detail,omitempty"`
-	Models        []string `json:"models,omitempty"`
+	ID               string   `json:"id"`
+	Name             string   `json:"name"`
+	Available        bool     `json:"available"`
+	Authenticated    bool     `json:"authenticated"`
+	Detail           string   `json:"detail,omitempty"`
+	Models           []string `json:"models,omitempty"`
+	ModelPlaceholder string   `json:"model_placeholder,omitempty"`
+	Efforts          []string `json:"efforts,omitempty"`
 }
 
 // SessionConfig is shared by all provider adapters.
 type SessionConfig struct {
 	ConversationID string
 	Model          string
+	Effort         string
 	RepositoryRoot string
 	MCPURL         string
 	MCPToken       string
@@ -75,12 +78,14 @@ type TurnRequest struct {
 	ConversationID string `json:"conversation_id"`
 	Provider       string `json:"provider"`
 	Model          string `json:"model"`
+	Effort         string `json:"effort"`
 	Message        string `json:"message"`
 }
 
 type managedConversation struct {
 	provider string
 	model    string
+	effort   string
 	session  Session
 	mu       sync.Mutex
 }
@@ -195,6 +200,12 @@ func (m *Manager) conversation(ctx context.Context, request TurnRequest) (*manag
 		if request.Provider != "" && request.Provider != conversation.provider {
 			return nil, "", errors.New("a conversation cannot switch providers")
 		}
+		if request.Model != "" && request.Model != conversation.model {
+			return nil, "", errors.New("a conversation cannot switch models")
+		}
+		if request.Effort != "" && request.Effort != conversation.effort {
+			return nil, "", errors.New("a conversation cannot switch effort")
+		}
 		return conversation, request.ConversationID, nil
 	}
 
@@ -209,6 +220,9 @@ func (m *Manager) conversation(ctx context.Context, request TurnRequest) (*manag
 	if !status.Authenticated {
 		return nil, "", fmt.Errorf("%s is not authenticated: %s", status.Name, status.Detail)
 	}
+	if request.Effort != "" && !contains(status.Efforts, request.Effort) {
+		return nil, "", fmt.Errorf("%s does not support effort %q", status.Name, request.Effort)
+	}
 	conversationID, err := randomID()
 	if err != nil {
 		return nil, "", fmt.Errorf("create conversation id: %w", err)
@@ -216,6 +230,7 @@ func (m *Manager) conversation(ctx context.Context, request TurnRequest) (*manag
 	session, err := adapter.Start(ctx, SessionConfig{
 		ConversationID: conversationID,
 		Model:          request.Model,
+		Effort:         request.Effort,
 		RepositoryRoot: m.repositoryRoot,
 		MCPURL:         conversationMCPURL(m.mcpURL, conversationID),
 		MCPToken:       m.mcpToken,
@@ -226,6 +241,7 @@ func (m *Manager) conversation(ctx context.Context, request TurnRequest) (*manag
 	conversation := &managedConversation{
 		provider: adapter.ID(),
 		model:    request.Model,
+		effort:   request.Effort,
 		session:  session,
 	}
 
@@ -233,6 +249,15 @@ func (m *Manager) conversation(ctx context.Context, request TurnRequest) (*manag
 	m.conversations[conversationID] = conversation
 	m.mu.Unlock()
 	return conversation, conversationID, nil
+}
+
+func contains(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func conversationMCPURL(endpoint, conversationID string) string {

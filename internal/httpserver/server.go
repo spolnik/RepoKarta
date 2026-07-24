@@ -206,6 +206,7 @@ func (s *Server) chat(response http.ResponseWriter, request *http.Request) {
 	turn.Message = strings.TrimSpace(turn.Message)
 	turn.Provider = strings.TrimSpace(turn.Provider)
 	turn.Model = strings.TrimSpace(turn.Model)
+	turn.Effort = strings.TrimSpace(turn.Effort)
 	turn.ConversationID = strings.TrimSpace(turn.ConversationID)
 	if turn.Message == "" || (turn.ConversationID == "" && turn.Provider == "") {
 		http.Error(response, "Provider and message are required", http.StatusBadRequest)
