@@ -35,7 +35,12 @@
                 <h2 id="conversation-heading" class="text-lg font-semibold tracking-tight text-white">Code conversation</h2>
                 <p class="mt-1 text-xs leading-5 text-slate-500">Answers retain inspectable source links from the indexed revisions.</p>
               </div>
-              <button type="button" class="secondary-button" data-new-conversation>New conversation</button>
+              <div class="flex items-center gap-2">
+                <button type="button" class="secondary-button debug-toggle" data-debug-toggle aria-controls="conversation-debug" aria-expanded="false">
+                  Debug <span data-debug-count>0</span>
+                </button>
+                <button type="button" class="secondary-button" data-new-conversation>New conversation</button>
+              </div>
             </header>
 
             <div id="conversation-messages" class="conversation-messages" aria-live="polite">
@@ -94,6 +99,28 @@
 
       {{template "repository-sidebar" .}}
     </main>
+
+    <aside id="conversation-debug" class="debug-window" aria-labelledby="debug-heading" hidden>
+      <header class="debug-window-header">
+        <div>
+          <p class="debug-window-kicker">Session diagnostics</p>
+          <h2 id="debug-heading">Chat debug log</h2>
+        </div>
+        <div class="flex items-center gap-1.5">
+          <button type="button" class="debug-action" data-debug-copy>Copy logs</button>
+          <button type="button" class="debug-action" data-debug-clear>Clear</button>
+          <button type="button" class="debug-close" data-debug-close aria-label="Close debug log">×</button>
+        </div>
+      </header>
+      <div class="debug-window-summary">
+        <span class="status-dot" aria-hidden="true"></span>
+        <span>Browser session only</span>
+        <span>·</span>
+        <span>Prompts and response text are not logged</span>
+      </div>
+      <ol id="debug-entries" class="debug-entries" aria-live="polite"></ol>
+      <p class="debug-empty" data-debug-empty>No diagnostics yet.</p>
+    </aside>
   </body>
 </html>
 {{end}}

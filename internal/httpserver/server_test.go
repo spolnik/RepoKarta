@@ -204,7 +204,13 @@ func TestSearchAndChatRenderAsSeparatePages(t *testing.T) {
 		t.Fatalf("chat status = %d, body = %s", chatResponse.Code, chatResponse.Body.String())
 	}
 	chatBody := chatResponse.Body.String()
-	for _, expected := range []string{`aria-current="page">Chat`, `id="conversation-form"`, `data-chat-prompt=`} {
+	for _, expected := range []string{
+		`aria-current="page">Chat`,
+		`id="conversation-form"`,
+		`data-chat-prompt=`,
+		`id="conversation-debug"`,
+		`data-debug-copy`,
+	} {
 		if !strings.Contains(chatBody, expected) {
 			t.Fatalf("chat page does not contain %q", expected)
 		}

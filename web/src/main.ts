@@ -179,6 +179,191 @@ type ProviderStatus = {
   efforts?: string[];
 };
 
+type DebugLevel = "info" | "warn" | "error";
+
+type DebugEntry = {
+  timestamp: string;
+  level: DebugLevel;
+  event: string;
+  details?: unknown;
+};
+
+type DebugLogger = {
+  add: (level: DebugLevel, event: string, details?: unknown) => void;
+  open: () => void;
+};
+
+function describeError(error: unknown): Record<string, unknown> {
+  if (error instanceof Error) {
+    return {
+      name: error.name,
+      message: error.message,
+      stack: error.stack
+    };
+  }
+  return { value: String(error) };
+}
+
+function formatDebugDetails(value: unknown): string {
+  const seen = new WeakSet<object>();
+  try {
+    return JSON.stringify(value, (_key, item: unknown) => {
+      if (typeof item === "object" && item !== null) {
+        if (seen.has(item)) {
+          return "[Circular]";
+        }
+        seen.add(item);
+      }
+      return item;
+    }, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function enableDebugLogger(): DebugLogger | undefined {
+  const panel = document.querySelector<HTMLElement>("#conversation-debug");
+  const list = document.querySelector<HTMLOListElement>("#debug-entries");
+  const empty = document.querySelector<HTMLElement>("[data-debug-empty]");
+  const toggle = document.querySelector<HTMLButtonElement>("[data-debug-toggle]");
+  const count = document.querySelector<HTMLElement>("[data-debug-count]");
+  const close = document.querySelector<HTMLButtonElement>("[data-debug-close]");
+  const copy = document.querySelector<HTMLButtonElement>("[data-debug-copy]");
+  const clear = document.querySelector<HTMLButtonElement>("[data-debug-clear]");
+  if (!panel || !list || !empty || !toggle || !count || !close || !copy || !clear) {
+    return undefined;
+  }
+
+  const entries: DebugEntry[] = [];
+
+  const setOpen = (open: boolean): void => {
+    panel.hidden = !open;
+    toggle.setAttribute("aria-expanded", String(open));
+    if (open) {
+      list.scrollTop = list.scrollHeight;
+    }
+  };
+
+  const add = (level: DebugLevel, event: string, details?: unknown): void => {
+    const entry: DebugEntry = {
+      timestamp: new Date().toISOString(),
+      level,
+      event,
+      details
+    };
+    entries.push(entry);
+    if (entries.length > 250) {
+      entries.shift();
+      list.firstElementChild?.remove();
+    }
+    if (level === "error") {
+      toggle.classList.add("debug-toggle-debug-error");
+    }
+
+    const item = document.createElement("li");
+    item.className = `debug-entry debug-entry-${level}`;
+    const time = document.createElement("time");
+    time.dateTime = entry.timestamp;
+    time.textContent = entry.timestamp.slice(11, 23);
+    const levelLabel = document.createElement("span");
+    levelLabel.className = "debug-entry-level";
+    levelLabel.textContent = level;
+    const eventLabel = document.createElement("span");
+    eventLabel.className = "debug-entry-event";
+    eventLabel.textContent = event;
+    item.append(time, levelLabel, eventLabel);
+    if (details !== undefined) {
+      const detail = document.createElement("pre");
+      detail.className = "debug-entry-details";
+      detail.textContent = formatDebugDetails(details);
+      item.append(detail);
+    }
+    list.append(item);
+    empty.hidden = true;
+    count.textContent = String(entries.length);
+    if (!panel.hidden) {
+      list.scrollTop = list.scrollHeight;
+    }
+    if (level === "error") {
+      setOpen(true);
+    }
+  };
+
+  toggle.addEventListener("click", () => setOpen(panel.hasAttribute("hidden")));
+  close.addEventListener("click", () => setOpen(false));
+  clear.addEventListener("click", () => {
+    entries.length = 0;
+    list.replaceChildren();
+    empty.hidden = false;
+    count.textContent = "0";
+    toggle.classList.remove("debug-toggle-debug-error");
+  });
+  copy.addEventListener("click", async () => {
+    const original = copy.textContent;
+    try {
+      await navigator.clipboard.writeText(entries.map((entry) => {
+        const heading = `[${entry.timestamp}] ${entry.level.toUpperCase()} ${entry.event}`;
+        return entry.details === undefined ? heading : `${heading}\n${formatDebugDetails(entry.details)}`;
+      }).join("\n\n"));
+      copy.textContent = "Copied";
+    } catch (error: unknown) {
+      add("error", "debug.copy.failed", describeError(error));
+      copy.textContent = "Copy failed";
+    }
+    window.setTimeout(() => {
+      copy.textContent = original;
+    }, 1600);
+  });
+
+  window.addEventListener("error", (event) => {
+    add("error", "browser.error", {
+      message: event.message,
+      filename: event.filename,
+      line: event.lineno,
+      column: event.colno,
+      error: describeError(event.error)
+    });
+  });
+  window.addEventListener("unhandledrejection", (event) => {
+    add("error", "browser.unhandled-rejection", describeError(event.reason));
+  });
+  window.addEventListener("offline", () => add("warn", "browser.offline"));
+  window.addEventListener("online", () => add("info", "browser.online"));
+
+  add("info", "debug.session.started", {
+    path: location.pathname,
+    online: navigator.onLine,
+    userAgent: navigator.userAgent
+  });
+
+  return {
+    add,
+    open: () => setOpen(true)
+  };
+}
+
+async function probeServerHealth(debug: DebugLogger): Promise<void> {
+  const started = performance.now();
+  debug.add("info", "server.health.probe.started");
+  try {
+    const response = await fetch("/healthz", {
+      cache: "no-store",
+      headers: { Accept: "application/json" }
+    });
+    const body = await response.text();
+    debug.add(response.ok ? "info" : "warn", "server.health.probe.completed", {
+      status: response.status,
+      duration_ms: Math.round(performance.now() - started),
+      body: body.slice(0, 500)
+    });
+  } catch (error: unknown) {
+    debug.add("error", "server.health.probe.failed", {
+      duration_ms: Math.round(performance.now() - started),
+      ...describeError(error)
+    });
+  }
+}
+
 function renderAssistantMarkdown(target: HTMLElement, markdown: string): void {
   const rendered = marked.parse(markdown, {
     async: false,
@@ -216,7 +401,7 @@ function conversationMessage(role: "user" | "assistant" | "error", text = ""): H
   return wrapper;
 }
 
-function enableConversations(): void {
+function enableConversations(debug?: DebugLogger): void {
   const form = document.querySelector<HTMLFormElement>("#conversation-form");
   const messages = document.querySelector<HTMLElement>("#conversation-messages");
   const empty = document.querySelector<HTMLElement>("[data-conversation-empty]");
@@ -275,17 +460,36 @@ function enableConversations(): void {
     model.disabled = !ready;
     effort.disabled = !ready || !status?.efforts?.length;
     detail.textContent = status?.detail ?? "Choose an authenticated local provider.";
+    debug?.add("info", "ui.provider.configured", {
+      provider: status?.id || null,
+      ready,
+      model: model.value || "provider-default",
+      effort: effort.value || "provider-default"
+    });
   };
 
+  debug?.add("info", "providers.request.started", { endpoint: "/api/providers" });
   void fetch("/api/providers", { headers: { Accept: "application/json" } })
     .then(async (response) => {
+      debug?.add(response.ok ? "info" : "warn", "providers.response.received", {
+        status: response.status,
+        content_type: response.headers.get("content-type")
+      });
       if (!response.ok) {
-        throw new Error(`Provider check failed (${response.status})`);
+        const body = await response.text();
+        throw new Error(body || `Provider check failed (${response.status})`);
       }
       return response.json() as Promise<{ providers: ProviderStatus[] }>;
     })
     .then((result) => {
       statuses = result.providers;
+      debug?.add("info", "providers.loaded", {
+        providers: statuses.map((status) => ({
+          id: status.id,
+          available: status.available,
+          authenticated: status.authenticated
+        }))
+      });
       provider.replaceChildren();
       for (const status of statuses) {
         const option = document.createElement("option");
@@ -302,24 +506,49 @@ function enableConversations(): void {
       configureProvider();
     })
     .catch((error: unknown) => {
+      debug?.add("error", "providers.request.failed", describeError(error));
       detail.textContent = error instanceof Error ? error.message : "Could not check providers.";
     });
 
   provider.addEventListener("change", configureProvider);
+  model.addEventListener("change", () => {
+    debug?.add("info", "ui.model.changed", {
+      provider: provider.value,
+      model: model.value.trim() || "provider-default"
+    });
+  });
+  effort.addEventListener("change", () => {
+    debug?.add("info", "ui.effort.changed", {
+      provider: provider.value,
+      effort: effort.value || "provider-default"
+    });
+  });
   document.querySelectorAll<HTMLButtonElement>("[data-chat-prompt]").forEach((button) => {
     button.addEventListener("click", () => {
       input.value = button.dataset.chatPrompt ?? "";
       input.focus();
+      debug?.add("info", "ui.starter.selected", {
+        message_length: input.value.length
+      });
     });
   });
   input.addEventListener("keydown", (event) => {
-    if (event.key !== "Enter" || event.shiftKey || event.isComposing) {
+    if (event.key !== "Enter" || event.isComposing) {
+      return;
+    }
+    if (event.shiftKey) {
+      debug?.add("info", "ui.message.newline");
       return;
     }
     event.preventDefault();
+    debug?.add("info", "ui.message.submit-key");
     form.requestSubmit();
   });
   newConversation.addEventListener("click", () => {
+    debug?.add("info", "ui.conversation.new", {
+      previous_conversation: conversationID || null,
+      provider: provider.value
+    });
     conversationID = "";
     provider.disabled = false;
     const status = statuses.find((candidate) => candidate.id === provider.value);
@@ -338,8 +567,17 @@ function enableConversations(): void {
     event.preventDefault();
     const question = input.value.trim();
     if (!question || !provider.value || busy) {
+      debug?.add("warn", "chat.submit.ignored", {
+        has_message: Boolean(question),
+        has_provider: Boolean(provider.value),
+        busy
+      });
       return;
     }
+    const requestStarted = performance.now();
+    let deltaEvents = 0;
+    let answerCharacters = 0;
+    let streamCompleted = false;
     busy = true;
     providerPreferences.set(provider.value, {
       model: model.value,
@@ -356,6 +594,14 @@ function enableConversations(): void {
     messages.append(assistant);
     input.value = "";
     messages.scrollTop = messages.scrollHeight;
+    debug?.add("info", "chat.request.started", {
+      endpoint: "/api/chat",
+      provider: provider.value,
+      model: model.value.trim() || "provider-default",
+      effort: effort.value || "provider-default",
+      conversation: conversationID ? "continuation" : "new",
+      message_length: question.length
+    });
 
     try {
       const response = await fetch("/api/chat", {
@@ -372,8 +618,15 @@ function enableConversations(): void {
           message: question
         })
       });
+      debug?.add(response.ok ? "info" : "warn", "chat.response.received", {
+        status: response.status,
+        status_text: response.statusText,
+        content_type: response.headers.get("content-type"),
+        duration_ms: Math.round(performance.now() - requestStarted)
+      });
       if (!response.ok || !response.body) {
-        throw new Error((await response.text()) || `Conversation failed (${response.status})`);
+        const body = await response.text();
+        throw new Error(body || `Conversation failed (${response.status})`);
       }
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
@@ -387,16 +640,33 @@ function enableConversations(): void {
           if (!line.trim()) {
             continue;
           }
-          const message = JSON.parse(line) as ConversationEvent;
+          let message: ConversationEvent;
+          try {
+            message = JSON.parse(line) as ConversationEvent;
+          } catch (error: unknown) {
+            debug?.add("error", "chat.stream.decode-failed", {
+              line_length: line.length,
+              ...describeError(error)
+            });
+            throw error;
+          }
           if (message.type === "meta" && message.conversation_id) {
             conversationID = message.conversation_id;
             provider.disabled = true;
             model.disabled = true;
             effort.disabled = true;
+            debug?.add("info", "chat.stream.started", {
+              conversation_id: conversationID
+            });
           } else if (message.type === "delta" && message.text && answer) {
+            deltaEvents++;
+            answerCharacters += message.text.length;
             answerText += message.text;
             renderAssistantMarkdown(answer, answerText);
           } else if (message.type === "sources" && message.sources?.length) {
+            debug?.add("info", "chat.stream.sources", {
+              count: message.sources.length
+            });
             let sources = assistant.querySelector<HTMLElement>(".conversation-sources");
             if (!sources) {
               sources = document.createElement("div");
@@ -412,16 +682,42 @@ function enableConversations(): void {
               link.rel = "noreferrer";
               sources.append(link);
             }
+          } else if (message.type === "done") {
+            streamCompleted = true;
+            debug?.add("info", "chat.stream.completed", {
+              delta_events: deltaEvents,
+              answer_characters: answerCharacters,
+              duration_ms: Math.round(performance.now() - requestStarted)
+            });
           } else if (message.type === "error") {
+            debug?.add("error", "chat.stream.provider-error", {
+              conversation_id: message.conversation_id || conversationID || null,
+              message: message.text || "The provider could not complete this turn."
+            });
             throw new Error(message.text || "The provider could not complete this turn.");
           }
         }
         messages.scrollTop = messages.scrollHeight;
         if (done) {
+          if (!streamCompleted) {
+            debug?.add("warn", "chat.stream.closed-without-done", {
+              delta_events: deltaEvents,
+              answer_characters: answerCharacters
+            });
+          }
           break;
         }
       }
     } catch (error: unknown) {
+      debug?.add("error", "chat.request.failed", {
+        endpoint: "/api/chat",
+        online: navigator.onLine,
+        duration_ms: Math.round(performance.now() - requestStarted),
+        ...describeError(error)
+      });
+      if (debug && (error instanceof TypeError || (error instanceof Error && /fetch|network/i.test(error.message)))) {
+        await probeServerHealth(debug);
+      }
       assistant.remove();
       messages.append(conversationMessage("error", error instanceof Error ? error.message : "Conversation failed."));
     } finally {
@@ -429,6 +725,10 @@ function enableConversations(): void {
       submit.disabled = false;
       submit.textContent = "Ask RepoKarta";
       input.focus();
+      debug?.add("info", "chat.request.settled", {
+        duration_ms: Math.round(performance.now() - requestStarted),
+        conversation_id: conversationID || null
+      });
     }
   });
 }
@@ -439,7 +739,8 @@ enableCopyButtons();
 highlightSource();
 focusSourceLine();
 highlightSearchResults();
-enableConversations();
+const debugLogger = enableDebugLogger();
+enableConversations(debugLogger);
 
 document.body.addEventListener("htmx:afterSwap", (event) => {
   const target = (event as CustomEvent<{ target?: ParentNode }>).detail?.target;
