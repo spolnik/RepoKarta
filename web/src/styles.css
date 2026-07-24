@@ -1,0 +1,11 @@
+@import "tailwindcss";
+@source "../templates";
+
+@theme {
+  --font-sans: "Inter", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "SFMono-Regular", "Cascadia Code", "Roboto Mono", ui-monospace, monospace;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--color-emerald-400) 35%, transparent);
+}
