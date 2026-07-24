@@ -166,6 +166,54 @@ func TestSearchRendersSafeHighlightedCommitPinnedResult(t *testing.T) {
 	}
 }
 
+func TestSearchAndChatRenderAsSeparatePages(t *testing.T) {
+	server, err := New(
+		Config{
+			Address:        "127.0.0.1:7331",
+			RepositoryRoot: `C:\code`,
+			Version:        "test",
+			Conversations:  testConversations{},
+		},
+		codeintel.New(testStore{}, testSearcher{}, "http://127.0.0.1:7331"),
+		testRefresher{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	searchRequest := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7331/", nil)
+	searchResponse := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(searchResponse, searchRequest)
+	if searchResponse.Code != http.StatusOK {
+		t.Fatalf("search status = %d, body = %s", searchResponse.Code, searchResponse.Body.String())
+	}
+	searchBody := searchResponse.Body.String()
+	for _, expected := range []string{`aria-current="page">Search`, `href="/chat"`, `action="/search"`} {
+		if !strings.Contains(searchBody, expected) {
+			t.Fatalf("search page does not contain %q", expected)
+		}
+	}
+	if strings.Contains(searchBody, `id="conversation-form"`) {
+		t.Fatal("search page unexpectedly contains the conversation form")
+	}
+
+	chatRequest := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7331/chat", nil)
+	chatResponse := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(chatResponse, chatRequest)
+	if chatResponse.Code != http.StatusOK {
+		t.Fatalf("chat status = %d, body = %s", chatResponse.Code, chatResponse.Body.String())
+	}
+	chatBody := chatResponse.Body.String()
+	for _, expected := range []string{`aria-current="page">Chat`, `id="conversation-form"`, `data-chat-prompt=`} {
+		if !strings.Contains(chatBody, expected) {
+			t.Fatalf("chat page does not contain %q", expected)
+		}
+	}
+	if strings.Contains(chatBody, `action="/search"`) {
+		t.Fatal("chat page unexpectedly contains the search form")
+	}
+}
+
 func TestChatStreamsNDJSON(t *testing.T) {
 	server, err := New(
 		Config{

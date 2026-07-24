@@ -265,6 +265,12 @@ function enableConversations(): void {
     });
 
   provider.addEventListener("change", updateProviderDetail);
+  document.querySelectorAll<HTMLButtonElement>("[data-chat-prompt]").forEach((button) => {
+    button.addEventListener("click", () => {
+      input.value = button.dataset.chatPrompt ?? "";
+      input.focus();
+    });
+  });
   newConversation.addEventListener("click", () => {
     conversationID = "";
     provider.disabled = false;

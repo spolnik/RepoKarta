@@ -71,6 +71,8 @@ type pageData struct {
 	ReadyCount     int
 	PendingCount   int
 	ErrorCount     int
+	ActivePage     string
+	ChatEnabled    bool
 	Search         searchData
 }
 
@@ -172,6 +174,7 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 		mux.Handle("/mcp", config.MCPHandler)
 	}
 	if config.Conversations != nil {
+		mux.HandleFunc("GET /chat", server.chatPage)
 		mux.HandleFunc("GET /api/providers", server.providerStatuses)
 		mux.HandleFunc("POST /api/chat", server.chat)
 	}
@@ -337,6 +340,16 @@ func (s *Server) home(response http.ResponseWriter, request *http.Request) {
 		return
 	}
 	s.render(response, "index", data)
+}
+
+func (s *Server) chatPage(response http.ResponseWriter, request *http.Request) {
+	data, err := s.pageData(request.Context())
+	if err != nil {
+		http.Error(response, "Could not load repositories", http.StatusInternalServerError)
+		return
+	}
+	data.ActivePage = "chat"
+	s.render(response, "chat", data)
 }
 
 func (s *Server) repositoryList(response http.ResponseWriter, request *http.Request) {
@@ -538,6 +551,8 @@ func (s *Server) pageData(ctx context.Context) (pageData, error) {
 		Version:        s.config.Version,
 		RepositoryRoot: s.config.RepositoryRoot,
 		Repositories:   repositories,
+		ActivePage:     "search",
+		ChatEnabled:    s.agents != nil,
 		Search: searchData{
 			Query: search.Query{Limit: codeintel.DefaultSearchLimit},
 		},

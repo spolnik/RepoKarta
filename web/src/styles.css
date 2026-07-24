@@ -81,6 +81,36 @@ a.brand-mark:hover,
   transform: translateY(-1px);
 }
 
+.app-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  border: 1px solid rgb(255 255 255 / 0.07);
+  border-radius: 0.7rem;
+  padding: 0.2rem;
+  background: rgb(0 0 0 / 0.18);
+}
+
+.app-nav-link {
+  border-radius: 0.5rem;
+  padding: 0.42rem 0.78rem;
+  color: rgb(100 116 139);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-decoration: none;
+  transition: 150ms ease;
+}
+
+.app-nav-link:hover {
+  color: rgb(203 213 225);
+}
+
+.app-nav-link-active {
+  background: rgb(255 255 255 / 0.07);
+  color: rgb(241 245 249);
+  box-shadow: inset 0 1px rgb(255 255 255 / 0.04);
+}
+
 .search-panel {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -113,6 +143,11 @@ a.brand-mark:hover,
   padding: 1rem;
 }
 
+.conversation-page-panel .conversation-messages {
+  height: clamp(18rem, calc(100vh - 30rem), 34rem);
+  max-height: none;
+}
+
 .conversation-empty {
   align-self: center;
   padding: 1.5rem;
@@ -120,6 +155,30 @@ a.brand-mark:hover,
   font-size: 0.82rem;
   line-height: 1.5rem;
   text-align: center;
+}
+
+.conversation-starters {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.45rem;
+  margin-top: 1rem;
+}
+
+.conversation-starters button {
+  border: 1px solid rgb(167 139 250 / 0.13);
+  border-radius: 999px;
+  padding: 0.38rem 0.65rem;
+  background: rgb(139 92 246 / 0.045);
+  color: rgb(148 163 184);
+  font-size: 0.7rem;
+  transition: 150ms ease;
+}
+
+.conversation-starters button:hover {
+  border-color: rgb(167 139 250 / 0.3);
+  background: rgb(139 92 246 / 0.1);
+  color: rgb(221 214 254);
 }
 
 .conversation-message {
