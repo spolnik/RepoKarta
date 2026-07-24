@@ -271,6 +271,13 @@ function enableConversations(): void {
       input.focus();
     });
   });
+  input.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" || event.shiftKey || event.isComposing) {
+      return;
+    }
+    event.preventDefault();
+    form.requestSubmit();
+  });
   newConversation.addEventListener("click", () => {
     conversationID = "";
     provider.disabled = false;
