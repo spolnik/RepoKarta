@@ -22,6 +22,7 @@ const (
 	EventDone    EventType = "done"
 	EventError   EventType = "error"
 	EventSources EventType = "sources"
+	EventImages  EventType = "images"
 )
 
 // Citation is an exact source reference observed during an MCP tool call.
@@ -36,6 +37,7 @@ type Event struct {
 	ConversationID string     `json:"conversation_id,omitempty"`
 	Text           string     `json:"text,omitempty"`
 	Sources        []Citation `json:"sources,omitempty"`
+	Images         []Image    `json:"images,omitempty"`
 }
 
 // Status describes whether a local provider harness is usable.
@@ -48,6 +50,8 @@ type Status struct {
 	Models           []string `json:"models,omitempty"`
 	ModelPlaceholder string   `json:"model_placeholder,omitempty"`
 	Efforts          []string `json:"efforts,omitempty"`
+	ImageInput       bool     `json:"image_input"`
+	ImageOutput      bool     `json:"image_output"`
 }
 
 // SessionConfig is shared by all provider adapters.
@@ -62,7 +66,7 @@ type SessionConfig struct {
 
 // Session is one provider-owned conversation.
 type Session interface {
-	Send(context.Context, string, func(Event) error) error
+	Send(context.Context, Turn, func(Event) error) error
 	Close() error
 }
 
@@ -75,19 +79,27 @@ type Adapter interface {
 
 // TurnRequest starts or continues a conversation.
 type TurnRequest struct {
-	ConversationID string `json:"conversation_id"`
-	Provider       string `json:"provider"`
-	Model          string `json:"model"`
-	Effort         string `json:"effort"`
-	Message        string `json:"message"`
+	ConversationID string  `json:"conversation_id"`
+	Provider       string  `json:"provider"`
+	Model          string  `json:"model"`
+	Effort         string  `json:"effort"`
+	Message        string  `json:"message"`
+	Images         []Image `json:"images,omitempty"`
+}
+
+// Turn is the provider-neutral content sent to one local harness.
+type Turn struct {
+	Message string
+	Images  []Image
 }
 
 type managedConversation struct {
-	provider string
-	model    string
-	effort   string
-	session  Session
-	mu       sync.Mutex
+	provider   string
+	model      string
+	effort     string
+	imageInput bool
+	session    Session
+	mu         sync.Mutex
 }
 
 // Manager owns ephemeral provider sessions. Conversation text is not persisted.
@@ -150,8 +162,11 @@ func (m *Manager) Statuses(ctx context.Context) []Status {
 
 // Send streams a single turn. New conversation IDs are generated server-side.
 func (m *Manager) Send(ctx context.Context, request TurnRequest, emit func(Event) error) error {
-	if request.Message == "" {
-		return errors.New("message is required")
+	if request.Message == "" && len(request.Images) == 0 {
+		return errors.New("message or image is required")
+	}
+	if err := ValidateImages(request.Images); err != nil {
+		return err
 	}
 
 	conversation, conversationID, err := m.conversation(ctx, request)
@@ -168,7 +183,7 @@ func (m *Manager) Send(ctx context.Context, request TurnRequest, emit func(Event
 	if m.citations != nil {
 		m.citations.Clear(conversationID)
 	}
-	if err := conversation.session.Send(ctx, request.Message, emit); err != nil {
+	if err := conversation.session.Send(ctx, Turn{Message: request.Message, Images: request.Images}, emit); err != nil {
 		m.dropConversation(conversationID, conversation)
 		return err
 	}
@@ -206,6 +221,9 @@ func (m *Manager) conversation(ctx context.Context, request TurnRequest) (*manag
 		if request.Effort != "" && request.Effort != conversation.effort {
 			return nil, "", errors.New("a conversation cannot switch effort")
 		}
+		if len(request.Images) > 0 && !conversation.imageInput {
+			return nil, "", errors.New("this provider does not support image input")
+		}
 		return conversation, request.ConversationID, nil
 	}
 
@@ -219,6 +237,9 @@ func (m *Manager) conversation(ctx context.Context, request TurnRequest) (*manag
 	}
 	if !status.Authenticated {
 		return nil, "", fmt.Errorf("%s is not authenticated: %s", status.Name, status.Detail)
+	}
+	if len(request.Images) > 0 && !status.ImageInput {
+		return nil, "", fmt.Errorf("%s does not support image input", status.Name)
 	}
 	if request.Effort != "" && !contains(status.Efforts, request.Effort) {
 		return nil, "", fmt.Errorf("%s does not support effort %q", status.Name, request.Effort)
@@ -239,10 +260,11 @@ func (m *Manager) conversation(ctx context.Context, request TurnRequest) (*manag
 		return nil, "", err
 	}
 	conversation := &managedConversation{
-		provider: adapter.ID(),
-		model:    request.Model,
-		effort:   request.Effort,
-		session:  session,
+		provider:   adapter.ID(),
+		model:      request.Model,
+		effort:     request.Effort,
+		imageInput: status.ImageInput,
+		session:    session,
 	}
 
 	m.mu.Lock()

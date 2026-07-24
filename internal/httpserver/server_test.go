@@ -104,7 +104,7 @@ func (testRefresher) Refresh(context.Context) error { return nil }
 type testConversations struct{}
 
 func (testConversations) Statuses(context.Context) []agent.Status {
-	return []agent.Status{{ID: "test", Name: "Test", Available: true, Authenticated: true}}
+	return []agent.Status{{ID: "test", Name: "Test", Available: true, Authenticated: true, ImageInput: true, ImageOutput: true}}
 }
 
 func (testConversations) Send(_ context.Context, request agent.TurnRequest, emit func(agent.Event) error) error {
@@ -113,6 +113,11 @@ func (testConversations) Send(_ context.Context, request agent.TurnRequest, emit
 	}
 	if err := emit(agent.Event{Type: agent.EventDelta, Text: "answer:" + request.Message}); err != nil {
 		return err
+	}
+	if len(request.Images) > 0 {
+		if err := emit(agent.Event{Type: agent.EventImages, Images: request.Images}); err != nil {
+			return err
+		}
 	}
 	return emit(agent.Event{Type: agent.EventDone, ConversationID: "conversation"})
 }
@@ -210,6 +215,8 @@ func TestSearchAndChatRenderAsSeparatePages(t *testing.T) {
 		`data-chat-prompt=`,
 		`id="conversation-debug"`,
 		`data-debug-copy`,
+		`id="conversation-image-input"`,
+		`data-image-attach`,
 	} {
 		if !strings.Contains(chatBody, expected) {
 			t.Fatalf("chat page does not contain %q", expected)
@@ -235,7 +242,7 @@ func TestChatStreamsNDJSON(t *testing.T) {
 	request := httptest.NewRequest(
 		http.MethodPost,
 		"http://127.0.0.1:7331/api/chat",
-		bytes.NewBufferString(`{"provider":"test","message":"hello"}`),
+		bytes.NewBufferString(`{"provider":"test","message":"hello","images":[{"name":"pixel.png","media_type":"image/png","data":"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="}]}`),
 	)
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
@@ -252,11 +259,41 @@ func TestChatStreamsNDJSON(t *testing.T) {
 		`"conversation_id":"conversation"`,
 		`"type":"delta"`,
 		`"text":"answer:hello"`,
+		`"type":"images"`,
+		`"media_type":"image/png"`,
 		`"type":"done"`,
 	} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("body does not contain %q: %s", expected, body)
 		}
+	}
+}
+
+func TestChatRejectsInvalidImageBeforeStreaming(t *testing.T) {
+	server, err := New(
+		Config{
+			Address:       "127.0.0.1:7331",
+			Conversations: testConversations{},
+		},
+		codeintel.New(testStore{}, testSearcher{}, "http://127.0.0.1:7331"),
+		testRefresher{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"http://127.0.0.1:7331/api/chat",
+		bytes.NewBufferString(`{"provider":"test","images":[{"name":"fake.png","media_type":"image/png","data":"aGVsbG8="}]}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), "does not match file content") {
+		t.Fatalf("unexpected body: %s", response.Body.String())
 	}
 }
 

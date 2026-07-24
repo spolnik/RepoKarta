@@ -29,8 +29,9 @@ import (
 )
 
 const (
-	maximumSourceLines = 500
-	eventPollInterval  = time.Second
+	maximumSourceLines      = 500
+	maximumChatRequestBytes = (agent.MaximumImagesPerTurn * agent.MaximumImageBytes * 4 / 3) + (1 << 20)
+	eventPollInterval       = time.Second
 )
 
 // CatalogueRefresher manually rediscovers and queues repositories.
@@ -197,7 +198,7 @@ func (s *Server) providerStatuses(response http.ResponseWriter, request *http.Re
 }
 
 func (s *Server) chat(response http.ResponseWriter, request *http.Request) {
-	request.Body = http.MaxBytesReader(response, request.Body, 64<<10)
+	request.Body = http.MaxBytesReader(response, request.Body, maximumChatRequestBytes)
 	var turn agent.TurnRequest
 	if err := json.NewDecoder(request.Body).Decode(&turn); err != nil {
 		http.Error(response, "Invalid conversation request", http.StatusBadRequest)
@@ -208,8 +209,16 @@ func (s *Server) chat(response http.ResponseWriter, request *http.Request) {
 	turn.Model = strings.TrimSpace(turn.Model)
 	turn.Effort = strings.TrimSpace(turn.Effort)
 	turn.ConversationID = strings.TrimSpace(turn.ConversationID)
-	if turn.Message == "" || (turn.ConversationID == "" && turn.Provider == "") {
-		http.Error(response, "Provider and message are required", http.StatusBadRequest)
+	for index := range turn.Images {
+		turn.Images[index].Name = strings.TrimSpace(turn.Images[index].Name)
+		turn.Images[index].MediaType = strings.ToLower(strings.TrimSpace(turn.Images[index].MediaType))
+	}
+	if (turn.Message == "" && len(turn.Images) == 0) || (turn.ConversationID == "" && turn.Provider == "") {
+		http.Error(response, "Provider and message or image are required", http.StatusBadRequest)
+		return
+	}
+	if err := agent.ValidateImages(turn.Images); err != nil {
+		http.Error(response, err.Error(), http.StatusBadRequest)
 		return
 	}
 

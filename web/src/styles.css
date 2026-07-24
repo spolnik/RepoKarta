@@ -470,6 +470,74 @@ a.brand-mark:hover,
   background: rgb(16 185 129 / 0.1);
 }
 
+.conversation-image-gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(13rem, 100%), 1fr));
+  gap: 0.55rem;
+  margin-top: 0.7rem;
+}
+
+.conversation-image-gallery-input {
+  grid-template-columns: repeat(auto-fit, minmax(7rem, 10rem));
+  justify-content: end;
+}
+
+.conversation-image-card {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid rgb(255 255 255 / 0.08);
+  border-radius: 0.62rem;
+  background: rgb(2 6 23 / 0.65);
+}
+
+.conversation-image-card > a {
+  display: grid;
+  min-height: 7rem;
+  place-items: center;
+  background:
+    linear-gradient(45deg, rgb(255 255 255 / 0.018) 25%, transparent 25%) 0 0 / 12px 12px,
+    linear-gradient(-45deg, rgb(255 255 255 / 0.018) 25%, transparent 25%) 0 6px / 12px 12px;
+}
+
+.conversation-image-gallery-output .conversation-image-card > a {
+  min-height: 12rem;
+}
+
+.conversation-image-card img {
+  display: block;
+  width: 100%;
+  max-height: 30rem;
+  object-fit: contain;
+}
+
+.conversation-image-card figcaption {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.7rem;
+  border-top: 1px solid rgb(255 255 255 / 0.055);
+  padding: 0.45rem 0.55rem;
+  color: rgb(100 116 139);
+  font-family: var(--font-mono);
+  font-size: 0.59rem;
+}
+
+.conversation-image-card figcaption span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-image-card figcaption a {
+  flex: none;
+  color: rgb(110 231 183);
+  text-decoration: none;
+}
+
+.conversation-image-card figcaption a:hover {
+  text-decoration: underline;
+}
+
 .conversation-input {
   width: 100%;
   resize: vertical;
@@ -490,6 +558,120 @@ a.brand-mark:hover,
 
 .conversation-input::placeholder {
   color: rgb(71 85 105);
+}
+
+.conversation-attachment-tray {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-top: 0.65rem;
+}
+
+.conversation-attachment-tray[hidden] {
+  display: none;
+}
+
+.conversation-attachment {
+  display: grid;
+  grid-template-columns: 2.5rem minmax(0, 8rem) 1.5rem;
+  align-items: center;
+  gap: 0.45rem;
+  overflow: hidden;
+  border: 1px solid rgb(52 211 153 / 0.14);
+  border-radius: 0.58rem;
+  padding: 0.3rem;
+  background: rgb(16 185 129 / 0.05);
+}
+
+.conversation-attachment img {
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 0.38rem;
+  object-fit: cover;
+}
+
+.conversation-attachment div {
+  min-width: 0;
+}
+
+.conversation-attachment strong,
+.conversation-attachment span {
+  display: block;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-attachment strong {
+  color: rgb(203 213 225);
+  font-size: 0.62rem;
+  font-weight: 600;
+}
+
+.conversation-attachment span {
+  margin-top: 0.12rem;
+  color: rgb(71 85 105);
+  font-size: 0.56rem;
+}
+
+.conversation-attachment button {
+  display: grid;
+  width: 1.45rem;
+  height: 1.45rem;
+  place-items: center;
+  border-radius: 999px;
+  color: rgb(100 116 139);
+  font-size: 0.9rem;
+  transition: 150ms ease;
+}
+
+.conversation-attachment button:hover {
+  background: rgb(251 113 133 / 0.1);
+  color: rgb(253 164 175);
+}
+
+.conversation-attach-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 2.35rem;
+  border: 1px solid rgb(52 211 153 / 0.13);
+  border-radius: 0.58rem;
+  padding: 0.4rem 0.6rem;
+  background: rgb(16 185 129 / 0.045);
+  color: rgb(110 231 183);
+  font-size: 0.68rem;
+  transition: 150ms ease;
+}
+
+.conversation-attach-button svg {
+  width: 0.9rem;
+  height: 0.9rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.conversation-attach-button:hover:not(:disabled) {
+  border-color: rgb(52 211 153 / 0.32);
+  background: rgb(16 185 129 / 0.1);
+}
+
+.conversation-attach-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.38;
+}
+
+.conversation-image-feedback {
+  color: rgb(251 191 36);
+}
+
+.conversation-form-drop-target {
+  box-shadow: 0 0 0 2px rgb(52 211 153 / 0.32) inset;
+  background: rgb(16 185 129 / 0.035);
 }
 
 .conversation-control {

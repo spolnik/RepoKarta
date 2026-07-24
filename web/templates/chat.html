@@ -63,9 +63,22 @@
                 maxlength="12000"
                 placeholder="Ask about architecture, behavior, dependencies, or code flow…"
                 class="conversation-input"
-                required
               ></textarea>
+              <div id="conversation-attachments" class="conversation-attachment-tray" aria-live="polite" hidden></div>
               <div class="mt-3 flex flex-wrap items-center gap-2">
+                <input
+                  id="conversation-image-input"
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/gif"
+                  multiple
+                  hidden
+                >
+                <button type="button" class="conversation-attach-button" data-image-attach disabled>
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M8.5 12.5 14.7 6.3a3 3 0 0 1 4.2 4.2l-8.3 8.3a5 5 0 0 1-7.1-7.1l8.5-8.5"></path>
+                  </svg>
+                  Attach image
+                </button>
                 <label class="conversation-control">
                   <span>Provider</span>
                   <select id="conversation-provider" name="provider" disabled>
@@ -86,7 +99,10 @@
                 <button id="conversation-submit" class="search-button ml-auto" type="submit" disabled>Ask RepoKarta</button>
               </div>
               <div class="mt-2 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-600">
-                <p id="provider-detail">Checking your installed provider harnesses…</p>
+                <div>
+                  <p id="provider-detail">Checking your installed provider harnesses…</p>
+                  <p id="image-support-detail" class="mt-0.5" aria-live="polite"></p>
+                </div>
                 <div class="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono">
                   <p><kbd class="text-slate-500">Enter</kbd> send · <kbd class="text-slate-500">Shift+Enter</kbd> new line</p>
                   <p>Read-only · ephemeral session</p>

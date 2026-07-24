@@ -162,10 +162,17 @@ function highlightSearchResults(root: ParentNode = document): void {
 }
 
 type ConversationEvent = {
-  type: "meta" | "delta" | "sources" | "done" | "error";
+  type: "meta" | "delta" | "sources" | "images" | "done" | "error";
   conversation_id?: string;
   text?: string;
   sources?: Array<{ label: string; url: string }>;
+  images?: ConversationImage[];
+};
+
+type ConversationImage = {
+  name: string;
+  media_type: string;
+  data: string;
 };
 
 type ProviderStatus = {
@@ -177,7 +184,13 @@ type ProviderStatus = {
   models?: string[];
   model_placeholder?: string;
   efforts?: string[];
+  image_input: boolean;
+  image_output: boolean;
 };
+
+const supportedImageTypes = new Set(["image/gif", "image/jpeg", "image/png", "image/webp"]);
+const maximumImagesPerTurn = 4;
+const maximumImageBytes = 8 * 1024 * 1024;
 
 type DebugLevel = "info" | "warn" | "error";
 
@@ -521,6 +534,109 @@ function renderAssistantMarkdown(
   });
 }
 
+function formatImageSize(bytes: number): string {
+  if (bytes < 1024 * 1024) {
+    return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  }
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function imageDataURL(image: ConversationImage): string | undefined {
+  const mediaType = image.media_type.toLowerCase();
+  const maximumEncodedLength = Math.ceil(maximumImageBytes / 3) * 4 + 4;
+  if (
+    !supportedImageTypes.has(mediaType) ||
+    !image.data ||
+    image.data.length > maximumEncodedLength ||
+    !/^[A-Za-z0-9+/]*={0,2}$/.test(image.data)
+  ) {
+    return undefined;
+  }
+  return `data:${mediaType};base64,${image.data}`;
+}
+
+function readConversationImage(file: File): Promise<ConversationImage> {
+  return new Promise((resolve, reject) => {
+    const mediaType = file.type.toLowerCase();
+    if (!supportedImageTypes.has(mediaType)) {
+      reject(new Error(`${file.name} is not a supported PNG, JPEG, WebP, or GIF image.`));
+      return;
+    }
+    if (file.size > maximumImageBytes) {
+      reject(new Error(`${file.name} exceeds the ${maximumImageBytes / (1024 * 1024)} MB image limit.`));
+      return;
+    }
+    const reader = new FileReader();
+    reader.addEventListener("error", () => reject(new Error(`${file.name} could not be read.`)), { once: true });
+    reader.addEventListener("load", () => {
+      const result = typeof reader.result === "string" ? reader.result : "";
+      const separator = result.indexOf(",");
+      if (separator < 0) {
+        reject(new Error(`${file.name} could not be encoded.`));
+        return;
+      }
+      resolve({
+        name: file.name,
+        media_type: mediaType,
+        data: result.slice(separator + 1)
+      });
+    }, { once: true });
+    reader.readAsDataURL(file);
+  });
+}
+
+function appendConversationImages(
+  message: HTMLElement,
+  images: ConversationImage[],
+  kind: "input" | "output"
+): number {
+  let gallery = message.querySelector<HTMLElement>(`[data-conversation-images="${kind}"]`);
+  if (!gallery) {
+    gallery = document.createElement("div");
+    gallery.className = `conversation-image-gallery conversation-image-gallery-${kind}`;
+    gallery.dataset.conversationImages = kind;
+    message.append(gallery);
+  }
+  let appended = 0;
+  for (const image of images) {
+    const source = imageDataURL(image);
+    if (!source) {
+      continue;
+    }
+    const card = document.createElement("figure");
+    card.className = "conversation-image-card";
+    const preview = document.createElement("a");
+    preview.href = source;
+    preview.target = "_blank";
+    preview.rel = "noopener noreferrer";
+    preview.title = `Open ${image.name || "image"}`;
+    const element = document.createElement("img");
+    element.src = source;
+    element.alt = image.name || (kind === "input" ? "Attached image" : "Generated image");
+    element.loading = "lazy";
+    element.decoding = "async";
+    preview.append(element);
+    const caption = document.createElement("figcaption");
+    const name = document.createElement("span");
+    name.textContent = image.name || (kind === "input" ? "Attached image" : "Generated image");
+    caption.append(name);
+    if (kind === "output") {
+      const download = document.createElement("a");
+      download.href = source;
+      download.download = image.name || "repokarta-image";
+      download.textContent = "Download";
+      caption.append(download);
+    }
+    card.append(preview, caption);
+    gallery.append(card);
+    appended++;
+  }
+  if (appended === 0 && gallery.childElementCount === 0) {
+    gallery.remove();
+  }
+  return appended;
+}
+
 function conversationMessage(role: "user" | "assistant" | "error", text = ""): HTMLElement {
   const wrapper = document.createElement("article");
   wrapper.className = `conversation-message conversation-message-${role}`;
@@ -545,18 +661,129 @@ function enableConversations(debug?: DebugLogger): void {
   const modelOptions = document.querySelector<HTMLDataListElement>("#conversation-model-options");
   const effort = document.querySelector<HTMLSelectElement>("#conversation-effort");
   const input = document.querySelector<HTMLTextAreaElement>("#conversation-message");
+  const imageInput = document.querySelector<HTMLInputElement>("#conversation-image-input");
+  const attachButton = document.querySelector<HTMLButtonElement>("[data-image-attach]");
+  const attachmentTray = document.querySelector<HTMLElement>("#conversation-attachments");
+  const imageSupportDetail = document.querySelector<HTMLElement>("#image-support-detail");
   const submit = document.querySelector<HTMLButtonElement>("#conversation-submit");
   const detail = document.querySelector<HTMLElement>("#provider-detail");
   const newConversation = document.querySelector<HTMLButtonElement>("[data-new-conversation]");
-  if (!form || !messages || !provider || !model || !modelOptions || !effort || !input || !submit || !detail || !newConversation) {
+  if (
+    !form ||
+    !messages ||
+    !provider ||
+    !model ||
+    !modelOptions ||
+    !effort ||
+    !input ||
+    !imageInput ||
+    !attachButton ||
+    !attachmentTray ||
+    !imageSupportDetail ||
+    !submit ||
+    !detail ||
+    !newConversation
+  ) {
     return;
   }
 
   let conversationID = "";
   let busy = false;
+  let attachedImages: ConversationImage[] = [];
+  let attachmentFeedback = "";
   let statuses: ProviderStatus[] = [];
   let configuredProviderID = "";
   const providerPreferences = new Map<string, { model: string; effort: string }>();
+
+  const renderAttachmentTray = (): void => {
+    attachmentTray.replaceChildren();
+    attachmentTray.hidden = attachedImages.length === 0;
+    for (const [index, image] of attachedImages.entries()) {
+      const source = imageDataURL(image);
+      if (!source) {
+        continue;
+      }
+      const card = document.createElement("div");
+      card.className = "conversation-attachment";
+      const preview = document.createElement("img");
+      preview.src = source;
+      preview.alt = "";
+      const text = document.createElement("div");
+      const name = document.createElement("strong");
+      name.textContent = image.name || `Image ${index + 1}`;
+      const size = document.createElement("span");
+      size.textContent = formatImageSize(Math.floor(image.data.length * 3 / 4));
+      text.append(name, size);
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.setAttribute("aria-label", `Remove ${image.name || `image ${index + 1}`}`);
+      remove.textContent = "×";
+      remove.addEventListener("click", () => {
+        attachedImages.splice(index, 1);
+        attachmentFeedback = "";
+        renderAttachmentTray();
+        configureImageControls();
+        debug?.add("info", "ui.image.removed", {
+          remaining_images: attachedImages.length
+        });
+      });
+      card.append(preview, text, remove);
+      attachmentTray.append(card);
+    }
+  };
+
+  const configureImageControls = (): void => {
+    const status = statuses.find((candidate) => candidate.id === provider.value);
+    const ready = Boolean(status?.available && status.authenticated);
+    attachButton.disabled = busy || !ready || !status?.image_input;
+    if (attachmentFeedback) {
+      imageSupportDetail.textContent = attachmentFeedback;
+      imageSupportDetail.classList.add("conversation-image-feedback");
+    } else if (status?.image_input) {
+      const output = status.image_output ? " Returned images render in the conversation." : "";
+      imageSupportDetail.textContent = `PNG, JPEG, WebP, or GIF · ${maximumImagesPerTurn} images · ${maximumImageBytes / (1024 * 1024)} MB each.${output}`;
+      imageSupportDetail.classList.remove("conversation-image-feedback");
+    } else if (status) {
+      imageSupportDetail.textContent = "This provider harness does not accept image attachments.";
+      imageSupportDetail.classList.remove("conversation-image-feedback");
+    } else {
+      imageSupportDetail.textContent = "";
+      imageSupportDetail.classList.remove("conversation-image-feedback");
+    }
+  };
+
+  const addImageFiles = async (files: File[]): Promise<void> => {
+    const status = statuses.find((candidate) => candidate.id === provider.value);
+    if (!status?.image_input) {
+      attachmentFeedback = "Choose a provider harness that supports image input.";
+      configureImageControls();
+      return;
+    }
+    attachmentFeedback = "";
+    const remaining = maximumImagesPerTurn - attachedImages.length;
+    if (remaining <= 0) {
+      attachmentFeedback = `A turn can include at most ${maximumImagesPerTurn} images.`;
+      configureImageControls();
+      return;
+    }
+    for (const file of files.slice(0, remaining)) {
+      try {
+        attachedImages.push(await readConversationImage(file));
+      } catch (error: unknown) {
+        attachmentFeedback = error instanceof Error ? error.message : "An image could not be attached.";
+      }
+    }
+    if (files.length > remaining) {
+      attachmentFeedback = `Only the first ${remaining} image${remaining === 1 ? "" : "s"} fit the ${maximumImagesPerTurn}-image limit.`;
+    }
+    renderAttachmentTray();
+    configureImageControls();
+    debug?.add("info", "ui.images.attached", {
+      image_count: attachedImages.length,
+      media_types: attachedImages.map((image) => image.media_type),
+      encoded_bytes: attachedImages.reduce((total, image) => total + image.data.length, 0)
+    });
+  };
 
   const configureProvider = (): void => {
     if (configuredProviderID) {
@@ -595,11 +822,14 @@ function enableConversations(debug?: DebugLogger): void {
     model.disabled = !ready;
     effort.disabled = !ready || !status?.efforts?.length;
     detail.textContent = status?.detail ?? "Choose an authenticated local provider.";
+    configureImageControls();
     debug?.add("info", "ui.provider.configured", {
       provider: status?.id || null,
       ready,
       model: model.value || "provider-default",
-      effort: effort.value || "provider-default"
+      effort: effort.value || "provider-default",
+      image_input: status?.image_input ?? false,
+      image_output: status?.image_output ?? false
     });
   };
 
@@ -646,6 +876,11 @@ function enableConversations(debug?: DebugLogger): void {
     });
 
   provider.addEventListener("change", configureProvider);
+  attachButton.addEventListener("click", () => imageInput.click());
+  imageInput.addEventListener("change", () => {
+    void addImageFiles(Array.from(imageInput.files ?? []));
+    imageInput.value = "";
+  });
   model.addEventListener("change", () => {
     debug?.add("info", "ui.model.changed", {
       provider: provider.value,
@@ -679,6 +914,27 @@ function enableConversations(debug?: DebugLogger): void {
     debug?.add("info", "ui.message.submit-key");
     form.requestSubmit();
   });
+  input.addEventListener("paste", (event) => {
+    const images = Array.from(event.clipboardData?.files ?? []).filter((file) => file.type.startsWith("image/"));
+    if (images.length > 0) {
+      void addImageFiles(images);
+    }
+  });
+  form.addEventListener("dragover", (event) => {
+    if (Array.from(event.dataTransfer?.items ?? []).some((item) => item.kind === "file")) {
+      event.preventDefault();
+      form.classList.add("conversation-form-drop-target");
+    }
+  });
+  form.addEventListener("dragleave", () => form.classList.remove("conversation-form-drop-target"));
+  form.addEventListener("drop", (event) => {
+    form.classList.remove("conversation-form-drop-target");
+    const images = Array.from(event.dataTransfer?.files ?? []).filter((file) => file.type.startsWith("image/"));
+    if (images.length > 0) {
+      event.preventDefault();
+      void addImageFiles(images);
+    }
+  });
   newConversation.addEventListener("click", () => {
     debug?.add("info", "ui.conversation.new", {
       previous_conversation: conversationID || null,
@@ -689,6 +945,10 @@ function enableConversations(debug?: DebugLogger): void {
     const status = statuses.find((candidate) => candidate.id === provider.value);
     model.disabled = false;
     effort.disabled = !status?.efforts?.length;
+    attachedImages = [];
+    attachmentFeedback = "";
+    renderAttachmentTray();
+    configureImageControls();
     messages.replaceChildren();
     const replacement = document.createElement("div");
     replacement.className = "conversation-empty";
@@ -701,14 +961,16 @@ function enableConversations(debug?: DebugLogger): void {
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const question = input.value.trim();
-    if (!question || !provider.value || busy) {
+    if ((!question && attachedImages.length === 0) || !provider.value || busy) {
       debug?.add("warn", "chat.submit.ignored", {
         has_message: Boolean(question),
+        image_count: attachedImages.length,
         has_provider: Boolean(provider.value),
         busy
       });
       return;
     }
+    const requestImages = attachedImages.slice();
     const requestStarted = performance.now();
     let deltaEvents = 0;
     let answerCharacters = 0;
@@ -720,14 +982,20 @@ function enableConversations(debug?: DebugLogger): void {
     });
     submit.disabled = true;
     submit.textContent = "Thinking…";
+    configureImageControls();
     empty?.remove();
     messages.querySelector("[data-conversation-empty]")?.remove();
-    messages.append(conversationMessage("user", question));
+    const userMessage = conversationMessage("user", question);
+    appendConversationImages(userMessage, requestImages, "input");
+    messages.append(userMessage);
     const assistant = conversationMessage("assistant");
     const answer = assistant.querySelector<HTMLElement>(".conversation-content");
     let answerText = "";
     messages.append(assistant);
     input.value = "";
+    attachedImages = [];
+    attachmentFeedback = "";
+    renderAttachmentTray();
     messages.scrollTop = messages.scrollHeight;
     debug?.add("info", "chat.request.started", {
       endpoint: "/api/chat",
@@ -735,7 +1003,9 @@ function enableConversations(debug?: DebugLogger): void {
       model: model.value.trim() || "provider-default",
       effort: effort.value || "provider-default",
       conversation: conversationID ? "continuation" : "new",
-      message_length: question.length
+      message_length: question.length,
+      image_count: requestImages.length,
+      image_bytes: requestImages.reduce((total, image) => total + Math.floor(image.data.length * 3 / 4), 0)
     });
 
     try {
@@ -750,7 +1020,8 @@ function enableConversations(debug?: DebugLogger): void {
           provider: provider.value,
           model: model.value.trim(),
           effort: effort.value,
-          message: question
+          message: question,
+          images: requestImages
         })
       });
       debug?.add(response.ok ? "info" : "warn", "chat.response.received", {
@@ -817,6 +1088,13 @@ function enableConversations(debug?: DebugLogger): void {
               link.rel = "noreferrer";
               sources.append(link);
             }
+          } else if (message.type === "images" && message.images?.length) {
+            const renderedImages = appendConversationImages(assistant, message.images, "output");
+            debug?.add(renderedImages === message.images.length ? "info" : "warn", "chat.stream.images", {
+              received: message.images.length,
+              rendered: renderedImages,
+              media_types: message.images.map((image) => image.media_type)
+            });
           } else if (message.type === "done") {
             streamCompleted = true;
             if (answer) {
@@ -865,6 +1143,7 @@ function enableConversations(debug?: DebugLogger): void {
       busy = false;
       submit.disabled = false;
       submit.textContent = "Ask RepoKarta";
+      configureImageControls();
       input.focus();
       debug?.add("info", "chat.request.settled", {
         duration_ms: Math.round(performance.now() - requestStarted),

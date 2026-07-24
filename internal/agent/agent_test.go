@@ -34,12 +34,57 @@ func (a *fakeAdapter) Start(_ context.Context, config SessionConfig) (Session, e
 
 type fakeSession struct {
 	prompts []string
+	images  [][]Image
 	closed  bool
 }
 
-func (s *fakeSession) Send(_ context.Context, prompt string, emit func(Event) error) error {
-	s.prompts = append(s.prompts, prompt)
-	return emit(Event{Type: EventDelta, Text: "answer:" + prompt})
+func (s *fakeSession) Send(_ context.Context, turn Turn, emit func(Event) error) error {
+	s.prompts = append(s.prompts, turn.Message)
+	s.images = append(s.images, turn.Images)
+	return emit(Event{Type: EventDelta, Text: "answer:" + turn.Message})
+}
+
+func TestManagerPassesImageOnlyTurn(t *testing.T) {
+	adapter := &fakeAdapter{id: "test"}
+	manager := NewManager("", "", "", adapter)
+	defer manager.Close()
+
+	image := Image{
+		Name:      "pixel.png",
+		MediaType: "image/png",
+		Data:      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+	}
+	err := manager.Send(context.Background(), TurnRequest{
+		Provider: "test",
+		Images:   []Image{image},
+	}, func(Event) error { return nil })
+	if err == nil {
+		t.Fatal("expected image capability error")
+	}
+
+	capable := &imageAdapter{fakeAdapter: fakeAdapter{id: "images"}}
+	manager = NewManager("", "", "", capable)
+	defer manager.Close()
+	err = manager.Send(context.Background(), TurnRequest{
+		Provider: "images",
+		Images:   []Image{image},
+	}, func(Event) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(capable.sessions) != 1 || len(capable.sessions[0].images) != 1 || len(capable.sessions[0].images[0]) != 1 {
+		t.Fatalf("image turn was not passed to provider: %#v", capable.sessions)
+	}
+}
+
+type imageAdapter struct {
+	fakeAdapter
+}
+
+func (a *imageAdapter) Status(context.Context) Status {
+	status := a.fakeAdapter.Status(context.Background())
+	status.ImageInput = true
+	return status
 }
 
 func (s *fakeSession) Close() error {

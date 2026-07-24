@@ -18,10 +18,10 @@ import (
 )
 
 const providerInstructions = `You are RepoKarta's read-only code intelligence assistant.
-Answer questions about the indexed repositories using only the RepoKarta MCP tools.
+Answer questions about the indexed repositories using only the RepoKarta MCP tools and image attachments explicitly included in the user's turn.
 Search before drawing conclusions, open the relevant source, and distinguish evidence from inference.
 Every material code claim must cite the source_url returned by a RepoKarta tool.
-Never use shell commands, direct filesystem access, network search, or code mutation.
+Never use shell commands, direct filesystem access beyond exact supplied image attachment paths, network search, or code mutation.
 If the indexed evidence is insufficient, say so plainly.`
 
 // Adapter starts local Claude Code stream-json sessions.
@@ -38,6 +38,8 @@ func (a *Adapter) Status(ctx context.Context) agent.Status {
 		Models:           []string{"sonnet", "opus"},
 		ModelPlaceholder: "sonnet, opus, or full model ID",
 		Efforts:          []string{"low", "medium", "high", "xhigh", "max"},
+		ImageInput:       true,
+		ImageOutput:      false,
 	}
 	command, err := localcommand.Resolve(a.Command, "claude")
 	if err != nil {
@@ -77,6 +79,10 @@ func (a *Adapter) Start(ctx context.Context, config agent.SessionConfig) (agent.
 	if err != nil {
 		return nil, fmt.Errorf("find Claude CLI: %w", err)
 	}
+	attachments, err := agent.NewAttachmentStore()
+	if err != nil {
+		return nil, fmt.Errorf("create Claude attachment store: %w", err)
+	}
 	mcpConfig, err := json.Marshal(map[string]any{
 		"mcpServers": map[string]any{
 			"repokarta": map[string]any{
@@ -89,39 +95,44 @@ func (a *Adapter) Start(ctx context.Context, config agent.SessionConfig) (agent.
 		},
 	})
 	if err != nil {
+		_ = attachments.Close()
 		return nil, err
 	}
-	arguments := commandArguments(config, string(mcpConfig))
+	arguments := commandArguments(config, string(mcpConfig), attachments.Directory())
 
 	process := exec.CommandContext(context.WithoutCancel(ctx), command, arguments...)
 	process.Dir = config.RepositoryRoot
 	stdin, err := process.StdinPipe()
 	if err != nil {
+		_ = attachments.Close()
 		return nil, fmt.Errorf("open Claude stdin: %w", err)
 	}
 	stdout, err := process.StdoutPipe()
 	if err != nil {
 		stdin.Close()
+		_ = attachments.Close()
 		return nil, fmt.Errorf("open Claude stdout: %w", err)
 	}
 	var stderr strings.Builder
 	process.Stderr = &stderr
 	if err := process.Start(); err != nil {
 		stdin.Close()
+		_ = attachments.Close()
 		return nil, fmt.Errorf("start Claude Code: %w", err)
 	}
 	s := &session{
-		command:   process,
-		stdin:     stdin,
-		messages:  make(chan json.RawMessage, 128),
-		readError: make(chan error, 1),
-		stderr:    &stderr,
+		command:     process,
+		stdin:       stdin,
+		messages:    make(chan json.RawMessage, 128),
+		readError:   make(chan error, 1),
+		stderr:      &stderr,
+		attachments: attachments,
 	}
 	go s.read(stdout)
 	return s, nil
 }
 
-func commandArguments(config agent.SessionConfig, mcpConfig string) []string {
+func commandArguments(config agent.SessionConfig, mcpConfig, attachmentDirectory string) []string {
 	arguments := []string{
 		"-p",
 		"--input-format", "stream-json",
@@ -135,6 +146,9 @@ func commandArguments(config agent.SessionConfig, mcpConfig string) []string {
 		"--disallowed-tools", "Bash", "Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch",
 		"--system-prompt", providerInstructions,
 	}
+	if attachmentDirectory != "" {
+		arguments = append(arguments, "--add-dir", attachmentDirectory)
+	}
 	if config.Model != "" {
 		arguments = append(arguments, "--model", config.Model)
 	}
@@ -145,24 +159,31 @@ func commandArguments(config agent.SessionConfig, mcpConfig string) []string {
 }
 
 type session struct {
-	command   *exec.Cmd
-	stdin     io.WriteCloser
-	messages  chan json.RawMessage
-	readError chan error
-	stderr    *strings.Builder
-	sendMu    sync.Mutex
-	closeOnce sync.Once
+	command     *exec.Cmd
+	stdin       io.WriteCloser
+	messages    chan json.RawMessage
+	readError   chan error
+	stderr      *strings.Builder
+	attachments *agent.AttachmentStore
+	sendMu      sync.Mutex
+	closeOnce   sync.Once
 }
 
-func (s *session) Send(ctx context.Context, prompt string, emit func(agent.Event) error) error {
+func (s *session) Send(ctx context.Context, turn agent.Turn, emit func(agent.Event) error) error {
 	s.sendMu.Lock()
 	defer s.sendMu.Unlock()
+
+	imagePaths, err := s.attachments.Write(turn.Images)
+	if err != nil {
+		return fmt.Errorf("prepare Claude image attachments: %w", err)
+	}
+	defer s.attachments.Remove(imagePaths)
 
 	message := map[string]any{
 		"type": "user",
 		"message": map[string]any{
 			"role":    "user",
-			"content": prompt,
+			"content": promptWithAttachments(turn, imagePaths),
 		},
 	}
 	encoded, err := json.Marshal(message)
@@ -292,6 +313,31 @@ func (s *session) Close() error {
 			_ = s.command.Process.Kill()
 		}
 		closeError = s.command.Wait()
+		closeError = errors.Join(closeError, s.attachments.Close())
 	})
 	return closeError
+}
+
+func promptWithAttachments(turn agent.Turn, imagePaths []string) string {
+	if len(imagePaths) == 0 {
+		return turn.Message
+	}
+	var prompt strings.Builder
+	if turn.Message != "" {
+		prompt.WriteString(turn.Message)
+		prompt.WriteString("\n\n")
+	}
+	prompt.WriteString("The user attached the following image")
+	if len(imagePaths) != 1 {
+		prompt.WriteString("s")
+	}
+	prompt.WriteString(". Inspect each one with the Read tool. These exact attachment paths are the only local files you may read:\n")
+	for index, path := range imagePaths {
+		name := strings.TrimSpace(turn.Images[index].Name)
+		if name == "" {
+			name = fmt.Sprintf("image %d", index+1)
+		}
+		fmt.Fprintf(&prompt, "- %q: %s\n", name, path)
+	}
+	return prompt.String()
 }

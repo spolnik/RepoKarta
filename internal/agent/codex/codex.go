@@ -21,10 +21,10 @@ import (
 )
 
 const providerInstructions = `You are RepoKarta's read-only code intelligence assistant.
-Answer questions about the indexed repositories using only the RepoKarta MCP tools.
+Answer questions about the indexed repositories using only the RepoKarta MCP tools and image attachments explicitly included in the user's turn.
 Search before drawing conclusions, open the relevant source, and distinguish evidence from inference.
 Every material code claim must cite the source_url returned by a RepoKarta tool.
-Never use shell commands, direct filesystem access, network search, or code mutation.
+Never use shell commands, direct filesystem access beyond supplied image attachments, network search, or code mutation.
 If the indexed evidence is insufficient, say so plainly.`
 
 // Adapter starts local Codex app-server sessions.
@@ -40,6 +40,8 @@ func (a *Adapter) Status(ctx context.Context) agent.Status {
 		Name:             "OpenAI Codex",
 		ModelPlaceholder: "Codex model ID or provider default",
 		Efforts:          []string{"minimal", "low", "medium", "high", "xhigh", "max", "ultra"},
+		ImageInput:       true,
+		ImageOutput:      true,
 	}
 	command, err := localcommand.Resolve(a.Command, "codex")
 	if err != nil {
@@ -89,6 +91,7 @@ type session struct {
 	readError     chan error
 	threadID      string
 	effort        string
+	attachments   *agent.AttachmentStore
 	closeOnce     sync.Once
 }
 
@@ -106,6 +109,10 @@ type rpcError struct {
 }
 
 func startSession(ctx context.Context, command string, config agent.SessionConfig) (*session, error) {
+	attachments, err := agent.NewAttachmentStore()
+	if err != nil {
+		return nil, fmt.Errorf("create Codex attachment store: %w", err)
+	}
 	arguments := []string{
 		"app-server",
 		"--stdio",
@@ -117,17 +124,20 @@ func startSession(ctx context.Context, command string, config agent.SessionConfi
 	process.Env = append(os.Environ(), "REPOKARTA_MCP_BEARER_TOKEN="+config.MCPToken)
 	stdin, err := process.StdinPipe()
 	if err != nil {
+		_ = attachments.Close()
 		return nil, fmt.Errorf("open Codex stdin: %w", err)
 	}
 	stdout, err := process.StdoutPipe()
 	if err != nil {
 		stdin.Close()
+		_ = attachments.Close()
 		return nil, fmt.Errorf("open Codex stdout: %w", err)
 	}
 	var stderr strings.Builder
 	process.Stderr = &stderr
 	if err := process.Start(); err != nil {
 		stdin.Close()
+		_ = attachments.Close()
 		return nil, fmt.Errorf("start Codex app-server: %w", err)
 	}
 
@@ -138,6 +148,7 @@ func startSession(ctx context.Context, command string, config agent.SessionConfi
 		notifications: make(chan rpcMessage, 128),
 		readError:     make(chan error, 1),
 		effort:        config.Effort,
+		attachments:   attachments,
 	}
 	go s.read(stdout)
 
@@ -187,13 +198,19 @@ func startSession(ctx context.Context, command string, config agent.SessionConfi
 	return s, nil
 }
 
-func (s *session) Send(ctx context.Context, prompt string, emit func(agent.Event) error) error {
+func (s *session) Send(ctx context.Context, turn agent.Turn, emit func(agent.Event) error) error {
+	imagePaths, err := s.attachments.Write(turn.Images)
+	if err != nil {
+		return fmt.Errorf("prepare Codex image attachments: %w", err)
+	}
+	defer s.attachments.Remove(imagePaths)
+
 	var started struct {
 		Turn struct {
 			ID string `json:"id"`
 		} `json:"turn"`
 	}
-	if err := s.call(ctx, "turn/start", turnStartParams(s.threadID, prompt, s.effort), &started); err != nil {
+	if err := s.call(ctx, "turn/start", turnStartParams(s.threadID, turn, imagePaths, s.effort), &started); err != nil {
 		return fmt.Errorf("start Codex turn: %w", err)
 	}
 	turnID := started.Turn.ID
@@ -219,6 +236,29 @@ func (s *session) Send(ctx context.Context, prompt string, emit func(agent.Event
 						return err
 					}
 				}
+			case "item/completed":
+				var completed struct {
+					TurnID string `json:"turnId"`
+					Item   struct {
+						Type      string `json:"type"`
+						Status    string `json:"status"`
+						SavedPath string `json:"savedPath"`
+					} `json:"item"`
+				}
+				if json.Unmarshal(message.Params, &completed) != nil ||
+					completed.TurnID != turnID ||
+					completed.Item.Type != "imageGeneration" ||
+					completed.Item.Status != "completed" ||
+					completed.Item.SavedPath == "" {
+					continue
+				}
+				image, err := agent.ImageFromFile(completed.Item.SavedPath)
+				if err != nil {
+					return fmt.Errorf("load Codex generated image: %w", err)
+				}
+				if err := emit(agent.Event{Type: agent.EventImages, Images: []agent.Image{image}}); err != nil {
+					return err
+				}
 			case "turn/completed":
 				var completed struct {
 					Turn struct {
@@ -242,13 +282,24 @@ func (s *session) Send(ctx context.Context, prompt string, emit func(agent.Event
 	}
 }
 
-func turnStartParams(threadID, prompt, effort string) map[string]any {
+func turnStartParams(threadID string, turn agent.Turn, imagePaths []string, effort string) map[string]any {
+	input := make([]map[string]any, 0, 1+len(imagePaths))
+	if turn.Message != "" {
+		input = append(input, map[string]any{
+			"type": "text",
+			"text": turn.Message,
+		})
+	}
+	for _, path := range imagePaths {
+		input = append(input, map[string]any{
+			"type":   "localImage",
+			"path":   path,
+			"detail": "auto",
+		})
+	}
 	params := map[string]any{
 		"threadId": threadID,
-		"input": []map[string]any{{
-			"type": "text",
-			"text": prompt,
-		}},
+		"input":    input,
 	}
 	if effort != "" {
 		params["effort"] = effort
@@ -356,6 +407,7 @@ func (s *session) Close() error {
 			_ = s.command.Process.Kill()
 		}
 		closeError = s.command.Wait()
+		closeError = errors.Join(closeError, s.attachments.Close())
 	})
 	return closeError
 }
