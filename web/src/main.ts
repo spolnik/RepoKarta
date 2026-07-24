@@ -1,5 +1,7 @@
 import htmx from "htmx.org";
 import hljs from "highlight.js/lib/common";
+import DOMPurify from "dompurify";
+import { marked } from "marked";
 import "./styles.css";
 
 htmx.config.allowEval = false;
@@ -174,22 +176,26 @@ type ProviderStatus = {
   detail?: string;
 };
 
-function appendLinkedText(target: HTMLElement, text: string): void {
-  const urlPattern = /\[([^\]\n]{1,200})\]\((https?:\/\/[^\s<>()]+)\)|(https?:\/\/[^\s<>()\]]+)/g;
-  let position = 0;
-  for (const match of text.matchAll(urlPattern)) {
-    const index = match.index ?? 0;
-    target.append(document.createTextNode(text.slice(position, index)));
-    const link = document.createElement("a");
-    link.href = match[2] ?? match[3];
-    link.textContent = match[1]?.replace(/^`|`$/g, "") ?? match[0];
+function renderAssistantMarkdown(target: HTMLElement, markdown: string): void {
+  const rendered = marked.parse(markdown, {
+    async: false,
+    breaks: false,
+    gfm: true
+  });
+  target.innerHTML = DOMPurify.sanitize(rendered, {
+    FORBID_ATTR: ["style"],
+    FORBID_TAGS: ["button", "embed", "form", "iframe", "img", "input", "object", "select", "style", "svg", "textarea"],
+    USE_PROFILES: { html: true }
+  });
+
+  target.querySelectorAll<HTMLAnchorElement>("a").forEach((link) => {
     link.target = "_blank";
-    link.rel = "noreferrer";
-    link.className = "conversation-source-link";
-    target.append(link);
-    position = index + match[0].length;
-  }
-  target.append(document.createTextNode(text.slice(position)));
+    link.rel = "noopener noreferrer";
+    link.classList.add("conversation-source-link");
+  });
+  target.querySelectorAll<HTMLElement>("pre code").forEach((code) => {
+    hljs.highlightElement(code);
+  });
 }
 
 function conversationMessage(role: "user" | "assistant" | "error", text = ""): HTMLElement {
@@ -201,7 +207,7 @@ function conversationMessage(role: "user" | "assistant" | "error", text = ""): H
   const content = document.createElement("div");
   content.className = "conversation-content";
   if (text) {
-    appendLinkedText(content, text);
+    content.textContent = text;
   }
   wrapper.append(label, content);
   return wrapper;
@@ -327,8 +333,7 @@ function enableConversations(): void {
             model.disabled = true;
           } else if (message.type === "delta" && message.text && answer) {
             answerText += message.text;
-            answer.replaceChildren();
-            appendLinkedText(answer, answerText);
+            renderAssistantMarkdown(answer, answerText);
           } else if (message.type === "sources" && message.sources?.length) {
             let sources = assistant.querySelector<HTMLElement>(".conversation-sources");
             if (!sources) {

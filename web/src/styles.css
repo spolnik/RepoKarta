@@ -155,7 +155,143 @@ a.brand-mark:hover,
   font-size: 0.84rem;
   line-height: 1.45rem;
   overflow-wrap: anywhere;
+}
+
+.conversation-message-user .conversation-content,
+.conversation-message-error .conversation-content {
   white-space: pre-wrap;
+}
+
+.conversation-message-assistant .conversation-content > :first-child {
+  margin-top: 0;
+}
+
+.conversation-message-assistant .conversation-content > :last-child {
+  margin-bottom: 0;
+}
+
+.conversation-message-assistant .conversation-content p {
+  margin: 0.65rem 0;
+}
+
+.conversation-message-assistant .conversation-content h1,
+.conversation-message-assistant .conversation-content h2,
+.conversation-message-assistant .conversation-content h3,
+.conversation-message-assistant .conversation-content h4 {
+  margin: 1.1rem 0 0.5rem;
+  color: rgb(241 245 249);
+  font-weight: 650;
+  line-height: 1.25;
+}
+
+.conversation-message-assistant .conversation-content h1 {
+  font-size: 1.2rem;
+}
+
+.conversation-message-assistant .conversation-content h2 {
+  font-size: 1.08rem;
+}
+
+.conversation-message-assistant .conversation-content h3,
+.conversation-message-assistant .conversation-content h4 {
+  font-size: 0.96rem;
+}
+
+.conversation-message-assistant .conversation-content ul,
+.conversation-message-assistant .conversation-content ol {
+  margin: 0.65rem 0;
+  padding-left: 1.4rem;
+}
+
+.conversation-message-assistant .conversation-content ul {
+  list-style: disc;
+}
+
+.conversation-message-assistant .conversation-content ol {
+  list-style: decimal;
+}
+
+.conversation-message-assistant .conversation-content li {
+  margin: 0.24rem 0;
+  padding-left: 0.12rem;
+}
+
+.conversation-message-assistant .conversation-content li > p {
+  margin: 0.2rem 0;
+}
+
+.conversation-message-assistant .conversation-content strong {
+  color: rgb(241 245 249);
+  font-weight: 650;
+}
+
+.conversation-message-assistant .conversation-content code {
+  border: 1px solid rgb(148 163 184 / 0.1);
+  border-radius: 0.32rem;
+  padding: 0.08rem 0.3rem;
+  background: rgb(15 23 42 / 0.72);
+  color: rgb(196 181 253);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+}
+
+.conversation-message-assistant .conversation-content pre {
+  max-width: 100%;
+  margin: 0.8rem 0;
+  overflow: auto;
+  border: 1px solid rgb(148 163 184 / 0.1);
+  border-radius: 0.58rem;
+  background: rgb(2 6 23 / 0.76);
+}
+
+.conversation-message-assistant .conversation-content pre code {
+  display: block;
+  min-width: max-content;
+  border: 0;
+  border-radius: 0;
+  padding: 0.75rem 0.85rem;
+  background: transparent;
+  color: rgb(203 213 225);
+  line-height: 1.35rem;
+}
+
+.conversation-message-assistant .conversation-content blockquote {
+  margin: 0.8rem 0;
+  border-left: 2px solid rgb(167 139 250 / 0.5);
+  padding: 0.15rem 0 0.15rem 0.8rem;
+  color: rgb(148 163 184);
+}
+
+.conversation-message-assistant .conversation-content blockquote p {
+  margin: 0.25rem 0;
+}
+
+.conversation-message-assistant .conversation-content hr {
+  margin: 1rem 0;
+  border: 0;
+  border-top: 1px solid rgb(255 255 255 / 0.08);
+}
+
+.conversation-message-assistant .conversation-content table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  margin: 0.8rem 0;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+}
+
+.conversation-message-assistant .conversation-content th,
+.conversation-message-assistant .conversation-content td {
+  border: 1px solid rgb(148 163 184 / 0.13);
+  padding: 0.42rem 0.55rem;
+  text-align: left;
+}
+
+.conversation-message-assistant .conversation-content th {
+  background: rgb(15 23 42 / 0.62);
+  color: rgb(241 245 249);
 }
 
 .conversation-source-link {
