@@ -27,7 +27,8 @@ var (
 	ErrUnsafePath = errors.New("unsafe repository path")
 	// ErrUnsupportedFile means the blob is binary, too large, or not UTF-8.
 	ErrUnsupportedFile = errors.New("unsupported source file")
-	// ErrUnknownRevision means the revision is not one recorded by RepoKarta.
+	// ErrUnknownRevision means the revision is not reachable from a commit
+	// recorded by RepoKarta.
 	ErrUnknownRevision = errors.New("unknown repository revision")
 )
 
@@ -57,12 +58,6 @@ func OpenFile(ctx context.Context, repository catalog.Repository, revision, file
 	if revision == "" {
 		revision = repository.HeadCommit
 	}
-	if revision != repository.IndexedCommit && revision != repository.HeadCommit {
-		return File{}, ErrUnknownRevision
-	}
-	if len(revision) != 40 || !isHex(revision) {
-		return File{}, ErrUnknownRevision
-	}
 
 	filePath = strings.TrimSpace(strings.ReplaceAll(filePath, "\\", "/"))
 	cleanPath := path.Clean(filePath)
@@ -73,6 +68,10 @@ func OpenFile(ctx context.Context, repository catalog.Repository, revision, file
 
 	boundedContext, cancel := context.WithTimeout(ctx, commandTimeout)
 	defer cancel()
+	revision, err := ResolveCommit(boundedContext, repository, revision)
+	if err != nil {
+		return File{}, err
+	}
 
 	object := revision + ":" + cleanPath
 	sizeText, err := gitOutput(boundedContext, repository, "cat-file", "-s", object)
@@ -144,7 +143,7 @@ func gitOutput(ctx context.Context, repository catalog.Repository, arguments ...
 	commandArguments = append(commandArguments, arguments...)
 
 	command := exec.CommandContext(ctx, "git", commandArguments...)
-	command.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0")
+	command.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0", "GIT_EXTERNAL_DIFF=", "LC_ALL=C")
 	var stderr bytes.Buffer
 	command.Stderr = &stderr
 	output, err := command.Output()
@@ -159,6 +158,9 @@ func gitOutput(ctx context.Context, repository catalog.Repository, arguments ...
 }
 
 func isHex(value string) bool {
+	if len(value) < 7 || len(value) > 64 {
+		return false
+	}
 	for _, character := range value {
 		if !((character >= '0' && character <= '9') ||
 			(character >= 'a' && character <= 'f') ||

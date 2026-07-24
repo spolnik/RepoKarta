@@ -35,6 +35,8 @@ type Intelligence interface {
 	Search(context.Context, codeintel.SearchRequest) (codeintel.SearchResponse, error)
 	GetFile(context.Context, codeintel.FileRequest) (codeintel.FileResponse, error)
 	ListTree(context.Context, codeintel.TreeRequest) (codeintel.TreeResponse, error)
+	GitLog(context.Context, codeintel.GitLogRequest) (codeintel.GitLogResponse, error)
+	GitDiff(context.Context, codeintel.GitDiffRequest) (codeintel.GitDiffResponse, error)
 }
 
 // NewToken generates an unguessable bearer token for the loopback MCP endpoint.
@@ -198,6 +200,43 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 		return nil, tree, nil
 	})
 
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "git_log",
+		Title:       "Read repository history",
+		Description: "List newest-first commits reachable from a repository's pinned indexed or HEAD commit. Optionally filter history to one path. Returns exact commit SHAs and explicit truncation metadata.",
+		Annotations: readOnly,
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input gitLogInput) (*mcp.CallToolResult, gitLogOutput, error) {
+		history, err := intelligence.GitLog(ctx, codeintel.GitLogRequest{
+			Repository: input.Repository,
+			Revision:   input.Revision,
+			Path:       input.Path,
+			Limit:      input.Limit,
+		})
+		if err != nil {
+			return nil, gitLogOutput{}, err
+		}
+		return nil, history, nil
+	})
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "git_diff",
+		Title:       "Read a historical diff",
+		Description: "Read a bounded unified patch between exact reachable commits. Omit to_revision for the indexed commit; omit from_revision to compare its first parent. Returns change counts and explicit patch truncation metadata.",
+		Annotations: readOnly,
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input gitDiffInput) (*mcp.CallToolResult, gitDiffOutput, error) {
+		diff, err := intelligence.GitDiff(ctx, codeintel.GitDiffRequest{
+			Repository:   input.Repository,
+			FromRevision: input.FromRevision,
+			ToRevision:   input.ToRevision,
+			Path:         input.Path,
+			ContextLines: input.ContextLines,
+		})
+		if err != nil {
+			return nil, gitDiffOutput{}, err
+		}
+		return nil, diff, nil
+	})
+
 	return server
 }
 
@@ -241,6 +280,25 @@ type listTreeInput struct {
 }
 
 type listTreeOutput = codeintel.TreeResponse
+
+type gitLogInput struct {
+	Repository string `json:"repository" jsonschema:"required,Exact repository name returned by list_repositories."`
+	Revision   string `json:"revision,omitempty" jsonschema:"Exact reachable commit SHA to start from. Omit to use the indexed commit."`
+	Path       string `json:"path,omitempty" jsonschema:"Optional repository-relative file or directory whose history should be returned."`
+	Limit      int    `json:"limit,omitempty" jsonschema:"Maximum commits to return from 1 to 200. Defaults to 50."`
+}
+
+type gitLogOutput = codeintel.GitLogResponse
+
+type gitDiffInput struct {
+	Repository   string `json:"repository" jsonschema:"required,Exact repository name returned by list_repositories."`
+	FromRevision string `json:"from_revision,omitempty" jsonschema:"Exact reachable base commit SHA. Omit to use the first parent of to_revision."`
+	ToRevision   string `json:"to_revision,omitempty" jsonschema:"Exact reachable target commit SHA. Omit to use the indexed commit."`
+	Path         string `json:"path,omitempty" jsonschema:"Optional repository-relative file or directory to diff."`
+	ContextLines int    `json:"context_lines,omitempty" jsonschema:"Unified diff context lines from 1 to 20. Defaults to 3."`
+}
+
+type gitDiffOutput = codeintel.GitDiffResponse
 
 func bearerAuth(token string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {

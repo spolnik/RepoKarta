@@ -23,8 +23,14 @@ import (
 const (
 	DefaultSearchLimit  = 100
 	MaximumSearchLimit  = 500
+	DefaultGitLogLimit  = 50
+	MaximumGitLogLimit  = 200
+	MaximumGitLogBytes  = 1 << 20
 	MaximumSourceLines  = 500
 	MaximumTreeEntries  = 500
+	MaximumDiffBytes    = 1 << 20
+	DefaultDiffContext  = 3
+	MaximumDiffContext  = 20
 	sourceWindowLines   = 200
 	sourceContextBefore = 80
 )
@@ -171,6 +177,63 @@ type TreeResponse struct {
 type TreeEntry struct {
 	Type string `json:"type"`
 	Path string `json:"path"`
+}
+
+// GitLogRequest selects a bounded history walk from a reachable commit.
+type GitLogRequest struct {
+	Repository string
+	Revision   string
+	Path       string
+	Limit      int
+}
+
+// GitLogResponse is a newest-first, explicitly bounded commit history.
+type GitLogResponse struct {
+	Repository      string      `json:"repository"`
+	Revision        string      `json:"revision"`
+	Path            string      `json:"path,omitempty"`
+	Commits         []GitCommit `json:"commits"`
+	Truncated       bool        `json:"truncated"`
+	OutputTruncated bool        `json:"output_truncated"`
+	Limit           int         `json:"limit"`
+	ReturnedBytes   int         `json:"returned_bytes"`
+	MaximumBytes    int         `json:"maximum_bytes"`
+}
+
+// GitCommit is immutable metadata for one reachable commit.
+type GitCommit struct {
+	Revision    string   `json:"revision"`
+	Parents     []string `json:"parents"`
+	AuthorName  string   `json:"author_name"`
+	AuthorEmail string   `json:"author_email"`
+	AuthoredAt  string   `json:"authored_at"`
+	Subject     string   `json:"subject"`
+	Body        string   `json:"body,omitempty"`
+}
+
+// GitDiffRequest selects an exact commit-to-commit patch.
+type GitDiffRequest struct {
+	Repository   string
+	FromRevision string
+	ToRevision   string
+	Path         string
+	ContextLines int
+}
+
+// GitDiffResponse is a bounded patch with explicit completeness metadata.
+type GitDiffResponse struct {
+	Repository    string `json:"repository"`
+	FromRevision  string `json:"from_revision,omitempty"`
+	ToRevision    string `json:"to_revision"`
+	Path          string `json:"path,omitempty"`
+	Patch         string `json:"patch"`
+	FilesChanged  int    `json:"files_changed"`
+	Insertions    int    `json:"insertions"`
+	Deletions     int    `json:"deletions"`
+	ContextLines  int    `json:"context_lines"`
+	Truncated     bool   `json:"truncated"`
+	ReturnedBytes int    `json:"returned_bytes"`
+	MaximumBytes  int    `json:"maximum_bytes"`
 }
 
 // Repositories returns stable repository metadata.
@@ -327,8 +390,9 @@ func (s *Service) ListTree(ctx context.Context, request TreeRequest) (TreeRespon
 	if revision == "" {
 		revision = repository.IndexedCommit
 	}
-	if revision != repository.IndexedCommit && revision != repository.HeadCommit {
-		return TreeResponse{}, source.ErrUnknownRevision
+	revision, err = source.ResolveCommit(ctx, repository, revision)
+	if err != nil {
+		return TreeResponse{}, err
 	}
 	treePath, err := safeTreePath(request.Path)
 	if err != nil {
@@ -345,6 +409,96 @@ func (s *Service) ListTree(ctx context.Context, request TreeRequest) (TreeRespon
 		Entries:    entries,
 		Truncated:  truncated,
 		Limit:      MaximumTreeEntries,
+	}, nil
+}
+
+// GitLog returns bounded history from the indexed commit or a reachable
+// historical commit, optionally limited to a repository-relative path.
+func (s *Service) GitLog(ctx context.Context, request GitLogRequest) (GitLogResponse, error) {
+	repository, err := s.namedRepository(ctx, request.Repository)
+	if err != nil {
+		return GitLogResponse{}, err
+	}
+	revision, err := source.ResolveCommit(ctx, repository, request.Revision)
+	if err != nil {
+		return GitLogResponse{}, err
+	}
+	limit := normalizeLimit(request.Limit, DefaultGitLogLimit, MaximumGitLogLimit)
+	commits, truncated, outputTruncated, returnedBytes, err := source.Log(
+		ctx,
+		repository,
+		revision,
+		request.Path,
+		limit,
+		MaximumGitLogBytes,
+	)
+	if err != nil {
+		return GitLogResponse{}, err
+	}
+	output := GitLogResponse{
+		Repository:      repository.Name,
+		Revision:        revision,
+		Path:            strings.TrimSpace(strings.ReplaceAll(request.Path, "\\", "/")),
+		Commits:         make([]GitCommit, 0, len(commits)),
+		Truncated:       truncated,
+		OutputTruncated: outputTruncated,
+		Limit:           limit,
+		ReturnedBytes:   returnedBytes,
+		MaximumBytes:    MaximumGitLogBytes,
+	}
+	for _, commit := range commits {
+		output.Commits = append(output.Commits, GitCommit{
+			Revision:    commit.Revision,
+			Parents:     commit.Parents,
+			AuthorName:  commit.AuthorName,
+			AuthorEmail: commit.AuthorEmail,
+			AuthoredAt:  commit.AuthoredAt,
+			Subject:     commit.Subject,
+			Body:        commit.Body,
+		})
+	}
+	return output, nil
+}
+
+// GitDiff returns a bounded unified patch between reachable commits. The
+// default comparison is the indexed commit against its first parent.
+func (s *Service) GitDiff(ctx context.Context, request GitDiffRequest) (GitDiffResponse, error) {
+	repository, err := s.namedRepository(ctx, request.Repository)
+	if err != nil {
+		return GitDiffResponse{}, err
+	}
+	contextLines := request.ContextLines
+	if contextLines <= 0 {
+		contextLines = DefaultDiffContext
+	}
+	if contextLines > MaximumDiffContext {
+		contextLines = MaximumDiffContext
+	}
+	diff, err := source.DiffCommits(
+		ctx,
+		repository,
+		request.FromRevision,
+		request.ToRevision,
+		request.Path,
+		contextLines,
+		MaximumDiffBytes,
+	)
+	if err != nil {
+		return GitDiffResponse{}, err
+	}
+	return GitDiffResponse{
+		Repository:    repository.Name,
+		FromRevision:  diff.FromRevision,
+		ToRevision:    diff.ToRevision,
+		Path:          strings.TrimSpace(strings.ReplaceAll(request.Path, "\\", "/")),
+		Patch:         diff.Patch,
+		FilesChanged:  diff.FilesChanged,
+		Insertions:    diff.Insertions,
+		Deletions:     diff.Deletions,
+		ContextLines:  contextLines,
+		Truncated:     diff.Truncated,
+		ReturnedBytes: diff.ReturnedBytes,
+		MaximumBytes:  MaximumDiffBytes,
 	}, nil
 }
 

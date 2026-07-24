@@ -24,6 +24,10 @@ M2 conversation slice:
   including `extensions.worktreeConfig=true` repositories;
 - bounded, cancellable result sets with highlighted source matches;
 - commit-pinned source pages and copyable file-and-line citations;
+- bounded Git history and exact commit-to-commit diffs without indexing every
+  historical tree;
+- historical file and tree reads restricted to commits reachable from the
+  catalogue's recorded indexed or HEAD commits;
 - live indexing state through Server-Sent Events;
 - loopback Host and Origin validation;
 - streamed, multi-turn questions through either a local Codex or Claude Code
@@ -33,7 +37,8 @@ M2 conversation slice:
 - one provider-neutral Go conversation interface;
 - a JSON code-intelligence API used by the UI and protocol adapters;
 - authenticated loopback HTTP MCP plus a stdio MCP adapter with read-only
-  `list_repositories`, `search_code`, `get_file`, and `list_tree` tools;
+  `list_repositories`, `search_code`, `get_file`, `list_tree`, `git_log`, and
+  `git_diff` tools;
 - read-only Codex sandboxes, Claude plan mode, and disabled mutation/shell
   tools;
 - authoritative citation chips recorded from the exact MCP tool results rather
@@ -99,12 +104,21 @@ GET /api/search?q=OpenFile&mode=literal&repo=RepoKarta&lang=Go&limit=100
 GET /api/repositories
 GET /api/file/{repository}?rev={commit}&path={path}&lines=1-200
 GET /api/tree/{repository}?rev={commit}&path={directory}
+GET /api/git/log/{repository}?rev={commit}&path={path}&limit=50
+GET /api/git/diff/{repository}?from={commit}&to={commit}&path={path}&context=3
 ```
 
 Search responses always include `returned_files`, `matching_files`,
 `estimated_total_files`, `total_files_exact`, `truncated`, `files_skipped`,
 `shards_skipped`, and the effective `limit`. A consumer can therefore tell
 whether a fleet-wide negative answer is complete.
+
+Git history walks are newest-first and report `truncated`, `output_truncated`,
+the effective `limit`, and their byte budget. Diffs return exact resolved
+revisions, change counts, a unified patch, and `truncated`, `returned_bytes`,
+and `maximum_bytes`. If `to` is omitted the indexed commit is used; if `from`
+is omitted its first parent is used. Commits returned by `git_log` can be
+passed to `get_file` and `list_tree` for commit-pinned historical evidence.
 
 For MCP clients that launch a stdio process, keep RepoKarta running and add:
 

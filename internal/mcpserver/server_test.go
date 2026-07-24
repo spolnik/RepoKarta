@@ -106,8 +106,17 @@ func TestMCPSearchReturnsPinnedCitation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tools.Tools) != 4 {
-		t.Fatalf("got %d tools, want 4", len(tools.Tools))
+	if len(tools.Tools) != 6 {
+		t.Fatalf("got %d tools, want 6", len(tools.Tools))
+	}
+	toolNames := make(map[string]bool, len(tools.Tools))
+	for _, tool := range tools.Tools {
+		toolNames[tool.Name] = true
+	}
+	for _, name := range []string{"list_repositories", "search_code", "get_file", "list_tree", "git_log", "git_diff"} {
+		if !toolNames[name] {
+			t.Fatalf("missing MCP tool %q: %#v", name, toolNames)
+		}
 	}
 	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
 		Name:      "search_code",

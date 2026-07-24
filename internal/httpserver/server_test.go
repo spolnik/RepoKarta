@@ -97,6 +97,28 @@ func TestAPISearchReturnsCompletenessAndPinnedEvidence(t *testing.T) {
 	}
 }
 
+func TestGitAPIRejectsInvalidBoundsBeforeRepositoryAccess(t *testing.T) {
+	server, err := New(
+		Config{Address: "127.0.0.1:7331"},
+		codeintel.New(testStore{}, testSearcher{}, "http://127.0.0.1:7331"),
+		testRefresher{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range []string{
+		"http://127.0.0.1:7331/api/git/log/repo?limit=201",
+		"http://127.0.0.1:7331/api/git/diff/repo?context=21",
+	} {
+		request := httptest.NewRequest(http.MethodGet, target, nil)
+		response := httptest.NewRecorder()
+		server.server.Handler.ServeHTTP(response, request)
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("%s returned %d: %s", target, response.Code, response.Body.String())
+		}
+	}
+}
+
 type testRefresher struct{}
 
 func (testRefresher) Refresh(context.Context) error { return nil }

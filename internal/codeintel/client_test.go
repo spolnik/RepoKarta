@@ -53,3 +53,60 @@ func TestClientReturnsStructuredAPIError(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 }
+
+func TestClientUsesGitHistoryContracts(t *testing.T) {
+	requestNumber := 0
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		requestNumber++
+		response.Header().Set("Content-Type", "application/json")
+		switch requestNumber {
+		case 1:
+			if request.URL.Path != "/api/git/log/RepoKarta" ||
+				request.URL.Query().Get("rev") != "abc1234" ||
+				request.URL.Query().Get("path") != "internal/source" ||
+				request.URL.Query().Get("limit") != "12" {
+				t.Fatalf("log request = %s?%s", request.URL.Path, request.URL.RawQuery)
+			}
+			_ = json.NewEncoder(response).Encode(GitLogResponse{Limit: 12})
+		case 2:
+			if request.URL.Path != "/api/git/diff/RepoKarta" ||
+				request.URL.Query().Get("from") != "abc1234" ||
+				request.URL.Query().Get("to") != "def5678" ||
+				request.URL.Query().Get("path") != "main.go" ||
+				request.URL.Query().Get("context") != "5" {
+				t.Fatalf("diff request = %s?%s", request.URL.Path, request.URL.RawQuery)
+			}
+			_ = json.NewEncoder(response).Encode(GitDiffResponse{ContextLines: 5})
+		default:
+			t.Fatalf("unexpected request %d", requestNumber)
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL)
+	logResult, err := client.GitLog(context.Background(), GitLogRequest{
+		Repository: "RepoKarta",
+		Revision:   "abc1234",
+		Path:       "internal/source",
+		Limit:      12,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if logResult.Limit != 12 {
+		t.Fatalf("log result = %#v", logResult)
+	}
+	diffResult, err := client.GitDiff(context.Background(), GitDiffRequest{
+		Repository:   "RepoKarta",
+		FromRevision: "abc1234",
+		ToRevision:   "def5678",
+		Path:         "main.go",
+		ContextLines: 5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diffResult.ContextLines != 5 {
+		t.Fatalf("diff result = %#v", diffResult)
+	}
+}

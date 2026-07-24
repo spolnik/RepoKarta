@@ -76,6 +76,35 @@ func (c *Client) ListTree(ctx context.Context, request TreeRequest) (TreeRespons
 	return output, err
 }
 
+// GitLog calls GET /api/git/log/{repository}.
+func (c *Client) GitLog(ctx context.Context, request GitLogRequest) (GitLogResponse, error) {
+	values := url.Values{
+		"rev":  []string{request.Revision},
+		"path": []string{request.Path},
+	}
+	if request.Limit > 0 {
+		values.Set("limit", strconv.Itoa(request.Limit))
+	}
+	var output GitLogResponse
+	err := c.get(ctx, "/api/git/log/"+url.PathEscape(request.Repository), values, &output)
+	return output, err
+}
+
+// GitDiff calls GET /api/git/diff/{repository}.
+func (c *Client) GitDiff(ctx context.Context, request GitDiffRequest) (GitDiffResponse, error) {
+	values := url.Values{
+		"from": []string{request.FromRevision},
+		"to":   []string{request.ToRevision},
+		"path": []string{request.Path},
+	}
+	if request.ContextLines > 0 {
+		values.Set("context", strconv.Itoa(request.ContextLines))
+	}
+	var output GitDiffResponse
+	err := c.get(ctx, "/api/git/diff/"+url.PathEscape(request.Repository), values, &output)
+	return output, err
+}
+
 func (c *Client) get(ctx context.Context, endpoint string, values url.Values, output any) error {
 	requestURL := c.baseURL + endpoint
 	if len(values) > 0 {

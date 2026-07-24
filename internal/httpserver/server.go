@@ -170,6 +170,8 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 	mux.HandleFunc("GET /api/repositories", server.apiRepositories)
 	mux.HandleFunc("GET /api/file/{repository}", server.apiFile)
 	mux.HandleFunc("GET /api/tree/{repository}", server.apiTree)
+	mux.HandleFunc("GET /api/git/log/{repository}", server.apiGitLog)
+	mux.HandleFunc("GET /api/git/diff/{repository}", server.apiGitDiff)
 	mux.HandleFunc("GET /events", server.events)
 	mux.HandleFunc("GET /healthz", server.health)
 	if config.MCPHandler != nil {
@@ -325,6 +327,55 @@ func (s *Server) apiTree(response http.ResponseWriter, request *http.Request) {
 		return
 	}
 	writeJSON(response, http.StatusOK, tree)
+}
+
+func (s *Server) apiGitLog(response http.ResponseWriter, request *http.Request) {
+	limit, err := apiBoundedInteger(
+		request.URL.Query().Get("limit"),
+		"limit",
+		codeintel.DefaultGitLogLimit,
+		codeintel.MaximumGitLogLimit,
+	)
+	if err != nil {
+		writeAPIError(response, http.StatusBadRequest, err)
+		return
+	}
+	result, err := s.intelligence.GitLog(request.Context(), codeintel.GitLogRequest{
+		Repository: request.PathValue("repository"),
+		Revision:   request.URL.Query().Get("rev"),
+		Path:       request.URL.Query().Get("path"),
+		Limit:      limit,
+	})
+	if err != nil {
+		writeCodeIntelligenceError(response, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
+func (s *Server) apiGitDiff(response http.ResponseWriter, request *http.Request) {
+	contextLines, err := apiBoundedInteger(
+		request.URL.Query().Get("context"),
+		"context",
+		codeintel.DefaultDiffContext,
+		codeintel.MaximumDiffContext,
+	)
+	if err != nil {
+		writeAPIError(response, http.StatusBadRequest, err)
+		return
+	}
+	result, err := s.intelligence.GitDiff(request.Context(), codeintel.GitDiffRequest{
+		Repository:   request.PathValue("repository"),
+		FromRevision: request.URL.Query().Get("from"),
+		ToRevision:   request.URL.Query().Get("to"),
+		Path:         request.URL.Query().Get("path"),
+		ContextLines: contextLines,
+	})
+	if err != nil {
+		writeCodeIntelligenceError(response, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
 }
 
 // Run listens until the context is cancelled and then shuts down gracefully.
@@ -667,6 +718,18 @@ func apiSearchLimit(value string) (int, error) {
 		return 0, fmt.Errorf("limit must be an integer from 1 to %d", codeintel.MaximumSearchLimit)
 	}
 	return limit, nil
+}
+
+func apiBoundedInteger(value, name string, fallback, maximum int) (int, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed <= 0 || parsed > maximum {
+		return 0, fmt.Errorf("%s must be an integer from 1 to %d", name, maximum)
+	}
+	return parsed, nil
 }
 
 func writeCodeIntelligenceError(response http.ResponseWriter, err error) {
