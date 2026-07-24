@@ -1,0 +1,289 @@
+// Package agent defines RepoKarta's provider-neutral conversation harness.
+package agent
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"net/url"
+	"sort"
+	"sync"
+)
+
+// EventType identifies one streamed conversation event.
+type EventType string
+
+const (
+	EventMeta    EventType = "meta"
+	EventDelta   EventType = "delta"
+	EventDone    EventType = "done"
+	EventError   EventType = "error"
+	EventSources EventType = "sources"
+)
+
+// Citation is an exact source reference observed during an MCP tool call.
+type Citation struct {
+	Label string `json:"label"`
+	URL   string `json:"url"`
+}
+
+// Event is emitted while a provider handles a turn.
+type Event struct {
+	Type           EventType  `json:"type"`
+	ConversationID string     `json:"conversation_id,omitempty"`
+	Text           string     `json:"text,omitempty"`
+	Sources        []Citation `json:"sources,omitempty"`
+}
+
+// Status describes whether a local provider harness is usable.
+type Status struct {
+	ID            string   `json:"id"`
+	Name          string   `json:"name"`
+	Available     bool     `json:"available"`
+	Authenticated bool     `json:"authenticated"`
+	Detail        string   `json:"detail,omitempty"`
+	Models        []string `json:"models,omitempty"`
+}
+
+// SessionConfig is shared by all provider adapters.
+type SessionConfig struct {
+	ConversationID string
+	Model          string
+	RepositoryRoot string
+	MCPURL         string
+	MCPToken       string
+}
+
+// Session is one provider-owned conversation.
+type Session interface {
+	Send(context.Context, string, func(Event) error) error
+	Close() error
+}
+
+// Adapter starts conversations against one installed provider harness.
+type Adapter interface {
+	ID() string
+	Status(context.Context) Status
+	Start(context.Context, SessionConfig) (Session, error)
+}
+
+// TurnRequest starts or continues a conversation.
+type TurnRequest struct {
+	ConversationID string `json:"conversation_id"`
+	Provider       string `json:"provider"`
+	Model          string `json:"model"`
+	Message        string `json:"message"`
+}
+
+type managedConversation struct {
+	provider string
+	model    string
+	session  Session
+	mu       sync.Mutex
+}
+
+// Manager owns ephemeral provider sessions. Conversation text is not persisted.
+type Manager struct {
+	mu             sync.RWMutex
+	adapters       map[string]Adapter
+	conversations  map[string]*managedConversation
+	repositoryRoot string
+	mcpURL         string
+	mcpToken       string
+	citations      CitationSource
+}
+
+// CitationSource records the exact source URLs returned to provider tools.
+type CitationSource interface {
+	List(string) []Citation
+	Clear(string)
+}
+
+// NewManager constructs an ephemeral conversation manager.
+func NewManager(repositoryRoot, mcpURL, mcpToken string, adapters ...Adapter) *Manager {
+	byID := make(map[string]Adapter, len(adapters))
+	for _, adapter := range adapters {
+		byID[adapter.ID()] = adapter
+	}
+	return &Manager{
+		adapters:       byID,
+		conversations:  make(map[string]*managedConversation),
+		repositoryRoot: repositoryRoot,
+		mcpURL:         mcpURL,
+		mcpToken:       mcpToken,
+	}
+}
+
+// UseCitations attaches the MCP citation recorder used for authoritative source
+// events. It must be configured before conversations are accepted.
+func (m *Manager) UseCitations(source CitationSource) *Manager {
+	m.citations = source
+	return m
+}
+
+// Statuses checks all configured adapters.
+func (m *Manager) Statuses(ctx context.Context) []Status {
+	m.mu.RLock()
+	adapters := make([]Adapter, 0, len(m.adapters))
+	for _, adapter := range m.adapters {
+		adapters = append(adapters, adapter)
+	}
+	m.mu.RUnlock()
+
+	statuses := make([]Status, 0, len(adapters))
+	for _, adapter := range adapters {
+		statuses = append(statuses, adapter.Status(ctx))
+	}
+	sort.Slice(statuses, func(left, right int) bool {
+		return statuses[left].ID < statuses[right].ID
+	})
+	return statuses
+}
+
+// Send streams a single turn. New conversation IDs are generated server-side.
+func (m *Manager) Send(ctx context.Context, request TurnRequest, emit func(Event) error) error {
+	if request.Message == "" {
+		return errors.New("message is required")
+	}
+
+	conversation, conversationID, err := m.conversation(ctx, request)
+	if err != nil {
+		return err
+	}
+	if err := emit(Event{Type: EventMeta, ConversationID: conversationID}); err != nil {
+		m.dropConversation(conversationID, conversation)
+		return err
+	}
+
+	conversation.mu.Lock()
+	defer conversation.mu.Unlock()
+	if m.citations != nil {
+		m.citations.Clear(conversationID)
+	}
+	if err := conversation.session.Send(ctx, request.Message, emit); err != nil {
+		m.dropConversation(conversationID, conversation)
+		return err
+	}
+	if m.citations != nil {
+		sources := m.citations.List(conversationID)
+		if len(sources) > 0 {
+			if err := emit(Event{Type: EventSources, ConversationID: conversationID, Sources: sources}); err != nil {
+				m.dropConversation(conversationID, conversation)
+				return err
+			}
+		}
+		m.citations.Clear(conversationID)
+	}
+	if err := emit(Event{Type: EventDone, ConversationID: conversationID}); err != nil {
+		m.dropConversation(conversationID, conversation)
+		return err
+	}
+	return nil
+}
+
+func (m *Manager) conversation(ctx context.Context, request TurnRequest) (*managedConversation, string, error) {
+	if request.ConversationID != "" {
+		m.mu.RLock()
+		conversation := m.conversations[request.ConversationID]
+		m.mu.RUnlock()
+		if conversation == nil {
+			return nil, "", errors.New("conversation is no longer active")
+		}
+		if request.Provider != "" && request.Provider != conversation.provider {
+			return nil, "", errors.New("a conversation cannot switch providers")
+		}
+		return conversation, request.ConversationID, nil
+	}
+
+	adapter := m.adapter(request.Provider)
+	if adapter == nil {
+		return nil, "", fmt.Errorf("unknown provider %q", request.Provider)
+	}
+	status := adapter.Status(ctx)
+	if !status.Available {
+		return nil, "", fmt.Errorf("%s is not available: %s", status.Name, status.Detail)
+	}
+	if !status.Authenticated {
+		return nil, "", fmt.Errorf("%s is not authenticated: %s", status.Name, status.Detail)
+	}
+	conversationID, err := randomID()
+	if err != nil {
+		return nil, "", fmt.Errorf("create conversation id: %w", err)
+	}
+	session, err := adapter.Start(ctx, SessionConfig{
+		ConversationID: conversationID,
+		Model:          request.Model,
+		RepositoryRoot: m.repositoryRoot,
+		MCPURL:         conversationMCPURL(m.mcpURL, conversationID),
+		MCPToken:       m.mcpToken,
+	})
+	if err != nil {
+		return nil, "", err
+	}
+	conversation := &managedConversation{
+		provider: adapter.ID(),
+		model:    request.Model,
+		session:  session,
+	}
+
+	m.mu.Lock()
+	m.conversations[conversationID] = conversation
+	m.mu.Unlock()
+	return conversation, conversationID, nil
+}
+
+func conversationMCPURL(endpoint, conversationID string) string {
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		return endpoint
+	}
+	query := parsed.Query()
+	query.Set("conversation_id", conversationID)
+	parsed.RawQuery = query.Encode()
+	return parsed.String()
+}
+
+func (m *Manager) dropConversation(id string, conversation *managedConversation) {
+	m.mu.Lock()
+	if m.conversations[id] == conversation {
+		delete(m.conversations, id)
+	}
+	m.mu.Unlock()
+	_ = conversation.session.Close()
+	if m.citations != nil {
+		m.citations.Clear(id)
+	}
+}
+
+func (m *Manager) adapter(id string) Adapter {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.adapters[id]
+}
+
+// Close releases every running provider subprocess.
+func (m *Manager) Close() error {
+	m.mu.Lock()
+	conversations := m.conversations
+	m.conversations = make(map[string]*managedConversation)
+	m.mu.Unlock()
+
+	var closeError error
+	for _, conversation := range conversations {
+		if err := conversation.session.Close(); err != nil && !errors.Is(err, io.EOF) {
+			closeError = errors.Join(closeError, err)
+		}
+	}
+	return closeError
+}
+
+func randomID() (string, error) {
+	var bytes [16]byte
+	if _, err := rand.Read(bytes[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(bytes[:]), nil
+}

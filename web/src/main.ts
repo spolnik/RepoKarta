@@ -62,7 +62,215 @@ function highlightSource(): void {
   });
 }
 
+type ConversationEvent = {
+  type: "meta" | "delta" | "sources" | "done" | "error";
+  conversation_id?: string;
+  text?: string;
+  sources?: Array<{ label: string; url: string }>;
+};
+
+type ProviderStatus = {
+  id: string;
+  name: string;
+  available: boolean;
+  authenticated: boolean;
+  detail?: string;
+};
+
+function appendLinkedText(target: HTMLElement, text: string): void {
+  const urlPattern = /\[([^\]\n]{1,200})\]\((https?:\/\/[^\s<>()]+)\)|(https?:\/\/[^\s<>()\]]+)/g;
+  let position = 0;
+  for (const match of text.matchAll(urlPattern)) {
+    const index = match.index ?? 0;
+    target.append(document.createTextNode(text.slice(position, index)));
+    const link = document.createElement("a");
+    link.href = match[2] ?? match[3];
+    link.textContent = match[1]?.replace(/^`|`$/g, "") ?? match[0];
+    link.target = "_blank";
+    link.rel = "noreferrer";
+    link.className = "conversation-source-link";
+    target.append(link);
+    position = index + match[0].length;
+  }
+  target.append(document.createTextNode(text.slice(position)));
+}
+
+function conversationMessage(role: "user" | "assistant" | "error", text = ""): HTMLElement {
+  const wrapper = document.createElement("article");
+  wrapper.className = `conversation-message conversation-message-${role}`;
+  const label = document.createElement("p");
+  label.className = "conversation-role";
+  label.textContent = role === "user" ? "You" : role === "assistant" ? "RepoKarta" : "Provider error";
+  const content = document.createElement("div");
+  content.className = "conversation-content";
+  if (text) {
+    appendLinkedText(content, text);
+  }
+  wrapper.append(label, content);
+  return wrapper;
+}
+
+function enableConversations(): void {
+  const form = document.querySelector<HTMLFormElement>("#conversation-form");
+  const messages = document.querySelector<HTMLElement>("#conversation-messages");
+  const empty = document.querySelector<HTMLElement>("[data-conversation-empty]");
+  const provider = document.querySelector<HTMLSelectElement>("#conversation-provider");
+  const model = document.querySelector<HTMLInputElement>("#conversation-model");
+  const input = document.querySelector<HTMLTextAreaElement>("#conversation-message");
+  const submit = document.querySelector<HTMLButtonElement>("#conversation-submit");
+  const detail = document.querySelector<HTMLElement>("#provider-detail");
+  const newConversation = document.querySelector<HTMLButtonElement>("[data-new-conversation]");
+  if (!form || !messages || !provider || !model || !input || !submit || !detail || !newConversation) {
+    return;
+  }
+
+  let conversationID = "";
+  let busy = false;
+  let statuses: ProviderStatus[] = [];
+
+  const updateProviderDetail = (): void => {
+    const status = statuses.find((candidate) => candidate.id === provider.value);
+    detail.textContent = status?.detail ?? "Choose an authenticated local provider.";
+  };
+
+  void fetch("/api/providers", { headers: { Accept: "application/json" } })
+    .then(async (response) => {
+      if (!response.ok) {
+        throw new Error(`Provider check failed (${response.status})`);
+      }
+      return response.json() as Promise<{ providers: ProviderStatus[] }>;
+    })
+    .then((result) => {
+      statuses = result.providers;
+      provider.replaceChildren();
+      for (const status of statuses) {
+        const option = document.createElement("option");
+        option.value = status.id;
+        option.disabled = !status.available || !status.authenticated;
+        const state = status.authenticated ? "ready" : status.available ? "login required" : "not installed";
+        option.textContent = `${status.name} — ${state}`;
+        provider.append(option);
+      }
+      const firstReady = statuses.find((status) => status.available && status.authenticated);
+      provider.value = firstReady?.id ?? "";
+      provider.disabled = !firstReady;
+      submit.disabled = !firstReady;
+      updateProviderDetail();
+    })
+    .catch((error: unknown) => {
+      detail.textContent = error instanceof Error ? error.message : "Could not check providers.";
+    });
+
+  provider.addEventListener("change", updateProviderDetail);
+  newConversation.addEventListener("click", () => {
+    conversationID = "";
+    provider.disabled = false;
+    model.disabled = false;
+    messages.replaceChildren();
+    const replacement = document.createElement("div");
+    replacement.className = "conversation-empty";
+    replacement.dataset.conversationEmpty = "";
+    replacement.textContent = "Start a fresh read-only conversation about the indexed code.";
+    messages.append(replacement);
+    input.focus();
+  });
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const question = input.value.trim();
+    if (!question || !provider.value || busy) {
+      return;
+    }
+    busy = true;
+    submit.disabled = true;
+    submit.textContent = "Thinking…";
+    empty?.remove();
+    messages.querySelector("[data-conversation-empty]")?.remove();
+    messages.append(conversationMessage("user", question));
+    const assistant = conversationMessage("assistant");
+    const answer = assistant.querySelector<HTMLElement>(".conversation-content");
+    let answerText = "";
+    messages.append(assistant);
+    input.value = "";
+    messages.scrollTop = messages.scrollHeight;
+
+    try {
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: {
+          Accept: "application/x-ndjson",
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          conversation_id: conversationID,
+          provider: provider.value,
+          model: model.value.trim(),
+          message: question
+        })
+      });
+      if (!response.ok || !response.body) {
+        throw new Error((await response.text()) || `Conversation failed (${response.status})`);
+      }
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      for (;;) {
+        const { value, done } = await reader.read();
+        buffer += decoder.decode(value, { stream: !done });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.trim()) {
+            continue;
+          }
+          const message = JSON.parse(line) as ConversationEvent;
+          if (message.type === "meta" && message.conversation_id) {
+            conversationID = message.conversation_id;
+            provider.disabled = true;
+            model.disabled = true;
+          } else if (message.type === "delta" && message.text && answer) {
+            answerText += message.text;
+            answer.replaceChildren();
+            appendLinkedText(answer, answerText);
+          } else if (message.type === "sources" && message.sources?.length) {
+            let sources = assistant.querySelector<HTMLElement>(".conversation-sources");
+            if (!sources) {
+              sources = document.createElement("div");
+              sources.className = "conversation-sources";
+              assistant.append(sources);
+            }
+            sources.replaceChildren();
+            for (const source of message.sources) {
+              const link = document.createElement("a");
+              link.href = source.url;
+              link.textContent = source.label;
+              link.target = "_blank";
+              link.rel = "noreferrer";
+              sources.append(link);
+            }
+          } else if (message.type === "error") {
+            throw new Error(message.text || "The provider could not complete this turn.");
+          }
+        }
+        messages.scrollTop = messages.scrollHeight;
+        if (done) {
+          break;
+        }
+      }
+    } catch (error: unknown) {
+      assistant.remove();
+      messages.append(conversationMessage("error", error instanceof Error ? error.message : "Conversation failed."));
+    } finally {
+      busy = false;
+      submit.disabled = false;
+      submit.textContent = "Ask RepoKarta";
+      input.focus();
+    }
+  });
+}
+
 connectIndexEvents();
 enableQueryChips();
 enableCopyButtons();
 highlightSource();
+enableConversations();

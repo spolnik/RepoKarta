@@ -90,3 +90,61 @@ func TestOpenMigratesM0DatabaseAndPreservesIndexStateAcrossScans(t *testing.T) {
 		t.Fatalf("expected changed commit to become pending, got %#v", repositories[0])
 	}
 }
+
+func TestIndexConfigurationChangeQueuesRepositoriesOnce(t *testing.T) {
+	storage, err := Open(filepath.Join(t.TempDir(), "repokarta.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer storage.Close()
+	repository := catalog.Repository{
+		Name:         "repo",
+		Path:         filepath.Join(t.TempDir(), "repo"),
+		HeadCommit:   "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		ScanState:    "ready",
+		DiscoveredAt: time.Now(),
+		ScannedAt:    time.Now(),
+	}
+	ctx := context.Background()
+	if err := storage.SyncRepositories(ctx, []catalog.Repository{repository}); err != nil {
+		t.Fatal(err)
+	}
+	repositories, err := storage.ListRepositories(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := storage.UpdateIndexState(ctx, repositories[0].ID, "ready", repository.HeadCommit, ""); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := storage.EnsureIndexConfiguration(ctx, "symbols=disabled")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("first configuration should be recorded as a change")
+	}
+	repositories, err = storage.ListRepositories(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repositories[0].IndexState != "pending" {
+		t.Fatalf("index state = %q, want pending", repositories[0].IndexState)
+	}
+	if err := storage.UpdateIndexState(ctx, repositories[0].ID, "ready", repository.HeadCommit, ""); err != nil {
+		t.Fatal(err)
+	}
+	changed, err = storage.EnsureIndexConfiguration(ctx, "symbols=disabled")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed {
+		t.Fatal("unchanged configuration should not queue another rebuild")
+	}
+	repositories, err = storage.ListRepositories(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repositories[0].IndexState != "ready" {
+		t.Fatalf("index state = %q, want ready", repositories[0].IndexState)
+	}
+}

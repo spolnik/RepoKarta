@@ -5,6 +5,10 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="description" content="Commit-pinned local source citation in RepoKarta.">
+    <meta name="theme-color" content="#090b0f">
+    <link rel="icon" href="/assets/favicon.ico" sizes="any">
+    <link rel="icon" type="image/png" href="/assets/favicon-32.png" sizes="32x32">
+    <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
     <title>{{.File.Repository.Name}} / {{.File.Path}} · RepoKarta</title>
     <link rel="stylesheet" href="/assets/app.css">
     <script type="module" src="/assets/app.js"></script>
@@ -13,7 +17,9 @@
     <header class="border-b border-white/[0.07] bg-[#090b0f]/95">
       <div class="mx-auto flex min-h-16 max-w-[1500px] flex-wrap items-center justify-between gap-3 px-5 py-3 lg:px-8">
         <div class="flex min-w-0 items-center gap-3">
-          <a href="/" class="grid size-8 shrink-0 place-items-center rounded-lg border border-emerald-400/20 bg-emerald-400/10 font-mono text-sm font-bold text-emerald-300" aria-label="Back to RepoKarta">R</a>
+          <a href="/" class="brand-mark shrink-0" aria-label="Back to RepoKarta">
+            <img src="/assets/repokarta-mark-192.png" alt="" width="32" height="32">
+          </a>
           <span class="text-slate-700">/</span>
           <span class="shrink-0 text-sm font-medium text-slate-300">{{.File.Repository.Name}}</span>
           <span class="text-slate-700">/</span>

@@ -48,8 +48,9 @@ repositories on managed Windows and Apple Silicon macOS laptops.
 6. The user searches all repositories or limits a query by repository,
    language, path, or file.
 7. The user opens a result in a syntax-highlighted source viewer.
-8. If an Anthropic API key is configured, the user can ask a question about
-   selected repositories and receive an answer with source citations.
+8. If a supported local provider harness is authenticated, the user can ask a
+   question across the indexed repositories and receive an answer with
+   commit-pinned source citations.
 9. The user can generate and browse a repository wiki and architecture map.
 10. When repositories change, RepoKarta refreshes affected indexes and marks
     derived documentation stale.
@@ -83,9 +84,15 @@ repositories on managed Windows and Apple Silicon macOS laptops.
 - Support substring, regular-expression, boolean, repository, language, path,
   file, and symbol queries exposed by Zoekt.
 - Stream large result sets to the browser.
+- Accept an explicit bounded result limit and report returned files, matching
+  files, skipped candidates/shards, truncation, and whether totals are exact.
+- Never turn an unavailable search capability into a silent empty result.
 - Show repository, revision, path, line range, context, and match highlights.
 - Treat Universal Ctags as an optional enhancement for symbol ranking rather
-  than a runtime requirement.
+  than a runtime requirement. Probe it at startup, rebuild indexes when its
+  availability changes, and warn on `sym:` queries when it is unavailable.
+- Fall back to a RepoKarta-owned Git CLI shadow repository when go-git cannot
+  open a repository format supported by the installed Git runtime.
 
 ### Source browser
 
@@ -99,11 +106,21 @@ repositories on managed Windows and Apple Silicon macOS laptops.
 
 ### Questions about code
 
-- Initial provider: Anthropic API using a user-supplied API key.
-- Do not collect or proxy Claude Free, Pro, or Max subscription credentials.
+- Initial provider harnesses:
+  - Codex app-server using the user's existing Codex/ChatGPT login.
+  - Claude Code stream-json using the user's existing Claude login.
+- Treat Codex and Claude as harness adapters behind one RepoKarta-owned Go
+  interface; do not pretend their agent protocols are interchangeable model
+  APIs.
+- Start provider harnesses locally and let them own authentication. Do not
+  collect, proxy, store, or reproduce ChatGPT or Claude subscription
+  credentials.
+- Keep direct API-key and local-model providers possible behind the same
+  conversation interface.
 - Implement a read-only agent loop with narrowly scoped tools:
+  - `list_repositories`
   - `search_code`
-  - `open_file`
+  - `get_file`
   - `list_tree`
   - `find_symbol`
   - `git_log`
@@ -115,9 +132,15 @@ repositories on managed Windows and Apple Silicon macOS laptops.
 - Persist conversations only when the user enables persistence.
 - Keep an AI-provider interface so additional hosted or local models can be
   added later.
-- Evaluate the Claude Agent SDK as an optional helper integration. The default
-  implementation should remain Go-native so normal runtime does not require
-  Node.js or Python.
+- Keep the default orchestration Go-native. The Claude Agent SDK may remain an
+  optional future adapter, but normal runtime must not require Node.js or
+  Python.
+- Serve the same authenticated, loopback-only MCP tools to every provider.
+- Keep a JSON API as the protocol-independent capability layer and MCP as a
+  thin adapter over the same Go service or that API. Do not add MCP-only code
+  capabilities.
+- Run Codex read-only with approvals disabled. Run Claude in plan mode with
+  shell, mutation, and web tools disabled.
 
 ### Architecture visualization
 

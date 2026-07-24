@@ -11,6 +11,14 @@ import (
 	"github.com/spolnik/RepoKarta/internal/search"
 )
 
+func TestDiscoverCTagsTreatsMissingConfiguredCommandAsUnavailable(t *testing.T) {
+	t.Setenv("CTAGS_COMMAND", filepath.Join(t.TempDir(), "missing-ctags"))
+	t.Setenv("PATH", t.TempDir())
+	if found := discoverCTags(); found != "" {
+		t.Fatalf("discoverCTags() = %q, want unavailable", found)
+	}
+}
+
 func TestAdapterIndexesAndSearchesRepositoryOnNativePlatform(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git is not installed")
@@ -96,6 +104,141 @@ func TestAdapterIndexesAndSearchesRepositoryOnNativePlatform(t *testing.T) {
 	}
 	if len(result.Matches) != 1 || result.Matches[0].Revision != updatedRepository.HeadCommit {
 		t.Fatalf("expected search to use updated commit, got %#v", result)
+	}
+}
+
+func TestSearchReportsExactFileLimitTruncation(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	root := t.TempDir()
+	repositoryPath := filepath.Join(root, "many-files")
+	runGit(t, root, "init", repositoryPath)
+	runGit(t, repositoryPath, "config", "user.email", "repokarta@example.test")
+	runGit(t, repositoryPath, "config", "user.name", "RepoKarta tests")
+	for _, name := range []string{"one.txt", "two.txt", "three.txt"} {
+		if err := os.WriteFile(filepath.Join(repositoryPath, name), []byte("fleet needle\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runGit(t, repositoryPath, "add", ".")
+	runGit(t, repositoryPath, "commit", "-m", "Add fleet files")
+	repositories, err := catalog.Discover(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository := repositories[0]
+	repository.ID = 43
+	adapter, err := New(filepath.Join(t.TempDir(), "indexes"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter.symbolsEnabled = false
+	adapter.ctagsPath = ""
+	defer adapter.Close()
+	if _, err := adapter.Index(context.Background(), repository); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := adapter.Search(context.Background(), search.Query{Text: "fleet needle", Limit: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Truncated || result.ReturnedFiles != 2 || result.FileCount != 3 {
+		t.Fatalf("unexpected completeness metadata: %#v", result)
+	}
+	if !result.TotalFilesExact || result.EstimatedFiles != 3 || result.Limit != 2 {
+		t.Fatalf("unexpected total metadata: %#v", result)
+	}
+}
+
+func TestSymbolQueryWarnsWhenUniversalCTagsIsUnavailable(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	root := t.TempDir()
+	repositoryPath := filepath.Join(root, "symbols")
+	runGit(t, root, "init", repositoryPath)
+	runGit(t, repositoryPath, "config", "user.email", "repokarta@example.test")
+	runGit(t, repositoryPath, "config", "user.name", "RepoKarta tests")
+	if err := os.WriteFile(filepath.Join(repositoryPath, "main.go"), []byte("package main\n\nfunc FleetSymbol() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repositoryPath, "add", ".")
+	runGit(t, repositoryPath, "commit", "-m", "Add symbol")
+	repositories, err := catalog.Discover(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository := repositories[0]
+	repository.ID = 44
+	adapter, err := New(filepath.Join(t.TempDir(), "indexes"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter.symbolsEnabled = false
+	adapter.ctagsPath = ""
+	defer adapter.Close()
+	if _, err := adapter.Index(context.Background(), repository); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := adapter.Search(context.Background(), search.Query{
+		Text:  "sym:FleetSymbol",
+		Mode:  "zoekt",
+		Limit: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Warnings) != 1 || result.Warnings[0].Code != "symbol_index_disabled" {
+		t.Fatalf("warnings = %#v", result.Warnings)
+	}
+}
+
+func TestIndexFallsBackToGitCLIForWorktreeConfigRepositories(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	root := t.TempDir()
+	repositoryPath := filepath.Join(root, "worktree-config")
+	runGit(t, root, "init", repositoryPath)
+	runGit(t, repositoryPath, "config", "user.email", "repokarta@example.test")
+	runGit(t, repositoryPath, "config", "user.name", "RepoKarta tests")
+	if err := os.WriteFile(filepath.Join(repositoryPath, "fallback.txt"), []byte("worktree fallback needle\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repositoryPath, "add", ".")
+	runGit(t, repositoryPath, "commit", "-m", "Add fallback source")
+	runGit(t, repositoryPath, "config", "core.repositoryFormatVersion", "1")
+	runGit(t, repositoryPath, "config", "extensions.worktreeConfig", "true")
+
+	repositories, err := catalog.Discover(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository := repositories[0]
+	repository.ID = 45
+	indexDirectory := filepath.Join(t.TempDir(), "indexes")
+	adapter, err := New(indexDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter.symbolsEnabled = false
+	adapter.ctagsPath = ""
+	defer adapter.Close()
+	if _, err := adapter.Index(context.Background(), repository); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(indexDirectory, "git-cli-fallback", "repo-45.git", "HEAD")); err != nil {
+		t.Fatalf("Git CLI fallback was not created: %v", err)
+	}
+	result, err := adapter.Search(context.Background(), search.Query{Text: "worktree fallback needle"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Matches) != 1 || result.Matches[0].Revision != repository.HeadCommit {
+		t.Fatalf("fallback search result = %#v", result)
 	}
 }
 

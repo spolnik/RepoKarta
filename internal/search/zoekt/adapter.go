@@ -3,10 +3,12 @@
 package zoekt
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	stdregexp "regexp"
 	"regexp/syntax"
@@ -37,6 +39,8 @@ const Revision = "2b2ce2e398e6bee68d67143f567b6c6199340c7f"
 // Adapter indexes Git HEADs into RepoKarta-owned Zoekt shards.
 type Adapter struct {
 	indexDirectory string
+	ctagsPath      string
+	symbolsEnabled bool
 	mu             sync.RWMutex
 	searcher       upstream.Streamer
 }
@@ -46,7 +50,33 @@ func New(indexDirectory string) (*Adapter, error) {
 	if err := os.MkdirAll(indexDirectory, 0o755); err != nil {
 		return nil, fmt.Errorf("create Zoekt index directory: %w", err)
 	}
-	return &Adapter{indexDirectory: indexDirectory}, nil
+	ctagsPath := discoverCTags()
+	return &Adapter{
+		indexDirectory: indexDirectory,
+		ctagsPath:      ctagsPath,
+		symbolsEnabled: ctagsPath != "",
+	}, nil
+}
+
+func discoverCTags() string {
+	candidates := []string{strings.TrimSpace(os.Getenv("CTAGS_COMMAND")), "universal-ctags"}
+	for _, candidate := range candidates {
+		if candidate == "" {
+			continue
+		}
+		if resolved, err := exec.LookPath(candidate); err == nil {
+			return resolved
+		}
+	}
+	return ""
+}
+
+// IndexConfiguration changes when existing shards must be rebuilt.
+func (a *Adapter) IndexConfiguration() string {
+	if !a.symbolsEnabled {
+		return "zoekt-" + Revision + ";symbols=disabled"
+	}
+	return "zoekt-" + Revision + ";symbols=universal-ctags"
 }
 
 // Close releases adapter resources.
@@ -81,7 +111,8 @@ func (a *Adapter) Index(ctx context.Context, repository catalog.Repository) (boo
 		BuildOptions: index.Options{
 			IndexDir:            a.indexDirectory,
 			ShardPrefixOverride: shardPrefix(repository),
-			DisableCTags:        true,
+			DisableCTags:        !a.symbolsEnabled,
+			CTagsPath:           a.ctagsPath,
 			RepositoryDescription: upstream.Repository{
 				Name:   repository.Name,
 				Source: repository.Path,
@@ -89,6 +120,19 @@ func (a *Adapter) Index(ctx context.Context, repository catalog.Repository) (boo
 		},
 	}
 	updated, err := gitindex.IndexGitRepo(options)
+	if err != nil && isRepositoryOpenError(err) {
+		shadowPath, shadowErr := a.prepareGitCLIShadow(ctx, repository)
+		if shadowErr != nil {
+			return false, fmt.Errorf(
+				"Zoekt index %s: %w; Git CLI fallback failed: %v",
+				repository.Name,
+				err,
+				shadowErr,
+			)
+		}
+		options.RepoDir = shadowPath
+		updated, err = gitindex.IndexGitRepo(options)
+	}
 	if err != nil {
 		return false, fmt.Errorf("Zoekt index %s: %w", repository.Name, err)
 	}
@@ -141,8 +185,24 @@ func (a *Adapter) Search(ctx context.Context, request search.Query) (search.Resu
 	}
 
 	result := search.Result{
-		Duration:  time.Since(started),
-		Truncated: len(response.Files) >= limit,
+		Duration:        time.Since(started),
+		MatchCount:      response.Stats.MatchCount,
+		FileCount:       response.Stats.FileCount,
+		EstimatedFiles:  response.Stats.FileCount + response.Stats.FilesSkipped,
+		ReturnedFiles:   len(response.Files),
+		FilesSkipped:    response.Stats.FilesSkipped,
+		ShardsSkipped:   response.Stats.ShardsSkipped,
+		Limit:           limit,
+		TotalFilesExact: response.Stats.FilesSkipped == 0 && response.Stats.ShardsSkipped == 0 && response.Stats.Crashes == 0,
+	}
+	result.Truncated = result.ReturnedFiles < result.FileCount ||
+		result.FilesSkipped > 0 ||
+		result.ShardsSkipped > 0
+	if containsSymbolQuery(parsed) && !a.symbolsEnabled {
+		result.Warnings = append(result.Warnings, search.Warning{
+			Code:    "symbol_index_disabled",
+			Message: "Symbol search is unavailable because universal-ctags was not found when RepoKarta started.",
+		})
 	}
 	for _, file := range response.Files {
 		match := search.FileMatch{
@@ -168,7 +228,6 @@ func (a *Adapter) Search(ctx context.Context, request search.Query) (search.Resu
 				lineMatch.Fragments = append(lineMatch.Fragments, search.Fragment{Start: start, End: end})
 			}
 			match.Lines = append(match.Lines, lineMatch)
-			result.MatchCount += len(line.LineFragments)
 		}
 		result.Matches = append(result.Matches, match)
 	}
@@ -240,4 +299,72 @@ func shardPrefix(repository catalog.Repository) string {
 
 func trimLineEnding(value string) string {
 	return strings.TrimSuffix(strings.TrimSuffix(value, "\n"), "\r")
+}
+
+func containsSymbolQuery(parsed query.Q) bool {
+	found := false
+	query.VisitAtoms(parsed, func(atom query.Q) {
+		if _, ok := atom.(*query.Symbol); ok {
+			found = true
+		}
+	})
+	return found
+}
+
+func isRepositoryOpenError(err error) bool {
+	message := err.Error()
+	return strings.Contains(message, "openRepo:") ||
+		strings.Contains(message, "plainOpenRepo:")
+}
+
+func (a *Adapter) prepareGitCLIShadow(ctx context.Context, repository catalog.Repository) (string, error) {
+	shadowRoot := filepath.Join(a.indexDirectory, "git-cli-fallback")
+	if err := os.MkdirAll(shadowRoot, 0o755); err != nil {
+		return "", fmt.Errorf("create fallback directory: %w", err)
+	}
+	shadowPath := filepath.Join(shadowRoot, fmt.Sprintf("repo-%d.git", repository.ID))
+	if _, err := os.Stat(filepath.Join(shadowPath, "HEAD")); errors.Is(err, os.ErrNotExist) {
+		if err := runGitCommand(ctx, "", "init", "--bare", shadowPath); err != nil {
+			return "", err
+		}
+	} else if err != nil {
+		return "", fmt.Errorf("inspect fallback repository: %w", err)
+	}
+	ref := "refs/heads/repokarta-index"
+	if err := runGitCommand(
+		ctx,
+		shadowPath,
+		"fetch",
+		"--force",
+		"--no-tags",
+		"--prune",
+		repository.Path,
+		"+HEAD:"+ref,
+	); err != nil {
+		return "", err
+	}
+	if err := runGitCommand(ctx, shadowPath, "symbolic-ref", "HEAD", ref); err != nil {
+		return "", err
+	}
+	return shadowPath, nil
+}
+
+func runGitCommand(ctx context.Context, gitDirectory string, arguments ...string) error {
+	commandArguments := make([]string, 0, len(arguments)+2)
+	if gitDirectory != "" {
+		commandArguments = append(commandArguments, "--git-dir", gitDirectory)
+	}
+	commandArguments = append(commandArguments, arguments...)
+	command := exec.CommandContext(ctx, "git", commandArguments...)
+	command.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0")
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
+	if err := command.Run(); err != nil {
+		message := strings.TrimSpace(stderr.String())
+		if message == "" {
+			message = err.Error()
+		}
+		return errors.New(message)
+	}
+	return nil
 }

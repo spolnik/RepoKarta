@@ -46,6 +46,41 @@ select {
   box-shadow: 0 0 0 4px rgb(52 211 153 / 0.08), 0 0 14px rgb(52 211 153 / 0.45);
 }
 
+.brand-mark {
+  display: grid;
+  width: 2.25rem;
+  height: 2.25rem;
+  flex-shrink: 0;
+  place-items: center;
+  border: 1px solid rgb(52 211 153 / 0.2);
+  border-radius: 0.65rem;
+  background:
+    radial-gradient(circle at 50% 38%, rgb(52 211 153 / 0.12), transparent 72%),
+    rgb(255 255 255 / 0.025);
+  box-shadow:
+    0 0 24px rgb(52 211 153 / 0.08),
+    inset 0 1px rgb(255 255 255 / 0.035);
+  transition: 160ms ease;
+}
+
+.brand-mark img {
+  width: 1.9rem;
+  height: 1.9rem;
+  object-fit: contain;
+}
+
+a.brand-mark:hover,
+.group:hover .brand-mark {
+  border-color: rgb(52 211 153 / 0.42);
+  background:
+    radial-gradient(circle at 50% 38%, rgb(52 211 153 / 0.2), transparent 72%),
+    rgb(255 255 255 / 0.04);
+  box-shadow:
+    0 0 30px rgb(52 211 153 / 0.14),
+    inset 0 1px rgb(255 255 255 / 0.05);
+  transform: translateY(-1px);
+}
+
 .search-panel {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -57,6 +92,161 @@ select {
   box-shadow:
     0 22px 70px rgb(0 0 0 / 0.22),
     inset 0 1px rgb(255 255 255 / 0.025);
+}
+
+.conversation-panel {
+  overflow: hidden;
+  border: 1px solid rgb(167 139 250 / 0.16);
+  border-radius: 1rem;
+  background:
+    radial-gradient(circle at 85% 0%, rgb(139 92 246 / 0.09), transparent 24rem),
+    rgb(255 255 255 / 0.025);
+  box-shadow: 0 22px 70px rgb(0 0 0 / 0.18);
+}
+
+.conversation-messages {
+  display: grid;
+  gap: 0.85rem;
+  max-height: 34rem;
+  min-height: 9rem;
+  overflow-y: auto;
+  padding: 1rem;
+}
+
+.conversation-empty {
+  align-self: center;
+  padding: 1.5rem;
+  color: rgb(100 116 139);
+  font-size: 0.82rem;
+  line-height: 1.5rem;
+  text-align: center;
+}
+
+.conversation-message {
+  max-width: min(88%, 52rem);
+  border: 1px solid rgb(255 255 255 / 0.065);
+  border-radius: 0.8rem;
+  padding: 0.8rem 0.9rem;
+  background: rgb(0 0 0 / 0.15);
+}
+
+.conversation-message-user {
+  justify-self: end;
+  border-color: rgb(52 211 153 / 0.14);
+  background: rgb(16 185 129 / 0.055);
+}
+
+.conversation-message-error {
+  border-color: rgb(251 113 133 / 0.18);
+  background: rgb(251 113 133 / 0.05);
+}
+
+.conversation-role {
+  margin-bottom: 0.35rem;
+  color: rgb(100 116 139);
+  font-size: 0.61rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.conversation-content {
+  color: rgb(203 213 225);
+  font-size: 0.84rem;
+  line-height: 1.45rem;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.conversation-source-link {
+  color: rgb(110 231 183);
+  text-decoration: underline;
+  text-decoration-color: rgb(52 211 153 / 0.3);
+  text-underline-offset: 0.18rem;
+}
+
+.conversation-sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.7rem;
+  padding-top: 0.65rem;
+  border-top: 1px solid rgb(255 255 255 / 0.055);
+}
+
+.conversation-sources a {
+  overflow: hidden;
+  max-width: 100%;
+  border: 1px solid rgb(52 211 153 / 0.14);
+  border-radius: 999px;
+  padding: 0.25rem 0.5rem;
+  background: rgb(16 185 129 / 0.055);
+  color: rgb(110 231 183);
+  font-family: var(--font-mono);
+  font-size: 0.61rem;
+  text-overflow: ellipsis;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.conversation-sources a:hover {
+  border-color: rgb(52 211 153 / 0.35);
+  background: rgb(16 185 129 / 0.1);
+}
+
+.conversation-input {
+  width: 100%;
+  resize: vertical;
+  border: 1px solid rgb(255 255 255 / 0.075);
+  border-radius: 0.7rem;
+  padding: 0.75rem 0.85rem;
+  background: rgb(0 0 0 / 0.18);
+  color: white;
+  font-size: 0.86rem;
+  line-height: 1.4rem;
+  outline: none;
+}
+
+.conversation-input:focus {
+  border-color: rgb(167 139 250 / 0.35);
+  box-shadow: 0 0 0 3px rgb(139 92 246 / 0.06);
+}
+
+.conversation-input::placeholder {
+  color: rgb(71 85 105);
+}
+
+.conversation-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-height: 2.35rem;
+  border: 1px solid rgb(255 255 255 / 0.065);
+  border-radius: 0.58rem;
+  padding: 0.4rem 0.6rem;
+  background: rgb(0 0 0 / 0.13);
+}
+
+.conversation-control span {
+  color: rgb(71 85 105);
+  font-size: 0.64rem;
+  text-transform: uppercase;
+}
+
+.conversation-control select,
+.conversation-control input {
+  min-width: 8rem;
+  max-width: 15rem;
+  border: 0;
+  background: transparent;
+  color: rgb(203 213 225);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  outline: 0;
+}
+
+.conversation-control select option {
+  background: #101318;
 }
 
 .search-panel:focus-within {

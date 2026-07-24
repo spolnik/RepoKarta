@@ -7,7 +7,12 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/spolnik/RepoKarta/internal/agent"
+	"github.com/spolnik/RepoKarta/internal/agent/claude"
+	"github.com/spolnik/RepoKarta/internal/agent/codex"
+	"github.com/spolnik/RepoKarta/internal/codeintel"
 	"github.com/spolnik/RepoKarta/internal/httpserver"
+	"github.com/spolnik/RepoKarta/internal/mcpserver"
 	"github.com/spolnik/RepoKarta/internal/search"
 	zoektadapter "github.com/spolnik/RepoKarta/internal/search/zoekt"
 	"github.com/spolnik/RepoKarta/internal/store"
@@ -20,6 +25,8 @@ type Config struct {
 	Excludes       []string
 	Version        string
 	OpenBrowser    bool
+	CodexCommand   string
+	ClaudeCommand  string
 }
 
 func DefaultConfig() (Config, error) {
@@ -38,6 +45,8 @@ func DefaultConfig() (Config, error) {
 		DataDirectory:  filepath.Join(cacheDirectory, "RepoKarta"),
 		RepositoryRoot: workingDirectory,
 		OpenBrowser:    true,
+		CodexCommand:   "codex",
+		ClaudeCommand:  "claude",
 	}, nil
 }
 
@@ -62,6 +71,11 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 	defer engine.Close()
+	if changed, err := database.EnsureIndexConfiguration(ctx, engine.IndexConfiguration()); err != nil {
+		return fmt.Errorf("validate index configuration: %w", err)
+	} else if changed {
+		slog.Info("index capabilities changed; queued repositories for rebuild", "configuration", engine.IndexConfiguration())
+	}
 
 	coordinator := search.NewCoordinator(cfg.RepositoryRoot, cfg.Excludes, database, engine)
 	if err := coordinator.Start(ctx); err != nil {
@@ -80,12 +94,35 @@ func Run(ctx context.Context, cfg Config) error {
 		"data_directory", cfg.DataDirectory,
 	)
 
+	mcpToken, err := mcpserver.NewToken()
+	if err != nil {
+		return fmt.Errorf("create MCP bearer token: %w", err)
+	}
+	baseURL := "http://" + cfg.ListenAddress
+	intelligence := codeintel.New(database, engine, baseURL)
+	citations := mcpserver.NewCitationTracker()
+	mcpHandler := mcpserver.NewHandler(mcpserver.Config{
+		Version: cfg.Version,
+		BaseURL: baseURL,
+		Token:   mcpToken,
+	}, intelligence, citations)
+	conversations := agent.NewManager(
+		cfg.RepositoryRoot,
+		baseURL+"/mcp",
+		mcpToken,
+		&codex.Adapter{Command: cfg.CodexCommand},
+		&claude.Adapter{Command: cfg.ClaudeCommand},
+	).UseCitations(citations)
+	defer conversations.Close()
+
 	server, err := httpserver.New(httpserver.Config{
 		Address:        cfg.ListenAddress,
 		RepositoryRoot: cfg.RepositoryRoot,
 		Version:        cfg.Version,
 		OpenBrowser:    cfg.OpenBrowser,
-	}, database, engine, coordinator)
+		MCPHandler:     mcpHandler,
+		Conversations:  conversations,
+	}, intelligence, coordinator)
 	if err != nil {
 		return err
 	}

@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	currentSchemaVersion = 2
+	currentSchemaVersion = 3
 
 	schemaV1 = `
 CREATE TABLE IF NOT EXISTS repositories (
@@ -36,6 +36,12 @@ ALTER TABLE repositories ADD COLUMN indexed_commit TEXT NOT NULL DEFAULT '';
 ALTER TABLE repositories ADD COLUMN indexed_at TEXT NOT NULL DEFAULT '';
 CREATE INDEX IF NOT EXISTS repositories_name_index ON repositories(name COLLATE NOCASE);
 CREATE INDEX IF NOT EXISTS repositories_index_state_index ON repositories(index_state);`
+
+	schemaV3 = `
+CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);`
 )
 
 // Store persists RepoKarta-owned metadata. Repository source remains read-only.
@@ -80,6 +86,8 @@ func migrate(db *sql.DB) error {
 			migration = schemaV1
 		case 2:
 			migration = schemaV2
+		case 3:
+			migration = schemaV3
 		default:
 			return fmt.Errorf("missing migration for schema version %d", next)
 		}
@@ -102,6 +110,39 @@ func migrate(db *sql.DB) error {
 		version = next
 	}
 	return nil
+}
+
+// EnsureIndexConfiguration queues every repository for reindexing when the
+// indexer's capability signature changes, such as ctags becoming available.
+func (s *Store) EnsureIndexConfiguration(ctx context.Context, signature string) (bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+
+	var current string
+	err = tx.QueryRowContext(ctx, "SELECT value FROM app_settings WHERE key = 'index_configuration'").Scan(&current)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return false, err
+	}
+	if err == nil && current == signature {
+		return false, tx.Commit()
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE repositories
+SET index_state = 'pending', index_error = '', indexed_at = ''`); err != nil {
+		return false, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO app_settings (key, value) VALUES ('index_configuration', ?)
+ON CONFLICT(key) DO UPDATE SET value = excluded.value`, signature); err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // Close closes the metadata database.

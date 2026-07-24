@@ -25,10 +25,24 @@ type Query struct {
 
 // Result contains source matches tied to exact repository revisions.
 type Result struct {
-	Matches    []FileMatch
-	MatchCount int
-	Duration   time.Duration
-	Truncated  bool
+	Matches         []FileMatch
+	MatchCount      int
+	FileCount       int
+	EstimatedFiles  int
+	ReturnedFiles   int
+	FilesSkipped    int
+	ShardsSkipped   int
+	Limit           int
+	Duration        time.Duration
+	Truncated       bool
+	TotalFilesExact bool
+	Warnings        []Warning
+}
+
+// Warning makes a search capability or completeness limitation explicit.
+type Warning struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
 }
 
 // FileMatch is one matched source file.

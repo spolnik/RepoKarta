@@ -19,7 +19,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/spolnik/RepoKarta/internal/agent"
 	"github.com/spolnik/RepoKarta/internal/catalog"
+	"github.com/spolnik/RepoKarta/internal/codeintel"
 	"github.com/spolnik/RepoKarta/internal/search"
 	"github.com/spolnik/RepoKarta/internal/source"
 	"github.com/spolnik/RepoKarta/web"
@@ -30,20 +32,15 @@ const (
 	eventPollInterval  = time.Second
 )
 
-// RepositoryStore supplies catalogue metadata to HTTP handlers.
-type RepositoryStore interface {
-	ListRepositories(context.Context) ([]catalog.Repository, error)
-	RepositoryByID(context.Context, int64) (catalog.Repository, error)
-}
-
-// CodeSearcher is the read-only code search surface.
-type CodeSearcher interface {
-	Search(context.Context, search.Query) (search.Result, error)
-}
-
 // CatalogueRefresher manually rediscovers and queues repositories.
 type CatalogueRefresher interface {
 	Refresh(context.Context) error
+}
+
+// ConversationService supplies provider status and streamed read-only turns.
+type ConversationService interface {
+	Statuses(context.Context) []agent.Status
+	Send(context.Context, agent.TurnRequest, func(agent.Event) error) error
 }
 
 // Config controls the local HTTP server.
@@ -52,16 +49,18 @@ type Config struct {
 	RepositoryRoot string
 	Version        string
 	OpenBrowser    bool
+	MCPHandler     http.Handler
+	Conversations  ConversationService
 }
 
 // Server hosts RepoKarta's loopback interface.
 type Server struct {
-	config    Config
-	server    *http.Server
-	templates *template.Template
-	store     RepositoryStore
-	searcher  CodeSearcher
-	refresher CatalogueRefresher
+	config       Config
+	server       *http.Server
+	templates    *template.Template
+	intelligence *codeintel.Service
+	refresher    CatalogueRefresher
+	agents       ConversationService
 }
 
 type pageData struct {
@@ -75,13 +74,21 @@ type pageData struct {
 }
 
 type searchData struct {
-	Query      search.Query
-	Performed  bool
-	Error      string
-	Duration   string
-	MatchCount int
-	Truncated  bool
-	Matches    []searchMatchView
+	Query           search.Query
+	Performed       bool
+	Error           string
+	Duration        string
+	MatchCount      int
+	FileCount       int
+	EstimatedFiles  int
+	ReturnedFiles   int
+	Limit           int
+	TotalFilesExact bool
+	FilesSkipped    int
+	ShardsSkipped   int
+	Warnings        []search.Warning
+	Truncated       bool
+	Matches         []searchMatchView
 }
 
 type searchMatchView struct {
@@ -105,7 +112,7 @@ type sourcePageData struct {
 }
 
 // New builds the local HTTP server and parses embedded templates.
-func New(config Config, store RepositoryStore, searcher CodeSearcher, refresher CatalogueRefresher) (*Server, error) {
+func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefresher) (*Server, error) {
 	functions := template.FuncMap{
 		"formatTime":    formatTime,
 		"highlightLine": highlightLine,
@@ -125,22 +132,33 @@ func New(config Config, store RepositoryStore, searcher CodeSearcher, refresher 
 	}
 
 	server := &Server{
-		config:    config,
-		templates: templates,
-		store:     store,
-		searcher:  searcher,
-		refresher: refresher,
+		config:       config,
+		templates:    templates,
+		intelligence: intelligence,
+		refresher:    refresher,
+		agents:       config.Conversations,
 	}
 
 	mux := http.NewServeMux()
 	mux.Handle("GET /assets/", http.FileServer(http.FS(dist)))
-	mux.HandleFunc("GET /", server.home)
+	mux.HandleFunc("GET /{$}", server.home)
 	mux.HandleFunc("GET /repositories", server.repositoryList)
 	mux.HandleFunc("POST /repositories/refresh", server.refreshRepositories)
 	mux.HandleFunc("GET /search", server.search)
 	mux.HandleFunc("GET /source/{repositoryID}", server.source)
+	mux.HandleFunc("GET /api/search", server.apiSearch)
+	mux.HandleFunc("GET /api/repositories", server.apiRepositories)
+	mux.HandleFunc("GET /api/file/{repository}", server.apiFile)
+	mux.HandleFunc("GET /api/tree/{repository}", server.apiTree)
 	mux.HandleFunc("GET /events", server.events)
 	mux.HandleFunc("GET /healthz", server.health)
+	if config.MCPHandler != nil {
+		mux.Handle("/mcp", config.MCPHandler)
+	}
+	if config.Conversations != nil {
+		mux.HandleFunc("GET /api/providers", server.providerStatuses)
+		mux.HandleFunc("POST /api/chat", server.chat)
+	}
 
 	server.server = &http.Server{
 		Addr:              config.Address,
@@ -150,6 +168,111 @@ func New(config Config, store RepositoryStore, searcher CodeSearcher, refresher 
 	}
 
 	return server, nil
+}
+
+func (s *Server) providerStatuses(response http.ResponseWriter, request *http.Request) {
+	response.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(response).Encode(map[string]any{
+		"providers": s.agents.Statuses(request.Context()),
+	})
+}
+
+func (s *Server) chat(response http.ResponseWriter, request *http.Request) {
+	request.Body = http.MaxBytesReader(response, request.Body, 64<<10)
+	var turn agent.TurnRequest
+	if err := json.NewDecoder(request.Body).Decode(&turn); err != nil {
+		http.Error(response, "Invalid conversation request", http.StatusBadRequest)
+		return
+	}
+	turn.Message = strings.TrimSpace(turn.Message)
+	turn.Provider = strings.TrimSpace(turn.Provider)
+	turn.Model = strings.TrimSpace(turn.Model)
+	turn.ConversationID = strings.TrimSpace(turn.ConversationID)
+	if turn.Message == "" || (turn.ConversationID == "" && turn.Provider == "") {
+		http.Error(response, "Provider and message are required", http.StatusBadRequest)
+		return
+	}
+
+	flusher, ok := response.(http.Flusher)
+	if !ok {
+		http.Error(response, "Streaming is not supported", http.StatusInternalServerError)
+		return
+	}
+	response.Header().Set("Content-Type", "application/x-ndjson; charset=utf-8")
+	response.Header().Set("Cache-Control", "no-store")
+	response.Header().Set("X-Accel-Buffering", "no")
+	encoder := json.NewEncoder(response)
+	emit := func(event agent.Event) error {
+		if err := encoder.Encode(event); err != nil {
+			return err
+		}
+		flusher.Flush()
+		return nil
+	}
+	if err := s.agents.Send(request.Context(), turn, emit); err != nil {
+		slog.Warn("conversation turn failed", "provider", turn.Provider, "error", err)
+		_ = emit(agent.Event{Type: agent.EventError, ConversationID: turn.ConversationID, Text: err.Error()})
+	}
+}
+
+func (s *Server) apiSearch(response http.ResponseWriter, request *http.Request) {
+	limit, err := apiSearchLimit(request.URL.Query().Get("limit"))
+	if err != nil {
+		writeAPIError(response, http.StatusBadRequest, err)
+		return
+	}
+	result, err := s.intelligence.Search(request.Context(), codeintel.SearchRequest{
+		Query:      request.URL.Query().Get("q"),
+		Repository: request.URL.Query().Get("repo"),
+		Language:   request.URL.Query().Get("lang"),
+		Path:       request.URL.Query().Get("path"),
+		File:       request.URL.Query().Get("file"),
+		Mode:       request.URL.Query().Get("mode"),
+		Limit:      limit,
+	})
+	if err != nil {
+		writeAPIError(response, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
+func (s *Server) apiRepositories(response http.ResponseWriter, request *http.Request) {
+	repositories, err := s.intelligence.Repositories(request.Context())
+	if err != nil {
+		writeAPIError(response, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, repositories)
+}
+
+func (s *Server) apiFile(response http.ResponseWriter, request *http.Request) {
+	start, end := parseLineRange(request.URL.Query().Get("lines"))
+	file, err := s.intelligence.GetFile(request.Context(), codeintel.FileRequest{
+		Repository: request.PathValue("repository"),
+		Revision:   request.URL.Query().Get("rev"),
+		Path:       request.URL.Query().Get("path"),
+		StartLine:  start,
+		EndLine:    end,
+	})
+	if err != nil {
+		writeCodeIntelligenceError(response, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, file)
+}
+
+func (s *Server) apiTree(response http.ResponseWriter, request *http.Request) {
+	tree, err := s.intelligence.ListTree(request.Context(), codeintel.TreeRequest{
+		Repository: request.PathValue("repository"),
+		Revision:   request.URL.Query().Get("rev"),
+		Path:       request.URL.Query().Get("path"),
+	})
+	if err != nil {
+		writeCodeIntelligenceError(response, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, tree)
 }
 
 // Run listens until the context is cancelled and then shuts down gracefully.
@@ -232,19 +355,35 @@ func (s *Server) search(response http.ResponseWriter, request *http.Request) {
 		Path:       strings.TrimSpace(request.URL.Query().Get("path")),
 		File:       strings.TrimSpace(request.URL.Query().Get("file")),
 		Mode:       strings.TrimSpace(request.URL.Query().Get("mode")),
-		Limit:      100,
+		Limit:      parseSearchLimit(request.URL.Query().Get("limit")),
 	}
 	data.Search.Query = query
 	data.Search.Performed = query.Text != ""
 	if data.Search.Performed {
-		result, searchError := s.searcher.Search(request.Context(), query)
+		result, searchError := s.intelligence.Search(request.Context(), codeintel.SearchRequest{
+			Query:      query.Text,
+			Repository: query.Repository,
+			Language:   query.Language,
+			Path:       query.Path,
+			File:       query.File,
+			Mode:       query.Mode,
+			Limit:      query.Limit,
+		})
 		if searchError != nil {
 			data.Search.Error = searchError.Error()
 		} else {
-			data.Search.Duration = formatDuration(result.Duration)
+			data.Search.Duration = formatMilliseconds(result.DurationMS)
 			data.Search.MatchCount = result.MatchCount
+			data.Search.FileCount = result.MatchingFiles
+			data.Search.EstimatedFiles = result.EstimatedTotalFiles
+			data.Search.ReturnedFiles = result.ReturnedFiles
+			data.Search.Limit = result.Limit
+			data.Search.TotalFilesExact = result.TotalFilesExact
+			data.Search.FilesSkipped = result.FilesSkipped
+			data.Search.ShardsSkipped = result.ShardsSkipped
+			data.Search.Warnings = result.Warnings
 			data.Search.Truncated = result.Truncated
-			data.Search.Matches = resolveMatches(result.Matches, data.Repositories)
+			data.Search.Matches = resolveSearchViews(result.Matches, data.Repositories)
 		}
 	}
 
@@ -261,7 +400,7 @@ func (s *Server) source(response http.ResponseWriter, request *http.Request) {
 		http.NotFound(response, request)
 		return
 	}
-	repository, err := s.store.RepositoryByID(request.Context(), repositoryID)
+	repository, err := s.intelligence.RepositoryByID(request.Context(), repositoryID)
 	if err != nil {
 		http.NotFound(response, request)
 		return
@@ -334,7 +473,7 @@ func (s *Server) events(response http.ResponseWriter, request *http.Request) {
 		case <-request.Context().Done():
 			return
 		case <-ticker.C:
-			repositories, err := s.store.ListRepositories(request.Context())
+			repositories, err := s.intelligence.CatalogRepositories(request.Context())
 			if err != nil {
 				return
 			}
@@ -360,7 +499,7 @@ func (s *Server) health(response http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) pageData(ctx context.Context) (pageData, error) {
-	repositories, err := s.store.ListRepositories(ctx)
+	repositories, err := s.intelligence.CatalogRepositories(ctx)
 	if err != nil {
 		return pageData{}, err
 	}
@@ -368,6 +507,9 @@ func (s *Server) pageData(ctx context.Context) (pageData, error) {
 		Version:        s.config.Version,
 		RepositoryRoot: s.config.RepositoryRoot,
 		Repositories:   repositories,
+		Search: searchData{
+			Query: search.Query{Limit: codeintel.DefaultSearchLimit},
+		},
 	}
 	for _, repository := range repositories {
 		switch repository.IndexState {
@@ -389,7 +531,7 @@ func (s *Server) render(response http.ResponseWriter, name string, data any) {
 	}
 }
 
-func resolveMatches(matches []search.FileMatch, repositories []catalog.Repository) []searchMatchView {
+func resolveSearchViews(matches []codeintel.SearchMatch, repositories []catalog.Repository) []searchMatchView {
 	views := make([]searchMatchView, 0, len(matches))
 	for _, match := range matches {
 		view := searchMatchView{
@@ -397,7 +539,16 @@ func resolveMatches(matches []search.FileMatch, repositories []catalog.Repositor
 			Revision:   match.Revision,
 			Path:       match.Path,
 			Language:   match.Language,
-			Lines:      match.Lines,
+			Lines:      make([]search.LineMatch, 0, len(match.Lines)),
+		}
+		for _, line := range match.Lines {
+			view.Lines = append(view.Lines, search.LineMatch{
+				Number:    line.Number,
+				Text:      line.Text,
+				Before:    line.Before,
+				After:     line.After,
+				Fragments: line.Fragments,
+			})
 		}
 		for _, repository := range repositories {
 			if repository.IndexedCommit != match.Revision && repository.HeadCommit != match.Revision {
@@ -414,6 +565,54 @@ func resolveMatches(matches []search.FileMatch, repositories []catalog.Repositor
 		views = append(views, view)
 	}
 	return views
+}
+
+func parseSearchLimit(value string) int {
+	limit, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || limit <= 0 {
+		return codeintel.DefaultSearchLimit
+	}
+	return min(limit, codeintel.MaximumSearchLimit)
+}
+
+func apiSearchLimit(value string) (int, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return codeintel.DefaultSearchLimit, nil
+	}
+	limit, err := strconv.Atoi(value)
+	if err != nil || limit <= 0 || limit > codeintel.MaximumSearchLimit {
+		return 0, fmt.Errorf("limit must be an integer from 1 to %d", codeintel.MaximumSearchLimit)
+	}
+	return limit, nil
+}
+
+func writeCodeIntelligenceError(response http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, source.ErrUnsafePath), errors.Is(err, source.ErrUnknownRevision):
+		writeAPIError(response, http.StatusBadRequest, err)
+	case errors.Is(err, source.ErrUnsupportedFile):
+		writeAPIError(response, http.StatusUnsupportedMediaType, err)
+	default:
+		writeAPIError(response, http.StatusNotFound, err)
+	}
+}
+
+func writeAPIError(response http.ResponseWriter, status int, err error) {
+	writeJSON(response, status, map[string]any{
+		"error": map[string]string{
+			"message": err.Error(),
+		},
+	})
+}
+
+func writeJSON(response http.ResponseWriter, status int, value any) {
+	response.Header().Set("Content-Type", "application/json; charset=utf-8")
+	response.Header().Set("Cache-Control", "no-store")
+	response.WriteHeader(status)
+	if err := json.NewEncoder(response).Encode(value); err != nil {
+		slog.Warn("encode JSON response", "error", err)
+	}
 }
 
 func parseLineRange(value string) (int, int) {
@@ -467,6 +666,13 @@ func formatDuration(duration time.Duration) string {
 		return "<1 ms"
 	}
 	return fmt.Sprintf("%d ms", duration.Milliseconds())
+}
+
+func formatMilliseconds(milliseconds float64) string {
+	if milliseconds < 1 {
+		return "<1 ms"
+	}
+	return fmt.Sprintf("%.0f ms", milliseconds)
 }
 
 func formatTime(value time.Time) string {

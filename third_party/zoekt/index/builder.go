@@ -1,4 +1,6 @@
 // Copyright 2016 Google Inc. All rights reserved.
+// Modified by RepoKarta contributors in 2026 for Windows portability.
+// See ../REPOKARTA_UPSTREAM.md for the exact delta.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.

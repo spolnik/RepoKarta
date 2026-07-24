@@ -5,6 +5,10 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="description" content="Fast, local-first search across the Git repositories already on your laptop.">
+    <meta name="theme-color" content="#090b0f">
+    <link rel="icon" href="/assets/favicon.ico" sizes="any">
+    <link rel="icon" type="image/png" href="/assets/favicon-32.png" sizes="32x32">
+    <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
     <title>RepoKarta · Local code search</title>
     <link rel="stylesheet" href="/assets/app.css">
     <script type="module" src="/assets/app.js"></script>
@@ -13,7 +17,9 @@
     <header class="sticky top-0 z-30 border-b border-white/[0.07] bg-[#090b0f]/90 backdrop-blur-xl">
       <div class="mx-auto flex h-16 max-w-[1500px] items-center justify-between px-5 lg:px-8">
         <a href="/" class="group flex items-center gap-3" aria-label="RepoKarta home">
-          <span class="grid size-8 place-items-center rounded-lg border border-emerald-400/20 bg-emerald-400/10 font-mono text-sm font-bold text-emerald-300 shadow-[0_0_28px_rgba(52,211,153,0.08)]">R</span>
+          <span class="brand-mark" aria-hidden="true">
+            <img src="/assets/repokarta-mark-192.png" alt="" width="32" height="32">
+          </span>
           <span class="font-semibold tracking-[-0.02em] text-white">RepoKarta</span>
           <span class="hidden rounded-full border border-white/10 px-2 py-0.5 font-mono text-[10px] text-slate-500 sm:inline">{{.Version}}</span>
         </a>
@@ -38,6 +44,51 @@
               Search every indexed repository on this laptop. Every result is pinned to a commit and opens as a copyable citation.
             </p>
           </div>
+
+          <section class="conversation-panel mb-8" aria-labelledby="conversation-heading" data-conversation>
+            <header class="flex flex-wrap items-start justify-between gap-4 border-b border-white/[0.06] px-5 py-4">
+              <div>
+                <p class="text-xs font-semibold uppercase tracking-[0.2em] text-violet-300">Deep code conversation</p>
+                <h2 id="conversation-heading" class="mt-1 text-lg font-semibold tracking-tight text-white">Ask across every indexed project</h2>
+                <p class="mt-1 text-xs leading-5 text-slate-500">Your local Codex or Claude login reasons over RepoKarta's read-only, commit-pinned tools.</p>
+              </div>
+              <button type="button" class="secondary-button" data-new-conversation>New conversation</button>
+            </header>
+
+            <div id="conversation-messages" class="conversation-messages" aria-live="polite">
+              <div class="conversation-empty" data-conversation-empty>
+                <p>Ask about architecture, behavior, dependencies, or how code flows between projects.</p>
+                <p class="mt-2 font-mono text-[11px] text-slate-600">Answers should include source links you can inspect.</p>
+              </div>
+            </div>
+
+            <form id="conversation-form" class="border-t border-white/[0.06] p-4">
+              <label for="conversation-message" class="sr-only">Question about your code</label>
+              <textarea
+                id="conversation-message"
+                name="message"
+                rows="3"
+                maxlength="12000"
+                placeholder="How does authentication flow across these repositories?"
+                class="conversation-input"
+                required
+              ></textarea>
+              <div class="mt-3 flex flex-wrap items-center gap-2">
+                <label class="conversation-control">
+                  <span>Provider</span>
+                  <select id="conversation-provider" name="provider" disabled>
+                    <option value="">Checking local providers…</option>
+                  </select>
+                </label>
+                <label class="conversation-control">
+                  <span>Model</span>
+                  <input id="conversation-model" name="model" placeholder="Provider default">
+                </label>
+                <button id="conversation-submit" class="search-button ml-auto" type="submit" disabled>Ask RepoKarta</button>
+              </div>
+              <p id="provider-detail" class="mt-2 text-[11px] text-slate-600">Checking your installed provider harnesses…</p>
+            </form>
+          </section>
 
           <form
             action="/search"
@@ -68,7 +119,7 @@
               <kbd class="ml-2 hidden rounded border border-white/10 bg-black/20 px-1.5 py-0.5 font-mono text-[10px] text-emerald-100/60 sm:inline">↵</kbd>
             </button>
 
-            <div class="col-span-full grid gap-3 border-t border-white/[0.06] pt-3 sm:grid-cols-2 xl:grid-cols-5">
+            <div class="col-span-full grid gap-3 border-t border-white/[0.06] pt-3 sm:grid-cols-2 xl:grid-cols-6">
               <label class="filter-field">
                 <span>Repository</span>
                 <select name="repo">
@@ -97,6 +148,10 @@
                   <option value="regex" {{if eq .Search.Query.Mode "regex"}}selected{{end}}>Regular expression</option>
                   <option value="zoekt" {{if eq .Search.Query.Mode "zoekt"}}selected{{end}}>Zoekt syntax</option>
                 </select>
+              </label>
+              <label class="filter-field">
+                <span>File limit</span>
+                <input name="limit" type="number" min="1" max="500" value="{{.Search.Query.Limit}}" inputmode="numeric">
               </label>
             </div>
           </form>
@@ -152,9 +207,26 @@
   </div>
   {{else if .Search.Performed}}
     <div class="mb-3 flex items-center justify-between gap-4 text-xs text-slate-500">
-      <p><span class="font-medium text-slate-300">{{len .Search.Matches}} files</span> · {{.Search.MatchCount}} matches · {{.Search.Duration}}</p>
-      {{if .Search.Truncated}}<p class="text-amber-300/80">Showing the first 100 files</p>{{end}}
+      <p><span class="font-medium text-slate-300">{{.Search.ReturnedFiles}} files shown</span> · {{.Search.MatchCount}} matches · {{.Search.Duration}}</p>
+      {{if .Search.Truncated}}
+      <p class="text-right text-amber-300/80">
+        Showing {{.Search.ReturnedFiles}} of
+        {{if .Search.TotalFilesExact}}{{.Search.FileCount}}{{else}}~{{.Search.EstimatedFiles}}{{end}}
+        files · limit {{.Search.Limit}}
+      </p>
+      {{end}}
     </div>
+    {{range .Search.Warnings}}
+    <div class="mb-3 rounded-xl border border-amber-300/20 bg-amber-300/[0.05] px-4 py-3 text-xs text-amber-100/80">
+      <span class="font-mono text-[10px] uppercase tracking-wider text-amber-300">{{.Code}}</span>
+      <span class="ml-2">{{.Message}}</span>
+    </div>
+    {{end}}
+    {{if or .Search.FilesSkipped .Search.ShardsSkipped}}
+    <p class="mb-3 text-right font-mono text-[10px] text-amber-300/60">
+      {{.Search.FilesSkipped}} candidate files skipped · {{.Search.ShardsSkipped}} shards skipped
+    </p>
+    {{end}}
     {{if .Search.Matches}}
     <div class="space-y-3">
       {{range .Search.Matches}}
