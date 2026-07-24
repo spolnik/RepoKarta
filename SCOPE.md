@@ -308,21 +308,21 @@ logs, generated documents, repository configuration, or browser local storage.
 - [x] Health endpoint and graceful shutdown.
 - [x] Windows build script.
 - [x] macOS/Linux build script.
-- [ ] Continuous integration on Windows and macOS.
+- [x] Continuous integration on Windows and macOS.
 
 Exit condition: a fresh checkout can build a native executable, point it at a
 directory, and display the discovered repositories.
 
 ### M1: useful local code search
 
-- [ ] Complete the Zoekt Windows portability spike and record the integration
+- [x] Complete the Zoekt Windows portability spike and record the integration
   decision.
-- [ ] RepoKarta-owned search and indexing interfaces.
-- [ ] Pinned Zoekt adapter.
-- [ ] Incremental indexing jobs and visible status.
-- [ ] Search query endpoint with cancellation and limits.
-- [ ] Search page with repository, language, path, and file filtering.
-- [ ] Source viewer and stable citations.
+- [x] RepoKarta-owned search and indexing interfaces.
+- [x] Pinned Zoekt adapter.
+- [x] Incremental indexing jobs and visible status.
+- [x] Search query endpoint with cancellation and limits.
+- [x] Search page with repository, language, path, and file filtering.
+- [x] Source viewer and stable citations.
 - [ ] Optional Universal Ctags detection.
 
 Exit condition: cross-repository search is fast and useful without AI.

@@ -1,0 +1,108 @@
+package zoekt
+
+import (
+	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"testing"
+
+	"github.com/spolnik/RepoKarta/internal/catalog"
+	"github.com/spolnik/RepoKarta/internal/search"
+)
+
+func TestAdapterIndexesAndSearchesRepositoryOnNativePlatform(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+
+	root := t.TempDir()
+	repositoryPath := filepath.Join(root, "example")
+	runGit(t, root, "init", repositoryPath)
+	runGit(t, repositoryPath, "config", "user.email", "repokarta@example.test")
+	runGit(t, repositoryPath, "config", "user.name", "RepoKarta tests")
+	source := "package greeting\n\nfunc HelloRepoKarta() string {\n\treturn \"needle from local code\"\n}\n"
+	if err := os.WriteFile(filepath.Join(repositoryPath, "hello.go"), []byte(source), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repositoryPath, "add", "hello.go")
+	runGit(t, repositoryPath, "commit", "-m", "Add searchable source")
+	runGit(t, repositoryPath, "remote", "add", "origin", "git@github.com:example/example.git")
+
+	repositories, err := catalog.Discover(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository := repositories[0]
+	repository.ID = 42
+
+	adapter, err := New(filepath.Join(t.TempDir(), "indexes"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer adapter.Close()
+
+	updated, err := adapter.Index(context.Background(), repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !updated {
+		t.Fatal("expected the first index to create a shard")
+	}
+
+	result, err := adapter.Search(context.Background(), search.Query{
+		Text:       "needle from local code",
+		Repository: "example",
+		Language:   "Go",
+		Path:       "hello",
+		File:       ".go",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Matches) != 1 {
+		t.Fatalf("expected one matching file, got %#v", result)
+	}
+	match := result.Matches[0]
+	if match.Path != "hello.go" || match.Revision != repository.HeadCommit {
+		t.Fatalf("unexpected search match: %#v", match)
+	}
+	if len(match.Lines) != 1 || match.Lines[0].Number != 4 {
+		t.Fatalf("expected a cited line 4, got %#v", match.Lines)
+	}
+
+	if err := os.WriteFile(filepath.Join(repositoryPath, "hello.go"), []byte(source+"\nconst UpdatedNeedle = \"fresh index\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repositoryPath, "add", "hello.go")
+	runGit(t, repositoryPath, "commit", "-m", "Update searchable source")
+	repositories, err = catalog.Discover(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updatedRepository := repositories[0]
+	updatedRepository.ID = repository.ID
+
+	updated, err = adapter.Index(context.Background(), updatedRepository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !updated {
+		t.Fatal("expected changed HEAD to update the shard")
+	}
+	result, err = adapter.Search(context.Background(), search.Query{Text: "fresh index"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Matches) != 1 || result.Matches[0].Revision != updatedRepository.HeadCommit {
+		t.Fatalf("expected search to use updated commit, got %#v", result)
+	}
+}
+
+func runGit(t *testing.T, directory string, arguments ...string) {
+	t.Helper()
+	command := exec.Command("git", append([]string{"-C", directory}, arguments...)...)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", arguments, err, output)
+	}
+}

@@ -1,76 +1,99 @@
 # RepoKarta
 
-Local code search, architecture maps, and living documentation for a directory
-of Git repositories.
+RepoKarta is fast, local-first code search for the Git repositories already on
+your laptop. Point it at a ghorg directory (or any repository root), and it
+discovers, incrementally indexes, and searches committed source without
+modifying a worktree.
 
-RepoKarta is designed to run as a native executable on a developer laptop. It
-uses Go for the local server, Zoekt for code indexing and search, SQLite for
-metadata, and a server-rendered HTMX interface with Vite and Tailwind CSS.
+The current implementation delivers the first useful M1 slice:
 
-The product definition, architecture decisions, milestones, and non-goals live
-in [SCOPE.md](./SCOPE.md).
+- regular, linked-worktree, and bare Git repository discovery;
+- origin, default revision, HEAD, scan, and index metadata in SQLite;
+- native Zoekt indexing on Windows amd64, macOS arm64, and Linux;
+- incremental reindexing when a repository HEAD changes;
+- literal, regular-expression, and native Zoekt query modes;
+- repository, language, path, and file filters;
+- bounded, cancellable result sets with highlighted source matches;
+- commit-pinned source pages and copyable file-and-line citations;
+- live indexing state through Server-Sent Events;
+- loopback Host and Origin validation;
+- embedded frontend assets in one native Go executable.
 
-## Current skeleton
+AI questions, architecture maps, and generated documentation remain later
+milestones. The full product definition and non-goals live in
+[SCOPE.md](./SCOPE.md).
 
-The initial executable:
+## Run
 
-- discovers Git worktrees beneath a selected root without modifying them;
-- records the discovered repositories in a local SQLite database;
-- serves a small embedded HTMX interface;
-- exposes `GET /healthz`;
-- shuts down gracefully.
-
-Code indexing, search, AI-assisted questions, architecture visualization, and
-generated documentation are intentionally planned as subsequent milestones.
-The current upstream Zoekt indexing package is not natively buildable on
-Windows; the required adapter/portability spike is documented in `SCOPE.md`.
-
-## Development
-
-Requirements:
+Requirements for a development build:
 
 - Go 1.26 or newer
 - Node.js 20 or newer
+- Git
 
-Install frontend dependencies and build the embedded assets:
+Build the embedded frontend:
 
 ```sh
-npm --prefix web install
+npm --prefix web ci
 npm --prefix web run build
 ```
 
-Run the Go tests:
-
-```sh
-go test ./...
-```
-
-Start RepoKarta against a directory containing local repositories:
+Start RepoKarta:
 
 ```sh
 go run ./cmd/repokarta serve /path/to/ghorg
 ```
 
-On Windows:
+Windows example:
 
 ```powershell
 go run ./cmd/repokarta serve C:\Work\ghorg
 ```
 
-By default the application listens on `http://127.0.0.1:7331`.
+RepoKarta opens `http://127.0.0.1:7331` in the default browser. Use
+`-open=false` to keep it in the terminal. Exclude directories with a repeatable
+flag:
 
-## Build native executables
+```powershell
+go run ./cmd/repokarta serve -exclude archived -exclude vendor C:\Work\ghorg
+```
 
-Windows:
+Search works without an AI provider or API key. Literal mode is the default;
+regular-expression mode treats the whole query as a regex; Zoekt mode exposes
+boolean, `repo:`, `lang:`, `file:`, `sym:`, and other native Zoekt syntax.
+
+## Storage and safety
+
+RepoKarta binds to loopback by default and treats repositories as read-only.
+It does not fetch, pull, checkout, reset, clean, build, or execute repository
+code.
+
+RepoKarta-owned state is kept outside source repositories:
+
+- Windows: `%LOCALAPPDATA%\RepoKarta\`
+- macOS: `~/Library/Caches/RepoKarta/`
+- Linux: the operating system user cache directory
+
+SQLite stores catalogue and job metadata. Zoekt shards live under `indexes/`;
+future generated documentation will live under `docs/`.
+
+## Validate and package
+
+```sh
+npm --prefix web run typecheck
+npm --prefix web run build
+go test ./...
+```
+
+Native build scripts write the executable to `dist/`:
 
 ```powershell
 .\scripts\build.ps1
 ```
 
-macOS or Linux:
-
 ```sh
 ./scripts/build.sh
 ```
 
-The resulting executable is written to `dist/`.
+The pinned Zoekt revision and Windows portability decision are documented in
+[docs/zoekt-windows-portability.md](./docs/zoekt-windows-portability.md).

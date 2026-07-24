@@ -15,6 +15,17 @@ import (
 
 const version = "0.1.0-dev"
 
+type stringList []string
+
+func (values *stringList) String() string {
+	return fmt.Sprint([]string(*values))
+}
+
+func (values *stringList) Set(value string) error {
+	*values = append(*values, value)
+	return nil
+}
+
 func main() {
 	if err := run(); err != nil {
 		slog.Error("RepoKarta stopped", "error", err)
@@ -52,6 +63,9 @@ func serve(args []string) error {
 	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
 	listenAddress := flags.String("listen", defaults.ListenAddress, "HTTP listen address")
 	dataDirectory := flags.String("data-dir", defaults.DataDirectory, "RepoKarta data directory")
+	openBrowser := flags.Bool("open", defaults.OpenBrowser, "open the local dashboard in the default browser")
+	var excludes stringList
+	flags.Var(&excludes, "exclude", "directory to exclude; repeat for multiple directories")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -73,7 +87,9 @@ func serve(args []string) error {
 		ListenAddress:  *listenAddress,
 		DataDirectory:  *dataDirectory,
 		RepositoryRoot: repositoryRoot,
+		Excludes:       excludes,
 		Version:        version,
+		OpenBrowser:    *openBrowser,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -91,5 +107,7 @@ Usage:
 
 Serve options:
   -listen string     HTTP listen address (default 127.0.0.1:7331)
-  -data-dir string   RepoKarta-owned data directory`)
+  -data-dir string   RepoKarta-owned data directory
+  -exclude string    directory to exclude (repeatable)
+  -open bool         open the local dashboard (default true)`)
 }

@@ -8,6 +8,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "highlight.js": "11.11.1",
     "htmx.org": "2.0.10"
   },
   "devDependencies": {
