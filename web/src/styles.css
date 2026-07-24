@@ -481,8 +481,16 @@ a.brand-mark:hover,
   min-height: 1.55rem;
 }
 
-.source-line:target {
-  background: rgb(52 211 153 / 0.06);
+.source-line:target,
+.source-line-focused {
+  background: linear-gradient(90deg, rgb(52 211 153 / 0.13), rgb(52 211 153 / 0.035));
+}
+
+.source-line:target .source-line-number,
+.source-line-focused .source-line-number {
+  box-shadow: inset 3px 0 rgb(52 211 153 / 0.75);
+  background: #101b1a;
+  color: rgb(110 231 183);
 }
 
 .source-line-number {

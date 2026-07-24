@@ -44,7 +44,7 @@
 
       <section class="source-viewer" aria-label="Source code">
         {{range .File.Lines}}
-        <div class="source-line" id="L{{.Number}}">
+        <div class="source-line{{if lineFocused .Number $.FocusStart $.FocusEnd}} source-line-focused{{end}}" id="L{{.Number}}">
           <a class="source-line-number" href="#L{{.Number}}" aria-label="Line {{.Number}}">{{.Number}}</a>
           <code class="source-code language-{{$.File.Language}}" data-highlight-language="{{$.File.Language}}">{{.Text}}</code>
         </div>

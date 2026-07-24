@@ -21,10 +21,12 @@ import (
 )
 
 const (
-	DefaultSearchLimit = 100
-	MaximumSearchLimit = 500
-	MaximumSourceLines = 500
-	MaximumTreeEntries = 500
+	DefaultSearchLimit  = 100
+	MaximumSearchLimit  = 500
+	MaximumSourceLines  = 500
+	MaximumTreeEntries  = 500
+	sourceWindowLines   = 200
+	sourceContextBefore = 80
 )
 
 // RepositoryStore supplies repository metadata.
@@ -348,12 +350,28 @@ func (s *Service) ListTree(ctx context.Context, request TreeRequest) (TreeRespon
 
 // SourceURL builds a local, commit-pinned human source URL.
 func (s *Service) SourceURL(repositoryID int64, revision, filePath string, start, end int) string {
+	windowStart, windowEnd := SourceWindow(start, end)
 	values := url.Values{
 		"rev":   []string{revision},
 		"path":  []string{filePath},
-		"lines": []string{strconv.Itoa(start) + "-" + strconv.Itoa(end)},
+		"lines": []string{strconv.Itoa(windowStart) + "-" + strconv.Itoa(windowEnd)},
+		"focus": []string{strconv.Itoa(start) + "-" + strconv.Itoa(end)},
 	}
-	return s.baseURL + "/source/" + strconv.FormatInt(repositoryID, 10) + "?" + values.Encode()
+	return s.baseURL + "/source/" + strconv.FormatInt(repositoryID, 10) + "?" + values.Encode() + "#L" + strconv.Itoa(start)
+}
+
+// SourceWindow returns a useful bounded viewing window around an exact cited
+// range. The cited range remains separate so consumers can emphasize it.
+func SourceWindow(start, end int) (int, int) {
+	start = max(1, start)
+	end = max(start, end)
+	windowStart := max(1, start-sourceContextBefore)
+	windowEnd := max(windowStart+sourceWindowLines-1, end)
+	if windowEnd-windowStart+1 > MaximumSourceLines {
+		windowStart = max(1, end-MaximumSourceLines+1)
+		windowEnd = max(windowStart+sourceWindowLines-1, end)
+	}
+	return windowStart, windowEnd
 }
 
 // Citation formats a concise commit-pinned evidence label.

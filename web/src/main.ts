@@ -62,6 +62,19 @@ function highlightSource(): void {
   });
 }
 
+function focusSourceLine(): void {
+  const hashTarget = /^#L\d+$/.test(location.hash)
+    ? document.getElementById(location.hash.slice(1))
+    : null;
+  const target = hashTarget ?? document.querySelector<HTMLElement>(".source-line-focused");
+  if (!target) {
+    return;
+  }
+  window.requestAnimationFrame(() => {
+    target.scrollIntoView({ block: "center", inline: "nearest" });
+  });
+}
+
 type MatchRange = {
   start: number;
   end: number;
@@ -357,6 +370,7 @@ connectIndexEvents();
 enableQueryChips();
 enableCopyButtons();
 highlightSource();
+focusSourceLine();
 highlightSearchResults();
 enableConversations();
 

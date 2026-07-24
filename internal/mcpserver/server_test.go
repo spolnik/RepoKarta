@@ -137,7 +137,7 @@ func TestMCPSearchReturnsPinnedCitation(t *testing.T) {
 	if match.Citation != "RepoKarta@aaaaaaaa:internal/source/source.go#L21-L21" {
 		t.Fatalf("citation = %q", match.Citation)
 	}
-	if match.SourceURL != "http://ui/source/7?lines=21-21&path=internal%2Fsource%2Fsource.go&rev="+revision {
+	if match.SourceURL != "http://ui/source/7?focus=21-21&lines=1-200&path=internal%2Fsource%2Fsource.go&rev="+revision+"#L21" {
 		t.Fatalf("source url = %q", match.SourceURL)
 	}
 	citations := tracker.List("conversation")

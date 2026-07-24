@@ -98,6 +98,7 @@ type searchMatchView struct {
 	Revision     string
 	Path         string
 	Language     string
+	FocusLine    int
 	Lines        []search.LineMatch
 }
 
@@ -110,6 +111,8 @@ type sourcePageData struct {
 	PreviousEnd   int
 	NextStart     int
 	NextEnd       int
+	FocusStart    int
+	FocusEnd      int
 }
 
 // New builds the local HTTP server and parses embedded templates.
@@ -120,8 +123,19 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 		"fragmentRanges": fragmentRanges,
 		"nextLine":       func(line int) int { return line + 1 },
 		"previousLine":   func(line int) int { return max(1, line-1) },
-		"shortCommit":    shortCommit,
-		"statusLabel":    statusLabel,
+		"sourceWindowStart": func(line int) int {
+			start, _ := codeintel.SourceWindow(line, line)
+			return start
+		},
+		"sourceWindowEnd": func(line int) int {
+			_, end := codeintel.SourceWindow(line, line)
+			return end
+		},
+		"lineFocused": func(line, start, end int) bool {
+			return start > 0 && line >= start && line <= end
+		},
+		"shortCommit": shortCommit,
+		"statusLabel": statusLabel,
 	}
 	templates, err := template.New("repokarta").Funcs(functions).ParseFS(web.Files, "templates/*.html")
 	if err != nil {
@@ -409,6 +423,10 @@ func (s *Server) source(response http.ResponseWriter, request *http.Request) {
 	}
 
 	startLine, endLine := parseLineRange(request.URL.Query().Get("lines"))
+	focusStart, focusEnd := parseFocusRange(request.URL.Query().Get("focus"))
+	if focusStart > 0 && (focusStart < startLine || focusEnd > endLine) {
+		startLine, endLine = codeintel.SourceWindow(focusStart, focusEnd)
+	}
 	file, err := source.OpenFile(
 		request.Context(),
 		repository,
@@ -440,16 +458,27 @@ func (s *Server) source(response http.ResponseWriter, request *http.Request) {
 		nextStart = file.EndLine + 1
 		nextEnd = min(file.TotalLines, nextStart+(maximumSourceLines-1))
 	}
+	if focusStart < file.StartLine || focusStart > file.EndLine {
+		focusStart, focusEnd = 0, 0
+	} else {
+		focusEnd = min(focusEnd, file.EndLine)
+	}
+	citationStart, citationEnd := file.StartLine, file.EndLine
+	if focusStart > 0 {
+		citationStart, citationEnd = focusStart, focusEnd
+	}
 
 	data := sourcePageData{
 		Version:       s.config.Version,
 		File:          file,
-		RemoteURL:     remoteFileURL(repository.OriginURL, file.Revision, file.Path, file.StartLine, file.EndLine),
-		Citation:      fmt.Sprintf("%s@%s:%s#L%d-L%d", repository.Name, shortCommit(file.Revision), file.Path, file.StartLine, file.EndLine),
+		RemoteURL:     remoteFileURL(repository.OriginURL, file.Revision, file.Path, citationStart, citationEnd),
+		Citation:      fmt.Sprintf("%s@%s:%s#L%d-L%d", repository.Name, shortCommit(file.Revision), file.Path, citationStart, citationEnd),
 		PreviousStart: previousStart,
 		PreviousEnd:   previousEnd,
 		NextStart:     nextStart,
 		NextEnd:       nextEnd,
+		FocusStart:    focusStart,
+		FocusEnd:      focusEnd,
 	}
 	s.render(response, "source", data)
 }
@@ -543,6 +572,9 @@ func resolveSearchViews(matches []codeintel.SearchMatch, repositories []catalog.
 			Language:   match.Language,
 			Lines:      make([]search.LineMatch, 0, len(match.Lines)),
 		}
+		if len(match.Lines) > 0 {
+			view.FocusLine = match.Lines[0].Number
+		}
 		for _, line := range match.Lines {
 			view.Lines = append(view.Lines, search.LineMatch{
 				Number:    line.Number,
@@ -631,6 +663,30 @@ func parseLineRange(value string) (int, int) {
 	}
 	if end < start {
 		end = start
+	}
+	if end-start+1 > maximumSourceLines {
+		end = start + maximumSourceLines - 1
+	}
+	return start, end
+}
+
+func parseFocusRange(value string) (int, int) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, 0
+	}
+	parts := strings.SplitN(value, "-", 2)
+	start, err := strconv.Atoi(parts[0])
+	if err != nil || start <= 0 {
+		return 0, 0
+	}
+	end := start
+	if len(parts) == 2 {
+		parsed, err := strconv.Atoi(parts[1])
+		if err != nil || parsed < start {
+			return 0, 0
+		}
+		end = parsed
 	}
 	if end-start+1 > maximumSourceLines {
 		end = start + maximumSourceLines - 1

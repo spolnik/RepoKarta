@@ -237,7 +237,7 @@
             <div class="flex min-w-0 items-center gap-2">
               <span class="shrink-0 rounded bg-white/[0.05] px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">{{.Repository}}</span>
               {{if .RepositoryID}}
-              <a class="truncate font-mono text-xs text-slate-200 hover:text-emerald-300" href="/source/{{.RepositoryID}}?rev={{.Revision}}&path={{urlquery .Path}}&lines=1-200">{{.Path}}</a>
+              <a class="truncate font-mono text-xs text-slate-200 hover:text-emerald-300" href="/source/{{.RepositoryID}}?rev={{.Revision}}&path={{urlquery .Path}}{{if .FocusLine}}&lines={{sourceWindowStart .FocusLine}}-{{sourceWindowEnd .FocusLine}}&focus={{.FocusLine}}-{{.FocusLine}}#L{{.FocusLine}}{{else}}&lines=1-200{{end}}">{{.Path}}</a>
               {{else}}
               <span class="truncate font-mono text-xs text-slate-200">{{.Path}}</span>
               {{end}}
@@ -254,7 +254,7 @@
           <a
             class="code-hit code-context group grid grid-cols-[3.25rem_minmax(0,1fr)]"
             {{if $match.RepositoryID}}
-            href="/source/{{$match.RepositoryID}}?rev={{$match.Revision}}&path={{urlquery $match.Path}}&lines={{previousLine .Number}}-{{previousLine .Number}}"
+            href="/source/{{$match.RepositoryID}}?rev={{$match.Revision}}&path={{urlquery $match.Path}}&lines={{sourceWindowStart .Number}}-{{sourceWindowEnd .Number}}&focus={{.Number}}-{{.Number}}#L{{.Number}}"
             {{else}}
             aria-disabled="true"
             {{end}}
@@ -266,7 +266,7 @@
           <a
             class="code-hit group grid grid-cols-[3.25rem_minmax(0,1fr)]"
             {{if $match.RepositoryID}}
-            href="/source/{{$match.RepositoryID}}?rev={{$match.Revision}}&path={{urlquery $match.Path}}&lines={{.Number}}-{{.Number}}"
+            href="/source/{{$match.RepositoryID}}?rev={{$match.Revision}}&path={{urlquery $match.Path}}&lines={{sourceWindowStart .Number}}-{{sourceWindowEnd .Number}}&focus={{.Number}}-{{.Number}}#L{{.Number}}"
             {{else}}
             aria-disabled="true"
             {{end}}
@@ -279,7 +279,7 @@
           <a
             class="code-hit code-context group grid grid-cols-[3.25rem_minmax(0,1fr)]"
             {{if $match.RepositoryID}}
-            href="/source/{{$match.RepositoryID}}?rev={{$match.Revision}}&path={{urlquery $match.Path}}&lines={{nextLine .Number}}-{{nextLine .Number}}"
+            href="/source/{{$match.RepositoryID}}?rev={{$match.Revision}}&path={{urlquery $match.Path}}&lines={{sourceWindowStart .Number}}-{{sourceWindowEnd .Number}}&focus={{.Number}}-{{.Number}}#L{{.Number}}"
             {{else}}
             aria-disabled="true"
             {{end}}

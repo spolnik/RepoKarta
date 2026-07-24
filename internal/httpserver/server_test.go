@@ -154,6 +154,7 @@ func TestSearchRendersSafeHighlightedCommitPinnedResult(t *testing.T) {
 		`/assets/repokarta-mark-192.png`,
 		`/assets/favicon.ico`,
 		`/source/1?rev=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`,
+		`lines=1-200&focus=7-7#L7`,
 		`internal%2Fexample.go`,
 	} {
 		if !strings.Contains(body, expected) {
@@ -245,5 +246,23 @@ func TestFragmentRangesConvertsUTF8ByteOffsetsToBrowserUTF16Offsets(t *testing.T
 	}
 	if ranges := fragmentRanges(line); ranges != "3:9" {
 		t.Fatalf("fragmentRanges() = %q, want 3:9", ranges)
+	}
+}
+
+func TestFocusRangeParsing(t *testing.T) {
+	for _, testCase := range []struct {
+		value string
+		start int
+		end   int
+	}{
+		{value: "120", start: 120, end: 120},
+		{value: "120-125", start: 120, end: 125},
+		{value: "", start: 0, end: 0},
+		{value: "125-120", start: 0, end: 0},
+	} {
+		start, end := parseFocusRange(testCase.value)
+		if start != testCase.start || end != testCase.end {
+			t.Fatalf("parseFocusRange(%q) = %d-%d, want %d-%d", testCase.value, start, end, testCase.start, testCase.end)
+		}
 	}
 }
