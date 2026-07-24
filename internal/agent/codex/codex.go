@@ -42,6 +42,8 @@ func (a *Adapter) Status(ctx context.Context) agent.Status {
 		Efforts:          []string{"minimal", "low", "medium", "high", "xhigh", "max", "ultra"},
 		ImageInput:       true,
 		ImageOutput:      true,
+		Interrupt:        true,
+		ContextUsage:     true,
 	}
 	command, err := localcommand.Resolve(a.Command, "codex")
 	if err != nil {
@@ -92,6 +94,8 @@ type session struct {
 	threadID      string
 	effort        string
 	attachments   *agent.AttachmentStore
+	activeMu      sync.RWMutex
+	activeTurnID  string
 	closeOnce     sync.Once
 }
 
@@ -214,13 +218,17 @@ func (s *session) Send(ctx context.Context, turn agent.Turn, emit func(agent.Eve
 		return fmt.Errorf("start Codex turn: %w", err)
 	}
 	turnID := started.Turn.ID
+	if turnID == "" {
+		return errors.New("Codex app-server returned an empty turn id")
+	}
+	s.setActiveTurn(turnID)
+	defer s.clearActiveTurn(turnID)
 	for {
 		select {
 		case <-ctx.Done():
-			_ = s.call(context.Background(), "turn/interrupt", map[string]any{
-				"threadId": s.threadID,
-				"turnId":   turnID,
-			}, nil)
+			interruptContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_ = s.Interrupt(interruptContext)
+			cancel()
 			return ctx.Err()
 		case err := <-s.readError:
 			return err
@@ -259,6 +267,13 @@ func (s *session) Send(ctx context.Context, turn agent.Turn, emit func(agent.Eve
 				if err := emit(agent.Event{Type: agent.EventImages, Images: []agent.Image{image}}); err != nil {
 					return err
 				}
+			case "thread/tokenUsage/updated":
+				usage, ok := contextUsageFromNotification(message.Params, s.threadID, turnID)
+				if ok {
+					if err := emit(agent.Event{Type: agent.EventContext, Context: &usage}); err != nil {
+						return err
+					}
+				}
 			case "turn/completed":
 				var completed struct {
 					Turn struct {
@@ -276,10 +291,68 @@ func (s *session) Send(ctx context.Context, turn agent.Turn, emit func(agent.Eve
 					}
 					return errors.New("Codex turn failed")
 				}
+				if completed.Turn.Status == "interrupted" {
+					return agent.ErrInterrupted
+				}
 				return nil
 			}
 		}
 	}
+}
+
+func contextUsageFromNotification(raw json.RawMessage, threadID, turnID string) (agent.ContextUsage, bool) {
+	var update struct {
+		ThreadID   string `json:"threadId"`
+		TurnID     string `json:"turnId"`
+		TokenUsage struct {
+			Last struct {
+				TotalTokens int64 `json:"totalTokens"`
+			} `json:"last"`
+			ModelContextWindow *int64 `json:"modelContextWindow"`
+		} `json:"tokenUsage"`
+	}
+	if json.Unmarshal(raw, &update) != nil ||
+		update.ThreadID != threadID ||
+		update.TurnID != turnID ||
+		update.TokenUsage.ModelContextWindow == nil ||
+		*update.TokenUsage.ModelContextWindow <= 0 {
+		return agent.ContextUsage{}, false
+	}
+	used := max(int64(0), update.TokenUsage.Last.TotalTokens)
+	limit := *update.TokenUsage.ModelContextWindow
+	return agent.ContextUsage{
+		UsedTokens: used,
+		MaxTokens:  limit,
+		Percentage: min(100, float64(used)*100/float64(limit)),
+	}, true
+}
+
+// Interrupt cancels the active Codex turn without discarding the thread.
+func (s *session) Interrupt(ctx context.Context) error {
+	s.activeMu.RLock()
+	turnID := s.activeTurnID
+	s.activeMu.RUnlock()
+	if turnID == "" {
+		return agent.ErrNoActiveTurn
+	}
+	return s.call(ctx, "turn/interrupt", map[string]any{
+		"threadId": s.threadID,
+		"turnId":   turnID,
+	}, nil)
+}
+
+func (s *session) setActiveTurn(turnID string) {
+	s.activeMu.Lock()
+	s.activeTurnID = turnID
+	s.activeMu.Unlock()
+}
+
+func (s *session) clearActiveTurn(turnID string) {
+	s.activeMu.Lock()
+	if s.activeTurnID == turnID {
+		s.activeTurnID = ""
+	}
+	s.activeMu.Unlock()
 }
 
 func turnStartParams(threadID string, turn agent.Turn, imagePaths []string, effort string) map[string]any {

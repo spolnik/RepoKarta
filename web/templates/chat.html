@@ -35,7 +35,18 @@
                 <h2 id="conversation-heading" class="text-lg font-semibold tracking-tight text-white">Code conversation</h2>
                 <p class="mt-1 text-xs leading-5 text-slate-500">Answers retain inspectable source links from the indexed revisions.</p>
               </div>
-              <div class="flex items-center gap-2">
+              <div class="flex flex-wrap items-center justify-end gap-2">
+                <div class="conversation-telemetry" aria-label="Conversation status">
+                  <div class="conversation-telemetry-item">
+                    <span>Turn</span>
+                    <strong id="conversation-runtime">Ready</strong>
+                  </div>
+                  <div class="conversation-telemetry-item conversation-context">
+                    <span>Context</span>
+                    <strong id="conversation-context-value" title="Context usage appears after the first turn.">After first turn</strong>
+                    <span id="conversation-context-meter" class="conversation-context-meter" data-state="pending" aria-hidden="true"></span>
+                  </div>
+                </div>
                 <button type="button" class="secondary-button debug-toggle" data-debug-toggle aria-controls="conversation-debug" aria-expanded="false">
                   Debug <span data-debug-count>0</span>
                 </button>
@@ -96,7 +107,8 @@
                     <option value="">Provider default</option>
                   </select>
                 </label>
-                <button id="conversation-submit" class="search-button ml-auto" type="submit" disabled>Ask RepoKarta</button>
+                <button id="conversation-interrupt" class="conversation-interrupt-button ml-auto" type="button" hidden disabled>Interrupt</button>
+                <button id="conversation-submit" class="search-button" type="submit" disabled>Ask Code</button>
               </div>
               <div class="mt-2 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-600">
                 <div>

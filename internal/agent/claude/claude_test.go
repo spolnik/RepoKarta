@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
@@ -22,6 +23,22 @@ func TestCommandArgumentsIncludeProviderModelAndEffort(t *testing.T) {
 	}
 	if !containsPair(arguments, "--add-dir", `/tmp/attachments`) {
 		t.Fatalf("arguments do not allow the attachment directory: %#v", arguments)
+	}
+}
+
+func TestContextUsageFromResponse(t *testing.T) {
+	usage, ok := contextUsageFromResponse(json.RawMessage(`{
+		"totalTokens":48000,
+		"maxTokens":200000,
+		"rawMaxTokens":200000,
+		"percentage":24,
+		"model":"claude-sonnet"
+	}`))
+	if !ok {
+		t.Fatal("context usage was not parsed")
+	}
+	if usage.UsedTokens != 48000 || usage.MaxTokens != 200000 || usage.Percentage != 24 || usage.Model != "claude-sonnet" {
+		t.Fatalf("unexpected context usage: %#v", usage)
 	}
 }
 

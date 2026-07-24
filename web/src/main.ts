@@ -162,11 +162,19 @@ function highlightSearchResults(root: ParentNode = document): void {
 }
 
 type ConversationEvent = {
-  type: "meta" | "delta" | "sources" | "images" | "done" | "error";
+  type: "meta" | "delta" | "sources" | "images" | "context" | "interrupted" | "done" | "error";
   conversation_id?: string;
   text?: string;
   sources?: Array<{ label: string; url: string }>;
   images?: ConversationImage[];
+  context?: ContextUsage;
+};
+
+type ContextUsage = {
+  used_tokens: number;
+  max_tokens: number;
+  percentage: number;
+  model?: string;
 };
 
 type ConversationImage = {
@@ -186,6 +194,8 @@ type ProviderStatus = {
   efforts?: string[];
   image_input: boolean;
   image_output: boolean;
+  interrupt: boolean;
+  context_usage: boolean;
 };
 
 const supportedImageTypes = new Set(["image/gif", "image/jpeg", "image/png", "image/webp"]);
@@ -541,6 +551,26 @@ function formatImageSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function formatElapsed(milliseconds: number): string {
+  const seconds = Math.max(0, milliseconds) / 1000;
+  if (seconds < 60) {
+    return `${seconds.toFixed(1)}s`;
+  }
+  const wholeSeconds = Math.floor(seconds);
+  const minutes = Math.floor(wholeSeconds / 60);
+  return `${minutes}:${String(wholeSeconds % 60).padStart(2, "0")}`;
+}
+
+function formatTokenCount(tokens: number): string {
+  if (tokens < 1000) {
+    return Math.max(0, Math.round(tokens)).toLocaleString();
+  }
+  if (tokens < 1_000_000) {
+    return `${(tokens / 1000).toFixed(tokens < 10_000 ? 1 : 0)}k`;
+  }
+  return `${(tokens / 1_000_000).toFixed(1)}m`;
+}
+
 function imageDataURL(image: ConversationImage): string | undefined {
   const mediaType = image.media_type.toLowerCase();
   const maximumEncodedLength = Math.ceil(maximumImageBytes / 3) * 4 + 4;
@@ -666,6 +696,10 @@ function enableConversations(debug?: DebugLogger): void {
   const attachmentTray = document.querySelector<HTMLElement>("#conversation-attachments");
   const imageSupportDetail = document.querySelector<HTMLElement>("#image-support-detail");
   const submit = document.querySelector<HTMLButtonElement>("#conversation-submit");
+  const interrupt = document.querySelector<HTMLButtonElement>("#conversation-interrupt");
+  const runtime = document.querySelector<HTMLElement>("#conversation-runtime");
+  const contextValue = document.querySelector<HTMLElement>("#conversation-context-value");
+  const contextMeter = document.querySelector<HTMLElement>("#conversation-context-meter");
   const detail = document.querySelector<HTMLElement>("#provider-detail");
   const newConversation = document.querySelector<HTMLButtonElement>("[data-new-conversation]");
   if (
@@ -681,6 +715,10 @@ function enableConversations(debug?: DebugLogger): void {
     !attachmentTray ||
     !imageSupportDetail ||
     !submit ||
+    !interrupt ||
+    !runtime ||
+    !contextValue ||
+    !contextMeter ||
     !detail ||
     !newConversation
   ) {
@@ -693,7 +731,49 @@ function enableConversations(debug?: DebugLogger): void {
   let attachmentFeedback = "";
   let statuses: ProviderStatus[] = [];
   let configuredProviderID = "";
+  let runtimeTimer = 0;
   const providerPreferences = new Map<string, { model: string; effort: string }>();
+
+  const stopRuntimeTimer = (): void => {
+    if (runtimeTimer) {
+      window.clearInterval(runtimeTimer);
+      runtimeTimer = 0;
+    }
+  };
+
+  const startRuntimeTimer = (started: number): void => {
+    stopRuntimeTimer();
+    const update = (): void => {
+      runtime.textContent = `Working · ${formatElapsed(performance.now() - started)}`;
+    };
+    update();
+    runtime.classList.add("conversation-telemetry-active");
+    runtimeTimer = window.setInterval(update, 100);
+  };
+
+  const finishRuntimeTimer = (started: number): void => {
+    stopRuntimeTimer();
+    runtime.textContent = `Last turn · ${formatElapsed(performance.now() - started)}`;
+    runtime.classList.remove("conversation-telemetry-active");
+  };
+
+  const renderContextUsage = (usage?: ContextUsage): void => {
+    if (!usage || usage.max_tokens <= 0) {
+      const status = statuses.find((candidate) => candidate.id === provider.value);
+      contextValue.textContent = status?.context_usage ? "After first turn" : "Unavailable";
+      contextValue.title = status?.context_usage
+        ? "The provider will report context usage after it processes a turn."
+        : "This provider harness does not expose context window usage.";
+      contextMeter.style.setProperty("--context-usage", "0%");
+      contextMeter.dataset.state = status?.context_usage ? "pending" : "unavailable";
+      return;
+    }
+    const percentage = Math.min(100, Math.max(0, usage.percentage || usage.used_tokens * 100 / usage.max_tokens));
+    contextValue.textContent = `${Math.round(percentage)}% · ${formatTokenCount(usage.used_tokens)} / ${formatTokenCount(usage.max_tokens)}`;
+    contextValue.title = `${usage.used_tokens.toLocaleString()} of ${usage.max_tokens.toLocaleString()} context tokens${usage.model ? ` · ${usage.model}` : ""}`;
+    contextMeter.style.setProperty("--context-usage", `${percentage}%`);
+    contextMeter.dataset.state = percentage >= 90 ? "critical" : percentage >= 75 ? "warning" : "ready";
+  };
 
   const renderAttachmentTray = (): void => {
     attachmentTray.replaceChildren();
@@ -823,13 +903,18 @@ function enableConversations(debug?: DebugLogger): void {
     effort.disabled = !ready || !status?.efforts?.length;
     detail.textContent = status?.detail ?? "Choose an authenticated local provider.";
     configureImageControls();
+    if (!conversationID) {
+      renderContextUsage();
+    }
     debug?.add("info", "ui.provider.configured", {
       provider: status?.id || null,
       ready,
       model: model.value || "provider-default",
       effort: effort.value || "provider-default",
       image_input: status?.image_input ?? false,
-      image_output: status?.image_output ?? false
+      image_output: status?.image_output ?? false,
+      interrupt: status?.interrupt ?? false,
+      context_usage: status?.context_usage ?? false
     });
   };
 
@@ -935,7 +1020,40 @@ function enableConversations(debug?: DebugLogger): void {
       void addImageFiles(images);
     }
   });
+  interrupt.addEventListener("click", async () => {
+    if (!busy || !conversationID || interrupt.disabled) {
+      return;
+    }
+    interrupt.disabled = true;
+    interrupt.textContent = "Interrupting…";
+    const endpoint = `/api/chat/${encodeURIComponent(conversationID)}/interrupt`;
+    debug?.add("info", "chat.interrupt.started", {
+      endpoint,
+      conversation_id: conversationID
+    });
+    try {
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: { Accept: "application/json" }
+      });
+      if (!response.ok) {
+        const body = await response.text();
+        throw new Error(body || `Interrupt failed (${response.status})`);
+      }
+      debug?.add("info", "chat.interrupt.accepted", {
+        status: response.status,
+        conversation_id: conversationID
+      });
+    } catch (error: unknown) {
+      interrupt.disabled = false;
+      interrupt.textContent = "Interrupt";
+      debug?.add("error", "chat.interrupt.failed", describeError(error));
+    }
+  });
   newConversation.addEventListener("click", () => {
+    if (busy) {
+      return;
+    }
     debug?.add("info", "ui.conversation.new", {
       previous_conversation: conversationID || null,
       provider: provider.value
@@ -947,6 +1065,9 @@ function enableConversations(debug?: DebugLogger): void {
     effort.disabled = !status?.efforts?.length;
     attachedImages = [];
     attachmentFeedback = "";
+    runtime.textContent = "Ready";
+    runtime.classList.remove("conversation-telemetry-active");
+    renderContextUsage();
     renderAttachmentTray();
     configureImageControls();
     messages.replaceChildren();
@@ -981,7 +1102,13 @@ function enableConversations(debug?: DebugLogger): void {
       effort: effort.value
     });
     submit.disabled = true;
-    submit.textContent = "Thinking…";
+    submit.textContent = "Working…";
+    newConversation.disabled = true;
+    const providerStatus = statuses.find((candidate) => candidate.id === provider.value);
+    interrupt.hidden = !providerStatus?.interrupt;
+    interrupt.disabled = true;
+    interrupt.textContent = "Interrupt";
+    startRuntimeTimer(requestStarted);
     configureImageControls();
     empty?.remove();
     messages.querySelector("[data-conversation-empty]")?.remove();
@@ -1061,6 +1188,7 @@ function enableConversations(debug?: DebugLogger): void {
             provider.disabled = true;
             model.disabled = true;
             effort.disabled = true;
+            interrupt.disabled = !providerStatus?.interrupt;
             debug?.add("info", "chat.stream.started", {
               conversation_id: conversationID
             });
@@ -1094,6 +1222,28 @@ function enableConversations(debug?: DebugLogger): void {
               received: message.images.length,
               rendered: renderedImages,
               media_types: message.images.map((image) => image.media_type)
+            });
+          } else if (message.type === "context" && message.context) {
+            renderContextUsage(message.context);
+            debug?.add("info", "chat.stream.context", {
+              used_tokens: message.context.used_tokens,
+              max_tokens: message.context.max_tokens,
+              percentage: message.context.percentage,
+              model: message.context.model || null
+            });
+          } else if (message.type === "interrupted") {
+            streamCompleted = true;
+            if (answer) {
+              renderAssistantMarkdown(answer, answerText, debug, true);
+            }
+            const notice = document.createElement("p");
+            notice.className = "conversation-turn-status conversation-turn-status-interrupted";
+            notice.textContent = "Interrupted by you.";
+            assistant.append(notice);
+            debug?.add("info", "chat.stream.interrupted", {
+              delta_events: deltaEvents,
+              answer_characters: answerCharacters,
+              duration_ms: Math.round(performance.now() - requestStarted)
             });
           } else if (message.type === "done") {
             streamCompleted = true;
@@ -1141,8 +1291,13 @@ function enableConversations(debug?: DebugLogger): void {
       messages.append(conversationMessage("error", error instanceof Error ? error.message : "Conversation failed."));
     } finally {
       busy = false;
+      finishRuntimeTimer(requestStarted);
       submit.disabled = false;
-      submit.textContent = "Ask RepoKarta";
+      submit.textContent = "Ask Code";
+      interrupt.hidden = true;
+      interrupt.disabled = true;
+      interrupt.textContent = "Interrupt";
+      newConversation.disabled = false;
       configureImageControls();
       input.focus();
       debug?.add("info", "chat.request.settled", {

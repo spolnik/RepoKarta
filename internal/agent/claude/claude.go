@@ -9,8 +9,10 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/spolnik/RepoKarta/internal/agent"
@@ -40,6 +42,8 @@ func (a *Adapter) Status(ctx context.Context) agent.Status {
 		Efforts:          []string{"low", "medium", "high", "xhigh", "max"},
 		ImageInput:       true,
 		ImageOutput:      false,
+		Interrupt:        true,
+		ContextUsage:     true,
 	}
 	command, err := localcommand.Resolve(a.Command, "claude")
 	if err != nil {
@@ -127,6 +131,7 @@ func (a *Adapter) Start(ctx context.Context, config agent.SessionConfig) (agent.
 		readError:   make(chan error, 1),
 		stderr:      &stderr,
 		attachments: attachments,
+		pending:     make(map[string]chan controlResponse),
 	}
 	go s.read(stdout)
 	return s, nil
@@ -165,6 +170,12 @@ type session struct {
 	readError   chan error
 	stderr      *strings.Builder
 	attachments *agent.AttachmentStore
+	writeMu     sync.Mutex
+	pendingMu   sync.Mutex
+	pending     map[string]chan controlResponse
+	nextControl atomic.Uint64
+	active      atomic.Bool
+	interrupted atomic.Bool
 	sendMu      sync.Mutex
 	closeOnce   sync.Once
 }
@@ -172,6 +183,8 @@ type session struct {
 func (s *session) Send(ctx context.Context, turn agent.Turn, emit func(agent.Event) error) error {
 	s.sendMu.Lock()
 	defer s.sendMu.Unlock()
+	s.active.Store(true)
+	defer s.active.Store(false)
 
 	imagePaths, err := s.attachments.Write(turn.Images)
 	if err != nil {
@@ -191,7 +204,7 @@ func (s *session) Send(ctx context.Context, turn agent.Turn, emit func(agent.Eve
 		return err
 	}
 	encoded = append(encoded, '\n')
-	if _, err := s.stdin.Write(encoded); err != nil {
+	if err := s.write(encoded); err != nil {
 		return fmt.Errorf("send Claude message: %w", err)
 	}
 
@@ -199,6 +212,9 @@ func (s *session) Send(ctx context.Context, turn agent.Turn, emit func(agent.Eve
 	for {
 		select {
 		case <-ctx.Done():
+			interruptContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_ = s.Interrupt(interruptContext)
+			cancel()
 			return ctx.Err()
 		case err := <-s.readError:
 			detail := strings.TrimSpace(s.stderr.String())
@@ -248,6 +264,9 @@ func (s *session) Send(ctx context.Context, turn agent.Turn, emit func(agent.Eve
 					}
 				}
 			case "result":
+				if s.interrupted.Swap(false) {
+					return agent.ErrInterrupted
+				}
 				if envelope.IsError || envelope.Subtype == "error" {
 					detail := envelope.Error
 					if detail == "" {
@@ -263,10 +282,115 @@ func (s *session) Send(ctx context.Context, turn agent.Turn, emit func(agent.Eve
 						return err
 					}
 				}
+				if err := s.emitContextUsage(emit); err != nil {
+					return err
+				}
 				return nil
 			}
 		}
 	}
+}
+
+type controlResponse struct {
+	Subtype   string          `json:"subtype"`
+	RequestID string          `json:"request_id"`
+	Error     string          `json:"error"`
+	Response  json.RawMessage `json:"response"`
+}
+
+func (s *session) write(encoded []byte) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	_, err := s.stdin.Write(encoded)
+	return err
+}
+
+func (s *session) control(ctx context.Context, request map[string]any) (json.RawMessage, error) {
+	requestID := strconv.FormatUint(s.nextControl.Add(1), 10)
+	responseChannel := make(chan controlResponse, 1)
+	s.pendingMu.Lock()
+	s.pending[requestID] = responseChannel
+	s.pendingMu.Unlock()
+	defer func() {
+		s.pendingMu.Lock()
+		delete(s.pending, requestID)
+		s.pendingMu.Unlock()
+	}()
+
+	encoded, err := json.Marshal(map[string]any{
+		"type":       "control_request",
+		"request_id": requestID,
+		"request":    request,
+	})
+	if err != nil {
+		return nil, err
+	}
+	encoded = append(encoded, '\n')
+	if err := s.write(encoded); err != nil {
+		return nil, err
+	}
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case err := <-s.readError:
+		return nil, err
+	case response := <-responseChannel:
+		if response.Subtype != "success" {
+			if response.Error == "" {
+				response.Error = "Claude control request failed"
+			}
+			return nil, errors.New(response.Error)
+		}
+		return response.Response, nil
+	}
+}
+
+// Interrupt cancels the active Claude turn while retaining its session.
+func (s *session) Interrupt(ctx context.Context) error {
+	if !s.active.Load() {
+		return agent.ErrNoActiveTurn
+	}
+	s.interrupted.Store(true)
+	if _, err := s.control(ctx, map[string]any{
+		"subtype":       "interrupt",
+		"cancel_queued": true,
+	}); err != nil {
+		s.interrupted.CompareAndSwap(true, false)
+		return err
+	}
+	return nil
+}
+
+func (s *session) emitContextUsage(emit func(agent.Event) error) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	raw, err := s.control(ctx, map[string]any{"subtype": "get_context_usage"})
+	if err != nil {
+		return nil
+	}
+	usage, ok := contextUsageFromResponse(raw)
+	if !ok {
+		return nil
+	}
+	return emit(agent.Event{Type: agent.EventContext, Context: &usage})
+}
+
+func contextUsageFromResponse(raw json.RawMessage) (agent.ContextUsage, bool) {
+	var response struct {
+		TotalTokens int64   `json:"totalTokens"`
+		MaxTokens   int64   `json:"maxTokens"`
+		Percentage  float64 `json:"percentage"`
+		Model       string  `json:"model"`
+	}
+	if json.Unmarshal(raw, &response) != nil || response.MaxTokens <= 0 {
+		return agent.ContextUsage{}, false
+	}
+	return agent.ContextUsage{
+		UsedTokens: max(int64(0), response.TotalTokens),
+		MaxTokens:  response.MaxTokens,
+		Percentage: min(100, max(0, response.Percentage)),
+		Model:      response.Model,
+	}, true
 }
 
 func assistantText(raw json.RawMessage) []string {
@@ -293,6 +417,19 @@ func (s *session) read(reader io.Reader) {
 	scanner.Buffer(make([]byte, 64<<10), 16<<20)
 	for scanner.Scan() {
 		raw := append(json.RawMessage(nil), scanner.Bytes()...)
+		var envelope struct {
+			Type     string          `json:"type"`
+			Response controlResponse `json:"response"`
+		}
+		if json.Unmarshal(raw, &envelope) == nil && envelope.Type == "control_response" {
+			s.pendingMu.Lock()
+			channel := s.pending[envelope.Response.RequestID]
+			s.pendingMu.Unlock()
+			if channel != nil {
+				channel <- envelope.Response
+			}
+			continue
+		}
 		s.messages <- raw
 	}
 	err := scanner.Err()

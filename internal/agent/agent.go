@@ -11,18 +11,30 @@ import (
 	"net/url"
 	"sort"
 	"sync"
+	"sync/atomic"
 )
 
 // EventType identifies one streamed conversation event.
 type EventType string
 
 const (
-	EventMeta    EventType = "meta"
-	EventDelta   EventType = "delta"
-	EventDone    EventType = "done"
-	EventError   EventType = "error"
-	EventSources EventType = "sources"
-	EventImages  EventType = "images"
+	EventMeta        EventType = "meta"
+	EventDelta       EventType = "delta"
+	EventDone        EventType = "done"
+	EventError       EventType = "error"
+	EventSources     EventType = "sources"
+	EventImages      EventType = "images"
+	EventContext     EventType = "context"
+	EventInterrupted EventType = "interrupted"
+)
+
+var (
+	// ErrInterrupted means the user intentionally stopped the active turn.
+	ErrInterrupted = errors.New("turn interrupted")
+	// ErrNoActiveTurn means a conversation exists but is currently idle.
+	ErrNoActiveTurn = errors.New("conversation has no active turn")
+	// ErrConversationNotFound means the ephemeral conversation has expired.
+	ErrConversationNotFound = errors.New("conversation is no longer active")
 )
 
 // Citation is an exact source reference observed during an MCP tool call.
@@ -31,13 +43,22 @@ type Citation struct {
 	URL   string `json:"url"`
 }
 
+// ContextUsage is the provider-reported context window utilization.
+type ContextUsage struct {
+	UsedTokens int64   `json:"used_tokens"`
+	MaxTokens  int64   `json:"max_tokens"`
+	Percentage float64 `json:"percentage"`
+	Model      string  `json:"model,omitempty"`
+}
+
 // Event is emitted while a provider handles a turn.
 type Event struct {
-	Type           EventType  `json:"type"`
-	ConversationID string     `json:"conversation_id,omitempty"`
-	Text           string     `json:"text,omitempty"`
-	Sources        []Citation `json:"sources,omitempty"`
-	Images         []Image    `json:"images,omitempty"`
+	Type           EventType     `json:"type"`
+	ConversationID string        `json:"conversation_id,omitempty"`
+	Text           string        `json:"text,omitempty"`
+	Sources        []Citation    `json:"sources,omitempty"`
+	Images         []Image       `json:"images,omitempty"`
+	Context        *ContextUsage `json:"context,omitempty"`
 }
 
 // Status describes whether a local provider harness is usable.
@@ -52,6 +73,8 @@ type Status struct {
 	Efforts          []string `json:"efforts,omitempty"`
 	ImageInput       bool     `json:"image_input"`
 	ImageOutput      bool     `json:"image_output"`
+	Interrupt        bool     `json:"interrupt"`
+	ContextUsage     bool     `json:"context_usage"`
 }
 
 // SessionConfig is shared by all provider adapters.
@@ -67,6 +90,7 @@ type SessionConfig struct {
 // Session is one provider-owned conversation.
 type Session interface {
 	Send(context.Context, Turn, func(Event) error) error
+	Interrupt(context.Context) error
 	Close() error
 }
 
@@ -100,6 +124,7 @@ type managedConversation struct {
 	imageInput bool
 	session    Session
 	mu         sync.Mutex
+	active     atomic.Bool
 }
 
 // Manager owns ephemeral provider sessions. Conversation text is not persisted.
@@ -180,10 +205,17 @@ func (m *Manager) Send(ctx context.Context, request TurnRequest, emit func(Event
 
 	conversation.mu.Lock()
 	defer conversation.mu.Unlock()
+	conversation.active.Store(true)
+	defer conversation.active.Store(false)
 	if m.citations != nil {
 		m.citations.Clear(conversationID)
 	}
-	if err := conversation.session.Send(ctx, Turn{Message: request.Message, Images: request.Images}, emit); err != nil {
+	if err := conversation.session.Send(ctx, Turn{Message: request.Message, Images: request.Images}, emit); errors.Is(err, ErrInterrupted) {
+		if m.citations != nil {
+			m.citations.Clear(conversationID)
+		}
+		return emit(Event{Type: EventInterrupted, ConversationID: conversationID})
+	} else if err != nil {
 		m.dropConversation(conversationID, conversation)
 		return err
 	}
@@ -204,13 +236,27 @@ func (m *Manager) Send(ctx context.Context, request TurnRequest, emit func(Event
 	return nil
 }
 
+// Interrupt stops the active provider turn while preserving its conversation.
+func (m *Manager) Interrupt(ctx context.Context, conversationID string) error {
+	m.mu.RLock()
+	conversation := m.conversations[conversationID]
+	m.mu.RUnlock()
+	if conversation == nil {
+		return ErrConversationNotFound
+	}
+	if !conversation.active.Load() {
+		return ErrNoActiveTurn
+	}
+	return conversation.session.Interrupt(ctx)
+}
+
 func (m *Manager) conversation(ctx context.Context, request TurnRequest) (*managedConversation, string, error) {
 	if request.ConversationID != "" {
 		m.mu.RLock()
 		conversation := m.conversations[request.ConversationID]
 		m.mu.RUnlock()
 		if conversation == nil {
-			return nil, "", errors.New("conversation is no longer active")
+			return nil, "", ErrConversationNotFound
 		}
 		if request.Provider != "" && request.Provider != conversation.provider {
 			return nil, "", errors.New("a conversation cannot switch providers")

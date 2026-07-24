@@ -101,13 +101,24 @@ type testRefresher struct{}
 
 func (testRefresher) Refresh(context.Context) error { return nil }
 
-type testConversations struct{}
-
-func (testConversations) Statuses(context.Context) []agent.Status {
-	return []agent.Status{{ID: "test", Name: "Test", Available: true, Authenticated: true, ImageInput: true, ImageOutput: true}}
+type testConversations struct {
+	interrupted string
 }
 
-func (testConversations) Send(_ context.Context, request agent.TurnRequest, emit func(agent.Event) error) error {
+func (*testConversations) Statuses(context.Context) []agent.Status {
+	return []agent.Status{{
+		ID:            "test",
+		Name:          "Test",
+		Available:     true,
+		Authenticated: true,
+		ImageInput:    true,
+		ImageOutput:   true,
+		Interrupt:     true,
+		ContextUsage:  true,
+	}}
+}
+
+func (*testConversations) Send(_ context.Context, request agent.TurnRequest, emit func(agent.Event) error) error {
 	if err := emit(agent.Event{Type: agent.EventMeta, ConversationID: "conversation"}); err != nil {
 		return err
 	}
@@ -119,7 +130,23 @@ func (testConversations) Send(_ context.Context, request agent.TurnRequest, emit
 			return err
 		}
 	}
+	if err := emit(agent.Event{
+		Type: agent.EventContext,
+		Context: &agent.ContextUsage{
+			UsedTokens: 1200,
+			MaxTokens:  200000,
+			Percentage: 0.6,
+			Model:      "test-model",
+		},
+	}); err != nil {
+		return err
+	}
 	return emit(agent.Event{Type: agent.EventDone, ConversationID: "conversation"})
+}
+
+func (s *testConversations) Interrupt(_ context.Context, conversationID string) error {
+	s.interrupted = conversationID
+	return nil
 }
 
 func TestSearchRendersSafeHighlightedCommitPinnedResult(t *testing.T) {
@@ -177,7 +204,7 @@ func TestSearchAndChatRenderAsSeparatePages(t *testing.T) {
 			Address:        "127.0.0.1:7331",
 			RepositoryRoot: `C:\code`,
 			Version:        "test",
-			Conversations:  testConversations{},
+			Conversations:  &testConversations{},
 		},
 		codeintel.New(testStore{}, testSearcher{}, "http://127.0.0.1:7331"),
 		testRefresher{},
@@ -217,6 +244,10 @@ func TestSearchAndChatRenderAsSeparatePages(t *testing.T) {
 		`data-debug-copy`,
 		`id="conversation-image-input"`,
 		`data-image-attach`,
+		`id="conversation-runtime"`,
+		`id="conversation-context-value"`,
+		`id="conversation-interrupt"`,
+		`>Ask Code</button>`,
 	} {
 		if !strings.Contains(chatBody, expected) {
 			t.Fatalf("chat page does not contain %q", expected)
@@ -231,7 +262,7 @@ func TestChatStreamsNDJSON(t *testing.T) {
 	server, err := New(
 		Config{
 			Address:       "127.0.0.1:7331",
-			Conversations: testConversations{},
+			Conversations: &testConversations{},
 		},
 		codeintel.New(testStore{}, testSearcher{}, "http://127.0.0.1:7331"),
 		testRefresher{},
@@ -261,6 +292,8 @@ func TestChatStreamsNDJSON(t *testing.T) {
 		`"text":"answer:hello"`,
 		`"type":"images"`,
 		`"media_type":"image/png"`,
+		`"type":"context"`,
+		`"max_tokens":200000`,
 		`"type":"done"`,
 	} {
 		if !strings.Contains(body, expected) {
@@ -269,11 +302,39 @@ func TestChatStreamsNDJSON(t *testing.T) {
 	}
 }
 
+func TestChatInterruptDelegatesToConversation(t *testing.T) {
+	conversations := &testConversations{}
+	server, err := New(
+		Config{
+			Address:       "127.0.0.1:7331",
+			Conversations: conversations,
+		},
+		codeintel.New(testStore{}, testSearcher{}, "http://127.0.0.1:7331"),
+		testRefresher{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"http://127.0.0.1:7331/api/chat/conversation/interrupt",
+		nil,
+	)
+	response := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if conversations.interrupted != "conversation" {
+		t.Fatalf("interrupted conversation = %q", conversations.interrupted)
+	}
+}
+
 func TestChatRejectsInvalidImageBeforeStreaming(t *testing.T) {
 	server, err := New(
 		Config{
 			Address:       "127.0.0.1:7331",
-			Conversations: testConversations{},
+			Conversations: &testConversations{},
 		},
 		codeintel.New(testStore{}, testSearcher{}, "http://127.0.0.1:7331"),
 		testRefresher{},

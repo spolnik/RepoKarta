@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"errors"
+	"sync"
 	"testing"
 )
 
@@ -33,15 +35,21 @@ func (a *fakeAdapter) Start(_ context.Context, config SessionConfig) (Session, e
 }
 
 type fakeSession struct {
-	prompts []string
-	images  [][]Image
-	closed  bool
+	prompts    []string
+	images     [][]Image
+	closed     bool
+	interrupts int
 }
 
 func (s *fakeSession) Send(_ context.Context, turn Turn, emit func(Event) error) error {
 	s.prompts = append(s.prompts, turn.Message)
 	s.images = append(s.images, turn.Images)
 	return emit(Event{Type: EventDelta, Text: "answer:" + turn.Message})
+}
+
+func (s *fakeSession) Interrupt(context.Context) error {
+	s.interrupts++
+	return nil
 }
 
 func TestManagerPassesImageOnlyTurn(t *testing.T) {
@@ -182,5 +190,97 @@ func TestManagerRejectsProviderSwitch(t *testing.T) {
 	}, func(Event) error { return nil })
 	if err == nil {
 		t.Fatal("expected provider switch error")
+	}
+}
+
+type blockingAdapter struct {
+	session *blockingSession
+}
+
+func (a *blockingAdapter) ID() string { return "blocking" }
+
+func (a *blockingAdapter) Status(context.Context) Status {
+	return Status{
+		ID:            a.ID(),
+		Name:          "Blocking",
+		Available:     true,
+		Authenticated: true,
+		Interrupt:     true,
+	}
+}
+
+func (a *blockingAdapter) Start(context.Context, SessionConfig) (Session, error) {
+	return a.session, nil
+}
+
+type blockingSession struct {
+	started   chan struct{}
+	release   chan struct{}
+	startOnce sync.Once
+	stopOnce  sync.Once
+}
+
+func (s *blockingSession) Send(context.Context, Turn, func(Event) error) error {
+	s.startOnce.Do(func() { close(s.started) })
+	<-s.release
+	return ErrInterrupted
+}
+
+func (s *blockingSession) Interrupt(context.Context) error {
+	s.stopOnce.Do(func() { close(s.release) })
+	return nil
+}
+
+func (s *blockingSession) Close() error { return nil }
+
+func TestManagerInterruptsActiveTurnWithoutDroppingConversation(t *testing.T) {
+	session := &blockingSession{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	manager := NewManager("", "", "", &blockingAdapter{session: session})
+	defer manager.Close()
+
+	var (
+		conversationID string
+		eventsMu       sync.Mutex
+		events         []Event
+	)
+	sendDone := make(chan error, 1)
+	go func() {
+		sendDone <- manager.Send(context.Background(), TurnRequest{
+			Provider: "blocking",
+			Message:  "wait",
+		}, func(event Event) error {
+			eventsMu.Lock()
+			events = append(events, event)
+			if event.Type == EventMeta {
+				conversationID = event.ConversationID
+			}
+			eventsMu.Unlock()
+			return nil
+		})
+	}()
+
+	<-session.started
+	eventsMu.Lock()
+	id := conversationID
+	eventsMu.Unlock()
+	if id == "" {
+		t.Fatal("manager did not emit a conversation id")
+	}
+	if err := manager.Interrupt(context.Background(), id); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-sendDone; err != nil {
+		t.Fatal(err)
+	}
+	eventsMu.Lock()
+	defer eventsMu.Unlock()
+	if len(events) != 2 || events[0].Type != EventMeta || events[1].Type != EventInterrupted {
+		t.Fatalf("unexpected events: %#v", events)
+	}
+	if err := manager.Interrupt(context.Background(), id); !errors.Is(err, ErrNoActiveTurn) {
+		t.Fatalf("idle interrupt error = %v, want %v", err, ErrNoActiveTurn)
 	}
 }

@@ -15,7 +15,7 @@ import (
 	"github.com/spolnik/RepoKarta/internal/mcpserver"
 )
 
-const version = "0.4.0-dev"
+const version = "0.5.0-dev"
 
 type stringList []string
 

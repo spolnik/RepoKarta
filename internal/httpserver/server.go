@@ -43,6 +43,7 @@ type CatalogueRefresher interface {
 type ConversationService interface {
 	Statuses(context.Context) []agent.Status
 	Send(context.Context, agent.TurnRequest, func(agent.Event) error) error
+	Interrupt(context.Context, string) error
 }
 
 // Config controls the local HTTP server.
@@ -178,6 +179,7 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 		mux.HandleFunc("GET /chat", server.chatPage)
 		mux.HandleFunc("GET /api/providers", server.providerStatuses)
 		mux.HandleFunc("POST /api/chat", server.chat)
+		mux.HandleFunc("POST /api/chat/{conversationID}/interrupt", server.interruptChat)
 	}
 
 	server.server = &http.Server{
@@ -242,6 +244,27 @@ func (s *Server) chat(response http.ResponseWriter, request *http.Request) {
 		slog.Warn("conversation turn failed", "provider", turn.Provider, "error", err)
 		_ = emit(agent.Event{Type: agent.EventError, ConversationID: turn.ConversationID, Text: err.Error()})
 	}
+}
+
+func (s *Server) interruptChat(response http.ResponseWriter, request *http.Request) {
+	conversationID := strings.TrimSpace(request.PathValue("conversationID"))
+	if conversationID == "" {
+		http.Error(response, "Conversation is required", http.StatusBadRequest)
+		return
+	}
+	if err := s.agents.Interrupt(request.Context(), conversationID); err != nil {
+		switch {
+		case errors.Is(err, agent.ErrConversationNotFound):
+			http.Error(response, err.Error(), http.StatusNotFound)
+		case errors.Is(err, agent.ErrNoActiveTurn):
+			http.Error(response, err.Error(), http.StatusConflict)
+		default:
+			slog.Warn("interrupt conversation turn", "conversation_id", conversationID, "error", err)
+			http.Error(response, err.Error(), http.StatusInternalServerError)
+		}
+		return
+	}
+	response.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) apiSearch(response http.ResponseWriter, request *http.Request) {
