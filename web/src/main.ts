@@ -62,6 +62,90 @@ function highlightSource(): void {
   });
 }
 
+type MatchRange = {
+  start: number;
+  end: number;
+};
+
+function parseMatchRanges(value: string | undefined): MatchRange[] {
+  if (!value) {
+    return [];
+  }
+  return value
+    .split(",")
+    .map((item) => {
+      const [start, end] = item.split(":").map(Number);
+      return { start, end };
+    })
+    .filter(({ start, end }) => Number.isInteger(start) && Number.isInteger(end) && start >= 0 && end > start);
+}
+
+function restoreMatchHighlights(element: HTMLElement, ranges: MatchRange[]): void {
+  if (ranges.length === 0) {
+    return;
+  }
+  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+  const textNodes: Array<{ node: Text; start: number; end: number }> = [];
+  let offset = 0;
+  while (walker.nextNode()) {
+    const node = walker.currentNode as Text;
+    const end = offset + node.data.length;
+    textNodes.push({ node, start: offset, end });
+    offset = end;
+  }
+
+  for (const item of textNodes) {
+    const overlaps = ranges
+      .map((range) => ({
+        start: Math.max(0, range.start - item.start),
+        end: Math.min(item.node.data.length, range.end - item.start)
+      }))
+      .filter((range) => range.end > range.start)
+      .sort((left, right) => left.start - right.start);
+    if (overlaps.length === 0) {
+      continue;
+    }
+
+    const replacement = document.createDocumentFragment();
+    let position = 0;
+    for (const overlap of overlaps) {
+      const start = Math.max(position, overlap.start);
+      if (overlap.end <= start) {
+        continue;
+      }
+      if (start > position) {
+        replacement.append(item.node.data.slice(position, start));
+      }
+      const mark = document.createElement("mark");
+      mark.className = "search-highlight";
+      mark.textContent = item.node.data.slice(start, overlap.end);
+      replacement.append(mark);
+      position = overlap.end;
+    }
+    if (position < item.node.data.length) {
+      replacement.append(item.node.data.slice(position));
+    }
+    item.node.replaceWith(replacement);
+  }
+}
+
+function highlightSearchResults(root: ParentNode = document): void {
+  root.querySelectorAll<HTMLElement>("code[data-search-highlight-language]").forEach((element) => {
+    if (element.dataset.syntaxHighlighted === "true") {
+      return;
+    }
+    const source = element.textContent ?? "";
+    const language = (element.dataset.searchHighlightLanguage ?? "").toLowerCase();
+    const highlighted = language && hljs.getLanguage(language)
+      ? hljs.highlight(source, { language, ignoreIllegals: true })
+      : hljs.highlightAuto(source);
+    element.innerHTML = highlighted.value;
+    element.classList.add("hljs");
+    element.dataset.syntaxHighlighted = "true";
+    restoreMatchHighlights(element, parseMatchRanges(element.dataset.matchRanges));
+  });
+}
+
 type ConversationEvent = {
   type: "meta" | "delta" | "sources" | "done" | "error";
   conversation_id?: string;
@@ -273,4 +357,10 @@ connectIndexEvents();
 enableQueryChips();
 enableCopyButtons();
 highlightSource();
+highlightSearchResults();
 enableConversations();
+
+document.body.addEventListener("htmx:afterSwap", (event) => {
+  const target = (event as CustomEvent<{ target?: ParentNode }>).detail?.target;
+  highlightSearchResults(target ?? document);
+});

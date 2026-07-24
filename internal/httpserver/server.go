@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf16"
 
 	"github.com/spolnik/RepoKarta/internal/agent"
 	"github.com/spolnik/RepoKarta/internal/catalog"
@@ -114,12 +115,13 @@ type sourcePageData struct {
 // New builds the local HTTP server and parses embedded templates.
 func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefresher) (*Server, error) {
 	functions := template.FuncMap{
-		"formatTime":    formatTime,
-		"highlightLine": highlightLine,
-		"nextLine":      func(line int) int { return line + 1 },
-		"previousLine":  func(line int) int { return max(1, line-1) },
-		"shortCommit":   shortCommit,
-		"statusLabel":   statusLabel,
+		"formatTime":     formatTime,
+		"highlightLine":  highlightLine,
+		"fragmentRanges": fragmentRanges,
+		"nextLine":       func(line int) int { return line + 1 },
+		"previousLine":   func(line int) int { return max(1, line-1) },
+		"shortCommit":    shortCommit,
+		"statusLabel":    statusLabel,
 	}
 	templates, err := template.New("repokarta").Funcs(functions).ParseFS(web.Files, "templates/*.html")
 	if err != nil {
@@ -659,6 +661,19 @@ func highlightLine(line search.LineMatch) template.HTML {
 	}
 	output.WriteString(template.HTMLEscapeString(line.Text[position:]))
 	return template.HTML(output.String())
+}
+
+func fragmentRanges(line search.LineMatch) string {
+	values := make([]string, 0, len(line.Fragments))
+	for _, fragment := range line.Fragments {
+		if fragment.Start < 0 || fragment.End <= fragment.Start || fragment.End > len(line.Text) {
+			continue
+		}
+		start := len(utf16.Encode([]rune(line.Text[:fragment.Start])))
+		end := start + len(utf16.Encode([]rune(line.Text[fragment.Start:fragment.End])))
+		values = append(values, strconv.Itoa(start)+":"+strconv.Itoa(end))
+	}
+	return strings.Join(values, ",")
 }
 
 func formatDuration(duration time.Duration) string {

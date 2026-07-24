@@ -148,6 +148,8 @@ func TestSearchRendersSafeHighlightedCommitPinnedResult(t *testing.T) {
 	body := response.Body.String()
 	for _, expected := range []string{
 		`<mark class="search-highlight">needle</mark>`,
+		`data-search-highlight-language="Go"`,
+		`data-match-ranges="9:15"`,
 		`if &lt;tag&gt; `,
 		`/assets/repokarta-mark-192.png`,
 		`/assets/favicon.ico`,
@@ -233,5 +235,15 @@ func TestServerRejectsUnexpectedHostAndOrigin(t *testing.T) {
 				t.Fatalf("expected 403, got %d", response.Code)
 			}
 		})
+	}
+}
+
+func TestFragmentRangesConvertsUTF8ByteOffsetsToBrowserUTF16Offsets(t *testing.T) {
+	line := search.LineMatch{
+		Text:      "🐉 needle",
+		Fragments: []search.Fragment{{Start: 5, End: 11}},
+	}
+	if ranges := fragmentRanges(line); ranges != "3:9" {
+		t.Fatalf("fragmentRanges() = %q, want 3:9", ranges)
 	}
 }
