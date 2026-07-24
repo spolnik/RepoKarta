@@ -16,7 +16,7 @@
   <body class="min-h-full bg-[#090b0f] text-slate-100 antialiased">
     {{template "app-header" .}}
 
-    <main class="mx-auto grid max-w-[1500px] gap-8 px-5 py-8 lg:grid-cols-[minmax(0,1fr)_340px] lg:px-8 lg:py-10">
+    <main class="mx-auto max-w-[1500px] px-5 py-8 lg:px-8 lg:py-10">
       <div class="min-w-0">
         <section aria-labelledby="search-heading">
           <div class="mb-7">
@@ -247,8 +247,37 @@
 {{end}}
 
 {{define "repository-sidebar"}}
-<aside class="min-w-0 lg:pt-[7.65rem]">
-  <div class="sticky top-24 space-y-4">
+<button
+  type="button"
+  class="repository-drawer-scrim"
+  data-repository-drawer-scrim
+  aria-label="Close repositories"
+  hidden
+></button>
+<aside
+  id="repository-drawer"
+  class="repository-drawer"
+  data-repository-drawer
+  data-expanded="false"
+  aria-label="Scanned repositories"
+>
+  <button
+    type="button"
+    class="repository-drawer-toggle"
+    data-repository-drawer-toggle
+    aria-controls="repository-drawer-panel"
+    aria-expanded="false"
+    aria-label="Open repositories"
+  >
+    <svg viewBox="0 0 20 20" aria-hidden="true">
+      <path d="m7.5 4.5 5 5.5-5 5.5"></path>
+    </svg>
+    <span>Repositories</span>
+    <strong>{{len .Repositories}}</strong>
+  </button>
+
+  <div id="repository-drawer-panel" class="repository-drawer-panel" aria-hidden="true" inert>
+    <div class="space-y-4 p-3 sm:p-4">
     <section class="rounded-2xl border border-white/[0.07] bg-white/[0.025] p-5">
       <div class="mb-4 flex items-center justify-between">
         <div>
@@ -278,6 +307,7 @@
     <p class="px-1 text-xs leading-5 text-slate-600">
       Source is read-only. Indexes live in RepoKarta’s own local storage.
     </p>
+    </div>
   </div>
 </aside>
 {{end}}

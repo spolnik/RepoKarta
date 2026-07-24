@@ -22,6 +22,42 @@ function connectIndexEvents(): void {
   window.addEventListener("pagehide", () => events.close(), { once: true });
 }
 
+function enableRepositoryDrawer(): void {
+  const drawer = document.querySelector<HTMLElement>("[data-repository-drawer]");
+  const toggle = document.querySelector<HTMLButtonElement>("[data-repository-drawer-toggle]");
+  const scrim = document.querySelector<HTMLButtonElement>("[data-repository-drawer-scrim]");
+  const panel = document.querySelector<HTMLElement>("#repository-drawer-panel");
+  if (!drawer || !toggle || !scrim || !panel) {
+    return;
+  }
+
+  const setExpanded = (expanded: boolean): void => {
+    drawer.dataset.expanded = String(expanded);
+    toggle.setAttribute("aria-expanded", String(expanded));
+    toggle.setAttribute("aria-label", expanded ? "Close repositories" : "Open repositories");
+    panel.setAttribute("aria-hidden", String(!expanded));
+    panel.toggleAttribute("inert", !expanded);
+    scrim.hidden = !expanded;
+  };
+
+  toggle.addEventListener("click", () => {
+    setExpanded(drawer.dataset.expanded !== "true");
+  });
+  scrim.addEventListener("click", () => {
+    setExpanded(false);
+    toggle.focus();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || drawer.dataset.expanded !== "true") {
+      return;
+    }
+    setExpanded(false);
+    toggle.focus();
+  });
+
+  setExpanded(false);
+}
+
 function enableQueryChips(): void {
   const form = document.querySelector<HTMLFormElement>('form[action="/search"]');
   const input = document.querySelector<HTMLInputElement>("#search-query");
@@ -1309,6 +1345,7 @@ function enableConversations(debug?: DebugLogger): void {
 }
 
 connectIndexEvents();
+enableRepositoryDrawer();
 enableQueryChips();
 enableCopyButtons();
 highlightSource();

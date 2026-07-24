@@ -220,7 +220,15 @@ func TestSearchAndChatRenderAsSeparatePages(t *testing.T) {
 		t.Fatalf("search status = %d, body = %s", searchResponse.Code, searchResponse.Body.String())
 	}
 	searchBody := searchResponse.Body.String()
-	for _, expected := range []string{`aria-current="page">Search`, `href="/chat"`, `action="/search"`} {
+	for _, expected := range []string{
+		`aria-current="page">Search`,
+		`href="/chat"`,
+		`action="/search"`,
+		`data-repository-drawer`,
+		`data-expanded="false"`,
+		`aria-label="Open repositories"`,
+		`id="repository-drawer-panel" class="repository-drawer-panel" aria-hidden="true" inert`,
+	} {
 		if !strings.Contains(searchBody, expected) {
 			t.Fatalf("search page does not contain %q", expected)
 		}
@@ -248,6 +256,10 @@ func TestSearchAndChatRenderAsSeparatePages(t *testing.T) {
 		`id="conversation-context-value"`,
 		`id="conversation-interrupt"`,
 		`>Ask Code</button>`,
+		`data-repository-drawer`,
+		`data-expanded="false"`,
+		`aria-label="Open repositories"`,
+		`id="repository-drawer-panel" class="repository-drawer-panel" aria-hidden="true" inert`,
 	} {
 		if !strings.Contains(chatBody, expected) {
 			t.Fatalf("chat page does not contain %q", expected)
