@@ -30,8 +30,9 @@ func TestDiscoverFindsWorktreeRepositories(t *testing.T) {
 	if repositories[0].Name != "example" {
 		t.Fatalf("expected repository name example, got %q", repositories[0].Name)
 	}
-	if repositories[0].Path != repositoryPath {
-		t.Fatalf("expected repository path %q, got %q", repositoryPath, repositories[0].Path)
+	expectedPath := mustCanonicalDirectory(t, repositoryPath)
+	if repositories[0].Path != expectedPath {
+		t.Fatalf("expected repository path %q, got %q", expectedPath, repositories[0].Path)
 	}
 }
 
@@ -113,8 +114,10 @@ func TestDiscoverContinuesBelowRepositoryRoot(t *testing.T) {
 	for _, repository := range repositories {
 		paths[repository.Path] = true
 	}
-	if !paths[root] || !paths[child] {
-		t.Fatalf("expected repositories at %q and %q, got %#v", root, child, repositories)
+	expectedRoot := mustCanonicalDirectory(t, root)
+	expectedChild := mustCanonicalDirectory(t, child)
+	if !paths[expectedRoot] || !paths[expectedChild] {
+		t.Fatalf("expected repositories at %q and %q, got %#v", expectedRoot, expectedChild, repositories)
 	}
 }
 
@@ -141,9 +144,19 @@ func TestDiscoverIgnoresInvalidGitMarkerAndContinues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(repositories) != 1 || repositories[0].Path != child {
+	expectedChild := mustCanonicalDirectory(t, child)
+	if len(repositories) != 1 || repositories[0].Path != expectedChild {
 		t.Fatalf("expected only the valid child repository, got %#v", repositories)
 	}
+}
+
+func mustCanonicalDirectory(t *testing.T, path string) string {
+	t.Helper()
+	canonical, err := canonicalDirectory(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return canonical
 }
 
 func runGit(t *testing.T, directory string, arguments ...string) {
