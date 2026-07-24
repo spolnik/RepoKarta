@@ -2,6 +2,7 @@ import htmx from "htmx.org";
 import hljs from "highlight.js/lib/common";
 import DOMPurify from "dompurify";
 import { marked } from "marked";
+import { createFrameBatcher } from "./frame-batcher.mjs";
 import "./styles.css";
 
 htmx.config.allowEval = false;
@@ -523,7 +524,8 @@ function renderAssistantMarkdown(
   markdown: string,
   debug?: DebugLogger,
   renderDiagrams = false
-): void {
+): number {
+  const started = performance.now();
   const revision = (markdownRenderRevisions.get(target) ?? 0) + 1;
   markdownRenderRevisions.set(target, revision);
   const rendered = marked.parse(markdown, {
@@ -578,6 +580,75 @@ function renderAssistantMarkdown(
     }
     hljs.highlightElement(code);
   });
+  const duration = performance.now() - started;
+  debug?.add("info", "chat.markdown.rendered", {
+    characters: markdown.length,
+    code_blocks: target.querySelectorAll("pre code").length,
+    diagrams: renderDiagrams,
+    duration_ms: Math.round(duration)
+  });
+  return duration;
+}
+
+type StreamingRenderMetrics = {
+  characters: number;
+  dom_flushes: number;
+  markdown_render_ms: number;
+};
+
+type StreamingMarkdownRenderer = {
+  append: (text: string) => void;
+  finish: (renderDiagrams?: boolean) => StreamingRenderMetrics;
+  cancel: () => void;
+};
+
+function createStreamingMarkdownRenderer(
+  target: HTMLElement,
+  debug?: DebugLogger,
+  onFlush?: () => void
+): StreamingMarkdownRenderer {
+  const textNode = document.createTextNode("");
+  target.replaceChildren(textNode);
+  target.classList.add("conversation-content-streaming");
+  let markdown = "";
+  let finalMetrics: StreamingRenderMetrics | undefined;
+  const batcher = createFrameBatcher({
+    schedule: (callback) => window.requestAnimationFrame(callback),
+    cancel: (handle) => window.cancelAnimationFrame(handle as number),
+    write: (text) => {
+      textNode.appendData(text);
+      onFlush?.();
+    }
+  });
+
+  return {
+    append: (text: string): void => {
+      if (finalMetrics || !text) {
+        return;
+      }
+      markdown += text;
+      batcher.append(text);
+    },
+    finish: (renderDiagrams = false): StreamingRenderMetrics => {
+      if (finalMetrics) {
+        return finalMetrics;
+      }
+      const domFlushes = batcher.finish();
+      target.classList.remove("conversation-content-streaming");
+      const markdownRenderMS = renderAssistantMarkdown(target, markdown, debug, renderDiagrams);
+      onFlush?.();
+      finalMetrics = {
+        characters: markdown.length,
+        dom_flushes: domFlushes,
+        markdown_render_ms: Math.round(markdownRenderMS)
+      };
+      return finalMetrics;
+    },
+    cancel: (): void => {
+      batcher.cancel();
+      target.classList.remove("conversation-content-streaming");
+    }
+  };
 }
 
 function formatImageSize(bytes: number): string {
@@ -768,7 +839,18 @@ function enableConversations(debug?: DebugLogger): void {
   let statuses: ProviderStatus[] = [];
   let configuredProviderID = "";
   let runtimeTimer = 0;
+  let messageScrollFrame = 0;
   const providerPreferences = new Map<string, { model: string; effort: string }>();
+
+  const scheduleMessageScroll = (): void => {
+    if (messageScrollFrame) {
+      return;
+    }
+    messageScrollFrame = window.requestAnimationFrame(() => {
+      messageScrollFrame = 0;
+      messages.scrollTop = messages.scrollHeight;
+    });
+  };
 
   const stopRuntimeTimer = (): void => {
     if (runtimeTimer) {
@@ -1153,13 +1235,16 @@ function enableConversations(debug?: DebugLogger): void {
     messages.append(userMessage);
     const assistant = conversationMessage("assistant");
     const answer = assistant.querySelector<HTMLElement>(".conversation-content");
-    let answerText = "";
+    const streamRenderer = answer
+      ? createStreamingMarkdownRenderer(answer, debug, scheduleMessageScroll)
+      : undefined;
+    let renderMetrics: StreamingRenderMetrics | undefined;
     messages.append(assistant);
     input.value = "";
     attachedImages = [];
     attachmentFeedback = "";
     renderAttachmentTray();
-    messages.scrollTop = messages.scrollHeight;
+    scheduleMessageScroll();
     debug?.add("info", "chat.request.started", {
       endpoint: "/api/chat",
       provider: provider.value,
@@ -1231,8 +1316,7 @@ function enableConversations(debug?: DebugLogger): void {
           } else if (message.type === "delta" && message.text && answer) {
             deltaEvents++;
             answerCharacters += message.text.length;
-            answerText += message.text;
-            renderAssistantMarkdown(answer, answerText, debug);
+            streamRenderer?.append(message.text);
           } else if (message.type === "sources" && message.sources?.length) {
             debug?.add("info", "chat.stream.sources", {
               count: message.sources.length
@@ -1269,9 +1353,7 @@ function enableConversations(debug?: DebugLogger): void {
             });
           } else if (message.type === "interrupted") {
             streamCompleted = true;
-            if (answer) {
-              renderAssistantMarkdown(answer, answerText, debug, true);
-            }
+            renderMetrics = streamRenderer?.finish(true);
             const notice = document.createElement("p");
             notice.className = "conversation-turn-status conversation-turn-status-interrupted";
             notice.textContent = "Interrupted by you.";
@@ -1279,16 +1361,16 @@ function enableConversations(debug?: DebugLogger): void {
             debug?.add("info", "chat.stream.interrupted", {
               delta_events: deltaEvents,
               answer_characters: answerCharacters,
+              rendering: renderMetrics,
               duration_ms: Math.round(performance.now() - requestStarted)
             });
           } else if (message.type === "done") {
             streamCompleted = true;
-            if (answer) {
-              renderAssistantMarkdown(answer, answerText, debug, true);
-            }
+            renderMetrics = streamRenderer?.finish(true);
             debug?.add("info", "chat.stream.completed", {
               delta_events: deltaEvents,
               answer_characters: answerCharacters,
+              rendering: renderMetrics,
               duration_ms: Math.round(performance.now() - requestStarted)
             });
           } else if (message.type === "error") {
@@ -1299,21 +1381,21 @@ function enableConversations(debug?: DebugLogger): void {
             throw new Error(message.text || "The provider could not complete this turn.");
           }
         }
-        messages.scrollTop = messages.scrollHeight;
+        scheduleMessageScroll();
         if (done) {
           if (!streamCompleted) {
-            if (answer) {
-              renderAssistantMarkdown(answer, answerText, debug, true);
-            }
+            renderMetrics = streamRenderer?.finish(true);
             debug?.add("warn", "chat.stream.closed-without-done", {
               delta_events: deltaEvents,
-              answer_characters: answerCharacters
+              answer_characters: answerCharacters,
+              rendering: renderMetrics
             });
           }
           break;
         }
       }
     } catch (error: unknown) {
+      streamRenderer?.cancel();
       debug?.add("error", "chat.request.failed", {
         endpoint: "/api/chat",
         online: navigator.onLine,

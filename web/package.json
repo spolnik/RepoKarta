@@ -5,6 +5,7 @@
   "scripts": {
     "build": "vite build",
     "dev": "vite build --watch",
+    "test": "node --test src/*.test.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

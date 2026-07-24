@@ -32,6 +32,8 @@ M2 conversation slice:
 - loopback Host and Origin validation;
 - streamed, multi-turn questions through either a local Codex or Claude Code
   harness;
+- animation-frame-batched response streaming with one final Markdown,
+  sanitization, syntax-highlighting, and Mermaid pass per answer;
 - reuse of the provider's existing ChatGPT/Codex or Claude login without
   collecting subscription credentials;
 - one provider-neutral Go conversation interface;

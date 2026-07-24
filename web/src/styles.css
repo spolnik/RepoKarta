@@ -221,6 +221,28 @@ a.brand-mark:hover,
   white-space: pre-wrap;
 }
 
+.conversation-message-assistant .conversation-content-streaming {
+  white-space: pre-wrap;
+}
+
+.conversation-message-assistant .conversation-content-streaming::after {
+  display: inline-block;
+  width: 0.42rem;
+  height: 0.9rem;
+  margin-left: 0.22rem;
+  border-radius: 0.1rem;
+  background: rgb(52 211 153 / 0.7);
+  content: "";
+  animation: conversation-stream-cursor 1s steps(2, jump-none) infinite;
+  vertical-align: -0.08rem;
+}
+
+@keyframes conversation-stream-cursor {
+  50% {
+    opacity: 0.2;
+  }
+}
+
 .conversation-message-assistant .conversation-content > :first-child {
   margin-top: 0;
 }
