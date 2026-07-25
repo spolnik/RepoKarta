@@ -59,6 +59,10 @@ func DiscoverWithOptions(root string, options DiscoverOptions) ([]Repository, er
 	}
 
 	var repositories []Repository
+	// ignoreScopes holds the .gitignore rules of every directory that encloses
+	// the entry being visited, so a directory a repository already ignores is
+	// never searched for nested repositories.
+	var ignoreScopes []ignoreScope
 	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			if errors.Is(walkErr, fs.ErrPermission) {
@@ -73,14 +77,21 @@ func DiscoverWithOptions(root string, options DiscoverOptions) ([]Repository, er
 		if entry.IsDir() && excluded(path, excludes) {
 			return filepath.SkipDir
 		}
+		// Hidden directories, including .git internals and hidden worktrees
+		// such as .jobguard-wt, are never repository roots RepoKarta manages.
 		if entry.IsDir() && path != root && strings.HasPrefix(entry.Name(), ".") {
 			return filepath.SkipDir
 		}
 		if !entry.IsDir() {
 			return nil
 		}
-		if path != root && entry.Name() == ".git" {
+
+		ignoreScopes = activeIgnoreScopes(ignoreScopes, path)
+		if path != root && ignoredDirectory(ignoreScopes, path) {
 			return filepath.SkipDir
+		}
+		if scope, ok := loadIgnoreScope(path); ok {
+			ignoreScopes = append(ignoreScopes, scope)
 		}
 
 		repositoryPath, bare, found, err := repositoryAt(path)

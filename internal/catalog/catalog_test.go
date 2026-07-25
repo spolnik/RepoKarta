@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -212,5 +213,111 @@ func TestDisplayNamesDisambiguateDuplicateRepositoryNames(t *testing.T) {
 			t.Fatalf("duplicate label %q", label)
 		}
 		seen[label] = true
+	}
+}
+
+func TestDiscoverRespectsGitignoreRules(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte(`
+# build output and vendored copies are not repositories we manage
+node_modules/
+/build
+vendor/**/generated
+sandbox/*
+!sandbox/keep
+excluded-parent
+!excluded-parent/rescued
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, relative := range []string{
+		"owner/service",                     // discovered
+		"node_modules/some-package",         // ignored by name at any depth
+		"owner/node_modules/nested-package", // ignored at depth too
+		"build/tool",                        // ignored by anchored rule
+		"vendor/acme/generated/lib",         // ignored through **
+		"sandbox/dropped",                   // ignored directory
+		"sandbox/keep/restored",             // re-included by negation
+		"excluded-parent/rescued/service",   // stays hidden: Git cannot re-include
+		//                                      anything below an excluded parent
+	} {
+		runGit(t, root, "init", filepath.Join(root, filepath.FromSlash(relative)))
+	}
+
+	repositories, err := Discover(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	discovered := make([]string, 0, len(repositories))
+	for _, repository := range repositories {
+		relative, relErr := filepath.Rel(mustCanonicalDirectory(t, root), repository.Path)
+		if relErr != nil {
+			t.Fatal(relErr)
+		}
+		discovered = append(discovered, filepath.ToSlash(relative))
+	}
+	slices.Sort(discovered)
+	expected := []string{"owner/service", "sandbox/keep/restored"}
+	if !slices.Equal(discovered, expected) {
+		t.Fatalf("discovered %v, want %v", discovered, expected)
+	}
+}
+
+func TestDiscoverAppliesGitignoreOnlyBelowItsOwnDirectory(t *testing.T) {
+	root := t.TempDir()
+	// A nested .gitignore must not hide anything outside its own subtree.
+	nested := filepath.Join(root, "owner")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(nested, ".gitignore"), []byte("tmp\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, root, "init", filepath.Join(root, "owner", "service"))
+	runGit(t, root, "init", filepath.Join(root, "owner", "tmp", "hidden"))
+	runGit(t, root, "init", filepath.Join(root, "tmp", "visible"))
+
+	repositories, err := Discover(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := make([]string, 0, len(repositories))
+	for _, repository := range repositories {
+		names = append(names, repository.Name)
+	}
+	slices.Sort(names)
+	if !slices.Equal(names, []string{"service", "visible"}) {
+		t.Fatalf("discovered %v, want [service visible]", names)
+	}
+}
+
+func TestCompileIgnorePatternHandlesGitignoreSyntax(t *testing.T) {
+	for _, testCase := range []struct {
+		rule    string
+		path    string
+		matches bool
+	}{
+		{rule: "node_modules", path: "a/b/node_modules", matches: true},
+		{rule: "/build", path: "build", matches: true},
+		{rule: "/build", path: "sub/build", matches: false},
+		{rule: "*.log", path: "logs/app.log", matches: true},
+		{rule: "**/generated", path: "vendor/acme/generated", matches: true},
+		{rule: "doc?", path: "docs", matches: true},
+		{rule: "doc?", path: "documents", matches: false},
+		{rule: "target/", path: "target", matches: true},
+		{rule: "# comment", path: "anything", matches: false},
+		{rule: "", path: "anything", matches: false},
+	} {
+		pattern, ok := compileIgnorePattern(testCase.rule)
+		if !ok {
+			if testCase.matches {
+				t.Fatalf("rule %q was rejected", testCase.rule)
+			}
+			continue
+		}
+		if pattern.matcher.MatchString(testCase.path) != testCase.matches {
+			t.Fatalf("rule %q against %q = %v, want %v",
+				testCase.rule, testCase.path, !testCase.matches, testCase.matches)
+		}
 	}
 }
