@@ -266,10 +266,11 @@ func (s *session) Send(ctx context.Context, turn agent.Turn, emit func(agent.Eve
 			case "item/agentMessage/delta":
 				var delta struct {
 					Delta  string `json:"delta"`
+					ItemID string `json:"itemId"`
 					TurnID string `json:"turnId"`
 				}
 				if json.Unmarshal(message.Params, &delta) == nil && (delta.TurnID == "" || delta.TurnID == turnID) && delta.Delta != "" {
-					if err := emit(agent.Event{Type: agent.EventDelta, Text: delta.Delta}); err != nil {
+					if err := emit(agent.Event{Type: agent.EventDelta, SegmentID: delta.ItemID, Text: delta.Delta}); err != nil {
 						return err
 					}
 				}
@@ -277,24 +278,35 @@ func (s *session) Send(ctx context.Context, turn agent.Turn, emit func(agent.Eve
 				var completed struct {
 					TurnID string `json:"turnId"`
 					Item   struct {
+						ID        string `json:"id"`
 						Type      string `json:"type"`
 						Status    string `json:"status"`
 						SavedPath string `json:"savedPath"`
 					} `json:"item"`
 				}
-				if json.Unmarshal(message.Params, &completed) != nil ||
-					completed.TurnID != turnID ||
-					completed.Item.Type != "imageGeneration" ||
-					completed.Item.Status != "completed" ||
-					completed.Item.SavedPath == "" {
+				if json.Unmarshal(message.Params, &completed) != nil || completed.TurnID != turnID {
 					continue
 				}
-				image, err := agent.ImageFromFile(completed.Item.SavedPath)
-				if err != nil {
-					return fmt.Errorf("load Codex generated image: %w", err)
-				}
-				if err := emit(agent.Event{Type: agent.EventImages, Images: []agent.Image{image}}); err != nil {
-					return err
+				switch completed.Item.Type {
+				case "agentMessage":
+					if err := emit(agent.Event{
+						Type:      agent.EventActivity,
+						Activity:  agent.ActivityThinking,
+						SegmentID: completed.Item.ID,
+					}); err != nil {
+						return err
+					}
+				case "imageGeneration":
+					if completed.Item.Status != "completed" || completed.Item.SavedPath == "" {
+						continue
+					}
+					image, err := agent.ImageFromFile(completed.Item.SavedPath)
+					if err != nil {
+						return fmt.Errorf("load Codex generated image: %w", err)
+					}
+					if err := emit(agent.Event{Type: agent.EventImages, Images: []agent.Image{image}}); err != nil {
+						return err
+					}
 				}
 			case "thread/tokenUsage/updated":
 				usage, ok := contextUsageFromNotification(message.Params, s.threadID, turnID)

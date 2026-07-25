@@ -126,7 +126,12 @@ func TestManagerReusesEphemeralProviderSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(first) != 3 || first[0].Type != EventMeta || first[1].Text != "answer:one" || first[2].Type != EventDone {
+	if len(first) != 4 ||
+		first[0].Type != EventMeta ||
+		first[1].Type != EventActivity ||
+		first[1].Activity != ActivityThinking ||
+		first[2].Text != "answer:one" ||
+		first[3].Type != EventDone {
 		t.Fatalf("unexpected first events: %#v", first)
 	}
 	conversationID := first[0].ConversationID
@@ -419,7 +424,10 @@ func TestManagerInterruptsActiveTurnWithoutDroppingConversation(t *testing.T) {
 	}
 	eventsMu.Lock()
 	defer eventsMu.Unlock()
-	if len(events) != 2 || events[0].Type != EventMeta || events[1].Type != EventInterrupted {
+	if len(events) != 3 ||
+		events[0].Type != EventMeta ||
+		events[1].Type != EventActivity ||
+		events[2].Type != EventInterrupted {
 		t.Fatalf("unexpected events: %#v", events)
 	}
 	if err := manager.Interrupt(context.Background(), id); !errors.Is(err, ErrNoActiveTurn) {
@@ -429,6 +437,70 @@ func TestManagerInterruptsActiveTurnWithoutDroppingConversation(t *testing.T) {
 
 type memoryConversationStore struct {
 	conversations map[string]Conversation
+}
+
+type segmentedAdapter struct{}
+
+func (*segmentedAdapter) ID() string { return "segmented" }
+
+func (a *segmentedAdapter) Status(context.Context) Status {
+	return Status{ID: a.ID(), Name: "Segmented", Available: true, Authenticated: true}
+}
+
+func (*segmentedAdapter) Start(context.Context, SessionConfig) (Session, error) {
+	return &segmentedSession{}, nil
+}
+
+type segmentedSession struct{}
+
+func (*segmentedSession) Send(_ context.Context, _ Turn, emit func(Event) error) error {
+	for _, event := range []Event{
+		{Type: EventDelta, SegmentID: "message-1", Text: "First update."},
+		{Type: EventActivity, Activity: ActivityThinking, SegmentID: "message-1"},
+		{Type: EventDelta, SegmentID: "message-2", Text: "Final answer."},
+	} {
+		if err := emit(event); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (*segmentedSession) Interrupt(context.Context) error { return nil }
+func (*segmentedSession) Close() error                    { return nil }
+
+func TestManagerPreservesProviderMessageBoundariesInTranscript(t *testing.T) {
+	store := &memoryConversationStore{}
+	manager := NewManager("", "", "", &segmentedAdapter{}).UsePersistence(store)
+	defer manager.Close()
+
+	var events []Event
+	if err := manager.Send(context.Background(), TurnRequest{
+		Provider: "segmented",
+		Message:  "Show progress",
+	}, func(event Event) error {
+		events = append(events, event)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 6 ||
+		events[1].Type != EventActivity ||
+		events[2].SegmentID != "message-1" ||
+		events[3].Type != EventActivity ||
+		events[4].SegmentID != "message-2" {
+		t.Fatalf("segmented events = %#v", events)
+	}
+	conversation, err := store.GetConversation(context.Background(), events[0].ConversationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(conversation.Messages) != 2 {
+		t.Fatalf("persisted messages = %#v", conversation.Messages)
+	}
+	if got := conversation.Messages[1].Text; got != "First update.\n\nFinal answer." {
+		t.Fatalf("assistant transcript = %q", got)
+	}
 }
 
 func (s *memoryConversationStore) CreateConversation(_ context.Context, conversation Conversation) error {

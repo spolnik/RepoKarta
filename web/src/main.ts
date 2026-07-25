@@ -199,9 +199,11 @@ function highlightSearchResults(root: ParentNode = document): void {
 }
 
 type ConversationEvent = {
-  type: "meta" | "delta" | "sources" | "images" | "context" | "usage" | "interrupted" | "done" | "error";
+  type: "meta" | "activity" | "delta" | "sources" | "images" | "context" | "usage" | "interrupted" | "done" | "error";
   conversation_id?: string;
   title?: string;
+  activity?: "thinking";
+  segment_id?: string;
   text?: string;
   sources?: Array<{ label: string; url: string }>;
   images?: ConversationImage[];
@@ -651,6 +653,13 @@ type StreamingMarkdownRenderer = {
   cancel: () => void;
 };
 
+type AssistantTimelineRenderer = {
+  append: (text: string, segmentID?: string) => void;
+  thinking: () => void;
+  finish: () => StreamingRenderMetrics;
+  cancel: () => void;
+};
+
 function createStreamingMarkdownRenderer(
   target: HTMLElement,
   debug?: DebugLogger,
@@ -696,6 +705,184 @@ function createStreamingMarkdownRenderer(
     cancel: (): void => {
       batcher.cancel();
       target.classList.remove("conversation-content-streaming");
+    }
+  };
+}
+
+function createAssistantTimelineRenderer(
+  target: HTMLElement,
+  composerActivity: HTMLElement,
+  debug?: DebugLogger,
+  onFlush?: () => void
+): AssistantTimelineRenderer {
+  const composerLabel = composerActivity.querySelector<HTMLElement>("[data-activity-label]");
+  const composerElapsed = composerActivity.querySelector<HTMLTimeElement>("[data-activity-elapsed]");
+  let currentRenderer: StreamingMarkdownRenderer | undefined;
+  let currentSegmentID = "";
+  let activityRow: HTMLElement | undefined;
+  let activityStarted = 0;
+  let phaseStarted = 0;
+  let phase: "thinking" | "answering" | undefined;
+  let timer = 0;
+  let finished = false;
+  const metrics: StreamingRenderMetrics = {
+    characters: 0,
+    dom_flushes: 0,
+    markdown_render_ms: 0
+  };
+
+  target.replaceChildren();
+
+  const setComposerPhase = (nextPhase?: "thinking" | "answering", elapsed = 0): void => {
+    phase = nextPhase;
+    if (!nextPhase) {
+      composerActivity.hidden = true;
+      composerActivity.removeAttribute("data-phase");
+      return;
+    }
+    composerActivity.hidden = false;
+    composerActivity.dataset.phase = nextPhase;
+    if (composerLabel) {
+      composerLabel.textContent = nextPhase === "thinking" ? "Thinking" : "Answering";
+    }
+    if (composerElapsed) {
+      composerElapsed.textContent = formatElapsed(elapsed);
+      composerElapsed.dateTime = `PT${Math.max(0, elapsed / 1000).toFixed(1)}S`;
+    }
+  };
+
+  const updateTimer = (): void => {
+    const now = performance.now();
+    if (activityRow) {
+      const elapsed = now - activityStarted;
+      const rowElapsed = activityRow.querySelector<HTMLTimeElement>("[data-activity-elapsed]");
+      if (rowElapsed) {
+        rowElapsed.textContent = formatElapsed(elapsed);
+        rowElapsed.dateTime = `PT${Math.max(0, elapsed / 1000).toFixed(1)}S`;
+      }
+      setComposerPhase("thinking", elapsed);
+    } else if (phase === "answering") {
+      setComposerPhase("answering", now - phaseStarted);
+    }
+  };
+
+  const ensureTimer = (): void => {
+    if (!timer) {
+      timer = window.setInterval(updateTimer, 100);
+    }
+  };
+
+  const mergeMetrics = (next?: StreamingRenderMetrics): void => {
+    if (!next) {
+      return;
+    }
+    metrics.characters += next.characters;
+    metrics.dom_flushes += next.dom_flushes;
+    metrics.markdown_render_ms += next.markdown_render_ms;
+  };
+
+  const finishCurrentSegment = (): void => {
+    if (!currentRenderer) {
+      return;
+    }
+    mergeMetrics(currentRenderer.finish(true));
+    currentRenderer = undefined;
+    currentSegmentID = "";
+  };
+
+  const completeThinking = (preserve: boolean): void => {
+    if (!activityRow) {
+      return;
+    }
+    const elapsed = performance.now() - activityStarted;
+    if (preserve) {
+      activityRow.dataset.state = "complete";
+      const label = activityRow.querySelector<HTMLElement>("[data-activity-label]");
+      const elapsedElement = activityRow.querySelector<HTMLTimeElement>("[data-activity-elapsed]");
+      if (label) {
+        label.textContent = "Thought for";
+      }
+      if (elapsedElement) {
+        elapsedElement.textContent = formatElapsed(elapsed);
+        elapsedElement.dateTime = `PT${Math.max(0, elapsed / 1000).toFixed(1)}S`;
+      }
+    } else {
+      activityRow.remove();
+    }
+    activityRow = undefined;
+  };
+
+  const startThinking = (): void => {
+    if (finished || activityRow) {
+      return;
+    }
+    finishCurrentSegment();
+    activityStarted = performance.now();
+    phaseStarted = activityStarted;
+    activityRow = document.createElement("div");
+    activityRow.className = "conversation-thinking";
+    activityRow.dataset.state = "active";
+    activityRow.innerHTML = [
+      '<span class="conversation-thinking-dots" aria-hidden="true"><i></i><i></i><i></i></span>',
+      '<span data-activity-label>Thinking</span>',
+      '<time data-activity-elapsed datetime="PT0S">0.0s</time>'
+    ].join("");
+    target.append(activityRow);
+    setComposerPhase("thinking");
+    ensureTimer();
+    onFlush?.();
+  };
+
+  return {
+    append: (text: string, segmentID = ""): void => {
+      if (finished || !text) {
+        return;
+      }
+      const normalizedSegmentID = segmentID || currentSegmentID || "answer";
+      if (currentRenderer && normalizedSegmentID !== currentSegmentID) {
+        finishCurrentSegment();
+      }
+      completeThinking(true);
+      if (!currentRenderer) {
+        const segment = document.createElement("section");
+        segment.className = "conversation-response-segment";
+        target.append(segment);
+        currentSegmentID = normalizedSegmentID;
+        currentRenderer = createStreamingMarkdownRenderer(segment, debug, onFlush);
+        phaseStarted = performance.now();
+      }
+      setComposerPhase("answering", performance.now() - phaseStarted);
+      ensureTimer();
+      currentRenderer.append(text);
+    },
+    thinking: startThinking,
+    finish: (): StreamingRenderMetrics => {
+      if (finished) {
+        return metrics;
+      }
+      finished = true;
+      completeThinking(false);
+      finishCurrentSegment();
+      if (timer) {
+        window.clearInterval(timer);
+        timer = 0;
+      }
+      setComposerPhase();
+      onFlush?.();
+      return metrics;
+    },
+    cancel: (): void => {
+      if (finished) {
+        return;
+      }
+      finished = true;
+      completeThinking(false);
+      currentRenderer?.cancel();
+      if (timer) {
+        window.clearInterval(timer);
+        timer = 0;
+      }
+      setComposerPhase();
     }
   };
 }
@@ -852,6 +1039,7 @@ function enableConversations(debug?: DebugLogger): void {
   const imageInput = document.querySelector<HTMLInputElement>("#conversation-image-input");
   const attachButton = document.querySelector<HTMLButtonElement>("[data-image-attach]");
   const attachmentTray = document.querySelector<HTMLElement>("#conversation-attachments");
+  const composerActivity = document.querySelector<HTMLElement>("#conversation-activity");
   const imageSupportDetail = document.querySelector<HTMLElement>("#image-support-detail");
   const submit = document.querySelector<HTMLButtonElement>("#conversation-submit");
   const interrupt = document.querySelector<HTMLButtonElement>("#conversation-interrupt");
@@ -894,6 +1082,7 @@ function enableConversations(debug?: DebugLogger): void {
     !imageInput ||
     !attachButton ||
     !attachmentTray ||
+    !composerActivity ||
     !imageSupportDetail ||
     !submit ||
     !interrupt ||
@@ -1778,11 +1967,12 @@ function enableConversations(debug?: DebugLogger): void {
     messages.append(userMessage);
     const assistant = conversationMessage("assistant");
     const answer = assistant.querySelector<HTMLElement>(".conversation-content");
-    const streamRenderer = answer
-      ? createStreamingMarkdownRenderer(answer, debug, scheduleMessageScroll)
+    const timelineRenderer = answer
+      ? createAssistantTimelineRenderer(answer, composerActivity, debug, scheduleMessageScroll)
       : undefined;
     let renderMetrics: StreamingRenderMetrics | undefined;
     messages.append(assistant);
+    timelineRenderer?.thinking();
     input.value = "";
     attachedImages = [];
     attachmentFeedback = "";
@@ -1867,10 +2057,12 @@ function enableConversations(debug?: DebugLogger): void {
               conversation_id: conversationID,
               title: message.title || null
             });
+          } else if (message.type === "activity" && message.activity === "thinking") {
+            timelineRenderer?.thinking();
           } else if (message.type === "delta" && message.text && answer) {
             deltaEvents++;
             answerCharacters += message.text.length;
-            streamRenderer?.append(message.text);
+            timelineRenderer?.append(message.text, message.segment_id);
           } else if (message.type === "sources" && message.sources?.length) {
             debug?.add("info", "chat.stream.sources", {
               count: message.sources.length
@@ -1911,7 +2103,7 @@ function enableConversations(debug?: DebugLogger): void {
             debug?.add("info", "chat.stream.usage", message.usage);
           } else if (message.type === "interrupted") {
             streamCompleted = true;
-            renderMetrics = streamRenderer?.finish(true);
+            renderMetrics = timelineRenderer?.finish();
             const notice = document.createElement("p");
             notice.className = "conversation-turn-status conversation-turn-status-interrupted";
             notice.textContent = "Interrupted by you.";
@@ -1924,7 +2116,7 @@ function enableConversations(debug?: DebugLogger): void {
             });
           } else if (message.type === "done") {
             streamCompleted = true;
-            renderMetrics = streamRenderer?.finish(true);
+            renderMetrics = timelineRenderer?.finish();
             void refreshConversationHistory();
             debug?.add("info", "chat.stream.completed", {
               delta_events: deltaEvents,
@@ -1943,7 +2135,7 @@ function enableConversations(debug?: DebugLogger): void {
         scheduleMessageScroll();
         if (done) {
           if (!streamCompleted) {
-            renderMetrics = streamRenderer?.finish(true);
+            renderMetrics = timelineRenderer?.finish();
             debug?.add("warn", "chat.stream.closed-without-done", {
               delta_events: deltaEvents,
               answer_characters: answerCharacters,
@@ -1954,7 +2146,7 @@ function enableConversations(debug?: DebugLogger): void {
         }
       }
     } catch (error: unknown) {
-      streamRenderer?.cancel();
+      timelineRenderer?.cancel();
       debug?.add("error", "chat.request.failed", {
         endpoint: "/api/chat",
         online: navigator.onLine,

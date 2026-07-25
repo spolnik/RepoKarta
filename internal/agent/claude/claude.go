@@ -217,6 +217,14 @@ func (s *session) Send(ctx context.Context, turn agent.Turn, emit func(agent.Eve
 	}
 
 	emittedText := false
+	textSegments := make(map[int]string)
+	segmentSequence := 0
+	nextTextSegment := func(index int) string {
+		segmentSequence++
+		segmentID := fmt.Sprintf("claude-%d", segmentSequence)
+		textSegments[index] = segmentID
+		return segmentID
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -252,28 +260,58 @@ func (s *session) Send(ctx context.Context, turn agent.Turn, emit func(agent.Eve
 			switch envelope.Type {
 			case "stream_event":
 				var event struct {
-					Type  string `json:"type"`
+					Type         string `json:"type"`
+					Index        int    `json:"index"`
+					ContentBlock struct {
+						Type string `json:"type"`
+					} `json:"content_block"`
 					Delta struct {
 						Type string `json:"type"`
 						Text string `json:"text"`
 					} `json:"delta"`
 				}
-				if json.Unmarshal(envelope.Event, &event) == nil &&
-					event.Type == "content_block_delta" &&
-					event.Delta.Type == "text_delta" &&
-					event.Delta.Text != "" {
+				if json.Unmarshal(envelope.Event, &event) != nil {
+					continue
+				}
+				if event.Type == "content_block_start" && event.ContentBlock.Type == "text" {
+					nextTextSegment(event.Index)
+				} else if event.Type == "content_block_delta" &&
+					event.Delta.Type == "text_delta" && event.Delta.Text != "" {
 					emittedText = true
-					if err := emit(agent.Event{Type: agent.EventDelta, Text: event.Delta.Text}); err != nil {
+					segmentID := textSegments[event.Index]
+					if segmentID == "" {
+						segmentID = nextTextSegment(event.Index)
+					}
+					if err := emit(agent.Event{
+						Type:      agent.EventDelta,
+						SegmentID: segmentID,
+						Text:      event.Delta.Text,
+					}); err != nil {
 						return err
+					}
+				} else if event.Type == "content_block_stop" {
+					if segmentID := textSegments[event.Index]; segmentID != "" {
+						delete(textSegments, event.Index)
+						if err := emit(agent.Event{
+							Type:      agent.EventActivity,
+							Activity:  agent.ActivityThinking,
+							SegmentID: segmentID,
+						}); err != nil {
+							return err
+						}
 					}
 				}
 			case "assistant":
 				if emittedText {
 					continue
 				}
-				for _, text := range assistantText(envelope.Message) {
+				for index, text := range assistantText(envelope.Message) {
 					emittedText = true
-					if err := emit(agent.Event{Type: agent.EventDelta, Text: text}); err != nil {
+					if err := emit(agent.Event{
+						Type:      agent.EventDelta,
+						SegmentID: fmt.Sprintf("claude-message-%d", index+1),
+						Text:      text,
+					}); err != nil {
 						return err
 					}
 				}
@@ -292,7 +330,11 @@ func (s *session) Send(ctx context.Context, turn agent.Turn, emit func(agent.Eve
 					return errors.New(detail)
 				}
 				if !emittedText && envelope.Result != "" {
-					if err := emit(agent.Event{Type: agent.EventDelta, Text: envelope.Result}); err != nil {
+					if err := emit(agent.Event{
+						Type:      agent.EventDelta,
+						SegmentID: "claude-result",
+						Text:      envelope.Result,
+					}); err != nil {
 						return err
 					}
 				}

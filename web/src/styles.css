@@ -420,6 +420,79 @@ a.brand-mark:hover,
   vertical-align: -0.08rem;
 }
 
+.conversation-response-segment {
+  display: block;
+}
+
+.conversation-response-segment + .conversation-response-segment {
+  margin-top: 0.9rem;
+}
+
+.conversation-thinking {
+  display: flex;
+  min-height: 1.5rem;
+  align-items: center;
+  gap: 0.38rem;
+  margin: 0.35rem 0;
+  color: rgb(100 116 139);
+  font-size: 0.68rem;
+  font-weight: 600;
+}
+
+.conversation-thinking[data-state="complete"] {
+  color: rgb(71 85 105);
+}
+
+.conversation-thinking time,
+.conversation-composer-activity time {
+  color: rgb(71 85 105);
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  font-weight: 500;
+}
+
+.conversation-thinking-dots {
+  display: inline-flex;
+  width: 1.1rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.conversation-thinking-dots i {
+  width: 0.2rem;
+  height: 0.2rem;
+  border-radius: 999px;
+  background: currentColor;
+  animation: conversation-thinking-dot 1.15s ease-in-out infinite;
+}
+
+.conversation-thinking-dots i:nth-child(2) {
+  animation-delay: 120ms;
+}
+
+.conversation-thinking-dots i:nth-child(3) {
+  animation-delay: 240ms;
+}
+
+.conversation-thinking[data-state="complete"] .conversation-thinking-dots i {
+  animation: none;
+  opacity: 0.45;
+}
+
+@keyframes conversation-thinking-dot {
+  0%,
+  60%,
+  100% {
+    opacity: 0.3;
+    transform: translateY(0);
+  }
+
+  30% {
+    opacity: 1;
+    transform: translateY(-0.13rem);
+  }
+}
+
 @keyframes conversation-stream-cursor {
   50% {
     opacity: 0.2;
@@ -2498,6 +2571,29 @@ a.brand-mark:hover,
 
 .conversation-attachment-tray {
   margin: 0 0.7rem 0.45rem;
+}
+
+.conversation-composer-activity {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0 0.72rem 0.18rem;
+  border-top: 1px solid rgb(255 255 255 / 0.055);
+  padding: 0.48rem 0.18rem 0.1rem;
+  color: rgb(110 231 183 / 0.82);
+  font-size: 0.64rem;
+}
+
+.conversation-composer-activity[hidden] {
+  display: none;
+}
+
+.conversation-composer-activity[data-phase="answering"] {
+  color: rgb(167 139 250 / 0.82);
+}
+
+.conversation-composer-activity strong {
+  font-weight: 650;
 }
 
 .conversation-composer-toolbar {

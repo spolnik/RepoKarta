@@ -21,6 +21,7 @@ type EventType string
 
 const (
 	EventMeta        EventType = "meta"
+	EventActivity    EventType = "activity"
 	EventDelta       EventType = "delta"
 	EventDone        EventType = "done"
 	EventError       EventType = "error"
@@ -29,6 +30,12 @@ const (
 	EventContext     EventType = "context"
 	EventInterrupted EventType = "interrupted"
 	EventUsage       EventType = "usage"
+)
+
+const (
+	// ActivityThinking means the provider is doing work before its next visible
+	// assistant message. It is a lifecycle signal, not hidden chain-of-thought.
+	ActivityThinking = "thinking"
 )
 
 var (
@@ -74,6 +81,8 @@ type Event struct {
 	Type           EventType     `json:"type"`
 	ConversationID string        `json:"conversation_id,omitempty"`
 	Title          string        `json:"title,omitempty"`
+	Activity       string        `json:"activity,omitempty"`
+	SegmentID      string        `json:"segment_id,omitempty"`
 	Text           string        `json:"text,omitempty"`
 	Sources        []Citation    `json:"sources,omitempty"`
 	Images         []Image       `json:"images,omitempty"`
@@ -376,11 +385,18 @@ func (m *Manager) Send(ctx context.Context, request TurnRequest, emit func(Event
 		CreatedAt:      time.Now().UTC(),
 	}
 	providerOutputObserved := false
+	lastSegmentID := ""
 	forward := func(event Event) error {
 		switch event.Type {
 		case EventDelta:
 			providerOutputObserved = true
+			if event.SegmentID != "" && lastSegmentID != "" && event.SegmentID != lastSegmentID {
+				assistantMessage.Text = strings.TrimRight(assistantMessage.Text, "\n") + "\n\n"
+			}
 			assistantMessage.Text += event.Text
+			if event.SegmentID != "" {
+				lastSegmentID = event.SegmentID
+			}
 		case EventImages:
 			providerOutputObserved = true
 			assistantMessage.Images = append(assistantMessage.Images, event.Images...)
@@ -402,6 +418,9 @@ func (m *Manager) Send(ctx context.Context, request TurnRequest, emit func(Event
 		m.citations.Clear(conversationID)
 	}
 	activeSession := conversation.currentSession()
+	if err := forward(Event{Type: EventActivity, Activity: ActivityThinking}); err != nil {
+		return err
+	}
 	sendError := activeSession.Send(turnContext, Turn{
 		Message:     request.Message,
 		Images:      request.Images,
