@@ -60,17 +60,20 @@ func (a *Adapter) ID() string { return "anthropic-api" }
 
 func (a *Adapter) Status(context.Context) agent.Status {
 	keyPresent := strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY")) != ""
+	efforts := []string{"low", "medium", "high", "xhigh", "max"}
 	status := agent.Status{
 		ID:            a.ID(),
 		Name:          "Anthropic API",
 		Available:     true,
 		Authenticated: keyPresent,
 		Models: []agent.ModelOption{
-			{ID: "claude-fable-5", Label: "Fable 5"},
-			{ID: "claude-opus-4-8", Label: "Opus 4.8"},
-			{ID: "claude-sonnet-5", Label: "Sonnet 5"},
-			{ID: "claude-opus-5", Label: "Opus 5"},
+			{ID: "claude-fable-5", Label: "Fable 5", Efforts: efforts},
+			{ID: "claude-opus-5", Label: "Opus 5", Efforts: efforts},
+			{ID: "claude-opus-4-8", Label: "Opus 4.8", Efforts: efforts},
+			{ID: "claude-sonnet-5", Label: "Sonnet 5", Efforts: efforts},
+			{ID: "claude-haiku-4-5", Label: "Haiku 4.5", Efforts: []string{}},
 		},
+		Efforts:      efforts,
 		ImageInput:   false,
 		ImageOutput:  false,
 		Interrupt:    true,
@@ -101,6 +104,7 @@ func (a *Adapter) Start(_ context.Context, config agent.SessionConfig) (agent.Se
 	return &session{
 		client:         &client,
 		model:          model,
+		effort:         strings.TrimSpace(config.Effort),
 		conversationID: config.ConversationID,
 		intelligence:   a.Intelligence,
 		citations:      a.Citations,
@@ -110,6 +114,7 @@ func (a *Adapter) Start(_ context.Context, config agent.SessionConfig) (agent.Se
 type session struct {
 	client         *anthropicapi.Client
 	model          string
+	effort         string
 	conversationID string
 	intelligence   Intelligence
 	citations      CitationRecorder
@@ -179,6 +184,11 @@ func (s *session) Send(ctx context.Context, turn agent.Turn, emit func(agent.Eve
 				Text: providerInstructions,
 			}},
 			Tools: toolDefinitions(),
+		}
+		if s.effort != "" {
+			params.OutputConfig = anthropicapi.OutputConfigParam{
+				Effort: anthropicapi.OutputConfigEffort(s.effort),
+			}
 		}
 		stream := s.client.Messages.NewStreaming(activeContext, params)
 		var message anthropicapi.Message

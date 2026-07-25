@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/spolnik/RepoKarta/internal/agent"
+	"github.com/spolnik/RepoKarta/internal/analysis"
 	"github.com/spolnik/RepoKarta/internal/catalog"
 	"github.com/spolnik/RepoKarta/internal/graph"
 )
@@ -108,11 +109,44 @@ func TestKnowledgePresetRequiresCuratedModelAndHighEffort(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "balanced Claude rejected",
+			name: "Claude Sonnet low",
 			request: GenerateRequest{
 				Provider: "anthropic-api",
 				Model:    "claude-sonnet-5",
+				Effort:   "low",
+			},
+		},
+		{
+			name: "Claude Haiku provider default",
+			request: GenerateRequest{
+				Provider: "claude",
+				Model:    "claude-haiku-4-5",
+			},
+		},
+		{
+			name: "Fast Haiku provider default",
+			request: GenerateRequest{
+				Preset:   "fast",
+				Provider: "claude",
+				Model:    "claude-haiku-4-5",
+			},
+		},
+		{
+			name: "Fast rejects a quality model",
+			request: GenerateRequest{
+				Preset:   "fast",
+				Provider: "claude",
+				Model:    "claude-opus-5",
 				Effort:   "high",
+			},
+			wantErr: true,
+		},
+		{
+			name: "Claude Haiku explicit effort rejected",
+			request: GenerateRequest{
+				Provider: "claude",
+				Model:    "claude-haiku-4-5",
+				Effort:   "medium",
 			},
 			wantErr: true,
 		},
@@ -747,6 +781,102 @@ func TestProfileScalesToRepositoryShape(t *testing.T) {
 	}
 	if err := validateKnowledgeSurvey(markdown, citations, standardKnowledgeProfile()); err == nil {
 		t.Fatal("the standard profile must still demand deeper evidence")
+	}
+}
+
+func TestFastProfileBoundsInteractiveSurveyWork(t *testing.T) {
+	site := Site{RepositoryID: 7, Repository: "payments", Revision: "abc123"}
+	snapshot := graph.Snapshot{
+		FileCount: 161,
+		Nodes: []graph.Node{
+			{Kind: "entrypoint", RepositoryID: 7, Path: "src/main/App.java"},
+			{Kind: "route", RepositoryID: 7, Path: "src/main/Routes.java"},
+		},
+	}
+	fast := profileForRequest(GenerateRequest{Preset: "fast"}, site, snapshot)
+	quality := profileForRequest(GenerateRequest{Preset: "quality"}, site, snapshot)
+	if fast.ID != "fast" || fast.MaximumTimeout != 600 || fast.MaximumToolCalls != 12 {
+		t.Fatalf("unexpected fast profile: %+v", fast)
+	}
+	if fast.SurveyTokenBudget >= quality.SurveyTokenBudget ||
+		fast.MaximumStructuralFacts >= quality.MaximumStructuralFacts ||
+		fast.MaximumPages >= quality.MaximumPages {
+		t.Fatalf("fast profile does not reduce survey/page work: fast=%+v quality=%+v", fast, quality)
+	}
+	prompt := knowledgeSurveyPrompt(site, snapshot, fast)
+	for _, expected := range []string{
+		"Use at most 12 RepoKarta tool calls",
+		"inspect only the 8-12 highest-value files",
+		"700-1,200 words",
+	} {
+		if !strings.Contains(prompt, expected) {
+			t.Fatalf("fast survey prompt does not contain %q:\n%s", expected, prompt)
+		}
+	}
+	resumed := profileForRequest(GenerateRequest{}, Site{
+		RepositoryID: 7,
+		Survey:       Checkpoint{Profile: "fast"},
+	}, snapshot)
+	if resumed.ID != "fast" {
+		t.Fatalf("saved fast survey resumed as %q", resumed.ID)
+	}
+}
+
+func TestKnowledgeSurveyStartsFromParsedSymbolsAndBuildFacts(t *testing.T) {
+	site := Site{RepositoryID: 7, Repository: "payments", Revision: "abc123"}
+	snapshot := graph.Snapshot{
+		FileCount: 12,
+		Nodes: []graph.Node{
+			{Kind: "repository", Label: "payments", RepositoryID: 7, Path: "README.md"},
+		},
+		Structure: []graph.StructuralDocument{
+			{
+				RepositoryID: 7,
+				Path:         "src/main/java/com/acme/PaymentService.java",
+				Symbols: []analysis.Symbol{
+					{
+						Kind:  "class",
+						Name:  "PaymentService",
+						Range: analysis.Range{StartLine: 8},
+					},
+				},
+			},
+			{
+				RepositoryID: 7,
+				Path:         "build.gradle.kts",
+				BuildFacts: []analysis.BuildFact{
+					{
+						Kind:  "dependency",
+						Name:  "implementation",
+						Value: `implementation("org.springframework.boot:spring-boot-starter-web")`,
+						Range: analysis.Range{StartLine: 14},
+					},
+				},
+			},
+			{
+				RepositoryID: 99,
+				Path:         "other.py",
+				Symbols: []analysis.Symbol{
+					{Kind: "function", Name: "mustNotLeak", Range: analysis.Range{StartLine: 1}},
+				},
+			},
+		},
+	}
+	prompt := knowledgeSurveyPrompt(site, snapshot, compactKnowledgeProfile())
+	for _, expected := range []string{
+		"parsed_documents=2",
+		"parsed_symbols=1",
+		"build_facts=1",
+		"structure_truncated=false",
+		"parsed class | PaymentService | src/main/java/com/acme/PaymentService.java:8",
+		"build dependency | implementation",
+	} {
+		if !strings.Contains(prompt, expected) {
+			t.Fatalf("survey prompt does not contain %q:\n%s", expected, prompt)
+		}
+	}
+	if strings.Contains(prompt, "mustNotLeak") {
+		t.Fatalf("survey prompt leaked another repository's structure:\n%s", prompt)
 	}
 }
 

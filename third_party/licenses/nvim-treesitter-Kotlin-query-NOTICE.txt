@@ -1,0 +1,14 @@
+nvim-treesitter Kotlin highlighting query notice
+================================================
+
+github.com/odvcencio/gotreesitter v0.47.0 includes a Kotlin highlighting query
+based on:
+
+https://github.com/nvim-treesitter/nvim-treesitter/blob/f8ab59861eed4a1c168505e3433462ed800f2bae/queries/kotlin/highlights.scm
+
+nvim-treesitter distributes that work under the Apache License, Version 2.0.
+The gotreesitter copy is modified: queries using #lua-match? were removed.
+
+The complete Apache License 2.0 terms are distributed beside this notice as
+zoekt-Apache-2.0.txt. That file contains the unmodified full license text and
+also satisfies the separate Apache 2.0 distribution requirement for Zoekt.

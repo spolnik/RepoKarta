@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/spolnik/RepoKarta/internal/agent"
@@ -19,6 +21,7 @@ import (
 	"github.com/spolnik/RepoKarta/internal/mcpserver"
 	"github.com/spolnik/RepoKarta/internal/search"
 	zoektadapter "github.com/spolnik/RepoKarta/internal/search/zoekt"
+	"github.com/spolnik/RepoKarta/internal/security"
 	"github.com/spolnik/RepoKarta/internal/store"
 )
 
@@ -31,6 +34,10 @@ type Config struct {
 	OpenBrowser    bool
 	CodexCommand   string
 	ClaudeCommand  string
+	AllowOpen      bool
+	AdminUser      string
+	AdminPassword  string
+	Security       security.Settings
 }
 
 func DefaultConfig() (Config, error) {
@@ -51,6 +58,16 @@ func DefaultConfig() (Config, error) {
 		OpenBrowser:    true,
 		CodexCommand:   "codex",
 		ClaudeCommand:  "claude",
+		AdminUser:      strings.TrimSpace(os.Getenv("REPOKARTA_ADMIN_USER")),
+		Security: security.Settings{
+			Mode:                 security.Mode(envOrDefault("REPOKARTA_AUTH_MODE", string(security.ModeLocal))),
+			PublicURL:            strings.TrimSpace(os.Getenv("REPOKARTA_PUBLIC_URL")),
+			CloudflareTeamDomain: strings.TrimSpace(os.Getenv("REPOKARTA_CF_TEAM_DOMAIN")),
+			CloudflareAudience:   strings.TrimSpace(os.Getenv("REPOKARTA_CF_AUDIENCE")),
+			SAMLMetadataURL:      strings.TrimSpace(os.Getenv("REPOKARTA_SAML_METADATA_URL")),
+			SAMLEntityID:         strings.TrimSpace(os.Getenv("REPOKARTA_SAML_ENTITY_ID")),
+		},
+		AllowOpen: envBool("REPOKARTA_ALLOW_OPEN"),
 	}, nil
 }
 
@@ -69,6 +86,18 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 	defer database.Close()
+
+	securityManager, err := security.New(ctx, database, security.Config{
+		Address:       cfg.ListenAddress,
+		DataDirectory: cfg.DataDirectory,
+		AllowOpen:     cfg.AllowOpen,
+		AdminUser:     cfg.AdminUser,
+		AdminPassword: cfg.AdminPassword,
+		Initial:       cfg.Security,
+	})
+	if err != nil {
+		return fmt.Errorf("initialize authentication: %w", err)
+	}
 
 	engine, err := zoektadapter.New(filepath.Join(cfg.DataDirectory, "indexes"))
 	if err != nil {
@@ -102,7 +131,11 @@ func Run(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return fmt.Errorf("create MCP bearer token: %w", err)
 	}
-	baseURL := "http://" + cfg.ListenAddress
+	internalBaseURL := "http://" + cfg.ListenAddress
+	baseURL := internalBaseURL
+	if configured := securityManager.Settings().PublicURL; configured != "" {
+		baseURL = configured
+	}
 	intelligence := codeintel.New(database, engine, baseURL)
 	maps, err := graph.New(database, filepath.Join(cfg.DataDirectory, "maps"), baseURL)
 	if err != nil {
@@ -111,7 +144,7 @@ func Run(ctx context.Context, cfg Config) error {
 	citations := mcpserver.NewCitationTracker()
 	conversations := agent.NewManager(
 		cfg.RepositoryRoot,
-		baseURL+"/mcp",
+		internalBaseURL+"/mcp",
 		mcpToken,
 		&codex.Adapter{Command: cfg.CodexCommand},
 		&claude.Adapter{Command: cfg.ClaudeCommand},
@@ -122,6 +155,14 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 	documents.UseGenerator(conversations)
+	securityManager.SetChangeHandler(func(settings security.Settings) {
+		updatedBaseURL := internalBaseURL
+		if settings.PublicURL != "" {
+			updatedBaseURL = settings.PublicURL
+		}
+		intelligence.SetBaseURL(updatedBaseURL)
+		maps.SetBaseURL(updatedBaseURL)
+	})
 	mcpHandler := mcpserver.NewHandler(mcpserver.Config{
 		Version:   cfg.Version,
 		BaseURL:   baseURL,
@@ -140,10 +181,23 @@ func Run(ctx context.Context, cfg Config) error {
 		Conversations:  conversations,
 		Maps:           maps,
 		Docs:           documents,
+		Security:       securityManager,
 	}, intelligence, coordinator)
 	if err != nil {
 		return err
 	}
 
 	return server.Run(ctx)
+}
+
+func envOrDefault(name, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+		return value
+	}
+	return fallback
+}
+
+func envBool(name string) bool {
+	value, err := strconv.ParseBool(strings.TrimSpace(os.Getenv(name)))
+	return err == nil && value
 }

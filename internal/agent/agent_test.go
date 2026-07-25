@@ -209,6 +209,43 @@ func TestManagerRejectsUnsupportedEffort(t *testing.T) {
 	}
 }
 
+type modelEffortAdapter struct {
+	fakeAdapter
+}
+
+func (a *modelEffortAdapter) Status(context.Context) Status {
+	return Status{
+		ID:            a.id,
+		Name:          a.id,
+		Available:     true,
+		Authenticated: true,
+		Models: []ModelOption{
+			{ID: "reasoning", Label: "Reasoning", Efforts: []string{"low", "medium"}},
+			{ID: "fast", Label: "Fast", Efforts: []string{}},
+		},
+		Efforts: []string{"low", "medium"},
+	}
+}
+
+func TestManagerHonorsModelSpecificEffortCapabilities(t *testing.T) {
+	adapter := &modelEffortAdapter{fakeAdapter: fakeAdapter{id: "model-effort"}}
+	manager := NewManager("", "", "", adapter)
+	defer manager.Close()
+
+	err := manager.Send(context.Background(), TurnRequest{
+		Provider: "model-effort",
+		Model:    "fast",
+		Effort:   "medium",
+		Message:  "hello",
+	}, func(Event) error { return nil })
+	if err == nil || !strings.Contains(err.Error(), "does not support effort") {
+		t.Fatalf("model-specific effort validation error = %v", err)
+	}
+	if adapter.started != 0 {
+		t.Fatalf("provider started %d sessions, want 0", adapter.started)
+	}
+}
+
 func TestManagerRejectsModelOutsideHarnessCatalog(t *testing.T) {
 	adapter := &fakeAdapter{id: "test"}
 	manager := NewManager("", "", "", adapter)

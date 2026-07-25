@@ -36,16 +36,18 @@ type Adapter struct {
 func (a *Adapter) ID() string { return "claude" }
 
 func (a *Adapter) Status(ctx context.Context) agent.Status {
+	efforts := []string{"low", "medium", "high", "xhigh", "max"}
 	status := agent.Status{
 		ID:   a.ID(),
 		Name: "Anthropic Claude",
 		Models: []agent.ModelOption{
-			{ID: "fable", Label: "Fable 5"},
-			{ID: "claude-opus-4-8", Label: "Opus 4.8"},
-			{ID: "sonnet", Label: "Sonnet 5"},
-			{ID: "opus", Label: "Opus 5"},
+			{ID: "claude-fable-5", Label: "Fable 5", Efforts: efforts},
+			{ID: "claude-opus-5", Label: "Opus 5", Efforts: efforts},
+			{ID: "claude-opus-4-8", Label: "Opus 4.8", Efforts: efforts},
+			{ID: "claude-sonnet-5", Label: "Sonnet 5", Efforts: efforts},
+			{ID: "claude-haiku-4-5", Label: "Haiku 4.5", Efforts: []string{}},
 		},
-		Efforts:      []string{"low", "medium", "high", "xhigh", "max"},
+		Efforts:      efforts,
 		ImageInput:   true,
 		ImageOutput:  false,
 		Interrupt:    true,
@@ -59,7 +61,7 @@ func (a *Adapter) Status(ctx context.Context) agent.Status {
 	status.Available = true
 	bounded, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	output, err := exec.CommandContext(bounded, command, "auth", "status").CombinedOutput()
+	output, err := exec.CommandContext(bounded, command, statusCommandArguments()...).CombinedOutput()
 	if err != nil && len(output) == 0 {
 		status.Detail = err.Error()
 		return status
@@ -110,11 +112,10 @@ func (a *Adapter) Start(ctx context.Context, config agent.SessionConfig) (agent.
 	}
 	arguments := commandArguments(config, string(mcpConfig), attachments.Directory())
 
-	process := exec.CommandContext(context.WithoutCancel(ctx), command, arguments...)
+	process := newCommand(context.WithoutCancel(ctx), command, arguments, attachments.Directory())
 	// Run from the attachment sandbox rather than a repository or user project
-	// directory. Combined with empty setting sources, this prevents personal or
-	// project Claude memory from contaminating evidence-grounded answers.
-	process.Dir = attachments.Directory()
+	// directory. Only user settings are loaded, so operational env, hooks, and
+	// telemetry apply while project/local settings and repository memory do not.
 	stdin, err := process.StdinPipe()
 	if err != nil {
 		_ = attachments.Close()
@@ -157,7 +158,7 @@ func commandArguments(config agent.SessionConfig, mcpConfig, attachmentDirectory
 		"--verbose",
 		"--strict-mcp-config",
 		"--mcp-config", mcpConfig,
-		"--setting-sources", "",
+		"--setting-sources", "user",
 		"--settings", "{}",
 		"--exclude-dynamic-system-prompt-sections",
 		"--permission-mode", "plan",
@@ -177,6 +178,19 @@ func commandArguments(config agent.SessionConfig, mcpConfig, attachmentDirectory
 		arguments = append(arguments, "--resume", strings.TrimSpace(config.ResumeCursor))
 	}
 	return arguments
+}
+
+func statusCommandArguments() []string {
+	return []string{"--setting-sources", "user", "auth", "status"}
+}
+
+// newCommand deliberately leaves Env nil. os/exec then inherits the complete
+// parent environment, matching a normal Claude invocation from RepoKarta's
+// launch context.
+func newCommand(ctx context.Context, command string, arguments []string, directory string) *exec.Cmd {
+	process := exec.CommandContext(ctx, command, arguments...)
+	process.Dir = directory
+	return process
 }
 
 type session struct {

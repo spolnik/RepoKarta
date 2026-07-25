@@ -223,6 +223,29 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value`, signature); err != nil {
 	return true, nil
 }
 
+// AppSetting returns one non-secret application setting.
+func (s *Store) AppSetting(ctx context.Context, key string) (string, bool, error) {
+	var value string
+	err := s.db.QueryRowContext(ctx, "SELECT value FROM app_settings WHERE key = ?", key).Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("read application setting %q: %w", key, err)
+	}
+	return value, true, nil
+}
+
+// SetAppSetting persists one non-secret application setting.
+func (s *Store) SetAppSetting(ctx context.Context, key, value string) error {
+	if _, err := s.db.ExecContext(ctx, `
+INSERT INTO app_settings (key, value) VALUES (?, ?)
+ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key, value); err != nil {
+		return fmt.Errorf("write application setting %q: %w", key, err)
+	}
+	return nil
+}
+
 // Close closes the metadata database.
 func (s *Store) Close() error {
 	return s.db.Close()

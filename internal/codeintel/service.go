@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spolnik/RepoKarta/internal/catalog"
@@ -51,7 +52,15 @@ type CodeSearcher interface {
 type Service struct {
 	store    RepositoryStore
 	searcher CodeSearcher
+	mu       sync.RWMutex
 	baseURL  string
+}
+
+// SetBaseURL changes the absolute URL used for newly returned source evidence.
+func (s *Service) SetBaseURL(baseURL string) {
+	s.mu.Lock()
+	s.baseURL = strings.TrimRight(baseURL, "/")
+	s.mu.Unlock()
 }
 
 // New creates a protocol-independent code-intelligence service.
@@ -560,7 +569,10 @@ func (s *Service) SourceURL(repositoryID int64, revision, filePath string, start
 		"lines": []string{strconv.Itoa(windowStart) + "-" + strconv.Itoa(windowEnd)},
 		"focus": []string{strconv.Itoa(start) + "-" + strconv.Itoa(end)},
 	}
-	return s.baseURL + "/source/" + strconv.FormatInt(repositoryID, 10) + "?" + values.Encode() + "#L" + strconv.Itoa(start)
+	s.mu.RLock()
+	baseURL := s.baseURL
+	s.mu.RUnlock()
+	return baseURL + "/source/" + strconv.FormatInt(repositoryID, 10) + "?" + values.Encode() + "#L" + strconv.Itoa(start)
 }
 
 // SourceWindow returns a useful bounded viewing window around an exact cited

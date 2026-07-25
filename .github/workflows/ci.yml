@@ -36,6 +36,6 @@ jobs:
           npm --prefix web run typecheck
           npm --prefix web run build
       - name: Test Go application
-        run: go test ./...
+        run: go test -tags "grammar_subset,grammar_subset_bash,grammar_subset_go,grammar_subset_groovy,grammar_subset_java,grammar_subset_javascript,grammar_subset_kotlin,grammar_subset_python,grammar_subset_sql,grammar_subset_tsx,grammar_subset_typescript" ./...
       - name: Build native executable
-        run: go build -trimpath ./cmd/repokarta
+        run: go build -tags "grammar_subset,grammar_subset_bash,grammar_subset_go,grammar_subset_groovy,grammar_subset_java,grammar_subset_javascript,grammar_subset_kotlin,grammar_subset_python,grammar_subset_sql,grammar_subset_tsx,grammar_subset_typescript" -trimpath ./cmd/repokarta

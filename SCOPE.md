@@ -148,8 +148,10 @@ repositories on managed Windows and Apple Silicon macOS laptops.
   repository-specific MCP tool and JSON endpoint. Cross-repository search keeps
   it optional. Repository names are not unique and are never the advertised
   selector.
-- Run provider harnesses outside every indexed repository, with personal and
-  project memory disabled, so answers rest only on RepoKarta tool evidence.
+- Run provider harnesses outside every indexed repository. Claude loads only
+  user-scoped operational settings (including hooks, environment, and
+  telemetry), never project/local settings; grounding instructions disable
+  personal and project memory so answers rest only on RepoKarta tool evidence.
 - Persist titled conversations locally by default, keep provider credentials
   out of that storage, and provide explicit per-conversation deletion.
 - Keep an AI-provider interface so additional hosted or local models can be
@@ -176,21 +178,33 @@ repositories on managed Windows and Apple Silicon macOS laptops.
   - executable entry points
   - HTTP routes where reliably detectable
   - databases and external services where reliably detectable
+- Build a bounded, language-neutral structural index from pure-Go Tree-sitter
+  grammars for Java, Kotlin, Gradle Groovy, TypeScript/TSX, JavaScript, Go,
+  SQL, Bash, and Python. Record declarations, imports, inheritance, call sites,
+  Gradle DSL calls, exact byte/line ranges, parser diagnostics, and confidence
+  without executing repository code.
+- Feed a curated subset of parsed types, functions, and build facts into the
+  Deep Wiki survey starting point. Keep the full syntax inventory separate from
+  visual graph nodes so generic call sites do not create a graph hairball.
 - Read Gradle builds in both Groovy and Kotlin syntax: string coordinates,
   Groovy map and Kotlin named `group`/`name`/`version` arguments,
   `platform`/`enforcedPlatform` BOM imports, `project(...)` dependencies, and
   `libs.*` version-catalog accessors resolved through `libs.versions.toml`.
-  Interpolated versions are recorded without a version rather than as literal
-  build-script text.
+  Resolve interpolated versions from `gradle.properties` and common literal
+  Groovy/Kotlin assignments; record unresolved versions without inventing a
+  literal value.
 - Read Spring routes from `@RequestMapping`, the HTTP-method mapping
   annotations, class-level path prefixes, `@HttpExchange` HTTP interfaces, and
   `RouterFunctions` predicates.
 - Derive repository-to-repository `service_call` edges from `@FeignClient`
   targets and from `http://`, `https://`, and `lb://` hosts found in files that
   actually build a client (Feign, WebClient, RestClient, RestTemplate, or an
-  HTTP interface proxy). Only targets that resolve to a discovered repository,
-  Gradle `rootProject.name`, or `spring.application.name` become edges;
-  unresolved variables and infrastructure hosts are dropped.
+  HTTP interface proxy), plus outbound base URLs in main Spring application
+  configuration. Prefer production configuration and `src/main` evidence;
+  retain test-only edges only as explicit low-confidence facts. Only targets
+  that resolve to a discovered repository, Gradle `rootProject.name`, or
+  `spring.application.name` become edges; unresolved variables and
+  infrastructure hosts are dropped.
 - Provide repository, package, component, and dependency views.
 - Use a small TypeScript visualization island within the otherwise
   server-rendered HTMX application.
@@ -199,16 +213,18 @@ repositories on managed Windows and Apple Silicon macOS laptops.
 - Prefer legible curated layers over an unfiltered graph containing every
   symbol.
 - Default the map to a single repository. The cross-repository view is an
-  explicit choice, is bounded to a fixed number of repositories, and reports
-  truncation rather than appearing complete, because analyzing several hundred
-  repositories at once is slow and rarely legible.
+  explicit choice, is bounded to a fixed number of repositories, and returns
+  explicit scope metadata with total, analyzed, omitted, limit, and completeness
+  rather than appearing fleet-complete.
 
 ### Living documentation
 
 - Generate Markdown documentation tied to a repository commit.
 - Use an isolated, read-only provider session to inspect implementation and
   tests, then plan a repository-specific two-level knowledge hierarchy.
-- Require an explicit Wiki-grade model and high-or-stronger reasoning effort.
+- Require an explicit curated model. Preserve the Codex profile effort floor;
+  expose all supported Claude effort levels per model, including provider
+  default for models without configurable effort.
 - Checkpoint a bounded repository survey to `survey.md`, then atomically save
   the hierarchy before generating pages one at a time.
 - Keep deterministic structural planning as the provider-free fallback.
@@ -438,6 +454,8 @@ rendering an unreadable file-level hairball.
 - [x] Survey, plan, and page checkpoints with resumable page-by-page progress,
   elapsed time, timeout visibility, and cancellation.
 - [x] Curated top-tier Wiki model presets with high-or-stronger effort.
+- [x] Fast/Haiku Wiki mode with a 12-call discovery budget, a hard 10-minute
+  survey timeout, and a focused 4-8 page plan.
 - [x] Filesystem-only Markdown and manifest persistence outside SQLite.
 - [x] Source citations and Mermaid validation.
 - [x] Three-pane Deep Wiki reader with hierarchy, filtering, page outline, and
@@ -454,7 +472,8 @@ rendering an unreadable file-level hairball.
 - [x] Output budget limited to providers that map it to a request limit, with
   an in-product explanation.
 - [x] Neutral harness grounding: provider processes run outside every indexed
-  repository with personal and project memory disabled.
+  repository; Claude keeps user operational settings while project/local
+  settings and personal/project memory remain excluded.
 - [x] Gradle dependency, Spring route, and inter-service HTTP extraction with
   exact revision, path, and line evidence.
 
@@ -473,15 +492,55 @@ changes.
 - [ ] Homebrew formula.
 - [ ] Upgrade and database migration tests.
 
-### M6: shared deployment (not started)
+### M6: shared deployment (in progress)
 
-Nothing in this milestone is implemented. RepoKarta remains loopback-only with
-no authentication, and documenting these items does not complete them.
+The executable now has a tested shared-deployment authentication boundary while
+remaining loopback-only by default. Non-secret provider settings persist in
+SQLite; bootstrap administrator credentials and SAML private keys do not.
 
-- [ ] Configurable bind address beyond `127.0.0.1`.
-- [ ] Authentication and per-user separation for a shared instance.
+- [x] Configurable bind address beyond `127.0.0.1`.
+- [x] Four explicit access modes: loopback-only local, Cloudflare Access JWT,
+  native SAML SP, and startup-gated unauthenticated shared access.
+- [x] Startup-credential-protected administration for authentication settings.
+- [ ] Per-user separation of conversations and generated artifacts on a shared
+  instance.
 - [ ] Scheduled ghorg synchronization.
 - [ ] Shared or team deployment packaging and operations.
+
+### Future: dependency management
+
+Add a read-only Dependency Management workspace over the dependencies already
+captured from committed manifests and build files.
+
+- [ ] Maintain a normalized dependency inventory with repository, manifest,
+  ecosystem, package coordinate, declared version or constraint, resolution
+  confidence, revision, path, and line evidence.
+- [ ] Resolve versions from supported build indirection where source proves the
+  value; show unresolved variables and constraints honestly instead of treating
+  them as concrete versions.
+- [ ] Query the appropriate public package registry for the latest available
+  stable version, including at least Maven Central/Gradle, npm, Go modules,
+  Cargo, and PyPI as their manifest extractors mature.
+- [ ] Compare declared and latest stable versions and expose clear states such
+  as current, behind, ahead/prerelease, unavailable, private/internal,
+  unresolved, and registry error.
+- [ ] Display version discrepancies fleet-wide and per repository, with filters
+  by ecosystem, package, repository, severity of version distance, and check
+  status.
+- [ ] Record the registry source and observation timestamp separately from the
+  commit-pinned declaration evidence so a freshness result never appears to be
+  a historical source fact.
+- [ ] Cache registry responses, honor rate limits and offline operation, bound
+  refresh concurrency, and surface partial or stale results explicitly.
+- [ ] Do not send private/internal package names to public registries unless an
+  administrator explicitly configures that ecosystem and registry as safe.
+- [ ] Keep the feature advisory and read-only: RepoKarta may explain an upgrade
+  discrepancy, but it must not rewrite manifests, lockfiles, or repositories.
+
+Exit condition: a user can see which captured dependencies are behind the
+latest public stable release, understand unresolved and private-package gaps,
+and trace every declared version back to exact committed source without
+RepoKarta modifying a repository.
 
 ## Definition of quality
 
@@ -525,8 +584,8 @@ completion criteria include:
   search is complete.
 - Which graph library offers the best balance of large-graph performance,
   accessibility, layout quality, and bundle size.
-- Which language-specific structural analyzers provide enough value before SCIP
-  is introduced.
+- Which repositories and cross-file questions justify adding optional SCIP
+  indexes after measuring the syntax-tree layer's coverage and cost.
 - Whether generated Markdown should live only in RepoKarta storage or optionally
   export to a user-selected directory automatically.
 - Whether an optional Claude Agent SDK helper materially improves Q&A enough to
@@ -534,8 +593,7 @@ completion criteria include:
 
 ## Current implementation version
 
-`0.20.0-dev`. M0 through M4 are complete. M5 is in progress and M6 has not
-started.
+`0.25.0-dev`. M0 through M4 are complete. M5 and M6 are in progress.
 
 ## Recommended next session
 
@@ -548,6 +606,6 @@ Complete M5 without weakening the local-first boundary:
 5. Add Windows packaging and macOS signing/notarization.
 6. Publish and verify the Homebrew formula.
 
-Do not mark any M6 item complete by documenting it. Shared deployment,
-authentication, a configurable bind address, and scheduled ghorg
-synchronization only count when they exist in the executable and are tested.
+Do not mark any remaining M6 item complete by documenting it. Per-user
+separation, scheduled ghorg synchronization, and shared-deployment operations
+only count when they exist in the executable and are tested.

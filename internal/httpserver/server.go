@@ -29,6 +29,7 @@ import (
 	"github.com/spolnik/RepoKarta/internal/docs"
 	"github.com/spolnik/RepoKarta/internal/graph"
 	"github.com/spolnik/RepoKarta/internal/search"
+	"github.com/spolnik/RepoKarta/internal/security"
 	"github.com/spolnik/RepoKarta/internal/source"
 	"github.com/spolnik/RepoKarta/web"
 )
@@ -82,6 +83,7 @@ type Config struct {
 	Conversations  ConversationService
 	Maps           MapService
 	Docs           DocumentationService
+	Security       *security.Manager
 }
 
 // Server hosts RepoKarta's loopback interface.
@@ -95,6 +97,7 @@ type Server struct {
 	history      ConversationHistoryService
 	maps         MapService
 	docs         DocumentationService
+	security     *security.Manager
 }
 
 type pageData struct {
@@ -111,6 +114,9 @@ type pageData struct {
 	ChatEnabled      bool
 	WikiEnabled      bool
 	Search           searchData
+	AuthMode         string
+	UserLabel        string
+	AdminEnabled     bool
 }
 
 type searchData struct {
@@ -199,6 +205,7 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 		agents:       config.Conversations,
 		maps:         config.Maps,
 		docs:         config.Docs,
+		security:     config.Security,
 	}
 	server.history, _ = config.Conversations.(ConversationHistoryService)
 
@@ -218,6 +225,15 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 	mux.HandleFunc("GET /api/git/diff/{repository}", server.apiGitDiff)
 	mux.HandleFunc("GET /events", server.events)
 	mux.HandleFunc("GET /healthz", server.health)
+	if server.security != nil {
+		mux.HandleFunc("GET /admin/login", server.adminLoginPage)
+		mux.HandleFunc("POST /admin/login", server.adminLogin)
+		mux.HandleFunc("GET /admin", server.adminPage)
+		mux.HandleFunc("POST /admin/security", server.updateSecurity)
+		mux.HandleFunc("POST /admin/logout", server.adminLogout)
+		mux.HandleFunc("POST /auth/logout", server.authLogout)
+		mux.Handle("/saml/", server.security.SAMLHandler())
+	}
 	if server.maps != nil {
 		mux.HandleFunc("GET /maps", server.mapPage)
 		mux.HandleFunc("GET /api/maps", server.apiMap)
@@ -246,9 +262,13 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 		}
 	}
 
+	handler := http.Handler(validateLocalRequest(config.Address, mux))
+	if server.security != nil {
+		handler = server.security.Middleware(mux)
+	}
 	server.server = &http.Server{
 		Addr:              config.Address,
-		Handler:           requestLog(validateLocalRequest(config.Address, mux)),
+		Handler:           requestLog(handler),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
@@ -651,6 +671,7 @@ func (s *Server) generateWiki(response http.ResponseWriter, request *http.Reques
 		Refresh      bool   `json:"refresh"`
 		SurveyOnly   bool   `json:"survey_only"`
 		PlanOnly     bool   `json:"plan_only"`
+		Preset       string `json:"preset"`
 		Provider     string `json:"provider"`
 		Model        string `json:"model"`
 		Effort       string `json:"effort"`
@@ -673,6 +694,7 @@ func (s *Server) generateWiki(response http.ResponseWriter, request *http.Reques
 		Refresh:      input.Refresh,
 		SurveyOnly:   input.SurveyOnly,
 		PlanOnly:     input.PlanOnly,
+		Preset:       strings.TrimSpace(input.Preset),
 		Provider:     strings.TrimSpace(input.Provider),
 		Model:        strings.TrimSpace(input.Model),
 		Effort:       strings.TrimSpace(input.Effort),
@@ -963,6 +985,19 @@ func (s *Server) pageData(ctx context.Context) (pageData, error) {
 		Search: searchData{
 			Query: search.Query{Limit: codeintel.DefaultSearchLimit},
 		},
+	}
+	if s.security != nil {
+		data.AuthMode = string(s.security.Mode())
+		data.AdminEnabled = s.security.AdminEnabled()
+		if principal, ok := security.PrincipalFromContext(ctx); ok {
+			data.UserLabel = principal.Name
+			if data.UserLabel == "" {
+				data.UserLabel = principal.Email
+			}
+			if data.UserLabel == "" {
+				data.UserLabel = principal.ID
+			}
+		}
 	}
 	for _, repository := range repositories {
 		switch repository.IndexState {

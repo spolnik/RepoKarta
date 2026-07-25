@@ -1,0 +1,103 @@
+{{define "admin"}}
+<!doctype html>
+<html lang="en" class="h-full bg-surface-base">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="noindex, nofollow">
+    <meta name="theme-color" content="#090b0f">
+    <link rel="icon" href="/assets/favicon.ico" sizes="any">
+    <title>RepoKarta · Administration</title>
+    <link rel="stylesheet" href="/assets/app.css">
+  </head>
+  <body class="min-h-full bg-surface-base text-ink antialiased">
+    <header class="border-b border-white/[0.07] bg-[#090b0f]/95">
+      <div class="mx-auto flex h-16 max-w-5xl items-center justify-between gap-4 px-5 lg:px-8">
+        <a href="/" class="group flex min-w-0 items-center gap-3" aria-label="RepoKarta home">
+          <span class="brand-mark" aria-hidden="true"><img src="/assets/repokarta-mark-192.png" alt="" width="32" height="32"></span>
+          <span class="font-semibold tracking-[-0.02em] text-white">RepoKarta</span>
+          <span class="hidden rounded-full border border-white/10 px-2 py-0.5 font-mono text-xs text-ink-soft sm:inline">{{.Version}}</span>
+        </a>
+        {{if .Authenticated}}
+        <form action="/admin/logout" method="post">
+          <input type="hidden" name="csrf" value="{{.CSRFToken}}">
+          <button class="app-nav-link" type="submit">Sign out admin</button>
+        </form>
+        {{end}}
+      </div>
+    </header>
+
+    <main class="mx-auto max-w-5xl px-5 py-10 lg:px-8">
+      {{if not .Authenticated}}
+      <section class="mx-auto max-w-md rounded-2xl border border-white/[0.08] bg-white/[0.025] p-6 shadow-2xl shadow-black/20" aria-labelledby="admin-login-title">
+        <p class="mb-2 text-xs font-semibold uppercase tracking-[0.24em] text-emerald-400">Protected configuration</p>
+        <h1 id="admin-login-title" class="text-2xl font-semibold tracking-[-0.03em] text-white">Administrator sign in</h1>
+        <p class="mt-3 text-sm leading-6 text-ink-soft">Use the bootstrap credentials configured when the service started. They are never stored in RepoKarta’s database.</p>
+        {{if .Error}}<p class="mt-5 rounded-lg border border-red-400/30 bg-red-400/10 px-4 py-3 text-sm text-red-200" role="alert">{{.Error}}</p>{{end}}
+        {{if .AdminEnabled}}
+        <form action="/admin/login" method="post" class="mt-6 grid gap-4">
+          <label class="filter-field"><span>Username</span><input name="username" autocomplete="username" required autofocus></label>
+          <label class="filter-field"><span>Password</span><input name="password" type="password" autocomplete="current-password" required></label>
+          <button class="search-button justify-center" type="submit">Sign in</button>
+        </form>
+        {{end}}
+      </section>
+      {{else}}
+      <div class="mb-8">
+        <p class="mb-2 text-xs font-semibold uppercase tracking-[0.24em] text-emerald-400">Deployment security</p>
+        <h1 class="text-3xl font-semibold tracking-[-0.04em] text-white">Authentication</h1>
+        <p class="mt-3 max-w-3xl text-sm leading-6 text-ink-soft">Choose how application requests are authenticated. The administrator panel always uses the startup-only bootstrap credentials.</p>
+      </div>
+
+      {{if .Notice}}<p class="mb-6 rounded-lg border border-emerald-400/30 bg-emerald-400/10 px-4 py-3 text-sm text-emerald-100" role="status">{{.Notice}}</p>{{end}}
+      {{if .Error}}<p class="mb-6 rounded-lg border border-red-400/30 bg-red-400/10 px-4 py-3 text-sm text-red-200" role="alert">{{.Error}}</p>{{end}}
+      {{if .ProviderError}}<p class="mb-6 rounded-lg border border-amber-400/30 bg-amber-400/10 px-4 py-3 text-sm text-amber-100" role="alert"><strong>Provider unavailable:</strong> {{.ProviderError}}</p>{{end}}
+
+      <form action="/admin/security" method="post" class="grid gap-6">
+        <input type="hidden" name="csrf" value="{{.CSRFToken}}">
+        <section class="rounded-2xl border border-white/[0.08] bg-white/[0.025] p-6">
+          <h2 class="text-lg font-semibold text-white">Access mode</h2>
+          <div class="mt-5 grid gap-4 sm:grid-cols-2">
+            <label class="filter-field">
+              <span>Authentication mode</span>
+              <select name="mode">
+                <option value="local" {{if eq .Mode "local"}}selected{{end}}>Local · loopback only</option>
+                <option value="cloudflare-access" {{if eq .Mode "cloudflare-access"}}selected{{end}}>Cloudflare Access JWT</option>
+                <option value="saml" {{if eq .Mode "saml"}}selected{{end}}>Native SAML service provider</option>
+                <option value="open" {{if eq .Mode "open"}}selected{{end}} {{if not .AllowOpen}}disabled{{end}}>Open · no user authentication</option>
+              </select>
+            </label>
+            <label class="filter-field"><span>Public RepoKarta URL</span><input name="public_url" type="url" value="{{.PublicURL}}" placeholder="https://repokarta.example.com"></label>
+          </div>
+          <p class="mt-4 text-xs leading-5 text-ink-faint">Shared modes require an exact HTTPS URL. Open mode is available only when the service starts with <code>-allow-open=true</code>.</p>
+        </section>
+
+        <section class="rounded-2xl border border-white/[0.08] bg-white/[0.025] p-6">
+          <h2 class="text-lg font-semibold text-white">Cloudflare Access</h2>
+          <p class="mt-2 text-sm leading-6 text-ink-soft">For an Access self-hosted application. RepoKarta verifies the signed assertion using your team JWKS.</p>
+          <div class="mt-5 grid gap-4 sm:grid-cols-2">
+            <label class="filter-field"><span>Team domain</span><input name="cloudflare_team_domain" value="{{.TeamDomain}}" placeholder="https://team.cloudflareaccess.com"></label>
+            <label class="filter-field"><span>Application audience tag</span><input name="cloudflare_audience" value="{{.Audience}}" autocomplete="off"></label>
+          </div>
+        </section>
+
+        <section class="rounded-2xl border border-white/[0.08] bg-white/[0.025] p-6">
+          <h2 class="text-lg font-semibold text-white">Native SAML</h2>
+          <p class="mt-2 text-sm leading-6 text-ink-soft">Compatible with Cloudflare’s generic SAML SaaS integration and other SAML 2.0 identity providers.</p>
+          <div class="mt-5 grid gap-4">
+            <label class="filter-field"><span>Identity-provider metadata URL</span><input name="saml_metadata_url" type="url" value="{{.MetadataURL}}" placeholder="https://identity.example.com/metadata"></label>
+            <label class="filter-field"><span>Service-provider entity ID · optional</span><input name="saml_entity_id" value="{{.EntityID}}" placeholder="{{.PublicURL}}/saml/metadata"></label>
+          </div>
+          <div class="mt-5 rounded-lg border border-white/[0.07] bg-black/20 px-4 py-3 text-xs leading-6 text-ink-soft">
+            <div><strong class="text-ink">SP metadata:</strong> {{if .PublicURL}}{{.PublicURL}}/saml/metadata{{else}}set the public URL first{{end}}</div>
+            <div><strong class="text-ink">ACS:</strong> {{if .PublicURL}}{{.PublicURL}}/saml/acs{{else}}set the public URL first{{end}}</div>
+          </div>
+        </section>
+
+        <div class="flex justify-end"><button class="search-button" type="submit">Save and activate</button></div>
+      </form>
+      {{end}}
+    </main>
+  </body>
+</html>
+{{end}}

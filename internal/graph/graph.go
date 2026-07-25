@@ -23,16 +23,24 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/spolnik/RepoKarta/internal/analysis"
 	"github.com/spolnik/RepoKarta/internal/catalog"
 )
 
 const (
-	snapshotVersion       = 2
+	snapshotVersion       = 4
 	maximumFiles          = 20_000
 	maximumSourceFiles    = 5_000
 	maximumSourceFileSize = 1 << 20
+	// Structural budgets keep syntax-backed inventories useful without turning
+	// a repository map into an unbounded dump of every call site.
+	maximumStructuralDocuments  = 3_000
+	maximumStructuralSymbols    = 12_000
+	maximumStructuralRelations  = 24_000
+	maximumStructuralBuildFacts = 4_000
 	// Curated layer budgets keep large Java and Kotlin services legible.
 	maximumComponentsPerRepository = 300
 	maximumRoutesPerRepository     = 900
@@ -102,33 +110,115 @@ type Node struct {
 
 // Edge is one directed, evidence-backed relationship.
 type Edge struct {
-	ID       string     `json:"id"`
-	Source   string     `json:"source"`
-	Target   string     `json:"target"`
-	Kind     string     `json:"kind"`
-	Label    string     `json:"label"`
-	Evidence []Evidence `json:"evidence"`
+	ID         string     `json:"id"`
+	Source     string     `json:"source"`
+	Target     string     `json:"target"`
+	Kind       string     `json:"kind"`
+	Label      string     `json:"label"`
+	Confidence string     `json:"confidence,omitempty"`
+	Evidence   []Evidence `json:"evidence"`
+}
+
+// Scope makes collection bounding part of the public map contract. Truncated
+// still reports any bounded analysis; Scope says specifically whether every
+// repository requested by the caller was analyzed.
+type Scope struct {
+	Kind                  string `json:"kind"`
+	Complete              bool   `json:"complete"`
+	TotalRepositories     int    `json:"total_repositories"`
+	AnalyzedRepositories  int    `json:"analyzed_repositories"`
+	OmittedRepositories   int    `json:"omitted_repositories"`
+	RepositoryLimit       int    `json:"repository_limit,omitempty"`
+	RequestedRepositoryID int64  `json:"requested_repository_id,omitempty"`
+}
+
+// StructuralDocument is a bounded syntax-tree index for one immutable source
+// file. Framework extractors consume these facts separately from the curated
+// graph so generic call sites do not turn the visual map into a hairball.
+type StructuralDocument struct {
+	RepositoryID  int64                 `json:"repository_id"`
+	Repository    string                `json:"repository"`
+	Revision      string                `json:"revision"`
+	Path          string                `json:"path"`
+	Language      string                `json:"language"`
+	Parser        string                `json:"parser"`
+	ParseComplete bool                  `json:"parse_complete"`
+	Truncated     bool                  `json:"truncated"`
+	Symbols       []analysis.Symbol     `json:"symbols,omitempty"`
+	Relations     []analysis.Relation   `json:"relations,omitempty"`
+	BuildFacts    []analysis.BuildFact  `json:"build_facts,omitempty"`
+	Diagnostics   []analysis.Diagnostic `json:"diagnostics,omitempty"`
 }
 
 // Snapshot is an immutable map derived from one or more catalogue revisions.
 type Snapshot struct {
-	Version      int          `json:"version"`
-	ID           string       `json:"id"`
-	GeneratedAt  time.Time    `json:"generated_at"`
-	Repositories []Repository `json:"repositories"`
-	Languages    []Language   `json:"languages"`
-	Manifests    []Manifest   `json:"manifests"`
-	Nodes        []Node       `json:"nodes"`
-	Edges        []Edge       `json:"edges"`
-	FileCount    int          `json:"file_count"`
-	Truncated    bool         `json:"truncated"`
+	Version            int                  `json:"version"`
+	ID                 string               `json:"id"`
+	GeneratedAt        time.Time            `json:"generated_at"`
+	Repositories       []Repository         `json:"repositories"`
+	Languages          []Language           `json:"languages"`
+	Manifests          []Manifest           `json:"manifests"`
+	Nodes              []Node               `json:"nodes"`
+	Edges              []Edge               `json:"edges"`
+	Structure          []StructuralDocument `json:"structure,omitempty"`
+	StructureTruncated bool                 `json:"structure_truncated"`
+	FileCount          int                  `json:"file_count"`
+	Truncated          bool                 `json:"truncated"`
+	Scope              Scope                `json:"scope"`
+}
+
+func rebaseSnapshotEvidence(snapshot *Snapshot, baseURL string) {
+	rebase := func(evidence *Evidence) {
+		if evidence.Path == "" {
+			evidence.URL = ""
+			return
+		}
+		line := max(1, evidence.Line)
+		evidence.URL = fmt.Sprintf(
+			"%s/source/%d?rev=%s&path=%s&focus=%d-%d#L%d",
+			baseURL,
+			evidence.RepositoryID,
+			url.QueryEscape(evidence.Revision),
+			url.QueryEscape(evidence.Path),
+			line,
+			line,
+			line,
+		)
+	}
+	for index := range snapshot.Manifests {
+		rebase(&snapshot.Manifests[index].Evidence)
+	}
+	for nodeIndex := range snapshot.Nodes {
+		for evidenceIndex := range snapshot.Nodes[nodeIndex].Evidence {
+			rebase(&snapshot.Nodes[nodeIndex].Evidence[evidenceIndex])
+		}
+	}
+	for edgeIndex := range snapshot.Edges {
+		for evidenceIndex := range snapshot.Edges[edgeIndex].Evidence {
+			rebase(&snapshot.Edges[edgeIndex].Evidence[evidenceIndex])
+		}
+	}
 }
 
 // Service caches graph snapshots outside source repositories.
 type Service struct {
 	store     RepositoryStore
 	directory string
+	mu        sync.RWMutex
 	baseURL   string
+}
+
+// SetBaseURL changes the absolute URL used for source evidence.
+func (s *Service) SetBaseURL(baseURL string) {
+	s.mu.Lock()
+	s.baseURL = strings.TrimRight(baseURL, "/")
+	s.mu.Unlock()
+}
+
+func (s *Service) currentBaseURL() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.baseURL
 }
 
 // New creates a read-only structural map service.
@@ -159,12 +249,13 @@ func (s *Service) Snapshot(ctx context.Context, repositoryID int64, refresh bool
 		if content, readErr := os.ReadFile(snapshotPath); readErr == nil {
 			var cached Snapshot
 			if json.Unmarshal(content, &cached) == nil && cached.Version == snapshotVersion {
+				rebaseSnapshotEvidence(&cached, s.currentBaseURL())
 				return cached, nil
 			}
 		}
 	}
 
-	builder := newBuilder(s.baseURL)
+	builder := newBuilder(s.currentBaseURL())
 	// A cross-repository map over a large collection is expensive and rarely
 	// legible, so the collection view analyzes a bounded number of
 	// repositories and reports the cut explicitly rather than appearing
@@ -180,6 +271,19 @@ func (s *Service) Snapshot(ctx context.Context, repositoryID int64, refresh bool
 		}
 	}
 	snapshot := builder.snapshot(signature)
+	snapshot.Scope = Scope{
+		Kind:                  "repository",
+		Complete:              true,
+		TotalRepositories:     len(repositories),
+		AnalyzedRepositories:  len(analyzed),
+		RequestedRepositoryID: repositoryID,
+	}
+	if repositoryID == 0 {
+		snapshot.Scope.Kind = "collection"
+		snapshot.Scope.RepositoryLimit = maximumCollectionRepositories
+		snapshot.Scope.OmittedRepositories = max(0, len(repositories)-len(analyzed))
+		snapshot.Scope.Complete = snapshot.Scope.OmittedRepositories == 0
+	}
 	content, err := json.MarshalIndent(snapshot, "", "  ")
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("encode graph snapshot: %w", err)
@@ -233,21 +337,27 @@ func snapshotSignature(repositories []catalog.Repository) string {
 }
 
 type builder struct {
-	baseURL          string
-	repositories     []Repository
-	languages        map[string]int
-	manifests        []Manifest
-	nodes            map[string]Node
-	edges            map[string]Edge
-	serviceTargets   map[string]string
-	clientReferences []clientReference
-	fileCount        int
-	truncated        bool
+	baseURL              string
+	repositories         []Repository
+	languages            map[string]int
+	manifests            []Manifest
+	nodes                map[string]Node
+	edges                map[string]Edge
+	serviceTargets       map[string]string
+	clientReferences     []clientReference
+	structure            []StructuralDocument
+	structuralSymbols    int
+	structuralRelations  int
+	structuralBuildFacts int
+	structureTruncated   bool
+	fileCount            int
+	truncated            bool
 }
 
 type clientReference struct {
 	sourceRepositoryID int64
 	target             string
+	confidence         string
 	evidence           Evidence
 }
 
@@ -284,17 +394,25 @@ func (b *builder) snapshot(signature string) Snapshot {
 		}
 		return strings.Compare(left.Path, right.Path)
 	})
+	slices.SortFunc(b.structure, func(left, right StructuralDocument) int {
+		if left.RepositoryID != right.RepositoryID {
+			return int(left.RepositoryID - right.RepositoryID)
+		}
+		return strings.Compare(left.Path, right.Path)
+	})
 	return Snapshot{
-		Version:      snapshotVersion,
-		ID:           signature,
-		GeneratedAt:  time.Now().UTC(),
-		Repositories: b.repositories,
-		Languages:    languageSummary(b.languages),
-		Manifests:    b.manifests,
-		Nodes:        nodes,
-		Edges:        edges,
-		FileCount:    b.fileCount,
-		Truncated:    b.truncated,
+		Version:            snapshotVersion,
+		ID:                 signature,
+		GeneratedAt:        time.Now().UTC(),
+		Repositories:       b.repositories,
+		Languages:          languageSummary(b.languages),
+		Manifests:          b.manifests,
+		Nodes:              nodes,
+		Edges:              edges,
+		Structure:          b.structure,
+		StructureTruncated: b.structureTruncated,
+		FileCount:          b.fileCount,
+		Truncated:          b.truncated,
 	}
 }
 
@@ -370,12 +488,71 @@ func (b *builder) analyzeRepository(ctx context.Context, repository catalog.Repo
 		goModule = b.addGoManifest(repository, revision, repositoryNodeID, "go.mod", content)
 	}
 	packageIDs := b.addPackages(repository, revision, repositoryNodeID, files, contents)
+	b.addStructuralAnalysis(repository, revision, files, contents)
 	b.addGoImportsAndRoutes(repository, revision, goModule, packageIDs, contents)
 	b.addServiceIdentity(repositoryNodeID, contents)
+	b.addServiceConfigurationReferences(repository, revision, contents)
 	b.addJavaStructure(repository, revision, repositoryNodeID, contents)
 	b.addGradleManifests(repository, revision, repositoryNodeID, contents)
 	b.addOtherManifests(repository, revision, repositoryNodeID, contents)
 	return nil
+}
+
+func (b *builder) addStructuralAnalysis(
+	repository catalog.Repository,
+	revision string,
+	files []string,
+	contents map[string][]byte,
+) {
+	for _, filePath := range files {
+		content, exists := contents[filePath]
+		if !exists {
+			continue
+		}
+		document, supported := analysis.Analyze(filePath, content)
+		if !supported {
+			continue
+		}
+		if len(b.structure) >= maximumStructuralDocuments {
+			b.structureTruncated = true
+			return
+		}
+		symbolBudget := maximumStructuralSymbols - b.structuralSymbols
+		relationBudget := maximumStructuralRelations - b.structuralRelations
+		buildFactBudget := maximumStructuralBuildFacts - b.structuralBuildFacts
+		if len(document.Symbols) > symbolBudget ||
+			len(document.Relations) > relationBudget ||
+			len(document.BuildFacts) > buildFactBudget {
+			b.structureTruncated = true
+		}
+		b.structureTruncated = b.structureTruncated || document.Truncated
+		document.Symbols = document.Symbols[:min(len(document.Symbols), symbolBudget)]
+		document.Relations = document.Relations[:min(len(document.Relations), relationBudget)]
+		document.BuildFacts = document.BuildFacts[:min(len(document.BuildFacts), buildFactBudget)]
+		b.structuralSymbols += len(document.Symbols)
+		b.structuralRelations += len(document.Relations)
+		b.structuralBuildFacts += len(document.BuildFacts)
+		b.structure = append(b.structure, StructuralDocument{
+			RepositoryID:  repository.ID,
+			Repository:    repository.Name,
+			Revision:      revision,
+			Path:          document.Path,
+			Language:      document.Language,
+			Parser:        document.Parser,
+			ParseComplete: document.ParseComplete,
+			Truncated:     document.Truncated,
+			Symbols:       document.Symbols,
+			Relations:     document.Relations,
+			BuildFacts:    document.BuildFacts,
+			Diagnostics:   document.Diagnostics,
+		})
+		if b.structuralSymbols >= maximumStructuralSymbols &&
+			b.structuralRelations >= maximumStructuralRelations &&
+			b.structuralBuildFacts >= maximumStructuralBuildFacts {
+			b.structureTruncated = true
+			return
+		}
+	}
 }
 
 func (b *builder) addGoManifest(
@@ -700,6 +877,13 @@ var (
 	gradleProjectName = regexp.MustCompile(
 		`(?m)^\s*rootProject\.name\s*[:=]\s*["']([^"']+)["']`,
 	)
+	gradleVersionAssignment = regexp.MustCompile(
+		`(?m)^\s*(?:def\s+|val\s+|var\s+)?(?:ext\.)?([A-Za-z_][A-Za-z0-9_.-]*)\s*=\s*["']([^"'$]+)["']`,
+	)
+	gradleExtraVersionAssignment = regexp.MustCompile(
+		`(?m)^\s*extra\s*\[\s*["']([A-Za-z_][A-Za-z0-9_.-]*)["']\s*]\s*=\s*["']([^"'$]+)["']`,
+	)
+	gradleInterpolation           = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_.-]*)\}|\$([A-Za-z_][A-Za-z0-9_.-]*)`)
 	springApplicationNameProperty = regexp.MustCompile(
 		`(?m)^\s*spring\.application\.name\s*[=:]\s*["']?([A-Za-z0-9][A-Za-z0-9_.-]*)["']?\s*$`,
 	)
@@ -727,7 +911,11 @@ var (
 		`@FeignClient|@HttpExchange|\bWebClient\b|\bRestClient\b|\bRestTemplate\b|` +
 			`HttpServiceProxyFactory|\bbaseUrl\s*\(|\brootUri\s*\(|URI\.create|\bWebTarget\b|\bHttpRequest\b`,
 	)
-	serviceURLPattern = regexp.MustCompile(
+	serviceConfigurationKey = regexp.MustCompile(
+		`(?i)(?:base[-_.]?url|url|uri|host|endpoint|address|service)`,
+	)
+	configuredServiceValue = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*(?::\d+)?$`)
+	serviceURLPattern      = regexp.MustCompile(
 		`(?i)(?:https?://|lb://)([a-z0-9][a-z0-9_.-]*)(?::\d+)?`,
 	)
 )
@@ -789,13 +977,14 @@ func (b *builder) addGradleManifests(
 		}
 	}
 	versionCatalog := parseGradleVersionCatalogs(contents)
+	versionVariables := parseGradleVersionVariables(contents)
 	sort.Strings(paths)
 	for _, filePath := range paths {
 		content := contents[filePath]
 		if match := gradleProjectName.FindSubmatch(content); len(match) == 2 {
 			b.registerServiceTarget(string(match[1]), repositoryNodeID)
 		}
-		dependencies := parseGradleDependencies(content, versionCatalog)
+		dependencies := parseGradleDependencies(content, versionCatalog, versionVariables)
 		if path.Base(filePath) == "libs.versions.toml" {
 			dependencies = catalogDependencies(content)
 		}
@@ -872,10 +1061,17 @@ func (b *builder) addGradleManifests(
 	}
 }
 
-func parseGradleDependencies(content []byte, catalog map[string]string) []gradleDependency {
+func parseGradleDependencies(
+	content []byte,
+	catalog map[string]string,
+	versionVariables map[string]string,
+) []gradleDependency {
 	byCoordinate := make(map[string]gradleDependency)
 	for _, match := range gradleStringDependency.FindAllSubmatchIndex(content, -1) {
-		coordinate := dropInterpolatedVersion(strings.TrimSpace(string(content[match[2]:match[3]])))
+		coordinate := resolveGradleCoordinate(
+			strings.TrimSpace(string(content[match[2]:match[3]])),
+			versionVariables,
+		)
 		if !validGradleCoordinate(coordinate) {
 			continue
 		}
@@ -885,7 +1081,10 @@ func parseGradleDependencies(content []byte, catalog map[string]string) []gradle
 		}
 	}
 	for _, match := range gradleNamedDependency.FindAllSubmatchIndex(content, -1) {
-		coordinate := parseGradleNamedCoordinate(string(content[match[2]:match[3]]))
+		coordinate := parseGradleNamedCoordinate(
+			string(content[match[2]:match[3]]),
+			versionVariables,
+		)
 		if !validGradleCoordinate(coordinate) {
 			continue
 		}
@@ -920,6 +1119,53 @@ func parseGradleDependencies(content []byte, catalog map[string]string) []gradle
 	slices.SortFunc(output, func(left, right gradleDependency) int {
 		return strings.Compare(left.coordinate, right.coordinate)
 	})
+	return output
+}
+
+// parseGradleVersionVariables resolves the common repository-local sources
+// used by Groovy and Kotlin builds: gradle.properties plus literal assignments
+// in settings and build scripts. Only literal values are accepted.
+func parseGradleVersionVariables(contents map[string][]byte) map[string]string {
+	output := make(map[string]string)
+	paths := make([]string, 0, len(contents))
+	for filePath := range contents {
+		base := path.Base(filePath)
+		if base == "gradle.properties" ||
+			base == "build.gradle" || base == "build.gradle.kts" ||
+			base == "settings.gradle" || base == "settings.gradle.kts" {
+			paths = append(paths, filePath)
+		}
+	}
+	sort.Strings(paths)
+	for _, filePath := range paths {
+		content := contents[filePath]
+		if path.Base(filePath) == "gradle.properties" {
+			scanner := bufio.NewScanner(bytes.NewReader(content))
+			scanner.Buffer(make([]byte, 0, 64*1024), maximumSourceFileSize)
+			for scanner.Scan() {
+				line := strings.TrimSpace(scanner.Text())
+				if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "!") {
+					continue
+				}
+				key, value, ok := strings.Cut(line, "=")
+				if !ok {
+					key, value, ok = strings.Cut(line, ":")
+				}
+				key, value = strings.TrimSpace(key), strings.TrimSpace(value)
+				if ok && key != "" && value != "" && !strings.Contains(value, "$") {
+					output[key] = value
+				}
+			}
+		}
+		for _, pattern := range []*regexp.Regexp{
+			gradleVersionAssignment,
+			gradleExtraVersionAssignment,
+		} {
+			for _, match := range pattern.FindAllSubmatch(content, -1) {
+				output[string(match[1])] = string(match[2])
+			}
+		}
+	}
 	return output
 }
 
@@ -1071,7 +1317,7 @@ func normalizeCatalogAlias(value string) string {
 // parseGradleNamedCoordinate reads Groovy map arguments and Kotlin named
 // arguments in any order and returns `group:artifact[:version]`. Interpolated
 // versions are dropped rather than recorded as literal build-script text.
-func parseGradleNamedCoordinate(arguments string) string {
+func parseGradleNamedCoordinate(arguments string, versionVariables map[string]string) string {
 	fields := make(map[string]string)
 	for _, match := range gradleNamedField.FindAllStringSubmatch(arguments, -1) {
 		fields[strings.ToLower(match[1])] = strings.TrimSpace(match[2])
@@ -1083,21 +1329,44 @@ func parseGradleNamedCoordinate(arguments string) string {
 	if module == "" {
 		return ""
 	}
-	if version := fields["version"]; version != "" && !strings.Contains(version, "$") {
-		return module + ":" + version
+	if version := fields["version"]; version != "" {
+		if resolved, ok := resolveGradleInterpolation(version, versionVariables); ok {
+			return module + ":" + resolved
+		}
 	}
 	return module
 }
 
-// dropInterpolatedVersion keeps `group:artifact` when the version segment is a
-// build-script variable, so the Dependencies view never claims a version it
-// cannot prove from source.
-func dropInterpolatedVersion(coordinate string) string {
+// resolveGradleCoordinate keeps group:artifact when an interpolated version
+// cannot be proven, and preserves the version when its repository-local
+// variable resolves to a literal value.
+func resolveGradleCoordinate(coordinate string, versionVariables map[string]string) string {
 	parts := strings.SplitN(coordinate, ":", 3)
-	if len(parts) == 3 && strings.Contains(parts[2], "$") {
+	if len(parts) == 3 {
+		if resolved, ok := resolveGradleInterpolation(parts[2], versionVariables); ok {
+			return parts[0] + ":" + parts[1] + ":" + resolved
+		}
 		return parts[0] + ":" + parts[1]
 	}
 	return coordinate
+}
+
+func resolveGradleInterpolation(value string, versionVariables map[string]string) (string, bool) {
+	if !strings.Contains(value, "$") {
+		return value, value != ""
+	}
+	missing := false
+	resolved := gradleInterpolation.ReplaceAllStringFunc(value, func(match string) string {
+		submatch := gradleInterpolation.FindStringSubmatch(match)
+		key := firstNonEmpty(submatch[1], submatch[2])
+		replacement := versionVariables[key]
+		if replacement == "" {
+			missing = true
+			return match
+		}
+		return replacement
+	})
+	return resolved, !missing && resolved != "" && !strings.Contains(resolved, "$")
 }
 
 func validGradleCoordinate(value string) bool {
@@ -1145,7 +1414,16 @@ func (b *builder) addJavaStructure(
 			paths = append(paths, filePath)
 		}
 	}
-	sort.Strings(paths)
+	slices.SortFunc(paths, func(left, right string) int {
+		leftConfidence, rightConfidence := sourceConfidence(left), sourceConfidence(right)
+		if leftConfidence != rightConfidence {
+			if leftConfidence == "high" {
+				return -1
+			}
+			return 1
+		}
+		return strings.Compare(left, right)
+	})
 	components, routeCount := 0, 0
 	for _, filePath := range paths {
 		// Documentation and license headers must not create routes or service
@@ -1162,6 +1440,7 @@ func (b *builder) addJavaStructure(
 			b.clientReferences = append(b.clientReferences, clientReference{
 				sourceRepositoryID: repository.ID,
 				target:             target.name,
+				confidence:         sourceConfidence(filePath),
 				evidence: b.evidence(
 					repository,
 					revision,
@@ -1447,16 +1726,192 @@ func (b *builder) addServiceIdentity(repositoryNodeID string, contents map[strin
 	}
 }
 
+// addServiceConfigurationReferences reads outbound base URLs from Spring
+// application configuration. RestTemplate and WebClient URLs are commonly
+// injected from properties instead of appearing as literals in client code.
+func (b *builder) addServiceConfigurationReferences(
+	repository catalog.Repository,
+	revision string,
+	contents map[string][]byte,
+) {
+	paths := make([]string, 0)
+	for filePath := range contents {
+		if isServiceConfiguration(filePath) {
+			paths = append(paths, filePath)
+		}
+	}
+	slices.SortFunc(paths, func(left, right string) int {
+		leftConfidence, rightConfidence := sourceConfidence(left), sourceConfidence(right)
+		if leftConfidence != rightConfidence {
+			if leftConfidence == "high" {
+				return -1
+			}
+			return 1
+		}
+		return strings.Compare(left, right)
+	})
+	for _, filePath := range paths {
+		for _, target := range serviceConfigurationTargets(contents[filePath]) {
+			b.clientReferences = append(b.clientReferences, clientReference{
+				sourceRepositoryID: repository.ID,
+				target:             target.name,
+				confidence:         sourceConfidence(filePath),
+				evidence: b.evidence(
+					repository,
+					revision,
+					filePath,
+					target.line,
+					target.name,
+				),
+			})
+		}
+	}
+}
+
+func serviceConfigurationTargets(content []byte) []springClientTarget {
+	byName := make(map[string]springClientTarget)
+	type configurationLevel struct {
+		key    string
+		indent int
+	}
+	stack := make([]configurationLevel, 0, 8)
+	scanner := bufio.NewScanner(bytes.NewReader(content))
+	scanner.Buffer(make([]byte, 0, 64*1024), maximumSourceFileSize)
+	lineNumber := 0
+	for scanner.Scan() {
+		lineNumber++
+		line := scanner.Text()
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		keyText := ""
+		configuredValue := ""
+		if match := yamlKeyValue.FindStringSubmatch(line); match != nil {
+			indent := len(match[1])
+			for len(stack) > 0 && stack[len(stack)-1].indent >= indent {
+				stack = stack[:len(stack)-1]
+			}
+			stack = append(stack, configurationLevel{
+				key:    strings.ToLower(match[2]),
+				indent: indent,
+			})
+			keys := make([]string, 0, len(stack))
+			for _, level := range stack {
+				keys = append(keys, level.key)
+			}
+			keyText = strings.Join(keys, ".")
+			configuredValue = match[3]
+		} else if key, value, ok := strings.Cut(line, "="); ok {
+			keyText = strings.ToLower(strings.TrimSpace(key))
+			configuredValue = value
+		}
+		lowerLine := strings.ToLower(line)
+		urlOffset := strings.Index(lowerLine, "http")
+		if lbOffset := strings.Index(lowerLine, "lb://"); urlOffset < 0 ||
+			(lbOffset >= 0 && lbOffset < urlOffset) {
+			urlOffset = lbOffset
+		}
+		if keyText == "" && urlOffset >= 0 {
+			keyText = strings.ToLower(line[:urlOffset])
+		}
+		if !serviceConfigurationKey.MatchString(keyText) {
+			continue
+		}
+		if strings.Contains(keyText, "docs") ||
+			strings.Contains(keyText, "swagger") ||
+			strings.Contains(keyText, "openapi") {
+			continue
+		}
+		foundURL := false
+		for _, match := range serviceURLPattern.FindAllStringSubmatch(line, -1) {
+			target := normalizeServiceName(match[1])
+			if target == "" || infrastructureHosts[target] {
+				continue
+			}
+			foundURL = true
+			byName[target] = springClientTarget{name: target, line: lineNumber}
+		}
+		if !foundURL {
+			target := configuredServiceName(configuredValue)
+			if target != "" && !infrastructureHosts[target] {
+				byName[target] = springClientTarget{name: target, line: lineNumber}
+			}
+		}
+	}
+	output := make([]springClientTarget, 0, len(byName))
+	for _, target := range byName {
+		output = append(output, target)
+	}
+	slices.SortFunc(output, func(left, right springClientTarget) int {
+		return strings.Compare(left.name, right.name)
+	})
+	return output
+}
+
+func configuredServiceName(value string) string {
+	value = strings.TrimSpace(strings.SplitN(value, "#", 2)[0])
+	value = strings.Trim(value, `"'`)
+	if strings.HasPrefix(value, "${") && strings.HasSuffix(value, "}") {
+		placeholder := strings.TrimSuffix(strings.TrimPrefix(value, "${"), "}")
+		_, fallback, ok := strings.Cut(placeholder, ":")
+		if !ok {
+			return ""
+		}
+		value = fallback
+	}
+	if value == "" || strings.Contains(value, "$") ||
+		strings.Contains(value, " ") || strings.Contains(value, "://") {
+		return ""
+	}
+	candidate := strings.SplitN(value, "/", 2)[0]
+	if !configuredServiceValue.MatchString(candidate) {
+		return ""
+	}
+	return normalizeServiceName(candidate)
+}
+
 // isServiceConfiguration reports whether a file can declare a Spring
-// application name.
+// application name or outbound service URL.
 func isServiceConfiguration(filePath string) bool {
-	switch path.Base(filePath) {
+	base := strings.ToLower(path.Base(filePath))
+	switch base {
 	case "application.yml", "application.yaml", "application.properties",
 		"bootstrap.yml", "bootstrap.yaml", "bootstrap.properties":
 		return true
 	default:
+		for _, prefix := range []string{"application-", "bootstrap-"} {
+			if strings.HasPrefix(base, prefix) &&
+				(strings.HasSuffix(base, ".yml") ||
+					strings.HasSuffix(base, ".yaml") ||
+					strings.HasSuffix(base, ".properties")) {
+				return true
+			}
+		}
 		return false
 	}
+}
+
+func sourceConfidence(filePath string) string {
+	normalized := "/" + strings.ToLower(strings.ReplaceAll(filePath, "\\", "/")) + "/"
+	for _, marker := range []string{
+		"/src/test/", "/src/integrationtest/", "/src/integration-test/",
+		"/src/inttest/", "/src/e2etest/", "/src/testfixtures/",
+	} {
+		if strings.Contains(normalized, marker) {
+			return "low"
+		}
+	}
+	base := strings.ToLower(path.Base(filePath))
+	for _, suffix := range []string{
+		"test.java", "tests.java", "test.kt", "tests.kt",
+		"it.java", "it.kt", "spec.java", "spec.kt",
+	} {
+		if strings.HasSuffix(base, suffix) {
+			return "low"
+		}
+	}
+	return "high"
 }
 
 // springApplicationName reads `spring.application.name` from either the flat
@@ -1505,19 +1960,45 @@ func springApplicationName(filePath string, content []byte) string {
 // application name. Unresolved hosts and interpolated placeholders are dropped
 // rather than invented as relationships.
 func (b *builder) resolveClientReferences() {
+	type resolvedReference struct {
+		confidence string
+		evidence   []Evidence
+	}
+	resolved := make(map[string]resolvedReference)
 	for _, reference := range b.clientReferences {
 		targetID := b.serviceTargets[normalizeServiceName(reference.target)]
 		sourceID := fmt.Sprintf("repository:%d", reference.sourceRepositoryID)
 		if targetID == "" || targetID == sourceID {
 			continue
 		}
+		key := sourceID + "\x00" + targetID
+		current := resolved[key]
+		if current.confidence == "high" && reference.confidence != "high" {
+			continue
+		}
+		if reference.confidence == "high" && current.confidence != "high" {
+			current = resolvedReference{confidence: "high"}
+		}
+		if current.confidence == "" {
+			current.confidence = reference.confidence
+		}
+		current.evidence = appendUniqueEvidence(current.evidence, reference.evidence)
+		resolved[key] = current
+	}
+	for key, reference := range resolved {
+		sourceID, targetID, _ := strings.Cut(key, "\x00")
+		label := "calls over HTTP"
+		if reference.confidence == "low" {
+			label += " (test-only)"
+		}
 		b.addEdge(Edge{
-			ID:       edgeID(sourceID, targetID, "service-call"),
-			Source:   sourceID,
-			Target:   targetID,
-			Kind:     "service_call",
-			Label:    "calls over HTTP",
-			Evidence: []Evidence{reference.evidence},
+			ID:         edgeID(sourceID, targetID, "service-call"),
+			Source:     sourceID,
+			Target:     targetID,
+			Kind:       "service_call",
+			Label:      label,
+			Confidence: reference.confidence,
+			Evidence:   reference.evidence,
 		})
 	}
 }
@@ -1622,6 +2103,15 @@ func (b *builder) addNode(node Node) {
 
 func (b *builder) addEdge(edge Edge) {
 	if existing, ok := b.edges[edge.ID]; ok {
+		if existing.Confidence != "high" && edge.Confidence == "high" {
+			existing.Confidence = "high"
+			existing.Label = edge.Label
+			existing.Evidence = nil
+		}
+		if existing.Confidence == "high" && edge.Confidence == "low" {
+			b.edges[edge.ID] = existing
+			return
+		}
 		existing.Evidence = appendUniqueEvidence(existing.Evidence, edge.Evidence...)
 		b.edges[edge.ID] = existing
 		return
@@ -1807,7 +2297,7 @@ func isManifest(filePath string) bool {
 	switch path.Base(filePath) {
 	case "go.mod", "package.json", "pnpm-workspace.yaml", "Cargo.toml", "pyproject.toml",
 		"requirements.txt", "pom.xml", "build.gradle", "build.gradle.kts",
-		"settings.gradle", "settings.gradle.kts", "libs.versions.toml", "composer.json",
+		"settings.gradle", "settings.gradle.kts", "gradle.properties", "libs.versions.toml", "composer.json",
 		"Gemfile", "Package.swift":
 		return true
 	default:
@@ -1831,6 +2321,8 @@ func manifestKind(filePath string) string {
 		return "Gradle project"
 	case "settings.gradle", "settings.gradle.kts":
 		return "Gradle settings"
+	case "gradle.properties":
+		return "Gradle properties"
 	case "libs.versions.toml":
 		return "Gradle version catalog"
 	case "composer.json":
@@ -1853,7 +2345,9 @@ func manifestKind(filePath string) string {
 
 func isAnalyzedSource(filePath string) bool {
 	switch strings.ToLower(path.Ext(filePath)) {
-	case ".go", ".java", ".kt":
+	case ".go", ".java", ".kt", ".kts", ".gradle", ".groovy", ".gvy",
+		".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
+		".py", ".sql", ".sh", ".bash":
 		return true
 	default:
 		return false

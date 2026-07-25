@@ -128,6 +128,13 @@
     </nav>
     <div class="hidden items-center justify-end gap-2 sm:flex">
       <a id="index-health" href="/" class="index-health" data-index-health>{{template "index-health" .}}</a>
+      {{if .AdminEnabled}}<a href="/admin" class="app-nav-link">Admin</a>{{end}}
+      {{if .UserLabel}}
+      <span class="max-w-40 truncate text-xs text-ink-soft" title="{{.UserLabel}}">{{.UserLabel}}</span>
+      {{if ne .AuthMode "open"}}
+      <form action="/auth/logout" method="post"><button class="app-nav-link" type="submit">Sign out</button></form>
+      {{end}}
+      {{end}}
     </div>
   </div>
 </header>
@@ -150,7 +157,7 @@
 <span class="index-health-dot" data-state="ready" aria-hidden="true"></span>
 <span>{{.ReadyCount}} indexed</span>
 {{end}}
-<span class="index-health-scope">· local only</span>
+<span class="index-health-scope">· {{if eq .AuthMode "local"}}local only{{else}}{{.AuthMode}}{{end}}</span>
 {{end}}
 
 {{/*

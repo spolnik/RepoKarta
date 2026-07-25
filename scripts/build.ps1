@@ -3,6 +3,19 @@ $ErrorActionPreference = "Stop"
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $outputDirectory = Join-Path $repositoryRoot "dist"
 $licenseDirectory = Join-Path $outputDirectory "licenses"
+$grammarTags = @(
+    "grammar_subset",
+    "grammar_subset_bash",
+    "grammar_subset_go",
+    "grammar_subset_groovy",
+    "grammar_subset_java",
+    "grammar_subset_javascript",
+    "grammar_subset_kotlin",
+    "grammar_subset_python",
+    "grammar_subset_sql",
+    "grammar_subset_tsx",
+    "grammar_subset_typescript"
+) -join ","
 
 npm --prefix (Join-Path $repositoryRoot "web") install
 if ($LASTEXITCODE -ne 0) { throw "npm install failed" }
@@ -15,16 +28,32 @@ if ($LASTEXITCODE -ne 0) { throw "frontend build failed" }
 
 Push-Location $repositoryRoot
 try {
-    go test ./...
+    go test -tags $grammarTags ./...
     if ($LASTEXITCODE -ne 0) { throw "Go tests failed" }
 
     New-Item -ItemType Directory -Force -Path $licenseDirectory | Out-Null
-    go build -trimpath -o (Join-Path $outputDirectory "repokarta.exe") ./cmd/repokarta
+    go build -tags $grammarTags -trimpath -o (Join-Path $outputDirectory "repokarta.exe") ./cmd/repokarta
     if ($LASTEXITCODE -ne 0) { throw "Go build failed" }
 
     Copy-Item `
         -LiteralPath (Join-Path $repositoryRoot "third_party\zoekt\LICENSE") `
         -Destination (Join-Path $licenseDirectory "zoekt-Apache-2.0.txt") `
+        -Force
+    Copy-Item `
+        -LiteralPath (Join-Path $repositoryRoot "third_party\licenses\gotreesitter-MIT.txt") `
+        -Destination (Join-Path $licenseDirectory "gotreesitter-MIT.txt") `
+        -Force
+    Copy-Item `
+        -LiteralPath (Join-Path $repositoryRoot "third_party\licenses\tree-sitter-grammars-MIT.txt") `
+        -Destination (Join-Path $licenseDirectory "tree-sitter-grammars-MIT.txt") `
+        -Force
+    Copy-Item `
+        -LiteralPath (Join-Path $repositoryRoot "third_party\licenses\nvim-treesitter-Kotlin-query-NOTICE.txt") `
+        -Destination (Join-Path $licenseDirectory "nvim-treesitter-Kotlin-query-NOTICE.txt") `
+        -Force
+    Copy-Item `
+        -LiteralPath (Join-Path $repositoryRoot "third_party\licenses\crewjam-saml-BSD-2-Clause.txt") `
+        -Destination (Join-Path $licenseDirectory "crewjam-saml-BSD-2-Clause.txt") `
         -Force
 }
 finally {

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spolnik/RepoKarta/internal/analysis"
 	"github.com/spolnik/RepoKarta/internal/catalog"
 )
 
@@ -119,6 +120,31 @@ func Run() {}
 	assertGraphNode(t, snapshot, "route", "/healthz")
 	assertGraphEdge(t, snapshot, "import", "imports")
 	assertGraphEdge(t, snapshot, "route", "serves")
+	if snapshot.Version != 4 {
+		t.Fatalf("snapshot version = %d, want 4", snapshot.Version)
+	}
+	if !snapshot.Scope.Complete || snapshot.Scope.Kind != "repository" ||
+		snapshot.Scope.TotalRepositories != 1 || snapshot.Scope.AnalyzedRepositories != 1 {
+		t.Fatalf("repository scope = %#v", snapshot.Scope)
+	}
+	if snapshot.StructureTruncated {
+		t.Fatal("small structural inventory was reported truncated")
+	}
+	if len(snapshot.Structure) != 2 {
+		t.Fatalf("structural documents = %#v", snapshot.Structure)
+	}
+	if !slices.ContainsFunc(snapshot.Structure, func(document StructuralDocument) bool {
+		return document.RepositoryID == 7 &&
+			document.Revision == revision &&
+			document.Path == "cmd/server/main.go" &&
+			document.Language == "go" &&
+			document.ParseComplete &&
+			slices.ContainsFunc(document.Symbols, func(symbol analysis.Symbol) bool {
+				return symbol.Kind == "function" && symbol.Name == "main"
+			})
+	}) {
+		t.Fatalf("main structural document missing: %#v", snapshot.Structure)
+	}
 
 	for _, node := range snapshot.Nodes {
 		if len(node.Evidence) == 0 || node.Evidence[0].Revision != revision || node.Evidence[0].URL == "" {
@@ -414,7 +440,11 @@ dependencies {
     testImplementation project(path: ':contract-tests')
     implementation project(':shared:domain')
 }`)
-	dependencies := parseGradleDependencies(groovy, nil)
+	versionVariables := parseGradleVersionVariables(map[string][]byte{
+		"build.gradle":      groovy,
+		"gradle.properties": []byte("postgresVersion=42.7.5\n"),
+	})
+	dependencies := parseGradleDependencies(groovy, nil, versionVariables)
 	coordinates := make([]string, 0, len(dependencies))
 	for _, dependency := range dependencies {
 		coordinates = append(coordinates, dependency.coordinate)
@@ -426,8 +456,7 @@ dependencies {
 		"com.acme.tools:shaded-tools",
 		"com.fasterxml.jackson:jackson-bom:2.18.4",
 		"org.assertj:assertj-core:3.27.6",
-		"org.postgresql:postgresql",
-		"org.projectlombok:lombok",
+		"org.postgresql:postgresql:42.7.5",
 		"org.projectlombok:lombok:1.18.42",
 		"org.springframework.boot:spring-boot-dependencies:4.0.1",
 		"org.springframework.boot:spring-boot-starter-web",
@@ -459,7 +488,7 @@ dependencies {
 		"jackson.bom":   "com.fasterxml.jackson:jackson-bom:2.18.4",
 		"moshi.codegen": "com.squareup.moshi:moshi-kotlin-codegen:1.15.2",
 	}
-	dependencies = parseGradleDependencies(kotlin, catalog)
+	dependencies = parseGradleDependencies(kotlin, catalog, nil)
 	coordinates = coordinates[:0]
 	for _, dependency := range dependencies {
 		coordinates = append(coordinates, dependency.coordinate)
@@ -628,6 +657,68 @@ spring:
 	}
 }
 
+func TestServiceConfigurationAndMainSourceEvidenceOutrankTests(t *testing.T) {
+	targets := serviceConfigurationTargets([]byte(`clients:
+  inventory:
+    base-url: ${INVENTORY_URL:http://inventory-service:8080}
+  pricing:
+    base-url: ${PRICING_HOST:pricing-service:9090}
+docs:
+  url: https://docs.example.com
+`))
+	if len(targets) != 2 ||
+		targets[0].name != "inventory-service" || targets[0].line != 3 ||
+		targets[1].name != "pricing-service" || targets[1].line != 5 {
+		t.Fatalf("configuration targets = %#v", targets)
+	}
+	if sourceConfidence("src/main/java/com/acme/InventoryClient.java") != "high" ||
+		sourceConfidence("src/test/java/com/acme/ManualInventoryClientTest.java") != "low" ||
+		sourceConfidence("tools/ManualInventoryClientTest.kt") != "low" {
+		t.Fatal("source confidence did not distinguish production and test clients")
+	}
+
+	builder := newBuilder("http://127.0.0.1:7331")
+	builder.registerServiceTarget("inventory-service", "repository:2")
+	builder.clientReferences = []clientReference{
+		{
+			sourceRepositoryID: 1,
+			target:             "inventory-service",
+			confidence:         "low",
+			evidence: Evidence{
+				RepositoryID: 1,
+				Path:         "src/test/java/com/acme/ManualInventoryClientTest.java",
+				Line:         35,
+			},
+		},
+		{
+			sourceRepositoryID: 1,
+			target:             "inventory-service",
+			confidence:         "high",
+			evidence: Evidence{
+				RepositoryID: 1,
+				Path:         "src/main/resources/application.yml",
+				Line:         3,
+			},
+		},
+	}
+	builder.resolveClientReferences()
+	edge := builder.edges[edgeID("repository:1", "repository:2", "service-call")]
+	if edge.Confidence != "high" || edge.Label != "calls over HTTP" ||
+		len(edge.Evidence) != 1 ||
+		edge.Evidence[0].Path != "src/main/resources/application.yml" {
+		t.Fatalf("resolved production edge = %#v", edge)
+	}
+
+	testOnly := newBuilder("http://127.0.0.1:7331")
+	testOnly.registerServiceTarget("inventory-service", "repository:2")
+	testOnly.clientReferences = builder.clientReferences[:1]
+	testOnly.resolveClientReferences()
+	edge = testOnly.edges[edgeID("repository:1", "repository:2", "service-call")]
+	if edge.Confidence != "low" || edge.Label != "calls over HTTP (test-only)" {
+		t.Fatalf("resolved test-only edge = %#v", edge)
+	}
+}
+
 func TestCollectionSnapshotIsBoundedAndReportsTruncation(t *testing.T) {
 	// A large collection must not analyze every repository before rendering.
 	root, revision := javaGraphFixture(t, map[string]string{
@@ -666,6 +757,13 @@ func TestCollectionSnapshotIsBoundedAndReportsTruncation(t *testing.T) {
 	if !collection.Truncated {
 		t.Fatal("bounded collection did not report truncation")
 	}
+	if collection.Scope.Kind != "collection" || collection.Scope.Complete ||
+		collection.Scope.TotalRepositories != maximumCollectionRepositories+5 ||
+		collection.Scope.AnalyzedRepositories != maximumCollectionRepositories ||
+		collection.Scope.OmittedRepositories != 5 ||
+		collection.Scope.RepositoryLimit != maximumCollectionRepositories {
+		t.Fatalf("collection scope = %#v", collection.Scope)
+	}
 
 	// Selecting one repository stays complete.
 	single, err := service.Snapshot(context.Background(), 3, true)
@@ -675,6 +773,10 @@ func TestCollectionSnapshotIsBoundedAndReportsTruncation(t *testing.T) {
 	if len(single.Repositories) != 1 || single.Truncated {
 		t.Fatalf("single repository snapshot = %d repositories, truncated=%v",
 			len(single.Repositories), single.Truncated)
+	}
+	if !single.Scope.Complete || single.Scope.Kind != "repository" ||
+		single.Scope.RequestedRepositoryID != 3 {
+		t.Fatalf("single repository scope = %#v", single.Scope)
 	}
 }
 

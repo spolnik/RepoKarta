@@ -350,3 +350,27 @@ func TestRepositoryByIDReportsAMissingRepositoryClearly(t *testing.T) {
 		t.Fatalf("missing repository error leaks a driver error: %v", err)
 	}
 }
+
+func TestAppSettingRoundTrip(t *testing.T) {
+	storage, err := Open(filepath.Join(t.TempDir(), "settings.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer storage.Close()
+	ctx := context.Background()
+	if value, ok, err := storage.AppSetting(ctx, "security"); err != nil || ok || value != "" {
+		t.Fatalf("missing AppSetting() = %q, %v, %v", value, ok, err)
+	}
+	if err := storage.SetAppSetting(ctx, "security", `{"mode":"local"}`); err != nil {
+		t.Fatal(err)
+	}
+	if value, ok, err := storage.AppSetting(ctx, "security"); err != nil || !ok || value != `{"mode":"local"}` {
+		t.Fatalf("AppSetting() = %q, %v, %v", value, ok, err)
+	}
+	if err := storage.SetAppSetting(ctx, "security", `{"mode":"open"}`); err != nil {
+		t.Fatal(err)
+	}
+	if value, ok, err := storage.AppSetting(ctx, "security"); err != nil || !ok || value != `{"mode":"open"}` {
+		t.Fatalf("updated AppSetting() = %q, %v, %v", value, ok, err)
+	}
+}

@@ -156,6 +156,7 @@ func TestGoAgentLoopStreamsToolResultAndUsage(t *testing.T) {
 	s := &session{
 		client:         &client,
 		model:          "claude-sonnet-5",
+		effort:         "medium",
 		conversationID: "conversation",
 		intelligence:   adversarialIntelligence{},
 	}
@@ -176,7 +177,8 @@ func TestGoAgentLoopStreamsToolResultAndUsage(t *testing.T) {
 		t.Fatalf("Messages API requests = %d, want 2", len(requestBodies))
 	}
 	if !strings.Contains(string(requestBodies[0]), "untrusted evidence") ||
-		!strings.Contains(string(requestBodies[0]), `"name":"search_code"`) {
+		!strings.Contains(string(requestBodies[0]), `"name":"search_code"`) ||
+		!strings.Contains(string(requestBodies[0]), `"effort":"medium"`) {
 		t.Fatalf("first request lacks system policy or read-only tools: %s", requestBodies[0])
 	}
 	if !strings.Contains(string(requestBodies[1]), `"type":"tool_result"`) ||

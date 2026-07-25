@@ -9,13 +9,15 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 
 	"github.com/spolnik/RepoKarta/internal/app"
 	"github.com/spolnik/RepoKarta/internal/codeintel"
 	"github.com/spolnik/RepoKarta/internal/mcpserver"
+	"github.com/spolnik/RepoKarta/internal/security"
 )
 
-const version = "0.20.0-dev"
+const version = "0.25.0-dev"
 
 type stringList []string
 
@@ -88,6 +90,15 @@ func serve(args []string) error {
 	openBrowser := flags.Bool("open", defaults.OpenBrowser, "open the local dashboard in the default browser")
 	codexCommand := flags.String("codex-command", defaults.CodexCommand, "Codex CLI command or absolute path")
 	claudeCommand := flags.String("claude-command", defaults.ClaudeCommand, "Claude Code CLI command or absolute path")
+	authMode := flags.String("auth-mode", string(defaults.Security.Mode), "authentication mode: local, cloudflare-access, saml, or open")
+	publicURL := flags.String("public-url", defaults.Security.PublicURL, "public HTTPS URL used by shared authentication modes")
+	allowOpen := flags.Bool("allow-open", defaults.AllowOpen, "allow the administrator to enable unauthenticated shared access")
+	adminUser := flags.String("admin-user", defaults.AdminUser, "bootstrap administrator username")
+	adminPasswordFile := flags.String("admin-password-file", strings.TrimSpace(os.Getenv("REPOKARTA_ADMIN_PASSWORD_FILE")), "file containing the bootstrap administrator password")
+	cloudflareTeamDomain := flags.String("cloudflare-team-domain", defaults.Security.CloudflareTeamDomain, "Cloudflare Access team domain")
+	cloudflareAudience := flags.String("cloudflare-audience", defaults.Security.CloudflareAudience, "Cloudflare Access application audience tag")
+	samlMetadataURL := flags.String("saml-metadata-url", defaults.Security.SAMLMetadataURL, "SAML identity-provider metadata URL")
+	samlEntityID := flags.String("saml-entity-id", defaults.Security.SAMLEntityID, "optional SAML service-provider entity ID")
 	var excludes stringList
 	flags.Var(&excludes, "exclude", "directory to exclude; repeat for multiple directories")
 	if err := flags.Parse(args); err != nil {
@@ -106,6 +117,17 @@ func serve(args []string) error {
 	if err != nil {
 		return fmt.Errorf("resolve repository root: %w", err)
 	}
+	adminPassword := ""
+	if strings.TrimSpace(*adminPasswordFile) != "" {
+		passwordBytes, err := os.ReadFile(*adminPasswordFile)
+		if err != nil {
+			return fmt.Errorf("read administrator password file: %w", err)
+		}
+		adminPassword = strings.TrimRight(string(passwordBytes), "\r\n")
+		if adminPassword == "" {
+			return errors.New("administrator password file is empty")
+		}
+	}
 
 	cfg := app.Config{
 		ListenAddress:  *listenAddress,
@@ -116,6 +138,17 @@ func serve(args []string) error {
 		OpenBrowser:    *openBrowser,
 		CodexCommand:   *codexCommand,
 		ClaudeCommand:  *claudeCommand,
+		AllowOpen:      *allowOpen,
+		AdminUser:      *adminUser,
+		AdminPassword:  adminPassword,
+		Security: security.Settings{
+			Mode:                 security.Mode(*authMode),
+			PublicURL:            *publicURL,
+			CloudflareTeamDomain: *cloudflareTeamDomain,
+			CloudflareAudience:   *cloudflareAudience,
+			SAMLMetadataURL:      *samlMetadataURL,
+			SAMLEntityID:         *samlEntityID,
+		},
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -139,6 +172,15 @@ Serve options:
   -open bool         open the local dashboard (default true)
   -codex-command     Codex CLI command or absolute path
   -claude-command    Claude Code CLI command or absolute path
+  -auth-mode         local, cloudflare-access, saml, or open (default local)
+  -public-url        public HTTPS URL for shared modes
+  -allow-open        permit administrator-controlled unauthenticated shared mode
+  -admin-user        bootstrap administrator username
+  -admin-password-file file containing the bootstrap administrator password
+  -cloudflare-team-domain Cloudflare Access team domain
+  -cloudflare-audience Cloudflare Access application audience tag
+  -saml-metadata-url SAML identity-provider metadata URL
+  -saml-entity-id    optional SAML service-provider entity ID
 
 MCP options:
   -url string        running RepoKarta URL (default http://127.0.0.1:7331)`)

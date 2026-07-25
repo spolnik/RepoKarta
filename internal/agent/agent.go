@@ -94,8 +94,9 @@ type Event struct {
 // ModelOption is one curated model exposed by a provider harness. ID is sent
 // to the harness while Label is the stable human-readable name shown in the UI.
 type ModelOption struct {
-	ID    string `json:"id"`
-	Label string `json:"label"`
+	ID      string   `json:"id"`
+	Label   string   `json:"label"`
+	Efforts []string `json:"efforts"`
 }
 
 // Status describes whether a local provider harness is usable.
@@ -758,9 +759,6 @@ func (m *Manager) startConversation(ctx context.Context, request TurnRequest, co
 	if len(request.Images) > 0 && !status.ImageInput {
 		return nil, fmt.Errorf("%s does not support image input", status.Name)
 	}
-	if request.Effort != "" && !contains(status.Efforts, request.Effort) {
-		return nil, fmt.Errorf("%s does not support effort %q", status.Name, request.Effort)
-	}
 	if len(status.Models) > 0 {
 		if strings.TrimSpace(request.Model) == "" {
 			request.Model = status.Models[0].ID
@@ -768,6 +766,21 @@ func (m *Manager) startConversation(ctx context.Context, request TurnRequest, co
 		if !containsModel(status.Models, request.Model) {
 			return nil, fmt.Errorf("%s does not support model %q", status.Name, request.Model)
 		}
+	}
+	supportedEfforts := status.Efforts
+	for _, model := range status.Models {
+		if model.ID == request.Model && model.Efforts != nil {
+			supportedEfforts = model.Efforts
+			break
+		}
+	}
+	if request.Effort != "" && !contains(supportedEfforts, request.Effort) {
+		return nil, fmt.Errorf(
+			"%s model %q does not support effort %q",
+			status.Name,
+			request.Model,
+			request.Effort,
+		)
 	}
 	session, err := adapter.Start(ctx, SessionConfig{
 		ConversationID: conversationID,

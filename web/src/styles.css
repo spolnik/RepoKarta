@@ -1837,6 +1837,17 @@ a.brand-mark:hover,
   font-weight: 700;
 }
 
+.map-scope-note {
+  margin: 0.7rem 0 0;
+  border: 1px solid rgb(245 158 11 / 0.2);
+  border-radius: var(--r-sm);
+  padding: 0.55rem 0.65rem;
+  background: rgb(120 53 15 / 0.14);
+  color: #fcd34d;
+  font-size: var(--fs-meta);
+  line-height: 1.45;
+}
+
 .map-language-list {
   display: flex;
   flex-wrap: wrap;

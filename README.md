@@ -58,10 +58,19 @@ questions, M3 evidence-backed repository maps, and M4 living documentation:
 - embedded frontend assets in one native Go executable;
 - deterministic language and manifest inventories extracted from committed
   source without executing repository code;
+- a bounded pure-Go syntax-tree index for Java, Kotlin, Gradle Groovy,
+  TypeScript/TSX, JavaScript, Go, SQL, Bash, and Python, with exact declaration,
+  relation, build-fact, and parser-diagnostic ranges;
 - commit-keyed package, dependency, entry-point, and HTTP-route graphs with
-  source evidence on every node and relationship;
+  source evidence on every node and relationship, resolved Gradle versions,
+  and production-first Spring HTTP-call edges;
 - an interactive layered map with scope and view filters, search, neighbor
-  focus, evidence inspection, and downloadable JSON snapshots.
+  focus, evidence inspection, downloadable JSON snapshots, and explicit
+  analyzed/omitted repository counts for bounded fleet views;
+- Deep Wiki surveys seeded with a curated subset of parsed types, functions,
+  and Gradle build facts;
+- a Fast Wiki mode that uses Claude Haiku 4.5, a 12-call discovery budget, a
+  hard 10-minute timeout, and a focused 4-8 page plan for casual exploration;
 - deterministic three-page documentation plans generated independently from
   commit-pinned structural facts;
 - durable page status, provider/model metadata, source sets, citations, and
@@ -117,6 +126,62 @@ RepoKarta enables symbol indexing automatically when `universal-ctags` is on
 the BSD ctags shipped by macOS. If Universal Ctags is unavailable, `sym:`
 searches return a machine-readable and visible warning instead of a misleading
 silent zero.
+
+## Deployment authentication
+
+RepoKarta stays loopback-only by default. A shared deployment can use one of
+four explicit modes:
+
+- `local`: no user login, but Host and Origin checks restrict the interface to
+  loopback.
+- `cloudflare-access`: validates Cloudflare Access application JWTs from
+  `Cf-Access-Jwt-Assertion`, including signature, issuer, audience, and time
+  claims.
+- `saml`: runs a native SAML 2.0 service provider. This works with
+  Cloudflare's generic SAML SaaS application and other SAML identity providers.
+- `open`: shared access without user authentication. This mode is unavailable
+  unless the service starts with `-allow-open=true`.
+
+The administrator panel at `/admin` has a separate bootstrap login in every
+mode. Supply its username and password file at service startup; the credentials
+are held in memory and are not written to SQLite:
+
+```powershell
+go run ./cmd/repokarta serve `
+  -listen 0.0.0.0:7331 `
+  -open=false `
+  -admin-user repokarta-admin `
+  -admin-password-file C:\secure\repokarta-admin-password.txt `
+  C:\Work\ghorg
+```
+
+Sign in at `/admin`, set the exact public HTTPS URL, and choose the access mode.
+Only non-secret provider settings persist. Native SAML generates its private
+key under the RepoKarta data directory; the admin page shows the service
+provider metadata and ACS URLs to enter in the identity provider.
+
+For Cloudflare Access JWT mode, enter the team domain such as
+`https://team.cloudflareaccess.com` and the Access application audience tag.
+For native SAML with Cloudflare, create a generic SAML SaaS application using:
+
+```text
+Entity ID: https://repokarta.example.com/saml/metadata
+ACS URL:   https://repokarta.example.com/saml/acs
+```
+
+Then enter Cloudflare's IdP metadata URL in RepoKarta. The same settings can be
+supplied on first startup with `-auth-mode`, `-public-url`,
+`-cloudflare-team-domain`, `-cloudflare-audience`, `-saml-metadata-url`, and
+`-saml-entity-id`. Corresponding environment variables are
+`REPOKARTA_AUTH_MODE`, `REPOKARTA_PUBLIC_URL`,
+`REPOKARTA_CF_TEAM_DOMAIN`, `REPOKARTA_CF_AUDIENCE`,
+`REPOKARTA_SAML_METADATA_URL`, and `REPOKARTA_SAML_ENTITY_ID`.
+`REPOKARTA_ADMIN_USER`, `REPOKARTA_ADMIN_PASSWORD_FILE`, and
+`REPOKARTA_ALLOW_OPEN` cover the startup-only controls.
+
+Authentication establishes a request identity, but conversations and generated
+artifacts are not yet separated per user. Treat the current shared deployment
+as a trusted-team instance.
 
 ## Documentation steering
 
@@ -215,6 +280,17 @@ interactive terminal is logged in. RepoKarta rechecks authentication when each
 new conversation starts and again after a harness startup failure; launch it
 from the same session where `codex login` or `claude auth login` succeeds.
 
+The Claude harness runs with `--setting-sources user`. Your personal Claude
+settings, including `env`, hooks, permission configuration, and organization
+telemetry exporters, therefore apply as they do in a normal terminal session.
+RepoKarta does not enable the `project` or `local` setting sources, and starts
+Claude from a neutral temporary attachment directory rather than an indexed
+repository, so repository `.claude/settings*.json`, project memory, and
+auto-memory are not loaded. The grounding system prompt still instructs Claude
+to ignore personal memory and use only RepoKarta tool evidence; RepoKarta's
+command-line plan mode and disabled mutation, shell, and web tools remain the
+authoritative safety boundary.
+
 To enable the direct Anthropic provider without persisting its secret:
 
 ```powershell
@@ -234,11 +310,14 @@ go run ./cmd/repokarta serve `
   C:\Work\ghorg
 ```
 
-Model and effort are configured per provider before a conversation starts.
-Leaving either field on its default lets the selected harness choose. RepoKarta
-passes Codex effort through app-server turn configuration and Claude effort
-through Claude Code's `--effort` option. Each turn also has a bounded timeout
-and, for the direct API loop, an output-token budget.
+Model and effort are configured per provider before a conversation starts and
+their explicit human-readable names remain visible in the conversation header.
+The Claude catalog includes Fable 5, Opus 5, Opus 4.8, Sonnet 5, and Haiku 4.5;
+supported effort levels are selected per model. Leaving effort on its default
+lets the selected harness choose. RepoKarta passes Codex effort through
+app-server turn configuration, Claude Code effort through `--effort`, and
+Anthropic API effort through `output_config.effort`. Each turn also has a
+bounded timeout and, for the direct API loop, an output-token budget.
 
 Conversation titles, messages, citations, status, and usage are stored locally.
 Uploaded conversation images are stored as exact RepoKarta-owned files outside
@@ -275,7 +354,7 @@ its transcript and its exact owned image files.
 ```sh
 npm --prefix web run typecheck
 npm --prefix web run build
-go test ./...
+go test -tags "grammar_subset,grammar_subset_bash,grammar_subset_go,grammar_subset_groovy,grammar_subset_java,grammar_subset_javascript,grammar_subset_kotlin,grammar_subset_python,grammar_subset_sql,grammar_subset_tsx,grammar_subset_typescript" ./...
 ```
 
 Native build scripts write the executable to `dist/` and include required

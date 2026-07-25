@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -16,10 +18,87 @@ import (
 	"github.com/spolnik/RepoKarta/internal/docs"
 	"github.com/spolnik/RepoKarta/internal/graph"
 	"github.com/spolnik/RepoKarta/internal/search"
+	"github.com/spolnik/RepoKarta/internal/security"
 )
 
 type testStore struct {
 	repositories []catalog.Repository
+}
+
+func TestAdministratorCanEnableAllowedOpenMode(t *testing.T) {
+	settingsStore := &testSettingsStore{values: make(map[string]string)}
+	securityManager, err := security.New(context.Background(), settingsStore, security.Config{
+		Address:       "127.0.0.1:7331",
+		DataDirectory: t.TempDir(),
+		AllowOpen:     true,
+		AdminUser:     "bootstrap-admin",
+		AdminPassword: "correct horse battery staple",
+		Initial:       security.Settings{Mode: security.ModeLocal},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := New(
+		Config{
+			Address:  "127.0.0.1:7331",
+			Version:  "test",
+			Security: securityManager,
+		},
+		codeintel.New(testStore{}, testSearcher{}, "http://127.0.0.1:7331"),
+		testRefresher{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7331/admin", nil)
+	response := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusSeeOther || response.Header().Get("Location") != "/admin/login" {
+		t.Fatalf("anonymous admin response = %d, location %q", response.Code, response.Header().Get("Location"))
+	}
+
+	loginForm := url.Values{
+		"username": {"bootstrap-admin"},
+		"password": {"correct horse battery staple"},
+	}
+	request = httptest.NewRequest(http.MethodPost, "http://127.0.0.1:7331/admin/login", strings.NewReader(loginForm.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	response = httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusSeeOther || len(response.Result().Cookies()) != 1 {
+		t.Fatalf("login response = %d, cookies %d, body %q", response.Code, len(response.Result().Cookies()), response.Body.String())
+	}
+	adminCookie := response.Result().Cookies()[0]
+
+	request = httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7331/admin", nil)
+	request.AddCookie(adminCookie)
+	response = httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "Cloudflare Access") {
+		t.Fatalf("admin response = %d, body %q", response.Code, response.Body.String())
+	}
+	match := regexp.MustCompile(`name="csrf" value="([^"]+)"`).FindStringSubmatch(response.Body.String())
+	if len(match) != 2 {
+		t.Fatalf("admin page did not include CSRF token: %q", response.Body.String())
+	}
+
+	updateForm := url.Values{
+		"csrf":       {match[1]},
+		"mode":       {string(security.ModeOpen)},
+		"public_url": {"https://repo.example.com"},
+	}
+	request = httptest.NewRequest(http.MethodPost, "http://127.0.0.1:7331/admin/security", strings.NewReader(updateForm.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(adminCookie)
+	response = httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "saved and activated") {
+		t.Fatalf("update response = %d, body %q", response.Code, response.Body.String())
+	}
+	if securityManager.Mode() != security.ModeOpen {
+		t.Fatalf("mode = %q, want %q", securityManager.Mode(), security.ModeOpen)
+	}
 }
 
 func (s testStore) ListRepositories(context.Context) ([]catalog.Repository, error) {
@@ -36,6 +115,20 @@ func (s testStore) RepositoryByID(_ context.Context, id int64) (catalog.Reposito
 }
 
 type testSearcher struct{}
+
+type testSettingsStore struct {
+	values map[string]string
+}
+
+func (store *testSettingsStore) AppSetting(_ context.Context, key string) (string, bool, error) {
+	value, ok := store.values[key]
+	return value, ok, nil
+}
+
+func (store *testSettingsStore) SetAppSetting(_ context.Context, key, value string) error {
+	store.values[key] = value
+	return nil
+}
 
 func (testSearcher) Search(context.Context, search.Query) (search.Result, error) {
 	return search.Result{
@@ -156,7 +249,7 @@ func TestDocumentationPageAPIGenerationAndExport(t *testing.T) {
 	request = httptest.NewRequest(
 		http.MethodPost,
 		"http://127.0.0.1:7331/api/wiki/generate",
-		bytes.NewBufferString(`{"repository_id":6,"page":"overview","refresh":true,"survey_only":true,"plan_only":true,"provider":"codex","model":"gpt-test","effort":"high","timeout_seconds":600,"token_budget":32000}`),
+		bytes.NewBufferString(`{"repository_id":6,"page":"overview","refresh":true,"survey_only":true,"plan_only":true,"preset":"fast","provider":"codex","model":"gpt-test","effort":"high","timeout_seconds":600,"token_budget":32000}`),
 	)
 	request.Header.Set("Content-Type", "application/json")
 	response = httptest.NewRecorder()
@@ -167,6 +260,7 @@ func TestDocumentationPageAPIGenerationAndExport(t *testing.T) {
 		!documents.generated.Refresh ||
 		!documents.generated.SurveyOnly ||
 		!documents.generated.PlanOnly ||
+		documents.generated.Preset != "fast" ||
 		documents.generated.Provider != "codex" ||
 		documents.generated.Model != "gpt-test" ||
 		documents.generated.Effort != "high" ||
@@ -198,6 +292,14 @@ func TestRepositoryMapPageAPIAndExport(t *testing.T) {
 	maps := &testMapService{snapshot: graph.Snapshot{
 		Version: 1,
 		ID:      "snapshot-1",
+		Scope: graph.Scope{
+			Kind:                 "collection",
+			Complete:             false,
+			TotalRepositories:    120,
+			AnalyzedRepositories: 40,
+			OmittedRepositories:  80,
+			RepositoryLimit:      40,
+		},
 		Repositories: []graph.Repository{{
 			ID:       repository.ID,
 			Name:     repository.Name,
@@ -246,6 +348,17 @@ func TestRepositoryMapPageAPIAndExport(t *testing.T) {
 	server.server.Handler.ServeHTTP(apiResponse, apiRequest)
 	if apiResponse.Code != http.StatusOK || maps.repositoryID != 4 || !maps.refresh {
 		t.Fatalf("map API status = %d, repository = %d, refresh = %v", apiResponse.Code, maps.repositoryID, maps.refresh)
+	}
+	for _, expected := range []string{
+		`"scope":`,
+		`"complete":false`,
+		`"total_repositories":120`,
+		`"analyzed_repositories":40`,
+		`"omitted_repositories":80`,
+	} {
+		if !strings.Contains(apiResponse.Body.String(), expected) {
+			t.Fatalf("map API body does not contain %q: %s", expected, apiResponse.Body.String())
+		}
 	}
 
 	exportRequest := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7331/api/maps/export?repository=4", nil)
