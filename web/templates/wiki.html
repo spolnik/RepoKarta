@@ -19,9 +19,9 @@
     <main class="wiki-workspace" data-wiki-workspace>
       <aside class="wiki-sidebar" aria-label="Documentation controls">
         <header class="wiki-sidebar-heading">
-          <p class="wiki-kicker">Living documentation</p>
-          <h1>Repository wiki</h1>
-          <p>Independent Markdown pages, pinned to commits and grounded in exact source.</p>
+          <p class="wiki-kicker">Code knowledge</p>
+          <h1>Deep Wiki</h1>
+          <p>Subsystems, flows, concepts, and implementation details generated from exact source.</p>
         </header>
 
         <label class="wiki-field">
@@ -33,6 +33,36 @@
             {{end}}
           </select>
         </label>
+
+        <details class="wiki-generation-controls">
+          <summary class="wiki-section-heading">
+            <div>
+              <p>Knowledge engine</p>
+              <h2 id="wiki-model-heading">Read-only generation</h2>
+            </div>
+            <span data-wiki-provider-state>Checking</span>
+          </summary>
+          <div class="wiki-generation-controls-body" aria-labelledby="wiki-model-heading">
+            <label class="wiki-field wiki-field-compact">
+              <span>Provider</span>
+              <select data-wiki-provider disabled>
+                <option value="">Checking local providers…</option>
+              </select>
+            </label>
+            <label class="wiki-field wiki-field-compact">
+              <span>Model</span>
+              <input data-wiki-model list="wiki-model-options" maxlength="200" placeholder="Provider default" autocomplete="off" disabled>
+              <datalist id="wiki-model-options"></datalist>
+            </label>
+            <label class="wiki-field wiki-field-compact">
+              <span>Reasoning effort</span>
+              <select data-wiki-effort disabled>
+                <option value="">Provider default</option>
+              </select>
+            </label>
+            <p class="wiki-provider-detail" data-wiki-provider-detail>Wiki generation uses an isolated session and never creates a saved chat.</p>
+          </div>
+        </details>
 
         <section class="wiki-plan-summary" aria-labelledby="wiki-plan-heading">
           <div class="wiki-section-heading">
@@ -55,7 +85,7 @@
             <svg viewBox="0 0 20 20" aria-hidden="true">
               <path d="m10 2 .9 3.1L14 6l-3.1.9L10 10l-.9-3.1L6 6l3.1-.9L10 2ZM5 11l.65 2.35L8 14l-2.35.65L5 17l-.65-2.35L2 14l2.35-.65L5 11Zm10-1 .55 1.95L17.5 12l-1.95.55L15 14.5l-.55-1.95L12.5 12l1.95-.55L15 10Z"></path>
             </svg>
-            <span>Generate pages</span>
+            <span>Build knowledge map</span>
           </button>
           <a class="wiki-secondary-action" href="#" data-wiki-export aria-disabled="true">
             <svg viewBox="0 0 20 20" aria-hidden="true">
@@ -68,11 +98,15 @@
         <div class="wiki-steering" data-wiki-steering>
           <span class="wiki-steering-mark" aria-hidden="true">YML</span>
           <div>
-            <strong>Default documentation plan</strong>
-            <p>Add a reviewed <code>.repokarta.yml</code> to include, exclude, title, or guide pages.</p>
+            <strong>Repository-specific plan</strong>
+            <p>The model discovers real subsystems; <code>.repokarta.yml</code> can guide or filter the result.</p>
           </div>
         </div>
 
+        <label class="wiki-page-search">
+          <span class="sr-only">Filter Wiki pages</span>
+          <input type="search" data-wiki-page-search placeholder="Filter knowledge pages…">
+        </label>
         <nav class="wiki-page-list" data-wiki-pages aria-label="Documentation pages"></nav>
       </aside>
 
@@ -96,7 +130,7 @@
           <div class="wiki-empty" data-wiki-empty>
             <span class="wiki-empty-mark" aria-hidden="true">⌘</span>
             <h2>Choose a repository to begin</h2>
-            <p>RepoKarta will create a small deterministic page plan before generating anything.</p>
+            <p>RepoKarta will inspect the code and build a repository-specific hierarchy of concepts and implementation flows.</p>
           </div>
           <div class="wiki-loading" data-wiki-loading hidden>
             <span class="wiki-loading-mark" aria-hidden="true"></span>
@@ -113,26 +147,29 @@
 
       <aside class="wiki-provenance" aria-labelledby="wiki-provenance-heading">
         <header>
-          <p class="wiki-kicker">Trust & provenance</p>
-          <h2 id="wiki-provenance-heading">Page evidence</h2>
-          <p>Generation metadata and exact supporting sources for the selected page.</p>
+          <p class="wiki-kicker">Page navigation</p>
+          <h2 id="wiki-provenance-heading">On this page</h2>
+          <p>Jump between the concepts, flows, and implementation details explained here.</p>
         </header>
+        <nav class="wiki-outline" data-wiki-outline aria-label="On this page">
+          <p>Headings appear after a page is generated.</p>
+        </nav>
+        <section class="wiki-supporting-files" aria-labelledby="wiki-supporting-heading">
+          <div class="wiki-section-heading">
+            <div>
+              <p>Relevant source files</p>
+              <h3 id="wiki-supporting-heading">Implementation set</h3>
+            </div>
+            <span data-wiki-support-count>0</span>
+          </div>
+          <ul data-wiki-supporting-files></ul>
+        </section>
         <dl class="wiki-provenance-meta">
           <div><dt>Revision</dt><dd data-wiki-page-revision>—</dd></div>
           <div><dt>Generator</dt><dd data-wiki-page-generator>—</dd></div>
           <div><dt>Generated</dt><dd data-wiki-page-generated>—</dd></div>
           <div><dt>Token usage</dt><dd data-wiki-page-tokens>0 in · 0 out</dd></div>
         </dl>
-        <section class="wiki-supporting-files" aria-labelledby="wiki-supporting-heading">
-          <div class="wiki-section-heading">
-            <div>
-              <p>Source set</p>
-              <h3 id="wiki-supporting-heading">Supporting files</h3>
-            </div>
-            <span data-wiki-support-count>0</span>
-          </div>
-          <ul data-wiki-supporting-files></ul>
-        </section>
         <section class="wiki-citations" aria-labelledby="wiki-citations-heading">
           <div class="wiki-section-heading">
             <div>

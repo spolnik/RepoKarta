@@ -622,11 +622,17 @@ func (s *Server) apiWikiPage(response http.ResponseWriter, request *http.Request
 }
 
 func (s *Server) generateWiki(response http.ResponseWriter, request *http.Request) {
-	request.Body = http.MaxBytesReader(response, request.Body, 8<<10)
+	request.Body = http.MaxBytesReader(response, request.Body, 16<<10)
 	var input struct {
 		RepositoryID int64  `json:"repository_id"`
 		Page         string `json:"page"`
 		Refresh      bool   `json:"refresh"`
+		PlanOnly     bool   `json:"plan_only"`
+		Provider     string `json:"provider"`
+		Model        string `json:"model"`
+		Effort       string `json:"effort"`
+		Timeout      int    `json:"timeout_seconds"`
+		TokenBudget  int64  `json:"token_budget"`
 	}
 	decoder := json.NewDecoder(request.Body)
 	decoder.DisallowUnknownFields()
@@ -642,6 +648,12 @@ func (s *Server) generateWiki(response http.ResponseWriter, request *http.Reques
 		RepositoryID: input.RepositoryID,
 		Page:         strings.TrimSpace(input.Page),
 		Refresh:      input.Refresh,
+		PlanOnly:     input.PlanOnly,
+		Provider:     strings.TrimSpace(input.Provider),
+		Model:        strings.TrimSpace(input.Model),
+		Effort:       strings.TrimSpace(input.Effort),
+		Timeout:      input.Timeout,
+		TokenBudget:  input.TokenBudget,
 	})
 	if err != nil {
 		writeDocumentationError(response, err)

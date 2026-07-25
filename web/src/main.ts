@@ -3120,6 +3120,13 @@ type WikiPage = {
   title: string;
   summary: string;
   order: number;
+  number: string;
+  parent_slug?: string;
+  depth: number;
+  plan_revision?: string;
+  plan_version: number;
+  plan_provider?: string;
+  plan_model?: string;
   status: "planned" | "generating" | "ready" | "stale" | "error";
   revision?: string;
   provider?: string;
@@ -3147,6 +3154,11 @@ type WikiSite = {
     notes?: Record<string, string>;
   };
   pages: WikiPage[];
+  plan_ready: boolean;
+  plan_stale: boolean;
+  plan_revision?: string;
+  plan_provider?: string;
+  plan_model?: string;
   ready: number;
   stale: number;
   pending: number;
@@ -3156,6 +3168,12 @@ type WikiSite = {
 function enableRepositoryWiki(debug?: DebugLogger): void {
   const workspace = document.querySelector<HTMLElement>("[data-wiki-workspace]");
   const repository = document.querySelector<HTMLSelectElement>("[data-wiki-repository]");
+  const provider = document.querySelector<HTMLSelectElement>("[data-wiki-provider]");
+  const providerState = document.querySelector<HTMLElement>("[data-wiki-provider-state]");
+  const providerDetail = document.querySelector<HTMLElement>("[data-wiki-provider-detail]");
+  const model = document.querySelector<HTMLInputElement>("[data-wiki-model]");
+  const modelOptions = document.querySelector<HTMLDataListElement>("#wiki-model-options");
+  const effort = document.querySelector<HTMLSelectElement>("[data-wiki-effort]");
   const planHeading = document.querySelector<HTMLElement>("[data-wiki-plan-heading]");
   const commit = document.querySelector<HTMLElement>("[data-wiki-commit]");
   const ready = document.querySelector<HTMLElement>("[data-wiki-ready]");
@@ -3166,6 +3184,7 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
   const exportLink = document.querySelector<HTMLAnchorElement>("[data-wiki-export]");
   const steering = document.querySelector<HTMLElement>("[data-wiki-steering]");
   const pages = document.querySelector<HTMLElement>("[data-wiki-pages]");
+  const pageSearch = document.querySelector<HTMLInputElement>("[data-wiki-page-search]");
   const repositoryName = document.querySelector<HTMLElement>("[data-wiki-repository-name]");
   const pageTitle = document.querySelector<HTMLElement>("[data-wiki-page-title]");
   const pageStatus = document.querySelector<HTMLElement>("[data-wiki-page-status]");
@@ -3183,12 +3202,14 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
   const supportingFiles = document.querySelector<HTMLUListElement>("[data-wiki-supporting-files]");
   const citationCount = document.querySelector<HTMLElement>("[data-wiki-citation-count]");
   const citations = document.querySelector<HTMLOListElement>("[data-wiki-citations]");
+  const outline = document.querySelector<HTMLElement>("[data-wiki-outline]");
   if (
-    !workspace || !repository || !planHeading || !commit || !ready || !stale || !pending || !failed ||
+    !workspace || !repository || !provider || !providerState || !providerDetail || !model || !modelOptions ||
+    !effort || !planHeading || !commit || !ready || !stale || !pending || !failed ||
     !generateAll || !exportLink || !steering || !pages || !repositoryName || !pageTitle || !pageStatus ||
     !refreshPage || !content || !empty || !loading || !error || !errorMessage || !pageRevision ||
     !pageGenerator || !pageGenerated || !pageTokens || !supportCount || !supportingFiles ||
-    !citationCount || !citations
+    !citationCount || !citations || !outline || !pageSearch
   ) {
     return;
   }
@@ -3197,6 +3218,87 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
   let activeSlug = "";
   let requestRevision = 0;
   let generating = false;
+  let providerStatuses: ProviderStatus[] = [];
+
+  const selectedProvider = (): ProviderStatus | undefined =>
+    providerStatuses.find((status) => status.id === provider.value);
+
+  const providerReady = (): boolean => {
+    const selected = selectedProvider();
+    return Boolean(selected?.available && selected.authenticated);
+  };
+
+  const configureProvider = (): void => {
+    const selected = selectedProvider();
+    const previousEffort = effort.value;
+    model.placeholder = selected?.model_placeholder ?? "Provider default";
+    model.disabled = !selected?.authenticated;
+    modelOptions.replaceChildren();
+    for (const modelID of selected?.models ?? []) {
+      const option = document.createElement("option");
+      option.value = modelID;
+      modelOptions.append(option);
+    }
+    effort.replaceChildren();
+    const providerDefault = document.createElement("option");
+    providerDefault.value = "";
+    providerDefault.textContent = "Provider default";
+    effort.append(providerDefault);
+    for (const level of selected?.efforts ?? []) {
+      const option = document.createElement("option");
+      option.value = level;
+      option.textContent = level[0].toUpperCase() + level.slice(1);
+      effort.append(option);
+    }
+    if (previousEffort && Array.from(effort.options).some((option) => option.value === previousEffort)) {
+      effort.value = previousEffort;
+    } else if ((selected?.efforts ?? []).includes("high")) {
+      effort.value = "high";
+    }
+    effort.disabled = !selected?.authenticated || (selected.efforts ?? []).length === 0;
+    providerState.textContent = selected?.authenticated ? "Ready" : "Unavailable";
+    providerState.dataset.state = selected?.authenticated ? "ready" : "error";
+    providerDetail.textContent = selected?.authenticated
+      ? `${selected.name} runs in an isolated read-only session. Wiki work never appears in saved chats.`
+      : selected?.detail || "Choose an authenticated local provider to build this Wiki.";
+    if (site) {
+      renderSite(site);
+      refreshPage.disabled = !activeSlug || !providerReady();
+    }
+  };
+
+  const loadProviders = async (): Promise<void> => {
+    try {
+      const response = await fetch("/api/providers", {
+        cache: "no-store",
+        headers: { Accept: "application/json" }
+      });
+      if (!response.ok) {
+        throw new Error(await response.text() || `Provider request failed (${response.status})`);
+      }
+      providerStatuses = (await response.json() as { providers: ProviderStatus[] }).providers ?? [];
+      provider.replaceChildren();
+      for (const status of providerStatuses) {
+        const option = document.createElement("option");
+        option.value = status.id;
+        option.textContent = `${status.name}${status.authenticated ? " — ready" : " — login required"}`;
+        option.disabled = !status.available || !status.authenticated;
+        provider.append(option);
+      }
+      const preferred = providerStatuses.find((status) => status.id === "codex" && status.authenticated)
+        ?? providerStatuses.find((status) => status.authenticated);
+      if (preferred) {
+        provider.value = preferred.id;
+      }
+      provider.disabled = !preferred;
+      configureProvider();
+    } catch (providerError: unknown) {
+      providerState.textContent = "Unavailable";
+      providerState.dataset.state = "error";
+      providerDetail.textContent = providerError instanceof Error ? providerError.message : String(providerError);
+      debug?.add("error", "wiki.providers.failed", describeError(providerError));
+    }
+  };
 
   const setStage = (state: "content" | "empty" | "loading" | "error"): void => {
     content.hidden = state !== "content";
@@ -3214,6 +3316,54 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
     citationCount.textContent = "0";
     supportingFiles.replaceChildren();
     citations.replaceChildren();
+    const outlineEmpty = document.createElement("p");
+    outlineEmpty.textContent = "Headings appear after a page is generated.";
+    outline.replaceChildren(outlineEmpty);
+  };
+
+  const renderOutline = (): void => {
+    const headings = Array.from(content.querySelectorAll<HTMLHeadingElement>("h2, h3"));
+    outline.replaceChildren();
+    if (headings.length === 0) {
+      const message = document.createElement("p");
+      message.textContent = "This page has no navigable sections.";
+      outline.append(message);
+      return;
+    }
+    const used = new Set<string>();
+    for (const heading of headings) {
+      let id = heading.textContent
+        ?.toLowerCase()
+        .normalize("NFKD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-|-$/g, "") || "section";
+      const base = id;
+      let suffix = 2;
+      while (used.has(id)) {
+        id = `${base}-${suffix++}`;
+      }
+      used.add(id);
+      heading.id = id;
+      const link = document.createElement("a");
+      link.href = `#${id}`;
+      link.textContent = heading.textContent || "Section";
+      link.dataset.depth = heading.tagName === "H3" ? "1" : "0";
+      outline.append(link);
+    }
+  };
+
+  const bindWikiLinks = (): void => {
+    content.querySelectorAll<HTMLAnchorElement>('a[href^="./"]').forEach((link) => {
+      const target = link.getAttribute("href")?.replace(/^\.\//, "").replace(/\.md(?:#.*)?$/, "") ?? "";
+      if (!site?.pages.some((page) => page.slug === target)) {
+        return;
+      }
+      link.addEventListener("click", (event) => {
+        event.preventDefault();
+        void loadPage(target);
+      });
+    });
   };
 
   const renderProvenance = (page: WikiPage): void => {
@@ -3295,8 +3445,13 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
     refreshPage.textContent = page.status === "planned" || page.status === "error"
       ? "Generate page"
       : "Refresh page";
-    refreshPage.disabled = generating;
+    refreshPage.disabled = generating || !providerReady();
+    const location = new URL(window.location.href);
+    location.searchParams.set("repository", String(site.repository_id));
+    location.searchParams.set("page", page.slug);
+    window.history.replaceState(null, "", location);
     if (page.status !== "ready" && page.status !== "stale") {
+      resetProvenance();
       showPlannedPage(page);
       return;
     }
@@ -3321,6 +3476,8 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
         return;
       }
       renderAssistantMarkdown(content, loaded.markdown || "", debug, true);
+      bindWikiLinks();
+      renderOutline();
       renderProvenance(loaded);
       setStage("content");
       debug?.add("info", "wiki.page.loaded", {
@@ -3350,10 +3507,19 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
       button.disabled = true;
     });
     setStage("loading");
-    loading.querySelector("strong")!.textContent = slug ? "Refreshing this page" : "Generating documentation";
-    loading.querySelector("p")!.textContent = "Writing commit-pinned Markdown and validating every citation before publication.";
-    const refreshAll = !slug && site.pages.every((page) => page.status === "ready");
-    try {
+    loading.querySelector("strong")!.textContent = !site.plan_ready
+      ? "Discovering the codebase knowledge map"
+      : slug
+        ? "Generating this knowledge page"
+        : "Generating the complete Deep Wiki";
+    loading.querySelector("p")!.textContent = !site.plan_ready
+      ? "Inspecting real subsystems, flows, domain concepts, and implementation boundaries."
+      : "Reading implementation and tests, then validating diagrams and every commit-pinned citation.";
+    const refreshAll = !slug && (
+      site.plan_stale ||
+      site.pages.every((page) => page.status === "ready")
+    );
+    const requestGeneration = async (page = "", planOnly = false, refresh = false): Promise<WikiSite> => {
       const response = await fetch("/api/wiki/generate", {
         method: "POST",
         headers: {
@@ -3361,17 +3527,53 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          repository_id: site.repository_id,
-          page: slug,
-          refresh: Boolean(slug) || refreshAll
+          repository_id: site!.repository_id,
+          page,
+          refresh,
+          plan_only: planOnly,
+          provider: provider.value,
+          model: model.value.trim(),
+          effort: effort.value,
+          timeout_seconds: 600,
+          token_budget: 32000
         })
       });
       if (!response.ok) {
         throw new Error(await response.text() || `Generation failed (${response.status})`);
       }
-      site = await response.json() as WikiSite;
-      renderSite(site);
-      const selected = slug || activeSlug || site.pages[0]?.slug;
+      return await response.json() as WikiSite;
+    };
+    try {
+      if (!site.plan_ready || (site.plan_stale && !slug)) {
+        site = await requestGeneration("", true, site.plan_stale);
+        renderSite(site);
+        activeSlug = site.pages.some((page) => page.slug === activeSlug) ? activeSlug : "";
+      }
+
+      if (slug) {
+        site = await requestGeneration(slug, false, true);
+        renderSite(site);
+      } else {
+        const targets = site.pages.filter((page) =>
+          refreshAll ||
+          page.status === "planned" ||
+          page.status === "stale" ||
+          page.status === "error"
+        );
+        for (const [index, target] of targets.entries()) {
+          loading.querySelector("strong")!.textContent =
+            `Generating page ${index + 1} of ${targets.length}`;
+          loading.querySelector("p")!.textContent =
+            `${target.number} ${target.title} · completed pages remain available if this run is interrupted.`;
+          site = await requestGeneration(target.slug, false, refreshAll || target.status !== "planned");
+          renderSite(site);
+        }
+      }
+
+      const selected = site.pages.some((page) => page.slug === (slug || activeSlug))
+        ? slug || activeSlug
+        : site.pages.find((page) => page.status === "ready" || page.status === "stale")?.slug
+          ?? site.pages[0]?.slug;
       if (selected) {
         await loadPage(selected);
       }
@@ -3390,14 +3592,16 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
       generating = false;
       if (site) {
         renderSite(site);
-        refreshPage.disabled = !activeSlug;
+        refreshPage.disabled = !activeSlug || !providerReady();
       }
     }
   };
 
   const renderSite = (value: WikiSite): void => {
     site = value;
-    planHeading.textContent = `${value.pages.length} independent pages`;
+    planHeading.textContent = value.plan_ready
+      ? `${value.pages.length} code knowledge pages`
+      : "Knowledge map not built";
     commit.textContent = value.revision.slice(0, 8);
     commit.title = value.revision;
     ready.textContent = String(value.ready);
@@ -3408,10 +3612,14 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
     exportLink.href = `/api/wiki/export?repository=${value.repository_id}`;
     const exportable = value.ready + value.stale > 0;
     exportLink.setAttribute("aria-disabled", String(!exportable));
-    generateAll.disabled = generating;
+    generateAll.disabled = generating || !providerReady();
     const generateLabel = generateAll.querySelector<HTMLElement>("span");
     if (generateLabel) {
-      generateLabel.textContent = value.stale > 0
+      generateLabel.textContent = !value.plan_ready
+        ? "Build Deep Wiki"
+        : value.plan_stale
+          ? "Refresh knowledge map"
+        : value.stale > 0
         ? `Refresh ${value.stale} stale`
         : value.pending + value.failed > 0
           ? `Generate ${value.pending + value.failed} pages`
@@ -3426,15 +3634,21 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
     );
     steering.querySelector("strong")!.textContent = configured
       ? "Plan steered by .repokarta.yml"
-      : "Default documentation plan";
+      : value.plan_ready
+        ? "Repository-specific knowledge map"
+        : "Knowledge map will be discovered from code";
     steering.querySelector("p")!.textContent = configured
       ? "Reviewed repository guidance is active and revision-pinned."
-      : "Add a reviewed .repokarta.yml to include, exclude, title, or guide pages.";
+      : value.plan_ready
+        ? `${value.plan_provider || "Provider"} identified the real subsystem hierarchy at this revision.`
+        : "The selected provider will inspect architecture, flows, tests, and domain concepts before planning pages.";
 
     pages.replaceChildren();
     for (const page of value.pages) {
       const row = document.createElement("div");
       row.className = "wiki-page-row";
+      row.dataset.depth = String(page.depth || 0);
+      row.dataset.wikiSearch = `${page.number} ${page.title} ${page.summary}`.toLowerCase();
       const select = document.createElement("button");
       select.type = "button";
       select.className = "wiki-page-select";
@@ -3442,7 +3656,7 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
       select.setAttribute("aria-label", `${page.title} · ${page.status}`);
       const index = document.createElement("span");
       index.className = "wiki-page-index";
-      index.textContent = String(page.order).padStart(2, "0");
+      index.textContent = page.number || String(page.order);
       const copy = document.createElement("span");
       copy.className = "wiki-page-copy";
       const title = document.createElement("strong");
@@ -3461,9 +3675,13 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
       regenerate.title = page.status === "planned" ? `Generate ${page.title}` : `Refresh ${page.title}`;
       regenerate.setAttribute("aria-label", regenerate.title);
       regenerate.textContent = page.status === "planned" ? "+" : "↻";
-      regenerate.disabled = generating;
+      regenerate.disabled = generating || !providerReady();
       regenerate.addEventListener("click", () => void generate(page.slug));
       row.append(select, regenerate);
+      row.hidden = Boolean(
+        pageSearch.value.trim() &&
+        !row.dataset.wikiSearch.includes(pageSearch.value.trim().toLowerCase())
+      );
       pages.append(row);
     }
     updatePageSelection();
@@ -3495,7 +3713,10 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
         return;
       }
       renderSite(loaded);
-      const initial = loaded.pages.find((page) => page.status === "ready" || page.status === "stale") ?? loaded.pages[0];
+      const requestedPage = new URL(window.location.href).searchParams.get("page");
+      const initial = loaded.pages.find((page) => page.slug === requestedPage)
+        ?? loaded.pages.find((page) => page.status === "ready" || page.status === "stale")
+        ?? loaded.pages[0];
       if (initial) {
         await loadPage(initial.slug);
       }
@@ -3515,6 +3736,13 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
   };
 
   repository.addEventListener("change", () => void loadSite());
+  provider.addEventListener("change", configureProvider);
+  pageSearch.addEventListener("input", () => {
+    const query = pageSearch.value.trim().toLowerCase();
+    pages.querySelectorAll<HTMLElement>(".wiki-page-row").forEach((row) => {
+      row.hidden = Boolean(query && !row.dataset.wikiSearch?.includes(query));
+    });
+  });
   generateAll.addEventListener("click", () => void generate());
   refreshPage.addEventListener("click", () => {
     if (activeSlug) {
@@ -3527,8 +3755,14 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
     }
   });
 
+  void loadProviders();
   if (repository.options.length > 1) {
-    repository.selectedIndex = 1;
+    const requestedRepository = new URL(window.location.href).searchParams.get("repository");
+    if (requestedRepository && Array.from(repository.options).some((option) => option.value === requestedRepository)) {
+      repository.value = requestedRepository;
+    } else {
+      repository.selectedIndex = 1;
+    }
     void loadSite();
   }
 }

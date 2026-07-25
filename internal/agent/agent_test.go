@@ -503,6 +503,26 @@ func TestManagerPreservesProviderMessageBoundariesInTranscript(t *testing.T) {
 	}
 }
 
+func TestManagerRunEphemeralReturnsOnlyFinalProviderMessage(t *testing.T) {
+	store := &memoryConversationStore{}
+	manager := NewManager("", "", "", &segmentedAdapter{}).UsePersistence(store)
+	defer manager.Close()
+
+	result, err := manager.RunEphemeral(context.Background(), TurnRequest{
+		Provider: "segmented",
+		Message:  "Generate repository documentation",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Provider != "segmented" || result.Text != "Final answer." {
+		t.Fatalf("ephemeral result = %#v", result)
+	}
+	if len(store.conversations) != 0 {
+		t.Fatalf("ephemeral generation created durable conversations: %#v", store.conversations)
+	}
+}
+
 func (s *memoryConversationStore) CreateConversation(_ context.Context, conversation Conversation) error {
 	if s.conversations == nil {
 		s.conversations = make(map[string]Conversation)

@@ -10,8 +10,6 @@ import (
 
 	"github.com/spolnik/RepoKarta/internal/agent"
 	"github.com/spolnik/RepoKarta/internal/catalog"
-	"github.com/spolnik/RepoKarta/internal/docs"
-	"github.com/spolnik/RepoKarta/internal/graph"
 	_ "modernc.org/sqlite"
 )
 
@@ -282,63 +280,20 @@ func TestSyncRepositoriesCanonicalizesDuplicatesAndRemovesStaleRows(t *testing.T
 	}
 }
 
-func TestDocumentMetadataAndCitationsPersist(t *testing.T) {
+func TestFreshDatabaseDoesNotCreateWikiTables(t *testing.T) {
 	storage, err := Open(filepath.Join(t.TempDir(), "repokarta.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer storage.Close()
-	ctx := context.Background()
-	if err := storage.SyncRepositories(ctx, []catalog.Repository{{
-		Name:         "fixture",
-		Path:         filepath.Join(t.TempDir(), "fixture"),
-		HeadCommit:   "abcdef1234567890",
-		ScanState:    "ready",
-		DiscoveredAt: time.Now().UTC(),
-	}}); err != nil {
+	var count int
+	if err := storage.db.QueryRow(`
+SELECT COUNT(*)
+FROM sqlite_master
+WHERE type = 'table' AND name IN ('document_pages', 'document_citations')`).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
-	repositories, err := storage.ListRepositories(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	page := docs.Page{
-		RepositoryID:    repositories[0].ID,
-		Slug:            "overview",
-		Title:           "Overview",
-		Summary:         "Fixture summary",
-		Order:           1,
-		Status:          docs.StatusReady,
-		Revision:        "abcdef1234567890",
-		Provider:        "repokarta",
-		Model:           "structural-v1",
-		GeneratedAt:     time.Now().UTC().Truncate(time.Millisecond),
-		UpdatedAt:       time.Now().UTC().Truncate(time.Millisecond),
-		SupportingFiles: []string{"README.md"},
-		Citations: []graph.Evidence{{
-			RepositoryID: repositories[0].ID,
-			Repository:   "fixture",
-			Revision:     "abcdef1234567890",
-			Path:         "README.md",
-			Line:         1,
-			Label:        "Fixture",
-			URL:          "http://127.0.0.1:7331/source/1?rev=abcdef1234567890&path=README.md",
-		}},
-	}
-	if err := storage.SaveDocumentPage(ctx, page); err != nil {
-		t.Fatal(err)
-	}
-	pages, err := storage.ListDocumentPages(ctx, repositories[0].ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(pages) != 1 || pages[0].Slug != page.Slug || pages[0].Status != docs.StatusReady {
-		t.Fatalf("document pages = %+v", pages)
-	}
-	if len(pages[0].SupportingFiles) != 1 || pages[0].SupportingFiles[0] != "README.md" {
-		t.Fatalf("supporting files = %v", pages[0].SupportingFiles)
-	}
-	if len(pages[0].Citations) != 1 || pages[0].Citations[0].URL != page.Citations[0].URL {
-		t.Fatalf("citations = %+v", pages[0].Citations)
+	if count != 0 {
+		t.Fatalf("fresh database created %d Wiki tables; Wiki persistence must remain filesystem-only", count)
 	}
 }

@@ -166,6 +166,18 @@ type Turn struct {
 	TokenBudget int64
 }
 
+// EphemeralResult is the complete output of a provider turn that is not added
+// to the durable conversation list. It is used by repository-owned background
+// work such as knowledge-page generation.
+type EphemeralResult struct {
+	Provider     string     `json:"provider"`
+	Model        string     `json:"model,omitempty"`
+	Text         string     `json:"text"`
+	Sources      []Citation `json:"sources"`
+	InputTokens  int64      `json:"input_tokens"`
+	OutputTokens int64      `json:"output_tokens"`
+}
+
 type managedConversation struct {
 	title      string
 	provider   string
@@ -528,6 +540,109 @@ func (m *Manager) Send(ctx context.Context, request TurnRequest, emit func(Event
 		return err
 	}
 	return nil
+}
+
+// RunEphemeral executes one isolated provider turn without creating durable
+// conversation metadata or retaining a resumable provider session.
+func (m *Manager) RunEphemeral(
+	ctx context.Context,
+	request TurnRequest,
+	emit func(Event) error,
+) (EphemeralResult, error) {
+	if request.Message == "" && len(request.Images) == 0 {
+		return EphemeralResult{}, errors.New("message or image is required")
+	}
+	if err := ValidateImages(request.Images); err != nil {
+		return EphemeralResult{}, err
+	}
+	timeoutSeconds, tokenBudget, err := normalizeTurnControls(request.TimeoutSeconds, request.TokenBudget)
+	if err != nil {
+		return EphemeralResult{}, err
+	}
+	if emit == nil {
+		emit = func(Event) error { return nil }
+	}
+	conversationID, err := randomID()
+	if err != nil {
+		return EphemeralResult{}, fmt.Errorf("create ephemeral turn id: %w", err)
+	}
+	conversation, err := m.startConversation(ctx, request, conversationID)
+	if err != nil {
+		return EphemeralResult{}, err
+	}
+	session := conversation.currentSession()
+	defer session.Close()
+
+	result := EphemeralResult{
+		Provider: conversation.provider,
+		Model:    conversation.model,
+		Sources:  []Citation{},
+	}
+	turnContext, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
+	defer cancel()
+	if m.citations != nil {
+		m.citations.Clear(conversationID)
+		defer m.citations.Clear(conversationID)
+	}
+	lastSegmentID := ""
+	forward := func(event Event) error {
+		switch event.Type {
+		case EventDelta:
+			if event.SegmentID != "" && lastSegmentID != "" && event.SegmentID != lastSegmentID {
+				result.Text = ""
+			}
+			result.Text += event.Text
+			if event.SegmentID != "" {
+				lastSegmentID = event.SegmentID
+			}
+		case EventSources:
+			result.Sources = append([]Citation(nil), event.Sources...)
+		case EventUsage:
+			if event.Usage != nil {
+				result.InputTokens = event.Usage.InputTokens
+				result.OutputTokens = event.Usage.OutputTokens
+			}
+		}
+		return emit(event)
+	}
+	if err := forward(Event{
+		Type:           EventMeta,
+		ConversationID: conversationID,
+		Title:          "Ephemeral generation",
+	}); err != nil {
+		return result, err
+	}
+	if err := forward(Event{Type: EventActivity, Activity: ActivityThinking}); err != nil {
+		return result, err
+	}
+	sendError := session.Send(turnContext, Turn{
+		Message:     request.Message,
+		Images:      request.Images,
+		TokenBudget: tokenBudget,
+	}, forward)
+	if sendError == nil && m.citations != nil {
+		result.Sources = m.citations.List(conversationID)
+		if len(result.Sources) > 0 {
+			if err := emit(Event{
+				Type:           EventSources,
+				ConversationID: conversationID,
+				Sources:        result.Sources,
+			}); err != nil {
+				return result, err
+			}
+		}
+	}
+	if errors.Is(sendError, context.DeadlineExceeded) ||
+		errors.Is(turnContext.Err(), context.DeadlineExceeded) {
+		return result, fmt.Errorf("turn exceeded the %d second timeout", timeoutSeconds)
+	}
+	if sendError != nil {
+		return result, m.providerSessionError(ctx, conversation.provider, sendError)
+	}
+	if err := emit(Event{Type: EventDone, ConversationID: conversationID}); err != nil {
+		return result, err
+	}
+	return result, nil
 }
 
 // Interrupt stops the active provider turn while preserving its conversation.

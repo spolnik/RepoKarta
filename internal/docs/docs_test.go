@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -14,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spolnik/RepoKarta/internal/agent"
 	"github.com/spolnik/RepoKarta/internal/catalog"
 	"github.com/spolnik/RepoKarta/internal/graph"
 )
@@ -21,7 +23,6 @@ import (
 type memoryStorage struct {
 	mu         sync.Mutex
 	repository catalog.Repository
-	pages      map[string]Page
 }
 
 func (s *memoryStorage) RepositoryByID(_ context.Context, id int64) (catalog.Repository, error) {
@@ -39,29 +40,209 @@ func (s *memoryStorage) ListRepositories(context.Context) ([]catalog.Repository,
 	return []catalog.Repository{s.repository}, nil
 }
 
-func (s *memoryStorage) ListDocumentPages(_ context.Context, repositoryID int64) ([]Page, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	var pages []Page
-	for _, page := range s.pages {
-		if page.RepositoryID == repositoryID {
-			pages = append(pages, clonePage(page))
-		}
+type fakeKnowledgeGenerator struct {
+	results  []agent.EphemeralResult
+	requests []agent.TurnRequest
+}
+
+func (g *fakeKnowledgeGenerator) RunEphemeral(
+	_ context.Context,
+	request agent.TurnRequest,
+	_ func(agent.Event) error,
+) (agent.EphemeralResult, error) {
+	g.requests = append(g.requests, request)
+	if len(g.results) == 0 {
+		return agent.EphemeralResult{}, errors.New("no fake knowledge result")
 	}
-	return pages, nil
+	result := g.results[0]
+	g.results = g.results[1:]
+	return result, nil
 }
 
-func (s *memoryStorage) SaveDocumentPage(_ context.Context, page Page) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.pages[page.Slug] = clonePage(page)
-	return nil
+func TestProviderGroundedKnowledgePlanAndPage(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repositoryPath := initializeDocumentationRepository(t)
+	revision := commitAll(t, repositoryPath, "deep wiki fixture")
+	storage := &memoryStorage{
+		repository: catalog.Repository{
+			ID:            1,
+			Name:          "fixture",
+			Path:          repositoryPath,
+			HeadCommit:    revision,
+			IndexedCommit: revision,
+		},
+	}
+	maps, err := graph.New(storage, filepath.Join(t.TempDir(), "maps"), "http://127.0.0.1:7331")
+	if err != nil {
+		t.Fatal(err)
+	}
+	markdown, sources := fakeKnowledgeMarkdown(revision)
+	generator := &fakeKnowledgeGenerator{results: []agent.EphemeralResult{
+		{
+			Provider: "codex",
+			Model:    "provider-default",
+			Text: `<repokarta_wiki_plan>
+{"pages":[
+{"slug":"architecture-overview","title":"Architecture Overview","summary":"Explain the runtime composition, process boundaries, central services, and end-to-end request paths.","number":"1","parent_slug":"","depth":0},
+{"slug":"runtime-lifecycle","title":"Runtime Lifecycle","summary":"Trace startup, dependency construction, request serving, shutdown, and the failure paths around each stage.","number":"1.1","parent_slug":"architecture-overview","depth":1},
+{"slug":"search-and-source-intelligence","title":"Search and Source Intelligence","summary":"Explain indexing, query coordination, source retrieval, symbol lookup, and commit-pinned citation behavior.","number":"2","parent_slug":"","depth":0},
+{"slug":"search-indexing-pipeline","title":"Search Indexing Pipeline","summary":"Trace repository discovery through incremental indexing, query execution, result limits, and recovery behavior.","number":"2.1","parent_slug":"search-and-source-intelligence","depth":1},
+{"slug":"operations-and-testing","title":"Operations and Testing","summary":"Explain configuration, build and packaging paths, runtime diagnostics, test layers, and operational invariants.","number":"3","parent_slug":"","depth":0},
+{"slug":"glossary","title":"Glossary","summary":"Define repository-specific services, storage concepts, provider terms, graph facts, and citation terminology.","number":"4","parent_slug":"","depth":0}
+]}
+</repokarta_wiki_plan>`,
+		},
+		{
+			Provider:     "codex",
+			Model:        "provider-default",
+			Text:         markdown,
+			Sources:      sources,
+			InputTokens:  1200,
+			OutputTokens: 900,
+		},
+	}}
+	docsDirectory := filepath.Join(t.TempDir(), "docs")
+	service, err := New(storage, maps, docsDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.UseGenerator(generator)
+
+	bootstrap, err := service.Plan(ctx, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bootstrap.PlanReady || len(bootstrap.Pages) != 1 || bootstrap.Pages[0].Slug != "architecture-overview" {
+		t.Fatalf("bootstrap plan = %+v", bootstrap)
+	}
+
+	planned, err := service.Generate(ctx, GenerateRequest{
+		RepositoryID: 1,
+		Provider:     "codex",
+		Effort:       "high",
+		PlanOnly:     true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !planned.PlanReady || planned.PlanStale || len(planned.Pages) != 6 {
+		t.Fatalf("knowledge plan = %+v", planned)
+	}
+	runtime := pageBySlug(t, planned, "runtime-lifecycle")
+	if runtime.ParentSlug != "architecture-overview" || runtime.Depth != 1 || runtime.Number != "1.1" {
+		t.Fatalf("hierarchical page metadata = %+v", runtime)
+	}
+
+	generated, err := service.Generate(ctx, GenerateRequest{
+		RepositoryID: 1,
+		Page:         "architecture-overview",
+		Provider:     "codex",
+		Effort:       "high",
+		Refresh:      true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := pageBySlug(t, generated, "architecture-overview")
+	if page.Status != StatusReady || page.Provider != "codex" || len(page.Citations) != 4 {
+		t.Fatalf("generated knowledge page = %+v", page)
+	}
+	if err := validateKnowledgePage(page); err != nil {
+		t.Fatal(err)
+	}
+	markdownPath := filepath.Join(docsDirectory, "repository-1", "architecture-overview.md")
+	persistedMarkdown, err := os.ReadFile(markdownPath)
+	if err != nil {
+		t.Fatalf("read persisted Wiki Markdown: %v", err)
+	}
+	if string(persistedMarkdown) != markdown {
+		t.Fatalf("persisted Markdown differs from generated page")
+	}
+	manifest, err := os.ReadFile(filepath.Join(docsDirectory, "repository-1", "manifest.json"))
+	if err != nil {
+		t.Fatalf("read persisted Wiki manifest: %v", err)
+	}
+	if bytes.Contains(manifest, []byte("The runtime is assembled")) {
+		t.Fatal("Wiki Markdown was duplicated into metadata instead of remaining in the .md file")
+	}
+	if len(generator.requests) != 2 ||
+		!strings.Contains(generator.requests[0].Message, "domain concepts") ||
+		!strings.Contains(generator.requests[1].Message, "failure and recovery") {
+		t.Fatalf("generation prompts = %#v", generator.requests)
+	}
 }
 
-func clonePage(page Page) Page {
-	page.SupportingFiles = slices.Clone(page.SupportingFiles)
-	page.Citations = slices.Clone(page.Citations)
-	return page
+func fakeKnowledgeMarkdown(revision string) (string, []agent.Citation) {
+	source := func(path string, line int) agent.Citation {
+		url := fmt.Sprintf(
+			"http://127.0.0.1:7331/source/1?rev=%s&path=%s&focus=%d-%d#L%d",
+			revision,
+			path,
+			line,
+			line+4,
+			line,
+		)
+		return agent.Citation{Label: path, URL: url}
+	}
+	sources := []agent.Citation{
+		source("README.md", 1),
+		source("go.mod", 1),
+		source("cmd/fixture/main.go", 1),
+		source("internal/server/server.go", 1),
+	}
+	paragraph := "The implementation keeps construction, request coordination, durable state, and evidence boundaries explicit. Each boundary has a narrow responsibility, a commit-pinned input, and a recoverable failure path so callers can distinguish unavailable data from invalid state. "
+	markdown := fmt.Sprintf(`# Architecture Overview
+
+The runtime is assembled from small services and starts from a single command entry point. [%s](%s)
+
+## Runtime composition
+
+%s %s [%s](%s)
+
+### Dependency construction
+
+%s
+
+## Request lifecycle
+
+%s %s [%s](%s)
+
+### End-to-end flow
+
+%s
+
+`+"```mermaid\nflowchart LR\n  CLI[\"CLI\"] --> Server[\"HTTP server\"]\n  Server --> Search[\"Search service\"]\n  Search --> Source[\"Commit-pinned source\"]\n```\n"+`
+
+## State and evidence boundaries
+
+%s %s [%s](%s)
+
+### Revision invariants
+
+%s
+
+## Failures, recovery, and tests
+
+%s %s
+
+### Operational invariants
+
+%s
+
+See [Runtime Lifecycle](./runtime-lifecycle.md) and [Search and Source Intelligence](./search-and-source-intelligence.md).
+`,
+		sources[0].Label, sources[0].URL,
+		paragraph, paragraph, sources[1].Label, sources[1].URL,
+		paragraph,
+		paragraph, paragraph, sources[2].Label, sources[2].URL,
+		paragraph,
+		paragraph, paragraph, sources[3].Label, sources[3].URL,
+		paragraph,
+		paragraph, paragraph,
+		paragraph,
+	)
+	return markdown, sources
 }
 
 func TestGenerationResumeSelectiveStalenessAndExport(t *testing.T) {
@@ -77,7 +258,6 @@ func TestGenerationResumeSelectiveStalenessAndExport(t *testing.T) {
 			HeadCommit:    firstRevision,
 			IndexedCommit: firstRevision,
 		},
-		pages: make(map[string]Page),
 	}
 	maps, err := graph.New(storage, filepath.Join(t.TempDir(), "maps"), "http://127.0.0.1:7331")
 	if err != nil {
@@ -120,7 +300,7 @@ func TestGenerationResumeSelectiveStalenessAndExport(t *testing.T) {
 
 	architecture := pageBySlug(t, generated, "architecture")
 	architecture.Status = StatusGenerating
-	if err := storage.SaveDocumentPage(ctx, architecture); err != nil {
+	if err := service.savePage(architecture); err != nil {
 		t.Fatal(err)
 	}
 	recovered, err := service.Plan(ctx, 1)

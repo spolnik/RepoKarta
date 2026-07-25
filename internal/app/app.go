@@ -108,17 +108,7 @@ func Run(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return err
 	}
-	documents, err := docs.New(database, maps, filepath.Join(cfg.DataDirectory, "docs"))
-	if err != nil {
-		return err
-	}
 	citations := mcpserver.NewCitationTracker()
-	mcpHandler := mcpserver.NewHandler(mcpserver.Config{
-		Version:   cfg.Version,
-		BaseURL:   baseURL,
-		Token:     mcpToken,
-		Artifacts: mcpserver.Artifacts{Maps: maps, Documents: documents},
-	}, intelligence, citations)
 	conversations := agent.NewManager(
 		cfg.RepositoryRoot,
 		baseURL+"/mcp",
@@ -127,6 +117,17 @@ func Run(ctx context.Context, cfg Config) error {
 		&claude.Adapter{Command: cfg.ClaudeCommand},
 		&anthropicprovider.Adapter{Intelligence: intelligence, Citations: citations},
 	).UseCitations(citations).UsePersistence(database)
+	documents, err := docs.New(database, maps, filepath.Join(cfg.DataDirectory, "docs"))
+	if err != nil {
+		return err
+	}
+	documents.UseGenerator(conversations)
+	mcpHandler := mcpserver.NewHandler(mcpserver.Config{
+		Version:   cfg.Version,
+		BaseURL:   baseURL,
+		Token:     mcpToken,
+		Artifacts: mcpserver.Artifacts{Maps: maps, Documents: documents},
+	}, intelligence, citations)
 	conversations.StartIdleReaper(ctx, 30*time.Minute)
 	defer conversations.Close()
 

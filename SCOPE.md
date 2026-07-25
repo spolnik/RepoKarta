@@ -166,12 +166,17 @@ repositories on managed Windows and Apple Silicon macOS laptops.
 ### Living documentation
 
 - Generate Markdown documentation tied to a repository commit.
-- Plan pages from a deterministic structural inventory.
+- Use an isolated, read-only provider session to inspect implementation and
+  tests, then plan a repository-specific two-level knowledge hierarchy.
+- Keep deterministic structural planning as the provider-free fallback.
 - Generate pages independently so individual pages can be retried and refreshed.
 - Require source citations for architectural and behavioral claims.
-- Produce Mermaid diagrams when the evidence supports them.
+- Produce Mermaid diagrams when the evidence supports them, render them safely
+  in the Wiki, and allow full-screen zoom and SVG download.
 - Store generation status, source revision, supporting files, citations,
-  provider, model, token usage, and timestamps.
+  provider, model, token usage, and timestamps in a filesystem manifest.
+- Persist every generated Wiki page as a Markdown file outside SQLite and
+  outside the source repository.
 - Compare Git revisions to identify pages affected by a change.
 - Mark affected pages stale before regenerating them.
 - Allow repository-specific steering through a reviewed configuration file,
@@ -377,15 +382,21 @@ rendering an unreadable file-level hairball.
 
 ### M4: living documentation
 
-- [x] Deterministic documentation planning.
-- [x] Independent, resumable page generation.
+- [x] Repository-specific, provider-grounded hierarchical knowledge planning.
+- [x] Independent, resumable, page-by-page generation progress.
+- [x] Filesystem-only Markdown and manifest persistence outside SQLite.
 - [x] Source citations and Mermaid validation.
+- [x] Three-pane Deep Wiki reader with hierarchy, filtering, page outline, and
+  relevant source files.
+- [x] Full-screen Mermaid zoom and SVG download.
 - [x] Commit-aware staleness and selective regeneration.
 - [x] `.repokarta.yml` steering.
 - [x] Markdown export.
 
-Exit condition: generated documentation remains trustworthy and economical to
-refresh after normal repository changes.
+Exit condition: generated documentation explains real subsystems, flows,
+types, state, failure paths, and tests with commit-pinned evidence, while
+remaining trustworthy and economical to refresh after normal repository
+changes.
 
 ### M5: distributable local product
 

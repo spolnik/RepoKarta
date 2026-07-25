@@ -156,7 +156,7 @@ func TestDocumentationPageAPIGenerationAndExport(t *testing.T) {
 	request = httptest.NewRequest(
 		http.MethodPost,
 		"http://127.0.0.1:7331/api/wiki/generate",
-		bytes.NewBufferString(`{"repository_id":6,"page":"overview","refresh":true}`),
+		bytes.NewBufferString(`{"repository_id":6,"page":"overview","refresh":true,"provider":"codex","model":"gpt-test","effort":"high","timeout_seconds":600,"token_budget":32000}`),
 	)
 	request.Header.Set("Content-Type", "application/json")
 	response = httptest.NewRecorder()
@@ -164,7 +164,12 @@ func TestDocumentationPageAPIGenerationAndExport(t *testing.T) {
 	if response.Code != http.StatusOK ||
 		documents.generated.RepositoryID != 6 ||
 		documents.generated.Page != "overview" ||
-		!documents.generated.Refresh {
+		!documents.generated.Refresh ||
+		documents.generated.Provider != "codex" ||
+		documents.generated.Model != "gpt-test" ||
+		documents.generated.Effort != "high" ||
+		documents.generated.Timeout != 600 ||
+		documents.generated.TokenBudget != 32000 {
 		t.Fatalf("generate status = %d, request = %+v, body = %s", response.Code, documents.generated, response.Body.String())
 	}
 

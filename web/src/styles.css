@@ -4245,7 +4245,8 @@ a.brand-mark:hover,
   text-transform: uppercase;
 }
 
-.wiki-field select {
+.wiki-field select,
+.wiki-field input {
   width: 100%;
   height: 2.45rem;
   border: 1px solid rgb(148 163 184 / 0.12);
@@ -4254,6 +4255,74 @@ a.brand-mark:hover,
   background: rgb(15 23 42 / 0.58);
   color: rgb(203 213 225);
   font-size: 0.72rem;
+}
+
+.wiki-field input {
+  padding-right: 0.72rem;
+}
+
+.wiki-generation-controls {
+  margin-top: 1rem;
+  border: 1px solid rgb(167 139 250 / 0.12);
+  border-radius: 0.7rem;
+  background:
+    radial-gradient(circle at 100% 0%, rgb(139 92 246 / 0.08), transparent 9rem),
+    rgb(15 23 42 / 0.34);
+}
+
+.wiki-generation-controls > summary {
+  cursor: pointer;
+  padding: 0.75rem;
+  list-style: none;
+}
+
+.wiki-generation-controls > summary::-webkit-details-marker {
+  display: none;
+}
+
+.wiki-generation-controls > summary::after {
+  content: "›";
+  color: rgb(71 85 105);
+  font-size: 0.9rem;
+  transform: rotate(0deg);
+  transition: transform 150ms ease;
+}
+
+.wiki-generation-controls[open] > summary::after {
+  transform: rotate(90deg);
+}
+
+.wiki-generation-controls-body {
+  border-top: 1px solid rgb(167 139 250 / 0.09);
+  padding: 0.1rem 0.75rem 0.75rem;
+}
+
+.wiki-generation-controls .wiki-section-heading > span[data-state="ready"] {
+  border-color: rgb(52 211 153 / 0.18);
+  color: rgb(110 231 183);
+}
+
+.wiki-generation-controls .wiki-section-heading > span[data-state="error"] {
+  border-color: rgb(251 113 133 / 0.18);
+  color: rgb(253 164 175);
+}
+
+.wiki-field-compact {
+  margin-top: 0.65rem;
+  gap: 0.3rem;
+}
+
+.wiki-field-compact select,
+.wiki-field-compact input {
+  height: 2.1rem;
+  font-size: 0.65rem;
+}
+
+.wiki-provider-detail {
+  margin: 0.65rem 0 0;
+  color: rgb(71 85 105);
+  font-size: 0.56rem;
+  line-height: 0.9rem;
 }
 
 .wiki-plan-summary {
@@ -4451,8 +4520,8 @@ a.brand-mark:hover,
 
 .wiki-page-list {
   display: grid;
-  gap: 0.4rem;
-  margin-top: 1rem;
+  gap: 0.12rem;
+  margin-top: 0.65rem;
   border-top: 1px solid rgb(148 163 184 / 0.08);
   padding-top: 0.9rem;
 }
@@ -4460,10 +4529,27 @@ a.brand-mark:hover,
 .wiki-page-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  border: 1px solid rgb(148 163 184 / 0.08);
-  border-radius: 0.55rem;
-  background: rgb(15 23 42 / 0.28);
+  border: 0;
+  border-radius: 0.45rem;
+  background: transparent;
   overflow: hidden;
+}
+
+.wiki-page-row[hidden] {
+  display: none;
+}
+
+.wiki-page-row[data-depth="1"] {
+  margin-left: 0.85rem;
+}
+
+.wiki-page-row[data-depth="1"] .wiki-page-select {
+  padding-block: 0.42rem;
+}
+
+.wiki-page-row[data-depth="1"] .wiki-page-copy strong {
+  color: rgb(148 163 184);
+  font-weight: 560;
 }
 
 .wiki-page-select,
@@ -4485,6 +4571,7 @@ a.brand-mark:hover,
 
 .wiki-page-select:hover,
 .wiki-page-select[aria-current="page"] {
+  border-radius: 0.45rem;
   background: rgb(16 185 129 / 0.065);
   color: rgb(226 232 240);
 }
@@ -4534,7 +4621,7 @@ a.brand-mark:hover,
 
 .wiki-page-generate {
   width: 2.2rem;
-  border-left: 1px solid rgb(148 163 184 / 0.07);
+  border-left: 0;
   color: rgb(71 85 105);
   font-size: 0.85rem;
 }
@@ -4546,6 +4633,26 @@ a.brand-mark:hover,
 
 .wiki-page-generate:disabled {
   opacity: 0.35;
+}
+
+.wiki-page-search {
+  display: block;
+  margin-top: 0.9rem;
+}
+
+.wiki-page-search input {
+  width: 100%;
+  height: 2.15rem;
+  border: 1px solid rgb(148 163 184 / 0.1);
+  border-radius: 0.5rem;
+  padding: 0 0.65rem;
+  background: rgb(15 23 42 / 0.34);
+  color: rgb(203 213 225);
+  font-size: 0.64rem;
+}
+
+.wiki-page-search input::placeholder {
+  color: rgb(71 85 105);
 }
 
 .wiki-stage {
@@ -4674,7 +4781,7 @@ a.brand-mark:hover,
 }
 
 .wiki-markdown {
-  width: min(100%, 54rem);
+  width: min(100%, 58rem);
   margin: 0 auto;
   padding: 3rem clamp(1.25rem, 4vw, 3.5rem) 6rem;
   color: rgb(184 196 211);
@@ -4696,6 +4803,24 @@ a.brand-mark:hover,
   color: rgb(226 232 240);
   font-size: 1.15rem;
   letter-spacing: -0.025em;
+}
+
+.wiki-markdown h3 {
+  margin-top: 1.8rem;
+  color: rgb(203 213 225);
+  font-size: 0.96rem;
+  letter-spacing: -0.015em;
+}
+
+.wiki-markdown a {
+  color: rgb(110 231 183);
+  text-decoration-color: rgb(52 211 153 / 0.32);
+  text-underline-offset: 0.18em;
+}
+
+.wiki-markdown a:hover {
+  color: rgb(167 243 208);
+  text-decoration-color: currentColor;
 }
 
 .wiki-markdown table {
@@ -4813,6 +4938,42 @@ a.brand-mark:hover,
   line-height: 0.9rem;
 }
 
+.wiki-outline {
+  display: grid;
+  gap: 0.18rem;
+  margin-top: 1rem;
+  border-top: 1px solid rgb(148 163 184 / 0.08);
+  padding-top: 0.8rem;
+}
+
+.wiki-outline p {
+  margin: 0;
+  color: rgb(71 85 105);
+  font-size: 0.6rem;
+  line-height: 1rem;
+}
+
+.wiki-outline a {
+  border-left: 1px solid rgb(148 163 184 / 0.1);
+  padding: 0.32rem 0.45rem;
+  color: rgb(100 116 139);
+  font-size: 0.62rem;
+  line-height: 0.95rem;
+  text-decoration: none;
+}
+
+.wiki-outline a[data-depth="1"] {
+  padding-left: 1rem;
+  color: rgb(71 85 105);
+  font-size: 0.57rem;
+}
+
+.wiki-outline a:hover {
+  border-left-color: rgb(52 211 153 / 0.6);
+  background: rgb(16 185 129 / 0.035);
+  color: rgb(167 243 208);
+}
+
 .wiki-supporting-files,
 .wiki-citations {
   margin-top: 1.15rem;
@@ -4827,6 +4988,13 @@ a.brand-mark:hover,
   margin: 0.65rem 0 0;
   padding: 0;
   list-style: none;
+}
+
+.wiki-supporting-files ul {
+  max-height: 14rem;
+  overflow-y: auto;
+  scrollbar-color: rgb(51 65 85 / 0.6) transparent;
+  scrollbar-width: thin;
 }
 
 .wiki-supporting-files li {
