@@ -1148,7 +1148,9 @@ func (b *builder) addJavaStructure(
 	sort.Strings(paths)
 	components, routeCount := 0, 0
 	for _, filePath := range paths {
-		content := contents[filePath]
+		// Documentation and license headers must not create routes or service
+		// relationships, so annotations and URLs are read from code only.
+		content := stripJavaComments(contents[filePath])
 		routes := springRoutes(content)
 		clientTargets := springClientTargets(content)
 		if len(routes) == 0 && len(clientTargets) == 0 {
@@ -1252,6 +1254,9 @@ type springRoute struct {
 }
 
 func springRoutes(content []byte) []springRoute {
+	// Idempotent: callers may pass raw or already-stripped source. Annotations
+	// named in documentation or commented out are not served routes.
+	content = stripJavaComments(content)
 	if declarativeClientType.Match(content) {
 		return nil
 	}
@@ -1360,6 +1365,9 @@ type springClientTarget struct {
 // (Feign, WebClient, RestClient, RestTemplate, or an HTTP interface proxy), so
 // license headers and XML namespaces never become service relationships.
 func springClientTargets(content []byte) []springClientTarget {
+	// Idempotent, and it keeps license URLs in headers out of service calls
+	// while preserving URLs written in string literals.
+	content = stripJavaComments(content)
 	byName := make(map[string]springClientTarget)
 	for _, match := range feignClientPattern.FindAllSubmatchIndex(content, -1) {
 		arguments := string(content[match[2]:match[3]])
@@ -1927,4 +1935,78 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// stripJavaComments blanks line and block comments in Java and Kotlin source
+// while preserving every byte offset and line break, so annotations mentioned
+// in documentation never become routes or service calls and extracted evidence
+// keeps exact line numbers. String and character literals are preserved, so a
+// URL such as "http://inventory-service" is still visible to client detection.
+func stripJavaComments(content []byte) []byte {
+	const (
+		code = iota
+		lineComment
+		blockComment
+		stringLiteral
+		charLiteral
+		rawStringLiteral
+	)
+	output := make([]byte, len(content))
+	copy(output, content)
+	state := code
+	for index := 0; index < len(content); index++ {
+		character := content[index]
+		switch state {
+		case code:
+			switch {
+			case character == '/' && index+1 < len(content) && content[index+1] == '/':
+				state = lineComment
+				output[index], output[index+1] = ' ', ' '
+				index++
+			case character == '/' && index+1 < len(content) && content[index+1] == '*':
+				state = blockComment
+				output[index], output[index+1] = ' ', ' '
+				index++
+			case character == '"' && bytes.HasPrefix(content[index:], []byte(`"""`)):
+				state = rawStringLiteral
+				index += 2
+			case character == '"':
+				state = stringLiteral
+			case character == '\'':
+				state = charLiteral
+			}
+		case lineComment:
+			if character == '\n' {
+				state = code
+				continue
+			}
+			output[index] = ' '
+		case blockComment:
+			if character == '*' && index+1 < len(content) && content[index+1] == '/' {
+				output[index], output[index+1] = ' ', ' '
+				index++
+				state = code
+				continue
+			}
+			if character != '\n' && character != '\r' {
+				output[index] = ' '
+			}
+		case stringLiteral, charLiteral:
+			if character == '\\' && index+1 < len(content) {
+				index++
+				continue
+			}
+			if (state == stringLiteral && character == '"') ||
+				(state == charLiteral && character == '\'') ||
+				character == '\n' {
+				state = code
+			}
+		case rawStringLiteral:
+			if character == '"' && bytes.HasPrefix(content[index:], []byte(`"""`)) {
+				index += 2
+				state = code
+			}
+		}
+	}
+	return output
 }

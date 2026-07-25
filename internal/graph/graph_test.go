@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -674,5 +675,58 @@ func TestCollectionSnapshotIsBoundedAndReportsTruncation(t *testing.T) {
 	if len(single.Repositories) != 1 || single.Truncated {
 		t.Fatalf("single repository snapshot = %d repositories, truncated=%v",
 			len(single.Repositories), single.Truncated)
+	}
+}
+
+func TestExtractionIgnoresCommentsButKeepsStringLiterals(t *testing.T) {
+	content := []byte(`/*
+ * Licensed under the Apache License, Version 2.0
+ * http://www.apache.org/licenses/LICENSE-2.0
+ */
+package com.acme.payment;
+
+@RestController
+@RequestMapping("/payments")
+public class PaymentController {
+
+	/**
+	 * Called before each and every @RequestMapping annotated method.
+	 * See also @GetMapping("/documented-but-not-real").
+	 */
+	void helper() {}
+
+	// @DeleteMapping("/commented-out")
+	@GetMapping("/{id}")
+	public String get() { return "ok"; }
+
+	WebClient client() {
+		// the base URL below is real code, not a comment
+		return WebClient.builder().baseUrl("http://inventory-service:8080").build();
+	}
+}
+`)
+	labels := make([]string, 0)
+	for _, route := range springRoutes(content) {
+		labels = append(labels, route.label)
+	}
+	if !slices.Equal(labels, []string{"GET /payments/{id}"}) {
+		t.Fatalf("routes = %v; documented or commented-out annotations must not count", labels)
+	}
+
+	targets := make([]string, 0)
+	for _, target := range springClientTargets(content) {
+		targets = append(targets, target.name)
+	}
+	if !slices.Equal(targets, []string{"inventory-service"}) {
+		t.Fatalf("client targets = %v; a URL in a string literal must survive and a license URL must not", targets)
+	}
+
+	// Byte offsets must be preserved so evidence keeps exact line numbers.
+	stripped := stripJavaComments(content)
+	if len(stripped) != len(content) {
+		t.Fatalf("stripped length %d, want %d", len(stripped), len(content))
+	}
+	if bytes.Count(stripped, []byte("\n")) != bytes.Count(content, []byte("\n")) {
+		t.Fatal("comment stripping changed the line count")
 	}
 }
