@@ -299,6 +299,7 @@ let mermaidLoader: Promise<MermaidAPI> | undefined;
 let mermaidRenderQueue: Promise<void> = Promise.resolve();
 let mermaidDiagramID = 0;
 const markdownRenderRevisions = new WeakMap<HTMLElement, number>();
+const mermaidDiagramSources = new WeakMap<HTMLElement, string>();
 
 function describeError(error: unknown): Record<string, unknown> {
   if (error instanceof Error) {
@@ -545,6 +546,10 @@ async function renderMermaidDiagram(
     canvas.innerHTML = result.svg;
     canvas.classList.remove("mermaid-diagram-loading");
     canvas.setAttribute("aria-label", `${result.diagramType} diagram`);
+    const expand = canvas.parentElement?.querySelector<HTMLButtonElement>("[data-mermaid-expand]");
+    if (expand) {
+      expand.disabled = false;
+    }
     debug?.add("info", "chat.diagram.rendered", {
       index,
       type: result.diagramType,
@@ -607,6 +612,22 @@ function renderAssistantMarkdown(
       const source = code.textContent ?? "";
       const figure = document.createElement("figure");
       figure.className = "mermaid-diagram";
+      mermaidDiagramSources.set(figure, source);
+      const toolbar = document.createElement("div");
+      toolbar.className = "mermaid-diagram-toolbar";
+      const expand = document.createElement("button");
+      expand.type = "button";
+      expand.className = "mermaid-diagram-expand";
+      expand.disabled = true;
+      expand.setAttribute("data-mermaid-expand", "");
+      expand.setAttribute("aria-label", "Expand diagram");
+      expand.innerHTML = `
+        <svg viewBox="0 0 20 20" aria-hidden="true">
+          <path d="M7.5 3.5h-4v4M12.5 3.5h4v4M16.5 12.5v4h-4M7.5 16.5h-4v-4"></path>
+        </svg>
+        <span>Expand</span>
+      `;
+      toolbar.append(expand);
       const canvas = document.createElement("div");
       canvas.className = "mermaid-diagram-canvas mermaid-diagram-loading";
       canvas.setAttribute("role", "img");
@@ -617,7 +638,7 @@ function renderAssistantMarkdown(
       const sourceSummary = document.createElement("summary");
       sourceSummary.textContent = "View Mermaid source";
       sourceDetails.append(sourceSummary, pre.cloneNode(true));
-      figure.append(canvas, sourceDetails);
+      figure.append(toolbar, canvas, sourceDetails);
       pre.replaceWith(figure);
       mermaidRenderQueue = mermaidRenderQueue.then(
         () => renderMermaidDiagram(target, canvas, source, revision, index + 1, debug)
@@ -639,6 +660,152 @@ function renderAssistantMarkdown(
     duration_ms: Math.round(duration)
   });
   return duration;
+}
+
+function enableMermaidViewer(debug?: DebugLogger): void {
+  const dialog = document.querySelector<HTMLDialogElement>("#mermaid-viewer");
+  const canvas = dialog?.querySelector<HTMLElement>("[data-mermaid-viewer-canvas]");
+  const stage = dialog?.querySelector<HTMLElement>("[data-mermaid-viewer-stage]");
+  const title = dialog?.querySelector<HTMLElement>("[data-mermaid-viewer-title]");
+  const status = dialog?.querySelector<HTMLElement>("[data-mermaid-viewer-status]");
+  const zoomSelect = dialog?.querySelector<HTMLSelectElement>("[data-mermaid-zoom]");
+  const zoomOut = dialog?.querySelector<HTMLButtonElement>("[data-mermaid-zoom-out]");
+  const zoomIn = dialog?.querySelector<HTMLButtonElement>("[data-mermaid-zoom-in]");
+  const close = dialog?.querySelector<HTMLButtonElement>("[data-mermaid-viewer-close]");
+  if (!dialog || !canvas || !stage || !title || !status || !zoomSelect || !zoomOut || !zoomIn || !close) {
+    return;
+  }
+
+  const zoomLevels = [50, 75, 100, 125, 150, 200];
+  let intrinsicWidth = 1200;
+  let viewerRequest = 0;
+
+  const updateZoomButtons = (): void => {
+    const zoom = Number.parseInt(zoomSelect.value, 10);
+    zoomOut.disabled = zoomSelect.value !== "fit" && zoom <= zoomLevels[0];
+    zoomIn.disabled = zoomSelect.value !== "fit" && zoom >= zoomLevels[zoomLevels.length - 1];
+  };
+
+  const applyZoom = (value: string, announce = true): void => {
+    const svg = canvas.querySelector<SVGSVGElement>("svg");
+    if (!svg) {
+      return;
+    }
+    if (value === "fit") {
+      canvas.style.width = `min(100%, ${Math.ceil(intrinsicWidth)}px)`;
+      status.textContent = "Fit to window";
+    } else {
+      const zoom = Number.parseInt(value, 10);
+      if (!Number.isFinite(zoom)) {
+        return;
+      }
+      canvas.style.width = `${Math.max(1, Math.round(intrinsicWidth * zoom / 100))}px`;
+      status.textContent = `${zoom}% zoom`;
+    }
+    zoomSelect.value = value;
+    stage.scrollTo({ left: 0, top: 0, behavior: "instant" });
+    updateZoomButtons();
+    if (announce) {
+      debug?.add("info", "chat.diagram.viewer.zoomed", { zoom: value });
+    }
+  };
+
+  const stepZoom = (direction: -1 | 1): void => {
+    if (zoomSelect.value === "fit") {
+      applyZoom(direction > 0 ? "100" : "75");
+      return;
+    }
+    const current = Number.parseInt(zoomSelect.value, 10);
+    const currentIndex = Math.max(0, zoomLevels.indexOf(current));
+    const nextIndex = Math.min(zoomLevels.length - 1, Math.max(0, currentIndex + direction));
+    applyZoom(String(zoomLevels[nextIndex]));
+  };
+
+  const openViewer = async (figure: HTMLElement): Promise<void> => {
+    const source = mermaidDiagramSources.get(figure);
+    if (!source) {
+      return;
+    }
+    const request = ++viewerRequest;
+    const embeddedCanvas = figure.querySelector<HTMLElement>(".mermaid-diagram-canvas");
+    title.textContent = embeddedCanvas?.getAttribute("aria-label") ?? "Mermaid diagram";
+    status.textContent = "Rendering full-resolution diagram…";
+    canvas.className = "mermaid-viewer-canvas mermaid-viewer-canvas-loading";
+    canvas.style.removeProperty("width");
+    canvas.textContent = "Rendering diagram…";
+    zoomSelect.value = "fit";
+    zoomSelect.disabled = true;
+    zoomOut.disabled = true;
+    zoomIn.disabled = true;
+    if (!dialog.open) {
+      dialog.showModal();
+    }
+
+    const started = performance.now();
+    let result: Awaited<ReturnType<MermaidAPI["render"]>> | undefined;
+    let renderError: unknown;
+    const render = async (): Promise<void> => {
+      try {
+        const mermaid = await loadMermaid();
+        result = await mermaid.render(`repokarta-mermaid-viewer-${++mermaidDiagramID}`, source);
+      } catch (error: unknown) {
+        renderError = error;
+      }
+    };
+    mermaidRenderQueue = mermaidRenderQueue.then(render, render);
+    await mermaidRenderQueue;
+    if (request !== viewerRequest || !dialog.open) {
+      return;
+    }
+    if (!result || renderError) {
+      canvas.className = "mermaid-viewer-canvas mermaid-viewer-canvas-error";
+      canvas.textContent = "This diagram could not be opened. Try the embedded view or inspect its Mermaid source.";
+      status.textContent = "Unable to render";
+      debug?.add("warn", "chat.diagram.viewer.render-failed", {
+        error_type: renderError instanceof Error ? renderError.name : "UnknownError"
+      });
+      return;
+    }
+
+    canvas.innerHTML = result.svg;
+    canvas.className = "mermaid-viewer-canvas";
+    const svg = canvas.querySelector<SVGSVGElement>("svg");
+    const viewBox = svg?.viewBox.baseVal;
+    const declaredWidth = Number.parseFloat(svg?.getAttribute("width") ?? "");
+    intrinsicWidth = viewBox?.width || declaredWidth || Math.max(svg?.getBoundingClientRect().width ?? 0, 1200);
+    zoomSelect.disabled = false;
+    applyZoom("fit", false);
+    debug?.add("info", "chat.diagram.viewer.opened", {
+      type: result.diagramType,
+      intrinsic_width: Math.round(intrinsicWidth),
+      duration_ms: Math.round(performance.now() - started)
+    });
+  };
+
+  document.addEventListener("click", (event) => {
+    const button = (event.target as Element | null)?.closest<HTMLButtonElement>("[data-mermaid-expand]");
+    if (!button || button.disabled) {
+      return;
+    }
+    const figure = button.closest<HTMLElement>(".mermaid-diagram");
+    if (figure) {
+      void openViewer(figure);
+    }
+  });
+  zoomSelect.addEventListener("change", () => applyZoom(zoomSelect.value));
+  zoomOut.addEventListener("click", () => stepZoom(-1));
+  zoomIn.addEventListener("click", () => stepZoom(1));
+  close.addEventListener("click", () => dialog.close());
+  dialog.addEventListener("click", (event) => {
+    if (event.target === dialog) {
+      dialog.close();
+    }
+  });
+  dialog.addEventListener("close", () => {
+    viewerRequest += 1;
+    canvas.replaceChildren();
+    canvas.style.removeProperty("width");
+  });
 }
 
 type StreamingRenderMetrics = {
@@ -2189,6 +2356,7 @@ highlightSource();
 focusSourceLine();
 highlightSearchResults();
 const debugLogger = enableDebugLogger();
+enableMermaidViewer(debugLogger);
 enableConversations(debugLogger);
 
 document.body.addEventListener("htmx:afterSwap", (event) => {

@@ -349,6 +349,54 @@
       <ol id="debug-entries" class="debug-entries" aria-live="polite"></ol>
       <p class="debug-empty" data-debug-empty>No diagnostics yet.</p>
     </aside>
+
+    <dialog id="mermaid-viewer" class="mermaid-viewer" aria-labelledby="mermaid-viewer-title">
+      <div class="mermaid-viewer-shell">
+        <header class="mermaid-viewer-header">
+          <div class="mermaid-viewer-heading">
+            <p>Diagram viewer</p>
+            <h2 id="mermaid-viewer-title" data-mermaid-viewer-title>Mermaid diagram</h2>
+          </div>
+          <div class="mermaid-viewer-controls" aria-label="Diagram zoom controls">
+            <button type="button" data-mermaid-zoom-out aria-label="Zoom out" title="Zoom out">
+              <svg viewBox="0 0 20 20" aria-hidden="true">
+                <path d="M5 10h10"></path>
+              </svg>
+            </button>
+            <label class="mermaid-viewer-zoom">
+              <span class="sr-only">Diagram zoom</span>
+              <select data-mermaid-zoom aria-label="Diagram zoom">
+                <option value="fit">Fit</option>
+                <option value="50">50%</option>
+                <option value="75">75%</option>
+                <option value="100">100%</option>
+                <option value="125">125%</option>
+                <option value="150">150%</option>
+                <option value="200">200%</option>
+              </select>
+            </label>
+            <button type="button" data-mermaid-zoom-in aria-label="Zoom in" title="Zoom in">
+              <svg viewBox="0 0 20 20" aria-hidden="true">
+                <path d="M5 10h10M10 5v10"></path>
+              </svg>
+            </button>
+            <span class="mermaid-viewer-divider" aria-hidden="true"></span>
+            <button type="button" class="mermaid-viewer-close" data-mermaid-viewer-close aria-label="Close diagram viewer" title="Close">
+              <svg viewBox="0 0 20 20" aria-hidden="true">
+                <path d="m5 5 10 10M15 5 5 15"></path>
+              </svg>
+            </button>
+          </div>
+        </header>
+        <div class="mermaid-viewer-stage" data-mermaid-viewer-stage>
+          <div class="mermaid-viewer-canvas" data-mermaid-viewer-canvas></div>
+        </div>
+        <footer class="mermaid-viewer-footer">
+          <span data-mermaid-viewer-status>Fit to window</span>
+          <span>Vector quality · scroll to explore · Esc to close</span>
+        </footer>
+      </div>
+    </dialog>
   </body>
 </html>
 {{end}}
