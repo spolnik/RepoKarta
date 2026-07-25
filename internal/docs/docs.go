@@ -575,10 +575,17 @@ func (s *Service) Generate(ctx context.Context, request GenerateRequest) (Site, 
 			generated, generateErr = generatePage(*page, site, snapshot)
 		}
 		if generateErr == nil {
-			generateErr = validateGeneratedPage(generated, site.Revision)
+			validationErr := validateGeneratedPage(generated, site.Revision)
+			if validationErr != nil && s.generator != nil {
+				generateErr = fmt.Errorf("%w: %s", ErrGenerationRejected, validationErr)
+			} else {
+				generateErr = validationErr
+			}
 		}
 		if generateErr == nil && s.generator != nil {
-			generateErr = validateKnowledgePage(generated)
+			if validationErr := validateKnowledgePage(generated); validationErr != nil {
+				generateErr = fmt.Errorf("%w: %s", ErrGenerationRejected, validationErr)
+			}
 		}
 		if generateErr == nil {
 			generateErr = s.writeMarkdown(generated)
@@ -1700,7 +1707,7 @@ func knowledgePagePrompt(page Page, site Site, survey string) string {
 	wordTarget := "750-1,200 words"
 	sectionTarget := "three to five"
 	toolBudget := 6
-	diagramRule := "Include a Mermaid diagram only when it materially clarifies this page."
+	diagramRule := "Do not include a Mermaid diagram; the Architecture Overview owns the Wiki's system diagram."
 	citationRule := "Use at least three exact citations across at least two distinct implementation or configuration files."
 	if page.Slug == "architecture-overview" {
 		wordTarget = "600-900 words"
@@ -1714,7 +1721,9 @@ func knowledgePagePrompt(page Page, site Site, survey string) string {
 		citationRule = "Use at least two exact citations across at least two distinct repository files."
 		diagramRule = "Define only repository-specific or genuinely ambiguous terms. Omit general industry " +
 			"vocabulary, near-synonyms, and terms already clear from their names. Use 8-12 entries, one short " +
-			"definition each, and do not include a Mermaid diagram."
+			"definition each. Definitions identify what a term means in this repository; they do not summarize " +
+			"subsystem behavior or make absence, uncertainty, coverage, or limitation claims. Omit any term whose " +
+			"definition is not established by the saved survey. Do not include a Mermaid diagram."
 	}
 	return fmt.Sprintf(`Write the DeepWiki-quality page %q for repository %q at exact commit %s.
 

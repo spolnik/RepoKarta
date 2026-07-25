@@ -870,10 +870,24 @@ func TestPagePromptReusesSurveyAndAppliesCompactWritingBudget(t *testing.T) {
 		t.Fatalf("glossary output budget = %d, want 2500", budget)
 	}
 	glossaryPrompt := knowledgePagePrompt(glossary, site, "# Repository Survey\n\nSaved evidence.")
-	for _, expected := range []string{"8-12 entries", "Omit general industry vocabulary"} {
+	for _, expected := range []string{
+		"8-12 entries",
+		"Omit general industry vocabulary",
+		"do not summarize subsystem behavior",
+		"make absence, uncertainty, coverage, or limitation claims",
+	} {
 		if !strings.Contains(glossaryPrompt, expected) {
 			t.Fatalf("glossary prompt does not contain %q:\n%s", expected, glossaryPrompt)
 		}
+	}
+
+	runtimePrompt := knowledgePagePrompt(
+		Page{Slug: "runtime", Title: "Runtime", Summary: "Explain the runtime lifecycle."},
+		site,
+		"# Repository Survey\n\nSaved evidence.",
+	)
+	if !strings.Contains(runtimePrompt, "Do not include a Mermaid diagram") {
+		t.Fatalf("focused page prompt still invites redundant diagrams:\n%s", runtimePrompt)
 	}
 }
 
