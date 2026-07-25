@@ -1021,6 +1021,10 @@ func writeDocumentationError(response http.ResponseWriter, err error) {
 		writeAPIError(response, http.StatusNotFound, errors.New("documentation page was not found"))
 	case errors.Is(err, docs.ErrInvalidKnowledgePreset):
 		writeAPIError(response, http.StatusUnprocessableEntity, err)
+	case errors.Is(err, docs.ErrNothingToExport):
+		// An empty Wiki is a normal state, not a server failure, and the
+		// caller needs the actual reason.
+		writeAPIError(response, http.StatusConflict, err)
 	case strings.Contains(err.Error(), ".repokarta.yml"):
 		writeAPIError(response, http.StatusUnprocessableEntity, err)
 	default:

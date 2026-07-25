@@ -55,6 +55,7 @@ const (
 var (
 	errPageNotFound           = errors.New("documentation page not found")
 	errInvalidKnowledgePreset = errors.New("invalid Deep Wiki quality preset")
+	errNothingToExport        = errors.New("generate at least one page before exporting")
 	mermaidBlock              = regexp.MustCompile("(?s)```mermaid[ \t]*\n(.*?)```")
 	mermaidFence              = regexp.MustCompile("(?m)^```mermaid[ \t]*$")
 	knowledgeSlug             = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
@@ -67,6 +68,10 @@ var ErrPageNotFound = errPageNotFound
 // ErrInvalidKnowledgePreset indicates a provider/model/effort combination
 // below the minimum quality floor for repository-wide knowledge generation.
 var ErrInvalidKnowledgePreset = errInvalidKnowledgePreset
+
+// ErrNothingToExport reports that no page has been generated yet. This is a
+// normal empty state rather than a server failure.
+var ErrNothingToExport = errNothingToExport
 
 // Storage supplies repository catalogue access. Wiki artifacts are persisted
 // as files beneath the documentation directory, never in the application DB.
@@ -612,7 +617,7 @@ func (s *Service) Export(ctx context.Context, repositoryID int64) ([]byte, strin
 	}
 	if exported == 0 {
 		archive.Close()
-		return nil, "", errors.New("generate at least one page before exporting")
+		return nil, "", errNothingToExport
 	}
 	indexWriter, err := archive.Create("README.md")
 	if err != nil {

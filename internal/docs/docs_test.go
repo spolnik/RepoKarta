@@ -662,3 +662,36 @@ func TestGenerationControlsAreClampedToProviderLimits(t *testing.T) {
 		}
 	}
 }
+
+func TestExportReportsAnEmptyWikiAsARecoverableState(t *testing.T) {
+	t.Parallel()
+	repositoryPath := initializeDocumentationRepository(t)
+	revision := commitAll(t, repositoryPath, "initial")
+	storage := &memoryStorage{
+		repository: catalog.Repository{
+			ID:            1,
+			Name:          "fixture",
+			Path:          repositoryPath,
+			HeadCommit:    revision,
+			IndexedCommit: revision,
+		},
+	}
+	maps, err := graph.New(storage, filepath.Join(t.TempDir(), "maps"), "http://127.0.0.1:7331")
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := New(storage, maps, filepath.Join(t.TempDir(), "docs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Nothing has been generated, so exporting is a normal empty state that
+	// must name its own reason rather than surface as an opaque failure.
+	_, _, err = service.Export(context.Background(), 1)
+	if !errors.Is(err, ErrNothingToExport) {
+		t.Fatalf("empty export error = %v, want ErrNothingToExport", err)
+	}
+	if !strings.Contains(err.Error(), "generate at least one page") {
+		t.Fatalf("empty export message = %q", err.Error())
+	}
+}
