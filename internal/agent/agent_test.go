@@ -24,6 +24,7 @@ func (a *fakeAdapter) Status(context.Context) Status {
 		Name:          a.id,
 		Available:     true,
 		Authenticated: true,
+		Models:        []ModelOption{{ID: "test-model", Label: "Test Model"}},
 		Efforts:       []string{"low", "high"},
 	}
 }
@@ -167,7 +168,7 @@ func TestManagerAppliesTurnTimeoutAndTokenBudget(t *testing.T) {
 	if err := manager.Send(context.Background(), TurnRequest{
 		Provider:       "test",
 		Message:        "bounded",
-		TimeoutSeconds: 45,
+		TimeoutSeconds: 300,
 		TokenBudget:    2222,
 	}, func(Event) error { return nil }); err != nil {
 		t.Fatal(err)
@@ -176,8 +177,8 @@ func TestManagerAppliesTurnTimeoutAndTokenBudget(t *testing.T) {
 	if len(session.turns) != 1 || session.turns[0].TokenBudget != 2222 {
 		t.Fatalf("turn budget = %#v", session.turns)
 	}
-	if len(session.deadlines) != 1 || session.deadlines[0] < 44*time.Second ||
-		session.deadlines[0] > 45*time.Second {
+	if len(session.deadlines) != 1 || session.deadlines[0] < 299*time.Second ||
+		session.deadlines[0] > 300*time.Second {
 		t.Fatalf("turn deadline = %v", session.deadlines)
 	}
 	for _, request := range []TurnRequest{
@@ -202,6 +203,24 @@ func TestManagerRejectsUnsupportedEffort(t *testing.T) {
 	}, func(Event) error { return nil })
 	if err == nil {
 		t.Fatal("expected unsupported effort error")
+	}
+	if adapter.started != 0 {
+		t.Fatalf("provider started %d sessions, want 0", adapter.started)
+	}
+}
+
+func TestManagerRejectsModelOutsideHarnessCatalog(t *testing.T) {
+	adapter := &fakeAdapter{id: "test"}
+	manager := NewManager("", "", "", adapter)
+	defer manager.Close()
+
+	err := manager.Send(context.Background(), TurnRequest{
+		Provider: "test",
+		Model:    "invented-model",
+		Message:  "hello",
+	}, func(Event) error { return nil })
+	if err == nil || !strings.Contains(err.Error(), "does not support model") {
+		t.Fatalf("model validation error = %v", err)
 	}
 	if adapter.started != 0 {
 		t.Fatalf("provider started %d sessions, want 0", adapter.started)

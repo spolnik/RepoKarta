@@ -196,8 +196,9 @@
                     </label>
                     <label class="conversation-control">
                       <span>Model</span>
-                      <input id="conversation-model" name="model" list="conversation-model-options" maxlength="200" placeholder="Provider default" autocomplete="off" disabled>
-                      <datalist id="conversation-model-options"></datalist>
+                      <select id="conversation-model" name="model" disabled>
+                        <option value="">Choose a model</option>
+                      </select>
                     </label>
                     <div class="conversation-settings-grid">
                       <label class="conversation-control">
@@ -209,14 +210,19 @@
                       <label class="conversation-control">
                         <span>Timeout</span>
                         <select id="conversation-timeout" name="timeout">
-                          <option value="60">1 min</option>
-                          <option value="180" selected>3 min</option>
                           <option value="300">5 min</option>
                           <option value="600">10 min</option>
+                          <option value="900">15 min</option>
+                          <option value="1800" selected>30 min</option>
+                          <option value="2700">45 min</option>
+                          <option value="3600">60 min</option>
                         </select>
                       </label>
-                      <label class="conversation-control">
-                        <span>Output budget</span>
+                      <label class="conversation-control" data-token-budget-field hidden>
+                        <span class="conversation-control-heading">
+                          Output budget
+                          <button type="button" class="conversation-help-button" data-token-budget-help aria-label="What is output budget?">?</button>
+                        </span>
                         <select id="conversation-token-budget" name="token_budget">
                           <option value="4000">4k</option>
                           <option value="12000" selected>12k</option>
@@ -313,7 +319,7 @@
             <ul class="conversation-repository-list">
               {{range .Repositories}}
               <li>
-                <span>{{.Name}}</span>
+                <span>{{index $.RepositoryLabels .ID}}</span>
                 <strong class="status-{{.IndexState}}">{{statusLabel .IndexState}}</strong>
               </li>
               {{else}}
@@ -349,6 +355,16 @@
       <ol id="debug-entries" class="debug-entries" aria-live="polite"></ol>
       <p class="debug-empty" data-debug-empty>No diagnostics yet.</p>
     </aside>
+
+    <dialog id="token-budget-help" class="settings-help-dialog" aria-labelledby="token-budget-help-title">
+      <div class="settings-help-card">
+        <p>Provider limit</p>
+        <h2 id="token-budget-help-title">What is output budget?</h2>
+        <p>The Anthropic API requires a maximum number of tokens it may generate for one turn. This is a ceiling, not a target or a context-window limit. Higher values allow longer answers but may use more API tokens.</p>
+        <p>Local Codex and Claude Code harnesses manage this themselves, so RepoKarta hides this control for those providers.</p>
+        <button type="button" data-token-budget-help-close>Got it</button>
+      </div>
+    </dialog>
 
     <dialog id="mermaid-viewer" class="mermaid-viewer" aria-labelledby="mermaid-viewer-title">
       <div class="mermaid-viewer-shell">

@@ -29,7 +29,7 @@
           <select data-wiki-repository>
             <option value="">Choose a repository</option>
             {{range .Repositories}}
-            <option value="{{.ID}}">{{.Name}}</option>
+            <option value="{{.ID}}">{{index $.RepositoryLabels .ID}}</option>
             {{end}}
           </select>
         </label>
@@ -59,6 +59,29 @@
               <span>Reasoning effort</span>
               <select data-wiki-effort disabled>
                 <option value="">Provider default</option>
+              </select>
+            </label>
+            <label class="wiki-field wiki-field-compact">
+              <span>Checkpoint timeout</span>
+              <select data-wiki-timeout>
+                <option value="300">5 min</option>
+                <option value="600">10 min</option>
+                <option value="900">15 min</option>
+                <option value="1800" selected>30 min</option>
+                <option value="2700">45 min</option>
+                <option value="3600">60 min</option>
+              </select>
+            </label>
+            <label class="wiki-field wiki-field-compact" data-wiki-token-budget-field hidden>
+              <span>
+                Output budget
+                <button type="button" class="conversation-help-button" data-token-budget-help aria-label="What is output budget?">?</button>
+              </span>
+              <select data-wiki-token-budget>
+                <option value="4000">4k</option>
+                <option value="12000">12k</option>
+                <option value="32000" selected>32k</option>
+                <option value="64000">64k</option>
               </select>
             </label>
             <p class="wiki-provider-detail" data-wiki-provider-detail>Wiki generation uses an isolated session and never creates a saved chat.</p>
@@ -188,6 +211,16 @@
         </section>
       </aside>
     </main>
+
+    <dialog id="token-budget-help" class="settings-help-dialog" aria-labelledby="token-budget-help-title">
+      <div class="settings-help-card">
+        <p>Provider limit</p>
+        <h2 id="token-budget-help-title">What is output budget?</h2>
+        <p>The Anthropic API requires a maximum number of tokens it may generate for one turn. This is a ceiling, not a target or a context-window limit. Higher values allow longer pages but may use more API tokens.</p>
+        <p>Local Codex and Claude Code harnesses manage this themselves, so RepoKarta hides this control for those providers.</p>
+        <button type="button" data-token-budget-help-close>Got it</button>
+      </div>
+    </dialog>
 
     <dialog id="mermaid-viewer" class="mermaid-viewer" aria-labelledby="mermaid-viewer-title">
       <div class="mermaid-viewer-shell">

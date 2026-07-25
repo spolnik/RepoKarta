@@ -21,6 +21,7 @@ import (
 
 const providerInstructions = `You are RepoKarta's read-only code intelligence assistant.
 Answer questions about the indexed repositories using only the RepoKarta MCP tools and image attachments explicitly included in the user's turn.
+Ignore personal memory, prior project context, and facts not returned by RepoKarta tools in this session.
 Search before drawing conclusions, open the relevant source, and distinguish evidence from inference.
 Use git_log and git_diff for history questions, then open relevant historical source at the exact returned revision.
 Every material code claim must cite the source_url returned by a RepoKarta tool.
@@ -36,15 +37,19 @@ func (a *Adapter) ID() string { return "claude" }
 
 func (a *Adapter) Status(ctx context.Context) agent.Status {
 	status := agent.Status{
-		ID:               a.ID(),
-		Name:             "Anthropic Claude",
-		Models:           []string{"sonnet", "opus"},
-		ModelPlaceholder: "sonnet, opus, or full model ID",
-		Efforts:          []string{"low", "medium", "high", "xhigh", "max"},
-		ImageInput:       true,
-		ImageOutput:      false,
-		Interrupt:        true,
-		ContextUsage:     true,
+		ID:   a.ID(),
+		Name: "Anthropic Claude",
+		Models: []agent.ModelOption{
+			{ID: "fable", Label: "Fable 5"},
+			{ID: "claude-opus-4-8", Label: "Opus 4.8"},
+			{ID: "sonnet", Label: "Sonnet 5"},
+			{ID: "opus", Label: "Opus 5"},
+		},
+		Efforts:      []string{"low", "medium", "high", "xhigh", "max"},
+		ImageInput:   true,
+		ImageOutput:  false,
+		Interrupt:    true,
+		ContextUsage: true,
 	}
 	command, err := localcommand.Resolve(a.Command, "claude")
 	if err != nil {
@@ -106,7 +111,10 @@ func (a *Adapter) Start(ctx context.Context, config agent.SessionConfig) (agent.
 	arguments := commandArguments(config, string(mcpConfig), attachments.Directory())
 
 	process := exec.CommandContext(context.WithoutCancel(ctx), command, arguments...)
-	process.Dir = config.RepositoryRoot
+	// Run from the attachment sandbox rather than a repository or user project
+	// directory. Combined with empty setting sources, this prevents personal or
+	// project Claude memory from contaminating evidence-grounded answers.
+	process.Dir = attachments.Directory()
 	stdin, err := process.StdinPipe()
 	if err != nil {
 		_ = attachments.Close()
@@ -149,6 +157,9 @@ func commandArguments(config agent.SessionConfig, mcpConfig, attachmentDirectory
 		"--verbose",
 		"--strict-mcp-config",
 		"--mcp-config", mcpConfig,
+		"--setting-sources", "",
+		"--settings", "{}",
+		"--exclude-dynamic-system-prompt-sections",
 		"--permission-mode", "plan",
 		"--disallowed-tools", "Bash", "Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch",
 		"--system-prompt", providerInstructions,

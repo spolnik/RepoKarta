@@ -22,6 +22,7 @@ import (
 
 const providerInstructions = `You are RepoKarta's read-only code intelligence assistant.
 Answer questions about the indexed repositories using only the RepoKarta MCP tools and image attachments explicitly included in the user's turn.
+Ignore personal memory, prior project context, and facts not returned by RepoKarta tools in this session.
 Search before drawing conclusions, open the relevant source, and distinguish evidence from inference.
 Use git_log and git_diff for history questions, then open relevant historical source at the exact returned revision.
 Every material code claim must cite the source_url returned by a RepoKarta tool.
@@ -37,15 +38,18 @@ func (a *Adapter) ID() string { return "codex" }
 
 func (a *Adapter) Status(ctx context.Context) agent.Status {
 	status := agent.Status{
-		ID:               a.ID(),
-		Name:             "OpenAI Codex",
-		Models:           []string{"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"},
-		ModelPlaceholder: "Codex model ID or provider default",
-		Efforts:          []string{"minimal", "low", "medium", "high", "xhigh", "max", "ultra"},
-		ImageInput:       true,
-		ImageOutput:      true,
-		Interrupt:        true,
-		ContextUsage:     true,
+		ID:   a.ID(),
+		Name: "OpenAI Codex",
+		Models: []agent.ModelOption{
+			{ID: "gpt-5.6-sol", Label: "gpt-5.6-sol"},
+			{ID: "gpt-5.6-terra", Label: "gpt-5.6-terra"},
+			{ID: "gpt-5.6-luna", Label: "gpt-5.6-luna"},
+		},
+		Efforts:      []string{"minimal", "low", "medium", "high", "xhigh", "max", "ultra"},
+		ImageInput:   true,
+		ImageOutput:  true,
+		Interrupt:    true,
+		ContextUsage: true,
 	}
 	command, err := localcommand.Resolve(a.Command, "codex")
 	if err != nil {
@@ -131,7 +135,9 @@ func startSession(ctx context.Context, command string, config agent.SessionConfi
 		"-c", `mcp_servers.repokarta.bearer_token_env_var="REPOKARTA_MCP_BEARER_TOKEN"`,
 	}
 	process := exec.CommandContext(context.WithoutCancel(ctx), command, arguments...)
-	process.Dir = config.RepositoryRoot
+	// Keep the harness outside every indexed repository. RepoKarta source is
+	// available only through the authenticated read-only MCP surface.
+	process.Dir = attachments.Directory()
 	process.Env = append(os.Environ(), "REPOKARTA_MCP_BEARER_TOKEN="+config.MCPToken)
 	stdin, err := process.StdinPipe()
 	if err != nil {
@@ -183,7 +189,7 @@ func startSession(ctx context.Context, command string, config agent.SessionConfi
 	}
 
 	params := map[string]any{
-		"cwd":                   config.RepositoryRoot,
+		"cwd":                   attachments.Directory(),
 		"approvalPolicy":        "never",
 		"sandbox":               "read-only",
 		"developerInstructions": providerInstructions,

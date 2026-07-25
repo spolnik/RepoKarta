@@ -48,8 +48,9 @@ var (
 )
 
 const (
-	DefaultTurnTimeoutSeconds = 180
-	MaximumTurnTimeoutSeconds = 600
+	MinimumTurnTimeoutSeconds = 300
+	DefaultTurnTimeoutSeconds = 1_800
+	MaximumTurnTimeoutSeconds = 3_600
 	DefaultTokenBudget        = 12_000
 	MaximumTokenBudget        = 64_000
 )
@@ -90,22 +91,28 @@ type Event struct {
 	Usage          *Usage        `json:"usage,omitempty"`
 }
 
+// ModelOption is one curated model exposed by a provider harness. ID is sent
+// to the harness while Label is the stable human-readable name shown in the UI.
+type ModelOption struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+}
+
 // Status describes whether a local provider harness is usable.
 type Status struct {
-	ID               string   `json:"id"`
-	Name             string   `json:"name"`
-	Available        bool     `json:"available"`
-	Authenticated    bool     `json:"authenticated"`
-	Detail           string   `json:"detail,omitempty"`
-	Models           []string `json:"models,omitempty"`
-	ModelPlaceholder string   `json:"model_placeholder,omitempty"`
-	Efforts          []string `json:"efforts,omitempty"`
-	ImageInput       bool     `json:"image_input"`
-	ImageOutput      bool     `json:"image_output"`
-	Interrupt        bool     `json:"interrupt"`
-	ContextUsage     bool     `json:"context_usage"`
-	TokenUsage       bool     `json:"token_usage"`
-	TokenBudget      bool     `json:"token_budget"`
+	ID            string        `json:"id"`
+	Name          string        `json:"name"`
+	Available     bool          `json:"available"`
+	Authenticated bool          `json:"authenticated"`
+	Detail        string        `json:"detail,omitempty"`
+	Models        []ModelOption `json:"models,omitempty"`
+	Efforts       []string      `json:"efforts,omitempty"`
+	ImageInput    bool          `json:"image_input"`
+	ImageOutput   bool          `json:"image_output"`
+	Interrupt     bool          `json:"interrupt"`
+	ContextUsage  bool          `json:"context_usage"`
+	TokenUsage    bool          `json:"token_usage"`
+	TokenBudget   bool          `json:"token_budget"`
 }
 
 // SessionConfig is shared by all provider adapters.
@@ -754,6 +761,14 @@ func (m *Manager) startConversation(ctx context.Context, request TurnRequest, co
 	if request.Effort != "" && !contains(status.Efforts, request.Effort) {
 		return nil, fmt.Errorf("%s does not support effort %q", status.Name, request.Effort)
 	}
+	if len(status.Models) > 0 {
+		if strings.TrimSpace(request.Model) == "" {
+			request.Model = status.Models[0].ID
+		}
+		if !containsModel(status.Models, request.Model) {
+			return nil, fmt.Errorf("%s does not support model %q", status.Name, request.Model)
+		}
+	}
 	session, err := adapter.Start(ctx, SessionConfig{
 		ConversationID: conversationID,
 		Model:          request.Model,
@@ -918,9 +933,10 @@ func normalizeTurnControls(timeoutSeconds int, tokenBudget int64) (int, int64, e
 	if timeoutSeconds == 0 {
 		timeoutSeconds = DefaultTurnTimeoutSeconds
 	}
-	if timeoutSeconds < 1 || timeoutSeconds > MaximumTurnTimeoutSeconds {
+	if timeoutSeconds < MinimumTurnTimeoutSeconds || timeoutSeconds > MaximumTurnTimeoutSeconds {
 		return 0, 0, fmt.Errorf(
-			"timeout_seconds must be from 1 to %d",
+			"timeout_seconds must be from %d to %d",
+			MinimumTurnTimeoutSeconds,
 			MaximumTurnTimeoutSeconds,
 		)
 	}
@@ -934,4 +950,17 @@ func normalizeTurnControls(timeoutSeconds int, tokenBudget int64) (int, int64, e
 		)
 	}
 	return timeoutSeconds, tokenBudget, nil
+}
+
+func containsModel(models []ModelOption, model string) bool {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return false
+	}
+	for _, candidate := range models {
+		if candidate.ID == model {
+			return true
+		}
+	}
+	return false
 }

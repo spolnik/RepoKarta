@@ -3732,6 +3732,34 @@ a.brand-mark:hover,
   text-transform: uppercase;
 }
 
+.conversation-control-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.32rem;
+}
+
+.conversation-help-button {
+  display: inline-grid;
+  width: 1rem;
+  height: 1rem;
+  place-items: center;
+  border: 1px solid rgb(148 163 184 / 0.2);
+  border-radius: 999px;
+  color: rgb(148 163 184);
+  font-family: var(--font-sans);
+  font-size: 0.58rem;
+  font-weight: 700;
+  line-height: 1;
+  text-transform: none;
+  transition: 150ms ease;
+}
+
+.conversation-help-button:hover {
+  border-color: rgb(52 211 153 / 0.36);
+  background: rgb(16 185 129 / 0.08);
+  color: rgb(167 243 208);
+}
+
 .conversation-control select,
 .conversation-control input {
   width: 100%;
@@ -3750,6 +3778,61 @@ a.brand-mark:hover,
 
 .conversation-image-support-detail:empty {
   display: none;
+}
+
+.settings-help-dialog {
+  width: min(30rem, calc(100vw - 2rem));
+  margin: auto;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+}
+
+.settings-help-dialog::backdrop {
+  background: rgb(2 6 12 / 0.76);
+  backdrop-filter: blur(5px);
+}
+
+.settings-help-card {
+  border: 1px solid rgb(52 211 153 / 0.2);
+  border-radius: 0.9rem;
+  padding: 1.1rem;
+  background: rgb(12 15 20 / 0.99);
+  box-shadow: 0 28px 90px rgb(0 0 0 / 0.62);
+}
+
+.settings-help-card > p:first-child {
+  color: rgb(52 211 153);
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+.settings-help-card h2 {
+  margin-top: 0.2rem;
+  color: rgb(241 245 249);
+  font-size: 1rem;
+  font-weight: 680;
+}
+
+.settings-help-card p:not(:first-child) {
+  margin-top: 0.7rem;
+  color: rgb(148 163 184);
+  font-size: 0.72rem;
+  line-height: 1.2rem;
+}
+
+.settings-help-card button {
+  margin-top: 1rem;
+  border: 1px solid rgb(52 211 153 / 0.22);
+  border-radius: 0.55rem;
+  padding: 0.48rem 0.72rem;
+  background: rgb(16 185 129 / 0.1);
+  color: rgb(167 243 208);
+  font-size: 0.68rem;
+  font-weight: 650;
 }
 
 .conversation-shortcut {

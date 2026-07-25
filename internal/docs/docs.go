@@ -39,14 +39,17 @@ const (
 	maximumKnowledgePages = 30
 	minimumKnowledgePages = 6
 	gitCommandTimeout     = 20 * time.Second
-	StatusPlanned         = "planned"
-	StatusGenerating      = "generating"
-	StatusReady           = "ready"
-	StatusStale           = "stale"
-	StatusError           = "error"
-	deterministicProvider = "repokarta"
-	deterministicModel    = "structural-v1"
-	knowledgeModel        = "deep-wiki-v2"
+	// defaultGenerationBudget applies only to providers that translate an
+	// output budget into a real request limit.
+	defaultGenerationBudget = 32_000
+	StatusPlanned           = "planned"
+	StatusGenerating        = "generating"
+	StatusReady             = "ready"
+	StatusStale             = "stale"
+	StatusError             = "error"
+	deterministicProvider   = "repokarta"
+	deterministicModel      = "structural-v1"
+	knowledgeModel          = "deep-wiki-v2"
 )
 
 var (
@@ -1380,18 +1383,34 @@ func sourceLine(focus string) int {
 	return line
 }
 
+// generationTimeout clamps a requested checkpoint timeout into the range the
+// agent manager accepts, so a stale or hand-edited request cannot ask for a
+// checkpoint shorter than one useful provider turn.
 func generationTimeout(value int) int {
-	if value <= 0 {
+	switch {
+	case value <= 0:
+		return agent.DefaultTurnTimeoutSeconds
+	case value < agent.MinimumTurnTimeoutSeconds:
+		return agent.MinimumTurnTimeoutSeconds
+	case value > agent.MaximumTurnTimeoutSeconds:
 		return agent.MaximumTurnTimeoutSeconds
+	default:
+		return value
 	}
-	return value
 }
 
+// generationBudget clamps the requested per-checkpoint output ceiling. Only
+// providers that map it to a real request limit send a value; the rest fall
+// back to a Wiki-sized default.
 func generationBudget(value int64) int64 {
-	if value <= 0 {
-		return 32_000
+	switch {
+	case value <= 0:
+		return defaultGenerationBudget
+	case value > agent.MaximumTokenBudget:
+		return agent.MaximumTokenBudget
+	default:
+		return value
 	}
-	return value
 }
 
 func providerModel(value string) string {

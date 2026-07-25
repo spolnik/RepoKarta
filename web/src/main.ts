@@ -95,6 +95,24 @@ function enableCopyButtons(): void {
   });
 }
 
+function enableTokenBudgetHelp(): void {
+  const dialog = document.querySelector<HTMLDialogElement>("#token-budget-help");
+  const close = dialog?.querySelector<HTMLButtonElement>("[data-token-budget-help-close]");
+  const triggers = Array.from(document.querySelectorAll<HTMLButtonElement>("[data-token-budget-help]"));
+  if (!dialog || !close || triggers.length === 0) {
+    return;
+  }
+  for (const trigger of triggers) {
+    trigger.addEventListener("click", () => dialog.showModal());
+  }
+  close.addEventListener("click", () => dialog.close());
+  dialog.addEventListener("click", (event) => {
+    if (event.target === dialog) {
+      dialog.close();
+    }
+  });
+}
+
 function highlightSource(): void {
   document.querySelectorAll<HTMLElement>("code[data-highlight-language]").forEach((element) => {
     hljs.highlightElement(element);
@@ -264,8 +282,7 @@ type ProviderStatus = {
   available: boolean;
   authenticated: boolean;
   detail?: string;
-  models?: string[];
-  model_placeholder?: string;
+  models?: Array<{ id: string; label: string }>;
   efforts?: string[];
   image_input: boolean;
   image_output: boolean;
@@ -1294,11 +1311,11 @@ function enableConversations(debug?: DebugLogger): void {
   const messages = document.querySelector<HTMLElement>("#conversation-messages");
   const empty = document.querySelector<HTMLElement>("[data-conversation-empty]");
   const provider = document.querySelector<HTMLSelectElement>("#conversation-provider");
-  const model = document.querySelector<HTMLInputElement>("#conversation-model");
-  const modelOptions = document.querySelector<HTMLDataListElement>("#conversation-model-options");
+  const model = document.querySelector<HTMLSelectElement>("#conversation-model");
   const effort = document.querySelector<HTMLSelectElement>("#conversation-effort");
   const timeout = document.querySelector<HTMLSelectElement>("#conversation-timeout");
   const tokenBudget = document.querySelector<HTMLSelectElement>("#conversation-token-budget");
+  const tokenBudgetField = document.querySelector<HTMLElement>("[data-token-budget-field]");
   const input = document.querySelector<HTMLTextAreaElement>("#conversation-message");
   const imageInput = document.querySelector<HTMLInputElement>("#conversation-image-input");
   const attachButton = document.querySelector<HTMLButtonElement>("[data-image-attach]");
@@ -1338,10 +1355,10 @@ function enableConversations(debug?: DebugLogger): void {
     !messages ||
     !provider ||
     !model ||
-    !modelOptions ||
     !effort ||
     !timeout ||
     !tokenBudget ||
+    !tokenBudgetField ||
     !input ||
     !imageInput ||
     !attachButton ||
@@ -1675,14 +1692,17 @@ function enableConversations(debug?: DebugLogger): void {
     const status = statuses.find((candidate) => candidate.id === provider.value);
     const preferences = providerPreferences.get(provider.value);
 
-    model.value = preferences?.model ?? "";
-    model.placeholder = status?.model_placeholder ?? "Provider default";
-    modelOptions.replaceChildren();
-    for (const modelID of status?.models ?? []) {
+    model.replaceChildren();
+    for (const modelOption of status?.models ?? []) {
       const option = document.createElement("option");
-      option.value = modelID;
-      modelOptions.append(option);
+      option.value = modelOption.id;
+      option.textContent = modelOption.label;
+      model.append(option);
     }
+    const modelIDs = (status?.models ?? []).map((candidate) => candidate.id);
+    model.value = modelIDs.includes(preferences?.model ?? "")
+      ? preferences?.model ?? ""
+      : modelIDs[0] ?? "";
 
     effort.replaceChildren();
     const defaultEffort = document.createElement("option");
@@ -1702,6 +1722,7 @@ function enableConversations(debug?: DebugLogger): void {
     effort.disabled = !ready || Boolean(conversationID) || !status?.efforts?.length;
     timeout.disabled = busy || !ready;
     tokenBudget.disabled = busy || !ready || !status?.token_budget;
+    tokenBudgetField.hidden = !status?.token_budget;
     detail.textContent = status?.detail ?? "Choose an authenticated local provider.";
     configureImageControls();
     if (!conversationID) {
@@ -2079,7 +2100,7 @@ function enableConversations(debug?: DebugLogger): void {
     });
 
   provider.addEventListener("change", configureProvider);
-  model.addEventListener("input", syncConversationChrome);
+  model.addEventListener("change", syncConversationChrome);
   attachButton.addEventListener("click", () => imageInput.click());
   imageInput.addEventListener("change", () => {
     void addImageFiles(Array.from(imageInput.files ?? []));
@@ -2303,7 +2324,7 @@ function enableConversations(debug?: DebugLogger): void {
           message: question,
           images: requestImages,
           timeout_seconds: Number.parseInt(timeout.value, 10),
-          token_budget: Number.parseInt(tokenBudget.value, 10)
+          token_budget: providerStatus?.token_budget ? Number.parseInt(tokenBudget.value, 10) : 0
         })
       });
       debug?.add(response.ok ? "info" : "warn", "chat.response.received", {
@@ -2577,6 +2598,7 @@ function enableRepositoryMaps(debug?: DebugLogger): void {
   let activeView = "all";
   let loadRevision = 0;
   let sharedDependencyIDs = new Set<string>();
+  let currentRepositoryCount = 0;
 
   const selectedRepositoryQuery = (): string => repository.value ? `repository=${encodeURIComponent(repository.value)}` : "";
 
@@ -2690,9 +2712,9 @@ function enableRepositoryMaps(debug?: DebugLogger): void {
       return;
     }
     const allowedKinds: Record<string, Set<string>> = {
-      packages: new Set(["repository", "package", "manifest", "entrypoint"]),
-      dependencies: new Set(["repository", "package", "dependency"]),
-      routes: new Set(["repository", "package", "entrypoint", "route"])
+      packages: new Set(["repository", "package", "manifest", "entrypoint", "component"]),
+      dependencies: new Set(["repository", "package", "manifest", "dependency"]),
+      routes: new Set(["repository", "package", "entrypoint", "component", "route"])
     };
     const allowed = allowedKinds[activeView];
     const query = search.value.trim().toLocaleLowerCase();
@@ -2700,7 +2722,9 @@ function enableRepositoryMaps(debug?: DebugLogger): void {
       graph?.nodes().forEach((node) => {
         const kind = String(node.data("kind"));
         const kindVisible = activeView === "all"
-          ? kind === "repository" || (kind === "dependency" && sharedDependencyIDs.has(node.id()))
+          ? kind === "repository" ||
+            (kind === "dependency" && sharedDependencyIDs.has(node.id())) ||
+            (currentRepositoryCount === 1 && ["entrypoint", "component", "route", "manifest"].includes(kind))
           : !allowed || allowed.has(kind);
         node.toggleClass("map-hidden", !kindVisible);
         const matches = !query ||
@@ -2713,7 +2737,11 @@ function enableRepositoryMaps(debug?: DebugLogger): void {
         const endpointsVisible =
           !edge.source().hasClass("map-hidden") &&
           !edge.target().hasClass("map-hidden") &&
-          (activeView === "all" ? Boolean(edge.data("system")) : !edge.data("system"));
+          (activeView === "all"
+            ? Boolean(edge.data("system")) ||
+              edge.data("kind") === "service_call" ||
+              currentRepositoryCount === 1
+            : !edge.data("system"));
         edge.toggleClass("map-hidden", !endpointsVisible);
         edge.toggleClass(
           "map-search-muted",
@@ -2780,6 +2808,7 @@ function enableRepositoryMaps(debug?: DebugLogger): void {
   const renderGraph = async (value: MapSnapshot): Promise<void> => {
     const { default: cytoscape } = await import("cytoscape");
     const nodeByID = new Map(value.nodes.map((node) => [node.id, node]));
+    currentRepositoryCount = value.repositories.length;
     const initialColumns = Math.max(1, Math.ceil(Math.sqrt(value.nodes.length)));
     const dependencyRepositories = new Map<string, Map<number, MapEvidence[]>>();
     for (const edge of value.edges) {
@@ -2914,6 +2943,15 @@ function enableRepositoryMaps(debug?: DebugLogger): void {
           }
         },
         {
+          selector: "node.component",
+          style: {
+            "background-color": "#164e63",
+            "border-color": "#22d3ee",
+            shape: "round-rectangle",
+            color: "#cffafe"
+          }
+        },
+        {
           selector: "node.route",
           style: {
             "background-color": "#451a03",
@@ -2967,6 +3005,15 @@ function enableRepositoryMaps(debug?: DebugLogger): void {
           style: {
             "line-color": "#d97706",
             "target-arrow-color": "#fbbf24"
+          }
+        },
+        {
+          selector: "edge[kind = 'service_call']",
+          style: {
+            width: 2,
+            "line-color": "#ec4899",
+            "target-arrow-color": "#f472b6",
+            "line-style": "dashed"
           }
         },
         {
@@ -3177,6 +3224,9 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
   const providerDetail = document.querySelector<HTMLElement>("[data-wiki-provider-detail]");
   const model = document.querySelector<HTMLSelectElement>("[data-wiki-model]");
   const effort = document.querySelector<HTMLSelectElement>("[data-wiki-effort]");
+  const timeout = document.querySelector<HTMLSelectElement>("[data-wiki-timeout]");
+  const tokenBudget = document.querySelector<HTMLSelectElement>("[data-wiki-token-budget]");
+  const tokenBudgetField = document.querySelector<HTMLElement>("[data-wiki-token-budget-field]");
   const planHeading = document.querySelector<HTMLElement>("[data-wiki-plan-heading]");
   const commit = document.querySelector<HTMLElement>("[data-wiki-commit]");
   const ready = document.querySelector<HTMLElement>("[data-wiki-ready]");
@@ -3211,7 +3261,7 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
   const outline = document.querySelector<HTMLElement>("[data-wiki-outline]");
   if (
     !workspace || !repository || !provider || !providerState || !providerDetail || !model ||
-    !effort || !planHeading || !commit || !ready || !stale || !pending || !failed ||
+    !effort || !timeout || !tokenBudget || !tokenBudgetField || !planHeading || !commit || !ready || !stale || !pending || !failed ||
     !generateAll || !exportLink || !steering || !pages || !repositoryName || !pageTitle || !pageStatus ||
     !refreshPage || !content || !empty || !loading || !error || !errorMessage || !pageRevision ||
     !pageGenerator || !pageGenerated || !pageTokens || !supportCount || !supportingFiles ||
@@ -3233,6 +3283,10 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
   const selectedProvider = (): ProviderStatus | undefined =>
     providerStatuses.find((status) => status.id === provider.value);
 
+  const selectedModelLabel = (): string =>
+    selectedProvider()?.models?.find((candidate) => candidate.id === model.value)?.label
+      ?? model.value;
+
   const providerReady = (): boolean => {
     const selected = selectedProvider();
     return Boolean(
@@ -3243,16 +3297,58 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
     );
   };
 
+  // Wiki runs are long, so the chosen engine and checkpoint limits are kept
+  // between visits. Only non-secret select values are stored.
+  const runSettingsStorageKey = "repokarta:wiki-run-settings:v1";
+  type WikiRunSettings = {
+    provider?: string;
+    model?: string;
+    effort?: string;
+    timeout?: string;
+    token_budget?: string;
+  };
+  const readRunSettings = (): WikiRunSettings => {
+    try {
+      const stored = window.localStorage.getItem(runSettingsStorageKey);
+      return stored ? JSON.parse(stored) as WikiRunSettings : {};
+    } catch {
+      return {};
+    }
+  };
+  const applyStoredValue = (element: HTMLSelectElement, value: unknown): boolean => {
+    if (typeof value !== "string" || !value) {
+      return false;
+    }
+    if (!Array.from(element.options).some((option) => option.value === value)) {
+      return false;
+    }
+    element.value = value;
+    return true;
+  };
+  const persistRunSettings = (): void => {
+    try {
+      window.localStorage.setItem(runSettingsStorageKey, JSON.stringify({
+        provider: provider.value,
+        model: model.value,
+        effort: effort.value,
+        timeout: timeout.value,
+        token_budget: tokenBudget.value
+      }));
+    } catch {
+      // Wiki controls keep their defaults when local storage is unavailable.
+    }
+  };
+
   const configureProvider = (): void => {
     const selected = selectedProvider();
     const previousModel = model.value;
     const previousEffort = effort.value;
-    model.disabled = !selected?.authenticated;
+    model.disabled = !selected?.authenticated || generating;
     model.replaceChildren();
-    for (const modelID of selected?.models ?? []) {
+    for (const modelOption of selected?.models ?? []) {
       const option = document.createElement("option");
-      option.value = modelID;
-      option.textContent = modelID;
+      option.value = modelOption.id;
+      option.textContent = modelOption.label;
       model.append(option);
     }
     const recommendedModels: Record<string, string> = {
@@ -3260,14 +3356,15 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
       claude: "opus",
       "anthropic-api": "claude-opus-5"
     };
-    const modelIDs = selected?.models ?? [];
+    const modelIDs = (selected?.models ?? []).map((candidate) => candidate.id);
+    const stored = readRunSettings();
     if (
       configuredProvider === selected?.id &&
       previousModel &&
       modelIDs.includes(previousModel)
     ) {
       model.value = previousModel;
-    } else {
+    } else if (!(stored.provider === selected?.id && applyStoredValue(model, stored.model))) {
       const recommended = selected ? recommendedModels[selected.id] : "";
       model.value = recommended && modelIDs.includes(recommended)
         ? recommended
@@ -3286,14 +3383,19 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
     }
     if (previousEffort && Array.from(effort.options).some((option) => option.value === previousEffort)) {
       effort.value = previousEffort;
-    } else if (wikiEfforts.includes("high")) {
+    } else if (!(stored.provider === selected?.id && applyStoredValue(effort, stored.effort))
+      && wikiEfforts.includes("high")) {
       effort.value = "high";
     }
-    effort.disabled = !selected?.authenticated || wikiEfforts.length === 0;
+    effort.disabled = !selected?.authenticated || generating || wikiEfforts.length === 0;
+    provider.disabled = generating || providerStatuses.every((status) => !status.authenticated);
+    timeout.disabled = !selected?.authenticated || generating;
+    tokenBudgetField.hidden = !selected?.token_budget;
+    tokenBudget.disabled = !selected?.authenticated || generating || !selected?.token_budget;
     providerState.textContent = selected?.authenticated ? "Ready" : "Unavailable";
     providerState.dataset.state = selected?.authenticated ? "ready" : "error";
     providerDetail.textContent = selected?.authenticated
-      ? `${model.value} · ${effort.value || "high"} effort · isolated read-only checkpoints; Wiki work never appears in saved chats.`
+      ? `${selectedModelLabel()} · ${effort.value || "high"} effort · isolated read-only checkpoints; Wiki work never appears in saved chats.`
       : selected?.detail || "Choose an authenticated local provider to build this Wiki.";
     if (site) {
       renderSite(site);
@@ -3363,7 +3465,7 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
     cancelGeneration.textContent = "Cancel";
     const updateElapsed = (): void => {
       generationElapsed.textContent =
-        `${formatElapsed(Date.now() - startedAt)} elapsed · 10:00 timeout`;
+        `${formatElapsed(Date.now() - startedAt)} elapsed · ${formatElapsed(Number.parseInt(timeout.value, 10) * 1000)} timeout`;
     };
     updateElapsed();
     generationTimer = window.setInterval(updateElapsed, 1000);
@@ -3580,6 +3682,9 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
     generationAbort = new AbortController();
     generateAll.disabled = true;
     refreshPage.disabled = true;
+    // Engine choices are locked in for the life of a run so resumed
+    // checkpoints keep the model, effort, and limits they started with.
+    configureProvider();
     pages.querySelectorAll<HTMLButtonElement>("[data-wiki-generate-page]").forEach((button) => {
       button.disabled = true;
     });
@@ -3611,8 +3716,8 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
           provider: provider.value,
           model: model.value,
           effort: effort.value,
-          timeout_seconds: 600,
-          token_budget: 32000
+          timeout_seconds: Number.parseInt(timeout.value, 10),
+          token_budget: selectedProvider()?.token_budget ? Number.parseInt(tokenBudget.value, 10) : 0
         })
       });
       if (!response.ok) {
@@ -3696,6 +3801,7 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
     } finally {
       generating = false;
       endGenerationProgress();
+      configureProvider();
       if (cancelled) {
         await loadSite();
       } else if (site) {
@@ -3853,14 +3959,22 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
     }
   };
 
+  const storedRunSettings = readRunSettings();
+  applyStoredValue(timeout, storedRunSettings.timeout);
+  applyStoredValue(tokenBudget, storedRunSettings.token_budget);
+
   repository.addEventListener("change", () => void loadSite());
-  provider.addEventListener("change", configureProvider);
+  provider.addEventListener("change", () => {
+    configureProvider();
+    persistRunSettings();
+  });
   model.addEventListener("change", () => {
     const selected = selectedProvider();
     if (selected?.authenticated) {
       providerDetail.textContent =
-        `${model.value} · ${effort.value || "high"} effort · isolated read-only checkpoints; Wiki work never appears in saved chats.`;
+        `${selectedModelLabel()} · ${effort.value || "high"} effort · isolated read-only checkpoints; Wiki work never appears in saved chats.`;
     }
+    persistRunSettings();
     if (site) {
       renderSite(site);
     }
@@ -3869,12 +3983,15 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
     const selected = selectedProvider();
     if (selected?.authenticated) {
       providerDetail.textContent =
-        `${model.value} · ${effort.value || "high"} effort · isolated read-only checkpoints; Wiki work never appears in saved chats.`;
+        `${selectedModelLabel()} · ${effort.value || "high"} effort · isolated read-only checkpoints; Wiki work never appears in saved chats.`;
     }
+    persistRunSettings();
     if (site) {
       renderSite(site);
     }
   });
+  timeout.addEventListener("change", persistRunSettings);
+  tokenBudget.addEventListener("change", persistRunSettings);
   cancelGeneration.addEventListener("click", () => {
     if (!generationAbort || generationAbort.signal.aborted) {
       return;
@@ -3921,6 +4038,7 @@ connectIndexEvents();
 enableRepositoryDrawer();
 enableQueryChips();
 enableCopyButtons();
+enableTokenBudgetHelp();
 highlightSource();
 focusSourceLine();
 highlightSearchResults();

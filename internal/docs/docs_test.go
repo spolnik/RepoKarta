@@ -632,3 +632,33 @@ func runGitTest(t *testing.T, directory string, arguments ...string) string {
 	}
 	return string(output)
 }
+
+func TestGenerationControlsAreClampedToProviderLimits(t *testing.T) {
+	for _, testCase := range []struct {
+		name     string
+		value    int
+		expected int
+	}{
+		{name: "unset", value: 0, expected: agent.DefaultTurnTimeoutSeconds},
+		{name: "below minimum", value: 30, expected: agent.MinimumTurnTimeoutSeconds},
+		{name: "supported", value: 900, expected: 900},
+		{name: "above maximum", value: 9_000, expected: agent.MaximumTurnTimeoutSeconds},
+	} {
+		if actual := generationTimeout(testCase.value); actual != testCase.expected {
+			t.Fatalf("%s timeout = %d, want %d", testCase.name, actual, testCase.expected)
+		}
+	}
+	for _, testCase := range []struct {
+		name     string
+		value    int64
+		expected int64
+	}{
+		{name: "unset", value: 0, expected: defaultGenerationBudget},
+		{name: "supported", value: 12_000, expected: 12_000},
+		{name: "above maximum", value: 1 << 20, expected: agent.MaximumTokenBudget},
+	} {
+		if actual := generationBudget(testCase.value); actual != testCase.expected {
+			t.Fatalf("%s budget = %d, want %d", testCase.name, actual, testCase.expected)
+		}
+	}
+}
