@@ -13,6 +13,7 @@ import (
 	"github.com/spolnik/RepoKarta/internal/agent/claude"
 	"github.com/spolnik/RepoKarta/internal/agent/codex"
 	"github.com/spolnik/RepoKarta/internal/codeintel"
+	"github.com/spolnik/RepoKarta/internal/docs"
 	"github.com/spolnik/RepoKarta/internal/graph"
 	"github.com/spolnik/RepoKarta/internal/httpserver"
 	"github.com/spolnik/RepoKarta/internal/mcpserver"
@@ -107,11 +108,16 @@ func Run(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return err
 	}
+	documents, err := docs.New(database, maps, filepath.Join(cfg.DataDirectory, "docs"))
+	if err != nil {
+		return err
+	}
 	citations := mcpserver.NewCitationTracker()
 	mcpHandler := mcpserver.NewHandler(mcpserver.Config{
-		Version: cfg.Version,
-		BaseURL: baseURL,
-		Token:   mcpToken,
+		Version:   cfg.Version,
+		BaseURL:   baseURL,
+		Token:     mcpToken,
+		Artifacts: mcpserver.Artifacts{Maps: maps, Documents: documents},
 	}, intelligence, citations)
 	conversations := agent.NewManager(
 		cfg.RepositoryRoot,
@@ -132,6 +138,7 @@ func Run(ctx context.Context, cfg Config) error {
 		MCPHandler:     mcpHandler,
 		Conversations:  conversations,
 		Maps:           maps,
+		Docs:           documents,
 	}, intelligence, coordinator)
 	if err != nil {
 		return err

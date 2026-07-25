@@ -24,6 +24,7 @@ import (
 	"github.com/spolnik/RepoKarta/internal/agent"
 	"github.com/spolnik/RepoKarta/internal/catalog"
 	"github.com/spolnik/RepoKarta/internal/codeintel"
+	"github.com/spolnik/RepoKarta/internal/docs"
 	"github.com/spolnik/RepoKarta/internal/graph"
 	"github.com/spolnik/RepoKarta/internal/search"
 	"github.com/spolnik/RepoKarta/internal/source"
@@ -61,6 +62,14 @@ type MapService interface {
 	Snapshot(context.Context, int64, bool) (graph.Snapshot, error)
 }
 
+// DocumentationService supplies durable, commit-aware repository pages.
+type DocumentationService interface {
+	Plan(context.Context, int64) (docs.Site, error)
+	Generate(context.Context, docs.GenerateRequest) (docs.Site, error)
+	Page(context.Context, int64, string) (docs.Page, error)
+	Export(context.Context, int64) ([]byte, string, error)
+}
+
 // Config controls the local HTTP server.
 type Config struct {
 	Address        string
@@ -70,6 +79,7 @@ type Config struct {
 	MCPHandler     http.Handler
 	Conversations  ConversationService
 	Maps           MapService
+	Docs           DocumentationService
 }
 
 // Server hosts RepoKarta's loopback interface.
@@ -82,6 +92,7 @@ type Server struct {
 	agents       ConversationService
 	history      ConversationHistoryService
 	maps         MapService
+	docs         DocumentationService
 }
 
 type pageData struct {
@@ -93,6 +104,7 @@ type pageData struct {
 	ErrorCount     int
 	ActivePage     string
 	ChatEnabled    bool
+	WikiEnabled    bool
 	Search         searchData
 }
 
@@ -176,6 +188,7 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 		refresher:    refresher,
 		agents:       config.Conversations,
 		maps:         config.Maps,
+		docs:         config.Docs,
 	}
 	server.history, _ = config.Conversations.(ConversationHistoryService)
 
@@ -199,6 +212,13 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 		mux.HandleFunc("GET /maps", server.mapPage)
 		mux.HandleFunc("GET /api/maps", server.apiMap)
 		mux.HandleFunc("GET /api/maps/export", server.exportMap)
+	}
+	if server.docs != nil {
+		mux.HandleFunc("GET /wiki", server.wikiPage)
+		mux.HandleFunc("GET /api/wiki", server.apiWiki)
+		mux.HandleFunc("POST /api/wiki/generate", server.generateWiki)
+		mux.HandleFunc("GET /api/wiki/export", server.exportWiki)
+		mux.HandleFunc("GET /api/wiki/{repositoryID}/{page}", server.apiWikiPage)
 	}
 	if config.MCPHandler != nil {
 		mux.Handle("/mcp", config.MCPHandler)
@@ -563,6 +583,91 @@ func (s *Server) mapPage(response http.ResponseWriter, request *http.Request) {
 	s.render(response, "maps", data)
 }
 
+func (s *Server) wikiPage(response http.ResponseWriter, request *http.Request) {
+	data, err := s.pageData(request.Context())
+	if err != nil {
+		http.Error(response, "Could not load repositories", http.StatusInternalServerError)
+		return
+	}
+	data.ActivePage = "wiki"
+	s.render(response, "wiki", data)
+}
+
+func (s *Server) apiWiki(response http.ResponseWriter, request *http.Request) {
+	repositoryID, err := requiredRepositoryID(request.URL.Query().Get("repository"))
+	if err != nil {
+		writeAPIError(response, http.StatusBadRequest, err)
+		return
+	}
+	site, err := s.docs.Plan(request.Context(), repositoryID)
+	if err != nil {
+		writeDocumentationError(response, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, site)
+}
+
+func (s *Server) apiWikiPage(response http.ResponseWriter, request *http.Request) {
+	repositoryID, err := requiredRepositoryID(request.PathValue("repositoryID"))
+	if err != nil {
+		writeAPIError(response, http.StatusBadRequest, err)
+		return
+	}
+	page, err := s.docs.Page(request.Context(), repositoryID, strings.TrimSpace(request.PathValue("page")))
+	if err != nil {
+		writeDocumentationError(response, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, page)
+}
+
+func (s *Server) generateWiki(response http.ResponseWriter, request *http.Request) {
+	request.Body = http.MaxBytesReader(response, request.Body, 8<<10)
+	var input struct {
+		RepositoryID int64  `json:"repository_id"`
+		Page         string `json:"page"`
+		Refresh      bool   `json:"refresh"`
+	}
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
+		writeAPIError(response, http.StatusBadRequest, errors.New("invalid documentation generation request"))
+		return
+	}
+	if input.RepositoryID <= 0 {
+		writeAPIError(response, http.StatusBadRequest, errors.New("repository_id must be a positive integer"))
+		return
+	}
+	site, err := s.docs.Generate(request.Context(), docs.GenerateRequest{
+		RepositoryID: input.RepositoryID,
+		Page:         strings.TrimSpace(input.Page),
+		Refresh:      input.Refresh,
+	})
+	if err != nil {
+		writeDocumentationError(response, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, site)
+}
+
+func (s *Server) exportWiki(response http.ResponseWriter, request *http.Request) {
+	repositoryID, err := requiredRepositoryID(request.URL.Query().Get("repository"))
+	if err != nil {
+		writeAPIError(response, http.StatusBadRequest, err)
+		return
+	}
+	content, fileName, err := s.docs.Export(request.Context(), repositoryID)
+	if err != nil {
+		writeDocumentationError(response, err)
+		return
+	}
+	response.Header().Set("Content-Type", "application/zip")
+	response.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, fileName))
+	response.Header().Set("Cache-Control", "no-store")
+	response.WriteHeader(http.StatusOK)
+	_, _ = response.Write(content)
+}
+
 func (s *Server) apiMap(response http.ResponseWriter, request *http.Request) {
 	repositoryID, err := optionalRepositoryID(request.URL.Query().Get("repository"))
 	if err != nil {
@@ -806,6 +911,7 @@ func (s *Server) pageData(ctx context.Context) (pageData, error) {
 		Repositories:   repositories,
 		ActivePage:     "search",
 		ChatEnabled:    s.agents != nil,
+		WikiEnabled:    s.docs != nil,
 		Search: searchData{
 			Query: search.Query{Limit: codeintel.DefaultSearchLimit},
 		},
@@ -840,6 +946,29 @@ func optionalRepositoryID(value string) (int64, error) {
 		return 0, errors.New("repository must be a positive integer")
 	}
 	return repositoryID, nil
+}
+
+func requiredRepositoryID(value string) (int64, error) {
+	repositoryID, err := optionalRepositoryID(value)
+	if err != nil {
+		return 0, err
+	}
+	if repositoryID == 0 {
+		return 0, errors.New("repository is required")
+	}
+	return repositoryID, nil
+}
+
+func writeDocumentationError(response http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, docs.ErrPageNotFound), errors.Is(err, sql.ErrNoRows):
+		writeAPIError(response, http.StatusNotFound, errors.New("documentation page was not found"))
+	case strings.Contains(err.Error(), ".repokarta.yml"):
+		writeAPIError(response, http.StatusUnprocessableEntity, err)
+	default:
+		slog.Error("documentation request", "error", err)
+		writeAPIError(response, http.StatusInternalServerError, errors.New("documentation request could not be completed"))
+	}
 }
 
 func safeDownloadName(value string) string {

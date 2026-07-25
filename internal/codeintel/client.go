@@ -9,6 +9,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/spolnik/RepoKarta/internal/docs"
+	"github.com/spolnik/RepoKarta/internal/graph"
 )
 
 // Client consumes RepoKarta's JSON API. It lets protocol adapters remain thin
@@ -117,6 +120,22 @@ func (c *Client) GitDiff(ctx context.Context, request GitDiffRequest) (GitDiffRe
 	}
 	var output GitDiffResponse
 	err := c.get(ctx, "/api/git/diff/"+url.PathEscape(request.Repository), values, &output)
+	return output, err
+}
+
+// RepositoryMap calls GET /api/maps for a single repository.
+func (c *Client) RepositoryMap(ctx context.Context, repositoryID int64) (graph.Snapshot, error) {
+	values := url.Values{"repository": []string{strconv.FormatInt(repositoryID, 10)}}
+	var output graph.Snapshot
+	err := c.get(ctx, "/api/maps", values, &output)
+	return output, err
+}
+
+// GeneratedDocument calls GET /api/wiki/{repository}/{page}.
+func (c *Client) GeneratedDocument(ctx context.Context, repositoryID int64, slug string) (docs.Page, error) {
+	endpoint := "/api/wiki/" + strconv.FormatInt(repositoryID, 10) + "/" + url.PathEscape(slug)
+	var output docs.Page
+	err := c.get(ctx, endpoint, nil, &output)
 	return output, err
 }
 

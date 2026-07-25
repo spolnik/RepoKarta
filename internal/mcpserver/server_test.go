@@ -12,6 +12,8 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spolnik/RepoKarta/internal/catalog"
 	"github.com/spolnik/RepoKarta/internal/codeintel"
+	"github.com/spolnik/RepoKarta/internal/docs"
+	"github.com/spolnik/RepoKarta/internal/graph"
 	"github.com/spolnik/RepoKarta/internal/search"
 )
 
@@ -40,6 +42,19 @@ type fakeSearcher struct {
 func (s *fakeSearcher) Search(_ context.Context, query search.Query) (search.Result, error) {
 	s.query = query
 	return s.result, nil
+}
+
+type fakeArtifacts struct {
+	snapshot graph.Snapshot
+	page     docs.Page
+}
+
+func (f fakeArtifacts) RepositoryMap(context.Context, int64) (graph.Snapshot, error) {
+	return f.snapshot, nil
+}
+
+func (f fakeArtifacts) GeneratedDocument(context.Context, int64, string) (docs.Page, error) {
+	return f.page, nil
 }
 
 type bearerTransport struct {
@@ -86,7 +101,42 @@ func TestMCPSearchReturnsPinnedCitation(t *testing.T) {
 	}}
 	tracker := NewCitationTracker()
 	intelligence := codeintel.New(store, searcher, "http://ui")
-	handler := NewHandler(Config{Version: "test", BaseURL: "http://ui", Token: "secret"}, intelligence, tracker)
+	artifacts := fakeArtifacts{
+		snapshot: graph.Snapshot{
+			ID: "map-1",
+			Nodes: []graph.Node{{
+				ID:   "repository:7",
+				Kind: "repository",
+				Evidence: []graph.Evidence{{
+					Repository: "RepoKarta",
+					Revision:   revision,
+					Path:       "README.md",
+					Line:       1,
+					URL:        "http://ui/source/7?rev=" + revision + "&path=README.md",
+				}},
+			}},
+		},
+		page: docs.Page{
+			RepositoryID: 7,
+			Slug:         "overview",
+			Status:       docs.StatusReady,
+			Revision:     revision,
+			Markdown:     "# Overview",
+			Citations: []graph.Evidence{{
+				Repository: "RepoKarta",
+				Revision:   revision,
+				Path:       "README.md",
+				Line:       1,
+				URL:        "http://ui/source/7?rev=" + revision + "&path=README.md",
+			}},
+		},
+	}
+	handler := NewHandler(Config{
+		Version:   "test",
+		BaseURL:   "http://ui",
+		Token:     "secret",
+		Artifacts: artifacts,
+	}, intelligence, tracker)
 	server := httptest.NewServer(handler)
 	defer server.Close()
 
@@ -106,14 +156,24 @@ func TestMCPSearchReturnsPinnedCitation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tools.Tools) != 7 {
-		t.Fatalf("got %d tools, want 7", len(tools.Tools))
+	if len(tools.Tools) != 9 {
+		t.Fatalf("got %d tools, want 9", len(tools.Tools))
 	}
 	toolNames := make(map[string]bool, len(tools.Tools))
 	for _, tool := range tools.Tools {
 		toolNames[tool.Name] = true
 	}
-	for _, name := range []string{"list_repositories", "search_code", "find_symbol", "get_file", "list_tree", "git_log", "git_diff"} {
+	for _, name := range []string{
+		"list_repositories",
+		"search_code",
+		"find_symbol",
+		"get_file",
+		"list_tree",
+		"git_log",
+		"git_diff",
+		"read_repository_map",
+		"read_generated_document",
+	} {
 		if !toolNames[name] {
 			t.Fatalf("missing MCP tool %q: %#v", name, toolNames)
 		}
@@ -152,5 +212,43 @@ func TestMCPSearchReturnsPinnedCitation(t *testing.T) {
 	citations := tracker.List("conversation")
 	if len(citations) != 1 || citations[0].URL != match.SourceURL || citations[0].Label != match.Citation {
 		t.Fatalf("tracked citations = %#v", citations)
+	}
+
+	result, err = session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "read_repository_map",
+		Arguments: map[string]any{"repository_id": 7},
+	})
+	if err != nil || result.IsError {
+		t.Fatalf("map tool error: %v %#v", err, result.Content)
+	}
+	encoded, err = json.Marshal(result.StructuredContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mapOutput readRepositoryMapOutput
+	if err := json.Unmarshal(encoded, &mapOutput); err != nil {
+		t.Fatal(err)
+	}
+	if mapOutput.ID != "map-1" {
+		t.Fatalf("map output = %+v", mapOutput)
+	}
+
+	result, err = session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "read_generated_document",
+		Arguments: map[string]any{"repository_id": 7, "page": "overview"},
+	})
+	if err != nil || result.IsError {
+		t.Fatalf("document tool error: %v %#v", err, result.Content)
+	}
+	encoded, err = json.Marshal(result.StructuredContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pageOutput readGeneratedDocumentOutput
+	if err := json.Unmarshal(encoded, &pageOutput); err != nil {
+		t.Fatal(err)
+	}
+	if pageOutput.Slug != "overview" || pageOutput.Markdown != "# Overview" {
+		t.Fatalf("document output = %+v", pageOutput)
 	}
 }

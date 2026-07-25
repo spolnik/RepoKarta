@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -14,11 +15,13 @@ import (
 
 	"github.com/spolnik/RepoKarta/internal/agent"
 	"github.com/spolnik/RepoKarta/internal/catalog"
+	"github.com/spolnik/RepoKarta/internal/docs"
+	"github.com/spolnik/RepoKarta/internal/graph"
 	_ "modernc.org/sqlite"
 )
 
 const (
-	currentSchemaVersion = 4
+	currentSchemaVersion = 5
 
 	schemaV1 = `
 CREATE TABLE IF NOT EXISTS repositories (
@@ -93,6 +96,46 @@ CREATE TABLE IF NOT EXISTS conversation_message_citations (
     label TEXT NOT NULL,
     url TEXT NOT NULL
 );`
+
+	schemaV5 = `
+CREATE TABLE IF NOT EXISTS document_pages (
+    repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+    slug TEXT NOT NULL,
+    title TEXT NOT NULL,
+    summary TEXT NOT NULL DEFAULT '',
+    page_order INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL,
+    revision TEXT NOT NULL DEFAULT '',
+    provider TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    started_at TEXT NOT NULL DEFAULT '',
+    generated_at TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT '',
+    error TEXT NOT NULL DEFAULT '',
+    supporting_files_json TEXT NOT NULL DEFAULT '[]',
+    PRIMARY KEY (repository_id, slug)
+);
+CREATE INDEX IF NOT EXISTS document_pages_status_index
+ON document_pages(repository_id, status, page_order);
+
+CREATE TABLE IF NOT EXISTS document_citations (
+    id INTEGER PRIMARY KEY,
+    repository_id INTEGER NOT NULL,
+    page_slug TEXT NOT NULL,
+    source_repository_id INTEGER NOT NULL,
+    source_repository TEXT NOT NULL,
+    revision TEXT NOT NULL,
+    path TEXT NOT NULL,
+    line INTEGER NOT NULL,
+    label TEXT NOT NULL,
+    url TEXT NOT NULL,
+    FOREIGN KEY (repository_id, page_slug)
+        REFERENCES document_pages(repository_id, slug) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS document_citations_page_index
+ON document_citations(repository_id, page_slug, id);`
 )
 
 // Store persists RepoKarta-owned metadata. Repository source remains read-only.
@@ -147,6 +190,8 @@ func migrate(db *sql.DB) error {
 			migration = schemaV3
 		case 4:
 			migration = schemaV4
+		case 5:
+			migration = schemaV5
 		default:
 			return fmt.Errorf("missing migration for schema version %d", next)
 		}
@@ -434,6 +479,179 @@ func parseTime(value string) time.Time {
 		return time.Time{}
 	}
 	return parsed
+}
+
+// ListDocumentPages returns persisted page metadata and citations in plan order.
+func (s *Store) ListDocumentPages(ctx context.Context, repositoryID int64) ([]docs.Page, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT
+    repository_id, slug, title, summary, page_order, status, revision,
+    provider, model, input_tokens, output_tokens, started_at, generated_at,
+    updated_at, error, supporting_files_json
+FROM document_pages
+WHERE repository_id = ?
+ORDER BY page_order, slug`, repositoryID)
+	if err != nil {
+		return nil, err
+	}
+	var pages []docs.Page
+	for rows.Next() {
+		var page docs.Page
+		var startedAt, generatedAt, updatedAt, supportingFiles string
+		if err := rows.Scan(
+			&page.RepositoryID,
+			&page.Slug,
+			&page.Title,
+			&page.Summary,
+			&page.Order,
+			&page.Status,
+			&page.Revision,
+			&page.Provider,
+			&page.Model,
+			&page.InputTokens,
+			&page.OutputTokens,
+			&startedAt,
+			&generatedAt,
+			&updatedAt,
+			&page.Error,
+			&supportingFiles,
+		); err != nil {
+			return nil, err
+		}
+		page.StartedAt = parseTime(startedAt)
+		page.GeneratedAt = parseTime(generatedAt)
+		page.UpdatedAt = parseTime(updatedAt)
+		if err := json.Unmarshal([]byte(supportingFiles), &page.SupportingFiles); err != nil {
+			return nil, fmt.Errorf("decode document supporting files: %w", err)
+		}
+		pages = append(pages, page)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	for index := range pages {
+		pages[index].Citations, err = s.documentCitations(ctx, pages[index].RepositoryID, pages[index].Slug)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return pages, nil
+}
+
+// SaveDocumentPage atomically stores page status, provenance, and citations.
+func (s *Store) SaveDocumentPage(ctx context.Context, page docs.Page) error {
+	if page.RepositoryID <= 0 || strings.TrimSpace(page.Slug) == "" {
+		return errors.New("document repository and slug are required")
+	}
+	supportingFiles, err := json.Marshal(page.SupportingFiles)
+	if err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO document_pages (
+    repository_id, slug, title, summary, page_order, status, revision,
+    provider, model, input_tokens, output_tokens, started_at, generated_at,
+    updated_at, error, supporting_files_json
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(repository_id, slug) DO UPDATE SET
+    title = excluded.title,
+    summary = excluded.summary,
+    page_order = excluded.page_order,
+    status = excluded.status,
+    revision = excluded.revision,
+    provider = excluded.provider,
+    model = excluded.model,
+    input_tokens = excluded.input_tokens,
+    output_tokens = excluded.output_tokens,
+    started_at = excluded.started_at,
+    generated_at = excluded.generated_at,
+    updated_at = excluded.updated_at,
+    error = excluded.error,
+    supporting_files_json = excluded.supporting_files_json`,
+		page.RepositoryID,
+		page.Slug,
+		page.Title,
+		page.Summary,
+		page.Order,
+		page.Status,
+		page.Revision,
+		page.Provider,
+		page.Model,
+		page.InputTokens,
+		page.OutputTokens,
+		formatTime(page.StartedAt),
+		formatTime(page.GeneratedAt),
+		formatTime(page.UpdatedAt),
+		page.Error,
+		string(supportingFiles),
+	); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+DELETE FROM document_citations WHERE repository_id = ? AND page_slug = ?`,
+		page.RepositoryID, page.Slug,
+	); err != nil {
+		return err
+	}
+	for _, citation := range page.Citations {
+		if _, err := tx.ExecContext(ctx, `
+INSERT INTO document_citations (
+    repository_id, page_slug, source_repository_id, source_repository,
+    revision, path, line, label, url
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			page.RepositoryID,
+			page.Slug,
+			citation.RepositoryID,
+			citation.Repository,
+			citation.Revision,
+			citation.Path,
+			citation.Line,
+			citation.Label,
+			citation.URL,
+		); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *Store) documentCitations(ctx context.Context, repositoryID int64, slug string) ([]graph.Evidence, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT
+    source_repository_id, source_repository, revision, path, line, label, url
+FROM document_citations
+WHERE repository_id = ? AND page_slug = ?
+ORDER BY id`, repositoryID, slug)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var citations []graph.Evidence
+	for rows.Next() {
+		var citation graph.Evidence
+		if err := rows.Scan(
+			&citation.RepositoryID,
+			&citation.Repository,
+			&citation.Revision,
+			&citation.Path,
+			&citation.Line,
+			&citation.Label,
+			&citation.URL,
+		); err != nil {
+			return nil, err
+		}
+		citations = append(citations, citation)
+	}
+	return citations, rows.Err()
 }
 
 // CreateConversation creates durable metadata for a provider-neutral chat.

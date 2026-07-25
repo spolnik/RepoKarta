@@ -110,3 +110,42 @@ func TestClientUsesGitHistoryContracts(t *testing.T) {
 		t.Fatalf("diff result = %#v", diffResult)
 	}
 }
+
+func TestClientUsesMapAndGeneratedDocumentContracts(t *testing.T) {
+	requestNumber := 0
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		requestNumber++
+		response.Header().Set("Content-Type", "application/json")
+		switch requestNumber {
+		case 1:
+			if request.URL.Path != "/api/maps" || request.URL.Query().Get("repository") != "8" {
+				t.Fatalf("map request = %s?%s", request.URL.Path, request.URL.RawQuery)
+			}
+			_, _ = response.Write([]byte(`{"id":"snapshot-8","nodes":[],"edges":[]}`))
+		case 2:
+			if request.URL.Path != "/api/wiki/8/architecture" {
+				t.Fatalf("document request = %s?%s", request.URL.Path, request.URL.RawQuery)
+			}
+			_, _ = response.Write([]byte(`{"repository_id":8,"slug":"architecture","status":"ready","markdown":"# Architecture"}`))
+		default:
+			t.Fatalf("unexpected request %d", requestNumber)
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL)
+	snapshot, err := client.RepositoryMap(context.Background(), 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.ID != "snapshot-8" {
+		t.Fatalf("snapshot = %+v", snapshot)
+	}
+	page, err := client.GeneratedDocument(context.Background(), 8, "architecture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Slug != "architecture" || page.Markdown != "# Architecture" {
+		t.Fatalf("page = %+v", page)
+	}
+}

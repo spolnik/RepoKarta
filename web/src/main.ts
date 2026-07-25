@@ -3072,6 +3072,425 @@ function enableRepositoryMaps(debug?: DebugLogger): void {
   void loadMap(false);
 }
 
+type WikiPage = {
+  repository_id: number;
+  slug: string;
+  title: string;
+  summary: string;
+  order: number;
+  status: "planned" | "generating" | "ready" | "stale" | "error";
+  revision?: string;
+  provider?: string;
+  model?: string;
+  input_tokens: number;
+  output_tokens: number;
+  started_at?: string;
+  generated_at?: string;
+  error?: string;
+  supporting_files: string[];
+  citations: MapEvidence[];
+  markdown?: string;
+};
+
+type WikiSite = {
+  version: number;
+  repository_id: number;
+  repository: string;
+  revision: string;
+  updated_at: string;
+  steering: {
+    title?: string;
+    include?: string[];
+    exclude?: string[];
+    notes?: Record<string, string>;
+  };
+  pages: WikiPage[];
+  ready: number;
+  stale: number;
+  pending: number;
+  failed: number;
+};
+
+function enableRepositoryWiki(debug?: DebugLogger): void {
+  const workspace = document.querySelector<HTMLElement>("[data-wiki-workspace]");
+  const repository = document.querySelector<HTMLSelectElement>("[data-wiki-repository]");
+  const planHeading = document.querySelector<HTMLElement>("[data-wiki-plan-heading]");
+  const commit = document.querySelector<HTMLElement>("[data-wiki-commit]");
+  const ready = document.querySelector<HTMLElement>("[data-wiki-ready]");
+  const stale = document.querySelector<HTMLElement>("[data-wiki-stale]");
+  const pending = document.querySelector<HTMLElement>("[data-wiki-pending]");
+  const failed = document.querySelector<HTMLElement>("[data-wiki-failed]");
+  const generateAll = document.querySelector<HTMLButtonElement>("[data-wiki-generate]");
+  const exportLink = document.querySelector<HTMLAnchorElement>("[data-wiki-export]");
+  const steering = document.querySelector<HTMLElement>("[data-wiki-steering]");
+  const pages = document.querySelector<HTMLElement>("[data-wiki-pages]");
+  const repositoryName = document.querySelector<HTMLElement>("[data-wiki-repository-name]");
+  const pageTitle = document.querySelector<HTMLElement>("[data-wiki-page-title]");
+  const pageStatus = document.querySelector<HTMLElement>("[data-wiki-page-status]");
+  const refreshPage = document.querySelector<HTMLButtonElement>("[data-wiki-refresh-page]");
+  const content = document.querySelector<HTMLElement>("[data-wiki-content]");
+  const empty = document.querySelector<HTMLElement>("[data-wiki-empty]");
+  const loading = document.querySelector<HTMLElement>("[data-wiki-loading]");
+  const error = document.querySelector<HTMLElement>("[data-wiki-error]");
+  const errorMessage = document.querySelector<HTMLElement>("[data-wiki-error-message]");
+  const pageRevision = document.querySelector<HTMLElement>("[data-wiki-page-revision]");
+  const pageGenerator = document.querySelector<HTMLElement>("[data-wiki-page-generator]");
+  const pageGenerated = document.querySelector<HTMLElement>("[data-wiki-page-generated]");
+  const pageTokens = document.querySelector<HTMLElement>("[data-wiki-page-tokens]");
+  const supportCount = document.querySelector<HTMLElement>("[data-wiki-support-count]");
+  const supportingFiles = document.querySelector<HTMLUListElement>("[data-wiki-supporting-files]");
+  const citationCount = document.querySelector<HTMLElement>("[data-wiki-citation-count]");
+  const citations = document.querySelector<HTMLOListElement>("[data-wiki-citations]");
+  if (
+    !workspace || !repository || !planHeading || !commit || !ready || !stale || !pending || !failed ||
+    !generateAll || !exportLink || !steering || !pages || !repositoryName || !pageTitle || !pageStatus ||
+    !refreshPage || !content || !empty || !loading || !error || !errorMessage || !pageRevision ||
+    !pageGenerator || !pageGenerated || !pageTokens || !supportCount || !supportingFiles ||
+    !citationCount || !citations
+  ) {
+    return;
+  }
+
+  let site: WikiSite | undefined;
+  let activeSlug = "";
+  let requestRevision = 0;
+  let generating = false;
+
+  const setStage = (state: "content" | "empty" | "loading" | "error"): void => {
+    content.hidden = state !== "content";
+    empty.hidden = state !== "empty";
+    loading.hidden = state !== "loading";
+    error.hidden = state !== "error";
+  };
+
+  const resetProvenance = (): void => {
+    pageRevision.textContent = "—";
+    pageGenerator.textContent = "—";
+    pageGenerated.textContent = "—";
+    pageTokens.textContent = "0 in · 0 out";
+    supportCount.textContent = "0";
+    citationCount.textContent = "0";
+    supportingFiles.replaceChildren();
+    citations.replaceChildren();
+  };
+
+  const renderProvenance = (page: WikiPage): void => {
+    const pageFiles = page.supporting_files ?? [];
+    const pageCitations = page.citations ?? [];
+    pageRevision.textContent = page.revision ? page.revision.slice(0, 12) : "—";
+    pageRevision.title = page.revision || "";
+    pageGenerator.textContent = page.provider
+      ? `${page.provider} · ${page.model || "default"}`
+      : "Not generated";
+    pageGenerated.textContent = page.generated_at && !page.generated_at.startsWith("0001-")
+      ? new Date(page.generated_at).toLocaleString()
+      : "—";
+    pageTokens.textContent = `${page.input_tokens.toLocaleString()} in · ${page.output_tokens.toLocaleString()} out`;
+    supportCount.textContent = String(pageFiles.length);
+    supportingFiles.replaceChildren();
+    for (const file of pageFiles) {
+      const item = document.createElement("li");
+      item.textContent = file;
+      item.title = file;
+      supportingFiles.append(item);
+    }
+    citationCount.textContent = String(pageCitations.length);
+    citations.replaceChildren();
+    for (const citation of pageCitations) {
+      const item = document.createElement("li");
+      const link = document.createElement("a");
+      link.href = citation.url;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      const label = document.createElement("strong");
+      label.textContent = `${citation.path}:${citation.line}`;
+      const detail = document.createElement("span");
+      detail.textContent = `${citation.revision.slice(0, 8)} · ${citation.label}`;
+      link.append(label, detail);
+      item.append(link);
+      citations.append(item);
+    }
+  };
+
+  const updatePageSelection = (): void => {
+    pages.querySelectorAll<HTMLButtonElement>("[data-wiki-page]").forEach((button) => {
+      if (button.dataset.wikiPage === activeSlug) {
+        button.setAttribute("aria-current", "page");
+      } else {
+        button.removeAttribute("aria-current");
+      }
+    });
+  };
+
+  const showPlannedPage = (page: WikiPage): void => {
+    setStage(page.status === "error" ? "error" : "empty");
+    const emptyHeading = empty.querySelector<HTMLElement>("h2");
+    const emptyCopy = empty.querySelector<HTMLElement>("p");
+    if (emptyHeading && emptyCopy) {
+      emptyHeading.textContent = page.status === "stale" ? "This page needs a refresh" : "This page is ready to generate";
+      emptyCopy.textContent = "Generation runs independently, so completed pages stay available if another page needs to be retried.";
+    }
+    if (page.status === "error") {
+      errorMessage.textContent = page.error || "Generation failed. Retry only this page.";
+    }
+    renderProvenance(page);
+  };
+
+  const loadPage = async (slug: string): Promise<void> => {
+    if (!site) {
+      return;
+    }
+    const page = site.pages.find((candidate) => candidate.slug === slug);
+    if (!page) {
+      return;
+    }
+    activeSlug = slug;
+    updatePageSelection();
+    repositoryName.textContent = site.repository;
+    pageTitle.textContent = page.title;
+    pageStatus.textContent = page.status === "planned" ? "Not generated" : page.status;
+    pageStatus.dataset.state = page.status;
+    refreshPage.textContent = page.status === "planned" || page.status === "error"
+      ? "Generate page"
+      : "Refresh page";
+    refreshPage.disabled = generating;
+    if (page.status !== "ready" && page.status !== "stale") {
+      showPlannedPage(page);
+      return;
+    }
+    const revision = ++requestRevision;
+    setStage("loading");
+    loading.querySelector("strong")!.textContent = page.status === "stale"
+      ? "Opening the last trusted revision"
+      : "Opening generated Markdown";
+    loading.querySelector("p")!.textContent = page.status === "stale"
+      ? "Changed supporting files are flagged; refresh this page when ready."
+      : "Rendering citations and validated diagrams locally.";
+    try {
+      const response = await fetch(`/api/wiki/${site.repository_id}/${encodeURIComponent(slug)}`, {
+        cache: "no-store",
+        headers: { Accept: "application/json" }
+      });
+      if (!response.ok) {
+        throw new Error(await response.text() || `Page request failed (${response.status})`);
+      }
+      const loaded = await response.json() as WikiPage;
+      if (revision !== requestRevision) {
+        return;
+      }
+      renderAssistantMarkdown(content, loaded.markdown || "", debug, true);
+      renderProvenance(loaded);
+      setStage("content");
+      debug?.add("info", "wiki.page.loaded", {
+        repository_id: site.repository_id,
+        page: loaded.slug,
+        status: loaded.status,
+        citations: loaded.citations.length
+      });
+    } catch (loadError: unknown) {
+      if (revision !== requestRevision) {
+        return;
+      }
+      errorMessage.textContent = loadError instanceof Error ? loadError.message : String(loadError);
+      setStage("error");
+      debug?.add("error", "wiki.page.failed", describeError(loadError));
+    }
+  };
+
+  const generate = async (slug = ""): Promise<void> => {
+    if (!site || generating) {
+      return;
+    }
+    generating = true;
+    generateAll.disabled = true;
+    refreshPage.disabled = true;
+    pages.querySelectorAll<HTMLButtonElement>("[data-wiki-generate-page]").forEach((button) => {
+      button.disabled = true;
+    });
+    setStage("loading");
+    loading.querySelector("strong")!.textContent = slug ? "Refreshing this page" : "Generating documentation";
+    loading.querySelector("p")!.textContent = "Writing commit-pinned Markdown and validating every citation before publication.";
+    const refreshAll = !slug && site.pages.every((page) => page.status === "ready");
+    try {
+      const response = await fetch("/api/wiki/generate", {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          repository_id: site.repository_id,
+          page: slug,
+          refresh: Boolean(slug) || refreshAll
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await response.text() || `Generation failed (${response.status})`);
+      }
+      site = await response.json() as WikiSite;
+      renderSite(site);
+      const selected = slug || activeSlug || site.pages[0]?.slug;
+      if (selected) {
+        await loadPage(selected);
+      }
+      debug?.add("info", "wiki.generated", {
+        repository_id: site.repository_id,
+        page: slug || "pending",
+        ready: site.ready,
+        stale: site.stale,
+        failed: site.failed
+      });
+    } catch (generationError: unknown) {
+      errorMessage.textContent = generationError instanceof Error ? generationError.message : String(generationError);
+      setStage("error");
+      debug?.add("error", "wiki.generation.failed", describeError(generationError));
+    } finally {
+      generating = false;
+      if (site) {
+        renderSite(site);
+        refreshPage.disabled = !activeSlug;
+      }
+    }
+  };
+
+  const renderSite = (value: WikiSite): void => {
+    site = value;
+    planHeading.textContent = `${value.pages.length} independent pages`;
+    commit.textContent = value.revision.slice(0, 8);
+    commit.title = value.revision;
+    ready.textContent = String(value.ready);
+    stale.textContent = String(value.stale);
+    pending.textContent = String(value.pending);
+    failed.textContent = String(value.failed);
+    repositoryName.textContent = value.repository;
+    exportLink.href = `/api/wiki/export?repository=${value.repository_id}`;
+    const exportable = value.ready + value.stale > 0;
+    exportLink.setAttribute("aria-disabled", String(!exportable));
+    generateAll.disabled = generating;
+    const generateLabel = generateAll.querySelector<HTMLElement>("span");
+    if (generateLabel) {
+      generateLabel.textContent = value.stale > 0
+        ? `Refresh ${value.stale} stale`
+        : value.pending + value.failed > 0
+          ? `Generate ${value.pending + value.failed} pages`
+          : "Refresh all";
+    }
+
+    const configured = Boolean(
+      value.steering.title ||
+      value.steering.include?.length ||
+      value.steering.exclude?.length ||
+      Object.keys(value.steering.notes || {}).length
+    );
+    steering.querySelector("strong")!.textContent = configured
+      ? "Plan steered by .repokarta.yml"
+      : "Default documentation plan";
+    steering.querySelector("p")!.textContent = configured
+      ? "Reviewed repository guidance is active and revision-pinned."
+      : "Add a reviewed .repokarta.yml to include, exclude, title, or guide pages.";
+
+    pages.replaceChildren();
+    for (const page of value.pages) {
+      const row = document.createElement("div");
+      row.className = "wiki-page-row";
+      const select = document.createElement("button");
+      select.type = "button";
+      select.className = "wiki-page-select";
+      select.dataset.wikiPage = page.slug;
+      select.setAttribute("aria-label", `${page.title} · ${page.status}`);
+      const index = document.createElement("span");
+      index.className = "wiki-page-index";
+      index.textContent = String(page.order).padStart(2, "0");
+      const copy = document.createElement("span");
+      copy.className = "wiki-page-copy";
+      const title = document.createElement("strong");
+      title.textContent = page.title;
+      const status = document.createElement("span");
+      status.dataset.state = page.status;
+      status.textContent = page.status === "planned" ? "Not generated" : page.status;
+      copy.append(title, status);
+      select.append(index, copy);
+      select.addEventListener("click", () => void loadPage(page.slug));
+
+      const regenerate = document.createElement("button");
+      regenerate.type = "button";
+      regenerate.className = "wiki-page-generate";
+      regenerate.dataset.wikiGeneratePage = page.slug;
+      regenerate.title = page.status === "planned" ? `Generate ${page.title}` : `Refresh ${page.title}`;
+      regenerate.setAttribute("aria-label", regenerate.title);
+      regenerate.textContent = page.status === "planned" ? "+" : "↻";
+      regenerate.disabled = generating;
+      regenerate.addEventListener("click", () => void generate(page.slug));
+      row.append(select, regenerate);
+      pages.append(row);
+    }
+    updatePageSelection();
+  };
+
+  const loadSite = async (): Promise<void> => {
+    const repositoryID = Number.parseInt(repository.value, 10);
+    if (!Number.isFinite(repositoryID) || repositoryID <= 0) {
+      return;
+    }
+    const revision = ++requestRevision;
+    activeSlug = "";
+    generateAll.disabled = true;
+    refreshPage.disabled = true;
+    resetProvenance();
+    setStage("loading");
+    loading.querySelector("strong")!.textContent = "Planning documentation";
+    loading.querySelector("p")!.textContent = "Reading the current structural snapshot and repository steering.";
+    try {
+      const response = await fetch(`/api/wiki?repository=${repositoryID}`, {
+        cache: "no-store",
+        headers: { Accept: "application/json" }
+      });
+      if (!response.ok) {
+        throw new Error(await response.text() || `Documentation plan failed (${response.status})`);
+      }
+      const loaded = await response.json() as WikiSite;
+      if (revision !== requestRevision) {
+        return;
+      }
+      renderSite(loaded);
+      const initial = loaded.pages.find((page) => page.status === "ready" || page.status === "stale") ?? loaded.pages[0];
+      if (initial) {
+        await loadPage(initial.slug);
+      }
+      debug?.add("info", "wiki.plan.loaded", {
+        repository_id: loaded.repository_id,
+        revision: loaded.revision,
+        pages: loaded.pages.length
+      });
+    } catch (planError: unknown) {
+      if (revision !== requestRevision) {
+        return;
+      }
+      errorMessage.textContent = planError instanceof Error ? planError.message : String(planError);
+      setStage("error");
+      debug?.add("error", "wiki.plan.failed", describeError(planError));
+    }
+  };
+
+  repository.addEventListener("change", () => void loadSite());
+  generateAll.addEventListener("click", () => void generate());
+  refreshPage.addEventListener("click", () => {
+    if (activeSlug) {
+      void generate(activeSlug);
+    }
+  });
+  exportLink.addEventListener("click", (event) => {
+    if (exportLink.getAttribute("aria-disabled") === "true") {
+      event.preventDefault();
+    }
+  });
+
+  if (repository.options.length > 1) {
+    repository.selectedIndex = 1;
+    void loadSite();
+  }
+}
+
 connectIndexEvents();
 enableRepositoryDrawer();
 enableQueryChips();
@@ -3083,6 +3502,7 @@ const debugLogger = enableDebugLogger();
 enableMermaidViewer(debugLogger);
 enableConversations(debugLogger);
 enableRepositoryMaps(debugLogger);
+enableRepositoryWiki(debugLogger);
 
 document.body.addEventListener("htmx:afterSwap", (event) => {
   const target = (event as CustomEvent<{ target?: ParentNode }>).detail?.target;

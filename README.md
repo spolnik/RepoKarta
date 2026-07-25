@@ -6,7 +6,7 @@ discovers, incrementally indexes, and searches committed source without
 modifying a worktree.
 
 The current implementation delivers M1 code search, M2 grounded code
-questions, and M3 evidence-backed repository maps:
+questions, M3 evidence-backed repository maps, and M4 living documentation:
 
 - regular, linked-worktree, and bare Git repository discovery;
 - origin, default revision, HEAD, scan, and index metadata in SQLite;
@@ -43,7 +43,8 @@ questions, and M3 evidence-backed repository maps:
 - a JSON code-intelligence API used by the UI and protocol adapters;
 - authenticated loopback HTTP MCP plus a stdio MCP adapter with read-only
   `list_repositories`, `search_code`, `find_symbol`, `get_file`, `list_tree`,
-  `git_log`, and `git_diff` tools;
+  `git_log`, `git_diff`, `read_repository_map`, and
+  `read_generated_document` tools;
 - read-only Codex sandboxes, Claude plan mode, and disabled mutation/shell
   tools;
 - authoritative citation chips recorded from the exact MCP tool results rather
@@ -54,16 +55,23 @@ questions, and M3 evidence-backed repository maps:
   budget controls;
 - adversarial coverage that keeps instructions found in repository content
   from expanding the agent's read-only tool permissions;
-- embedded frontend assets in one native Go executable.
+- embedded frontend assets in one native Go executable;
 - deterministic language and manifest inventories extracted from committed
   source without executing repository code;
 - commit-keyed package, dependency, entry-point, and HTTP-route graphs with
   source evidence on every node and relationship;
 - an interactive layered map with scope and view filters, search, neighbor
   focus, evidence inspection, and downloadable JSON snapshots.
+- deterministic three-page documentation plans generated independently from
+  commit-pinned structural facts;
+- durable page status, provider/model metadata, source sets, citations, and
+  filesystem-backed Markdown with interrupted-job recovery;
+- commit-aware selective staleness and regeneration based on exact changed
+  supporting files;
+- validated Mermaid diagrams, reviewed `.repokarta.yml` steering, a dedicated
+  Wiki workspace, and portable Markdown ZIP export.
 
-Generated DeepWiki-style documentation remains the next milestone. The full
-product definition and non-goals live in [SCOPE.md](./SCOPE.md).
+The full product definition and non-goals live in [SCOPE.md](./SCOPE.md).
 
 ## Run
 
@@ -110,6 +118,28 @@ the BSD ctags shipped by macOS. If Universal Ctags is unavailable, `sym:`
 searches return a machine-readable and visible warning instead of a misleading
 silent zero.
 
+## Documentation steering
+
+RepoKarta uses a small default plan: `overview`, `architecture`, and
+`dependencies`. A reviewed `.repokarta.yml` at the repository root can title
+the wiki, include or exclude pages, and add bounded guidance:
+
+```yaml
+docs:
+  title: Engineering handbook
+  include:
+    - overview
+    - architecture
+    - dependencies
+  exclude: []
+  notes:
+    architecture: Emphasize service boundaries and public entry points.
+```
+
+Unknown keys and page names are rejected. The configuration is read from the
+same recorded commit as the generated pages; RepoKarta never writes it or any
+other source file.
+
 ## JSON API and MCP
 
 The JSON API is the capability boundary used by non-browser clients:
@@ -122,6 +152,12 @@ GET /api/file/{repository}?rev={commit}&path={path}&lines=1-200
 GET /api/tree/{repository}?rev={commit}&path={directory}
 GET /api/git/log/{repository}?rev={commit}&path={path}&limit=50
 GET /api/git/diff/{repository}?from={commit}&to={commit}&path={path}&context=3
+GET /api/maps?repository={repository-id}
+GET /api/maps/export?repository={repository-id}
+GET /api/wiki?repository={repository-id}
+POST /api/wiki/generate
+GET /api/wiki/{repository-id}/{page}
+GET /api/wiki/export?repository={repository-id}
 GET /api/conversations
 GET /api/conversations/{conversation-id}
 PATCH /api/conversations/{conversation-id}

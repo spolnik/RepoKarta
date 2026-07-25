@@ -13,6 +13,7 @@ import (
 	"github.com/spolnik/RepoKarta/internal/agent"
 	"github.com/spolnik/RepoKarta/internal/catalog"
 	"github.com/spolnik/RepoKarta/internal/codeintel"
+	"github.com/spolnik/RepoKarta/internal/docs"
 	"github.com/spolnik/RepoKarta/internal/graph"
 	"github.com/spolnik/RepoKarta/internal/search"
 )
@@ -70,6 +71,119 @@ func (s *testMapService) Snapshot(_ context.Context, repositoryID int64, refresh
 	s.repositoryID = repositoryID
 	s.refresh = refresh
 	return s.snapshot, nil
+}
+
+type testDocumentationService struct {
+	site      docs.Site
+	page      docs.Page
+	generated docs.GenerateRequest
+}
+
+func (s *testDocumentationService) Plan(_ context.Context, repositoryID int64) (docs.Site, error) {
+	s.site.RepositoryID = repositoryID
+	return s.site, nil
+}
+
+func (s *testDocumentationService) Generate(_ context.Context, request docs.GenerateRequest) (docs.Site, error) {
+	s.generated = request
+	return s.site, nil
+}
+
+func (s *testDocumentationService) Page(_ context.Context, repositoryID int64, slug string) (docs.Page, error) {
+	s.page.RepositoryID = repositoryID
+	s.page.Slug = slug
+	return s.page, nil
+}
+
+func (*testDocumentationService) Export(context.Context, int64) ([]byte, string, error) {
+	return []byte("PK fixture"), "repokarta-wiki-fixture.zip", nil
+}
+
+func TestDocumentationPageAPIGenerationAndExport(t *testing.T) {
+	repository := catalog.Repository{ID: 6, Name: "Documented Repo", IndexState: "ready"}
+	documents := &testDocumentationService{
+		site: docs.Site{
+			Version:    1,
+			Repository: repository.Name,
+			Revision:   strings.Repeat("b", 40),
+			Pages: []docs.Page{{
+				RepositoryID: repository.ID,
+				Slug:         "overview",
+				Title:        "Overview",
+				Status:       docs.StatusReady,
+			}},
+			Ready: 1,
+		},
+		page: docs.Page{
+			Title:    "Overview",
+			Status:   docs.StatusReady,
+			Revision: strings.Repeat("b", 40),
+			Markdown: "# Overview",
+		},
+	}
+	server, err := New(
+		Config{Address: "127.0.0.1:7331", Docs: documents},
+		codeintel.New(
+			testStore{repositories: []catalog.Repository{repository}},
+			testSearcher{},
+			"http://127.0.0.1:7331",
+		),
+		testRefresher{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7331/wiki", nil)
+	response := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("wiki page status = %d, body = %s", response.Code, response.Body.String())
+	}
+	for _, expected := range []string{`aria-current="page">Wiki`, `data-wiki-workspace`, `data-wiki-pages`, `data-wiki-content`} {
+		if !strings.Contains(response.Body.String(), expected) {
+			t.Fatalf("wiki page does not contain %q", expected)
+		}
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7331/api/wiki?repository=6", nil)
+	response = httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"repository_id":6`) {
+		t.Fatalf("wiki plan status = %d, body = %s", response.Code, response.Body.String())
+	}
+
+	request = httptest.NewRequest(
+		http.MethodPost,
+		"http://127.0.0.1:7331/api/wiki/generate",
+		bytes.NewBufferString(`{"repository_id":6,"page":"overview","refresh":true}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	response = httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK ||
+		documents.generated.RepositoryID != 6 ||
+		documents.generated.Page != "overview" ||
+		!documents.generated.Refresh {
+		t.Fatalf("generate status = %d, request = %+v, body = %s", response.Code, documents.generated, response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7331/api/wiki/6/overview", nil)
+	response = httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"markdown":"# Overview"`) {
+		t.Fatalf("wiki page API status = %d, body = %s", response.Code, response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7331/api/wiki/export?repository=6", nil)
+	response = httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || response.Header().Get("Content-Type") != "application/zip" {
+		t.Fatalf("wiki export status = %d, headers = %v", response.Code, response.Header())
+	}
+	if got := response.Header().Get("Content-Disposition"); got != `attachment; filename="repokarta-wiki-fixture.zip"` {
+		t.Fatalf("content disposition = %q", got)
+	}
 }
 
 func TestRepositoryMapPageAPIAndExport(t *testing.T) {

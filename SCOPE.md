@@ -377,12 +377,12 @@ rendering an unreadable file-level hairball.
 
 ### M4: living documentation
 
-- [ ] Deterministic documentation planning.
-- [ ] Independent, resumable page generation.
-- [ ] Source citations and Mermaid validation.
-- [ ] Commit-aware staleness and selective regeneration.
-- [ ] `.repokarta.yml` steering.
-- [ ] Markdown export.
+- [x] Deterministic documentation planning.
+- [x] Independent, resumable page generation.
+- [x] Source citations and Mermaid validation.
+- [x] Commit-aware staleness and selective regeneration.
+- [x] `.repokarta.yml` steering.
+- [x] Markdown export.
 
 Exit condition: generated documentation remains trustworthy and economical to
 refresh after normal repository changes.
@@ -448,11 +448,11 @@ completion criteria include:
 
 ## Recommended next session
 
-Complete M4 on top of the deterministic M3 snapshot:
+Complete M5 without weakening the local-first boundary:
 
-1. Plan a small set of independent repository pages from structural facts.
-2. Persist page status, revision, evidence, and generated Markdown.
-3. Mark only pages affected by commit changes stale.
-4. Validate citations and Mermaid before publishing a page.
-5. Add reviewed `.repokarta.yml` steering and Markdown export.
-6. Verify generation, resume, staleness, and export end to end.
+1. Add storage visibility and exact-target cleanup controls.
+2. Build a secret-redacted diagnostics export.
+3. Exercise database and artifact migrations across packaged upgrades.
+4. Produce checksummed Windows and macOS release artifacts.
+5. Add Windows packaging and macOS signing/notarization.
+6. Publish and verify the Homebrew formula.

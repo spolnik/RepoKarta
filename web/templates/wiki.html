@@ -1,0 +1,195 @@
+{{define "wiki"}}
+<!doctype html>
+<html lang="en" class="h-full bg-[#090b0f]">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Browse durable, commit-aware documentation generated from repository evidence.">
+    <meta name="theme-color" content="#090b0f">
+    <link rel="icon" href="/assets/favicon.ico" sizes="any">
+    <link rel="icon" type="image/png" href="/assets/favicon-32.png" sizes="32x32">
+    <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+    <title>RepoKarta · Living documentation</title>
+    <link rel="stylesheet" href="/assets/app.css">
+    <script type="module" src="/assets/app.js"></script>
+  </head>
+  <body class="h-full overflow-hidden bg-[#090b0f] text-slate-100 antialiased">
+    {{template "app-header" .}}
+
+    <main class="wiki-workspace" data-wiki-workspace>
+      <aside class="wiki-sidebar" aria-label="Documentation controls">
+        <header class="wiki-sidebar-heading">
+          <p class="wiki-kicker">Living documentation</p>
+          <h1>Repository wiki</h1>
+          <p>Independent Markdown pages, pinned to commits and grounded in exact source.</p>
+        </header>
+
+        <label class="wiki-field">
+          <span>Repository</span>
+          <select data-wiki-repository>
+            <option value="">Choose a repository</option>
+            {{range .Repositories}}
+            <option value="{{.ID}}">{{.Name}}</option>
+            {{end}}
+          </select>
+        </label>
+
+        <section class="wiki-plan-summary" aria-labelledby="wiki-plan-heading">
+          <div class="wiki-section-heading">
+            <div>
+              <p>Documentation plan</p>
+              <h2 id="wiki-plan-heading" data-wiki-plan-heading>Choose a repository</h2>
+            </div>
+            <span data-wiki-commit>—</span>
+          </div>
+          <dl class="wiki-plan-metrics">
+            <div data-state="ready"><dt>Ready</dt><dd data-wiki-ready>0</dd></div>
+            <div data-state="stale"><dt>Stale</dt><dd data-wiki-stale>0</dd></div>
+            <div data-state="pending"><dt>Pending</dt><dd data-wiki-pending>0</dd></div>
+            <div data-state="error"><dt>Failed</dt><dd data-wiki-failed>0</dd></div>
+          </dl>
+        </section>
+
+        <div class="wiki-sidebar-actions">
+          <button type="button" class="wiki-primary-action" data-wiki-generate disabled>
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <path d="m10 2 .9 3.1L14 6l-3.1.9L10 10l-.9-3.1L6 6l3.1-.9L10 2ZM5 11l.65 2.35L8 14l-2.35.65L5 17l-.65-2.35L2 14l2.35-.65L5 11Zm10-1 .55 1.95L17.5 12l-1.95.55L15 14.5l-.55-1.95L12.5 12l1.95-.55L15 10Z"></path>
+            </svg>
+            <span>Generate pages</span>
+          </button>
+          <a class="wiki-secondary-action" href="#" data-wiki-export aria-disabled="true">
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <path d="M10 3.5v8M6.75 8.5 10 11.75l3.25-3.25M4 14.5v2h12v-2"></path>
+            </svg>
+            Export Markdown
+          </a>
+        </div>
+
+        <div class="wiki-steering" data-wiki-steering>
+          <span class="wiki-steering-mark" aria-hidden="true">YML</span>
+          <div>
+            <strong>Default documentation plan</strong>
+            <p>Add a reviewed <code>.repokarta.yml</code> to include, exclude, title, or guide pages.</p>
+          </div>
+        </div>
+
+        <nav class="wiki-page-list" data-wiki-pages aria-label="Documentation pages"></nav>
+      </aside>
+
+      <section class="wiki-stage" aria-label="Generated documentation">
+        <header class="wiki-stage-header">
+          <div class="wiki-stage-heading">
+            <span class="wiki-stage-icon" aria-hidden="true">¶</span>
+            <div>
+              <p data-wiki-repository-name>Repository documentation</p>
+              <h2 data-wiki-page-title>Select a repository</h2>
+            </div>
+          </div>
+          <div class="wiki-stage-meta">
+            <span class="wiki-status-chip" data-wiki-page-status data-state="planned">Not generated</span>
+            <button type="button" data-wiki-refresh-page disabled>Refresh page</button>
+          </div>
+        </header>
+
+        <div class="wiki-article-scroll">
+          <article class="conversation-markdown wiki-markdown" data-wiki-content hidden></article>
+          <div class="wiki-empty" data-wiki-empty>
+            <span class="wiki-empty-mark" aria-hidden="true">⌘</span>
+            <h2>Choose a repository to begin</h2>
+            <p>RepoKarta will create a small deterministic page plan before generating anything.</p>
+          </div>
+          <div class="wiki-loading" data-wiki-loading hidden>
+            <span class="wiki-loading-mark" aria-hidden="true"></span>
+            <strong>Reading structural evidence</strong>
+            <p>Planning pages from the commit-pinned repository map.</p>
+          </div>
+          <div class="wiki-error" data-wiki-error hidden>
+            <span aria-hidden="true">!</span>
+            <h2>Documentation could not be loaded</h2>
+            <p data-wiki-error-message></p>
+          </div>
+        </div>
+      </section>
+
+      <aside class="wiki-provenance" aria-labelledby="wiki-provenance-heading">
+        <header>
+          <p class="wiki-kicker">Trust & provenance</p>
+          <h2 id="wiki-provenance-heading">Page evidence</h2>
+          <p>Generation metadata and exact supporting sources for the selected page.</p>
+        </header>
+        <dl class="wiki-provenance-meta">
+          <div><dt>Revision</dt><dd data-wiki-page-revision>—</dd></div>
+          <div><dt>Generator</dt><dd data-wiki-page-generator>—</dd></div>
+          <div><dt>Generated</dt><dd data-wiki-page-generated>—</dd></div>
+          <div><dt>Token usage</dt><dd data-wiki-page-tokens>0 in · 0 out</dd></div>
+        </dl>
+        <section class="wiki-supporting-files" aria-labelledby="wiki-supporting-heading">
+          <div class="wiki-section-heading">
+            <div>
+              <p>Source set</p>
+              <h3 id="wiki-supporting-heading">Supporting files</h3>
+            </div>
+            <span data-wiki-support-count>0</span>
+          </div>
+          <ul data-wiki-supporting-files></ul>
+        </section>
+        <section class="wiki-citations" aria-labelledby="wiki-citations-heading">
+          <div class="wiki-section-heading">
+            <div>
+              <p>Grounding</p>
+              <h3 id="wiki-citations-heading">Source citations</h3>
+            </div>
+            <span data-wiki-citation-count>0</span>
+          </div>
+          <ol data-wiki-citations></ol>
+        </section>
+      </aside>
+    </main>
+
+    <dialog id="mermaid-viewer" class="mermaid-viewer" aria-labelledby="mermaid-viewer-title">
+      <div class="mermaid-viewer-shell">
+        <header class="mermaid-viewer-header">
+          <div class="mermaid-viewer-heading">
+            <p>Diagram viewer</p>
+            <h2 id="mermaid-viewer-title" data-mermaid-viewer-title>Mermaid diagram</h2>
+          </div>
+          <div class="mermaid-viewer-controls" aria-label="Diagram zoom controls">
+            <button type="button" data-mermaid-zoom-out aria-label="Zoom out" title="Zoom out">
+              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 10h10"></path></svg>
+            </button>
+            <label class="mermaid-viewer-zoom">
+              <span class="sr-only">Diagram zoom</span>
+              <select data-mermaid-zoom aria-label="Diagram zoom">
+                <option value="fit">Fit</option>
+                <option value="50">50%</option>
+                <option value="75">75%</option>
+                <option value="100">100%</option>
+                <option value="125">125%</option>
+                <option value="150">150%</option>
+                <option value="200">200%</option>
+              </select>
+            </label>
+            <button type="button" data-mermaid-zoom-in aria-label="Zoom in" title="Zoom in">
+              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 10h10M10 5v10"></path></svg>
+            </button>
+            <span class="mermaid-viewer-divider" aria-hidden="true"></span>
+            <button type="button" data-mermaid-viewer-download aria-label="Download diagram as SVG" title="Download SVG" disabled>
+              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3.5v8M6.75 8.5 10 11.75l3.25-3.25M4 14.5v2h12v-2"></path></svg>
+            </button>
+            <button type="button" class="mermaid-viewer-close" data-mermaid-viewer-close aria-label="Close diagram viewer" title="Close">
+              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15"></path></svg>
+            </button>
+          </div>
+        </header>
+        <div class="mermaid-viewer-stage" data-mermaid-viewer-stage>
+          <div class="mermaid-viewer-canvas" data-mermaid-viewer-canvas></div>
+        </div>
+        <footer class="mermaid-viewer-footer">
+          <span data-mermaid-viewer-status>Fit to window</span>
+          <span>Vector quality · scroll to explore · Esc to close</span>
+        </footer>
+      </div>
+    </dialog>
+  </body>
+</html>
+{{end}}

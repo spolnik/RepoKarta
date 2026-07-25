@@ -15,6 +15,8 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spolnik/RepoKarta/internal/agent"
 	"github.com/spolnik/RepoKarta/internal/codeintel"
+	"github.com/spolnik/RepoKarta/internal/docs"
+	"github.com/spolnik/RepoKarta/internal/graph"
 )
 
 const (
@@ -23,9 +25,10 @@ const (
 
 // Config controls the local MCP endpoint.
 type Config struct {
-	Version string
-	BaseURL string
-	Token   string
+	Version   string
+	BaseURL   string
+	Token     string
+	Artifacts ArtifactReader
 }
 
 // Intelligence is the shared surface implemented by both the in-process
@@ -38,6 +41,38 @@ type Intelligence interface {
 	ListTree(context.Context, codeintel.TreeRequest) (codeintel.TreeResponse, error)
 	GitLog(context.Context, codeintel.GitLogRequest) (codeintel.GitLogResponse, error)
 	GitDiff(context.Context, codeintel.GitDiffRequest) (codeintel.GitDiffResponse, error)
+}
+
+// ArtifactReader exposes the two higher-level, evidence-backed M3/M4 artifacts.
+type ArtifactReader interface {
+	RepositoryMap(context.Context, int64) (graph.Snapshot, error)
+	GeneratedDocument(context.Context, int64, string) (docs.Page, error)
+}
+
+// MapReader supplies commit-pinned structural maps.
+type MapReader interface {
+	Snapshot(context.Context, int64, bool) (graph.Snapshot, error)
+}
+
+// DocumentReader supplies generated repository pages.
+type DocumentReader interface {
+	Page(context.Context, int64, string) (docs.Page, error)
+}
+
+// Artifacts adapts in-process map and documentation services to MCP tools.
+type Artifacts struct {
+	Maps      MapReader
+	Documents DocumentReader
+}
+
+// RepositoryMap reads one cached or deterministically generated repository map.
+func (a Artifacts) RepositoryMap(ctx context.Context, repositoryID int64) (graph.Snapshot, error) {
+	return a.Maps.Snapshot(ctx, repositoryID, false)
+}
+
+// GeneratedDocument reads one persisted generated page.
+func (a Artifacts) GeneratedDocument(ctx context.Context, repositoryID int64, slug string) (docs.Page, error) {
+	return a.Documents.Page(ctx, repositoryID, slug)
 }
 
 // NewToken generates an unguessable bearer token for the loopback MCP endpoint.
@@ -259,11 +294,56 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 		return nil, diff, nil
 	})
 
+	if config.Artifacts != nil {
+		mcp.AddTool(server, &mcp.Tool{
+			Name:        "read_repository_map",
+			Title:       "Read repository map",
+			Description: "Read the deterministic, commit-pinned structural map for one repository. Every node and edge includes exact source evidence.",
+			Annotations: readOnly,
+		}, func(ctx context.Context, _ *mcp.CallToolRequest, input readRepositoryMapInput) (*mcp.CallToolResult, readRepositoryMapOutput, error) {
+			snapshot, err := config.Artifacts.RepositoryMap(ctx, input.RepositoryID)
+			if err != nil {
+				return nil, readRepositoryMapOutput{}, err
+			}
+			for _, node := range snapshot.Nodes {
+				for _, evidence := range node.Evidence {
+					tracker.Record(conversationID, agent.Citation{
+						Label: evidence.Repository + "@" + shortRevision(evidence.Revision) + ":" + evidence.Path,
+						URL:   evidence.URL,
+					})
+				}
+			}
+			return nil, snapshot, nil
+		})
+
+		mcp.AddTool(server, &mcp.Tool{
+			Name:        "read_generated_document",
+			Title:       "Read generated documentation",
+			Description: "Read one persisted repository wiki page with its source revision, generation status, supporting files, citations, and Markdown.",
+			Annotations: readOnly,
+		}, func(ctx context.Context, _ *mcp.CallToolRequest, input readGeneratedDocumentInput) (*mcp.CallToolResult, readGeneratedDocumentOutput, error) {
+			page, err := config.Artifacts.GeneratedDocument(ctx, input.RepositoryID, input.Page)
+			if err != nil {
+				return nil, readGeneratedDocumentOutput{}, err
+			}
+			for _, evidence := range page.Citations {
+				tracker.Record(conversationID, agent.Citation{
+					Label: evidence.Repository + "@" + shortRevision(evidence.Revision) + ":" + evidence.Path,
+					URL:   evidence.URL,
+				})
+			}
+			return nil, page, nil
+		})
+	}
+
 	return server
 }
 
 // RunStdio serves the same tools over stdio, normally backed by the JSON API.
 func RunStdio(ctx context.Context, config Config, intelligence Intelligence) error {
+	if artifacts, ok := intelligence.(ArtifactReader); ok {
+		config.Artifacts = artifacts
+	}
 	err := newServer(config, intelligence, nil, "").Run(ctx, &mcp.StdioTransport{})
 	if errors.Is(err, io.EOF) {
 		return nil
@@ -284,6 +364,19 @@ type searchCodeInput struct {
 	Limit      int    `json:"limit,omitempty" jsonschema:"Maximum files to return from 1 to 500. Defaults to 100."`
 }
 type searchCodeOutput = codeintel.SearchResponse
+
+type readRepositoryMapInput struct {
+	RepositoryID int64 `json:"repository_id" jsonschema:"required,Repository ID returned by list_repositories."`
+}
+
+type readRepositoryMapOutput = graph.Snapshot
+
+type readGeneratedDocumentInput struct {
+	RepositoryID int64  `json:"repository_id" jsonschema:"required,Repository ID returned by list_repositories."`
+	Page         string `json:"page" jsonschema:"required,Page slug from the documentation plan such as overview architecture or dependencies."`
+}
+
+type readGeneratedDocumentOutput = docs.Page
 
 type findSymbolInput struct {
 	Symbol     string `json:"symbol" jsonschema:"required,Exact symbol name to find."`
@@ -346,4 +439,11 @@ func bearerAuth(token string, next http.Handler) http.Handler {
 
 func boolPointer(value bool) *bool {
 	return &value
+}
+
+func shortRevision(value string) string {
+	if len(value) > 8 {
+		return value[:8]
+	}
+	return value
 }
