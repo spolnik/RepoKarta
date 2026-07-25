@@ -203,6 +203,11 @@ func TestProviderGroundedKnowledgePlanAndPage(t *testing.T) {
 			InputTokens:  1200,
 			OutputTokens: 900,
 		},
+		{
+			Provider: "codex",
+			Model:    "gpt-5.6-sol",
+			Text:     "# Runtime Lifecycle\n\nToo short to pass the quality gate.",
+		},
 	}}
 	docsDirectory := filepath.Join(t.TempDir(), "docs")
 	service, err := New(storage, maps, docsDirectory)
@@ -289,6 +294,24 @@ func TestProviderGroundedKnowledgePlanAndPage(t *testing.T) {
 		!strings.Contains(generator.requests[1].Message, "saved_repository_survey") ||
 		!strings.Contains(generator.requests[2].Message, "failure behavior") {
 		t.Fatalf("generation prompts = %#v", generator.requests)
+	}
+	if _, err := service.Generate(ctx, GenerateRequest{
+		RepositoryID: 1,
+		Page:         "runtime-lifecycle",
+		Provider:     "codex",
+		Model:        "gpt-5.6-sol",
+		Effort:       "high",
+		Refresh:      true,
+	}); err == nil {
+		t.Fatal("page-specific generation hid a quality-gate failure")
+	}
+	failedSite, err := service.Plan(ctx, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed := pageBySlug(t, failedSite, "runtime-lifecycle")
+	if failed.Status != StatusError || failed.Error == "" {
+		t.Fatalf("failed page status was not persisted: %+v", failed)
 	}
 }
 

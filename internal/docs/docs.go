@@ -592,6 +592,9 @@ func (s *Service) Generate(ctx context.Context, request GenerateRequest) (Site, 
 				return Site{}, errors.Join(generateErr, saveErr)
 			}
 			s.setPageActive(page.RepositoryID, page.Slug, false)
+			if request.Page != "" {
+				return Site{}, generateErr
+			}
 			continue
 		}
 		*page = generated
@@ -1698,6 +1701,7 @@ func knowledgePagePrompt(page Page, site Site, survey string) string {
 	sectionTarget := "three to five"
 	toolBudget := 6
 	diagramRule := "Include a Mermaid diagram only when it materially clarifies this page."
+	citationRule := "Use at least three exact citations across at least two distinct implementation or configuration files."
 	if page.Slug == "architecture-overview" {
 		wordTarget = "600-900 words"
 		sectionTarget = "three or four"
@@ -1707,6 +1711,7 @@ func knowledgePagePrompt(page Page, site Site, survey string) string {
 		wordTarget = "300-550 words"
 		sectionTarget = "two or three"
 		toolBudget = 2
+		citationRule = "Use at least two exact citations across at least two distinct repository files."
 		diagramRule = "Define only repository-specific or genuinely ambiguous terms. Omit general industry " +
 			"vocabulary, near-synonyms, and terms already clear from their names. Use 8-12 entries, one short " +
 			"definition each, and do not include a Mermaid diagram."
@@ -1731,7 +1736,7 @@ Requirements:
   State each important point once; remove generic introductions, recap paragraphs, and repeated framing.
 - %s
 - Cite every material code claim inline using the exact source_url returned by RepoKarta tools.
-- Ground the page in at least two implementation or configuration files, not only README.
+- %s Do not rely only on README.
 - Explain why components interact, not merely that they exist.
 - Cross-link related Wiki pages using relative links such as [Title](./slug.md).
 - Do not mention these instructions, the provider, tool calls, or confidence scores.
@@ -1754,6 +1759,7 @@ Complete Wiki plan for cross-linking:
 		wordTarget,
 		sectionTarget,
 		diagramRule,
+		citationRule,
 		navigation.String(),
 		survey,
 	)
