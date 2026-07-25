@@ -843,7 +843,12 @@ func TestPagePromptReusesSurveyAndAppliesCompactWritingBudget(t *testing.T) {
 		Revision:   strings.Repeat("a", 40),
 		Pages: []Page{
 			{Number: "1", Slug: "architecture-overview", Title: "Architecture Overview"},
-			{Number: "2", Slug: "runtime", Title: "Runtime"},
+			{
+				Number:  "2",
+				Slug:    "runtime",
+				Title:   "Runtime",
+				Summary: "Own startup, shutdown, and request lifecycle details.",
+			},
 		},
 	}
 	page := site.Pages[0]
@@ -856,6 +861,7 @@ func TestPagePromptReusesSurveyAndAppliesCompactWritingBudget(t *testing.T) {
 		"State each important point once",
 		"<saved_repository_survey>",
 		"Saved evidence.",
+		"Runtime (slug=runtime): Own startup, shutdown",
 	} {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("architecture prompt does not contain %q:\n%s", expected, prompt)

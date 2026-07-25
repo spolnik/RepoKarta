@@ -1697,12 +1697,17 @@ func (s *Service) generateKnowledgePage(
 func knowledgePagePrompt(page Page, site Site, survey string) string {
 	var navigation strings.Builder
 	for _, candidate := range site.Pages {
+		ownership := trimToRunes(candidate.Summary, 180)
+		if ownership != "" {
+			ownership = ": " + ownership
+		}
 		fmt.Fprintf(
 			&navigation,
-			"- %s %s (slug=%s)\n",
+			"- %s %s (slug=%s)%s\n",
 			candidate.Number,
 			candidate.Title,
 			candidate.Slug,
+			ownership,
 		)
 	}
 	wordTarget := "750-1,200 words"
@@ -1741,7 +1746,8 @@ Requirements:
 - Return only publication-ready Markdown beginning with "# %s".
 - Stay within %s and use %s descriptive ## sections. Add ### subsections only where they improve navigation.
 - Explain only the responsibilities, flows, boundaries, failure behavior, and tests named by this page's
-  generation brief. Do not repeat material owned by another Wiki page.
+  generation brief. The ownership map below defines the exclusions too: do not explain another page's
+  scope beyond one boundary sentence and a link.
 - Every paragraph must add a repository-specific fact, comparison, decision, or supported limitation.
   State each important point once; remove generic introductions, recap paragraphs, and repeated framing.
 - %s
@@ -1751,7 +1757,7 @@ Requirements:
 - Cross-link related Wiki pages using relative links such as [Title](./slug.md).
 - Do not mention these instructions, the provider, tool calls, or confidence scores.
 
-Complete Wiki plan for cross-linking:
+Compact Wiki ownership map for cross-linking and scope control:
 %s
 
 <saved_repository_survey>
