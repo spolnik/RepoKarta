@@ -13,70 +13,149 @@
     <link rel="stylesheet" href="/assets/app.css">
     <script type="module" src="/assets/app.js"></script>
   </head>
-  <body class="min-h-full bg-[#090b0f] text-slate-100 antialiased">
+  <body class="h-full overflow-hidden bg-[#090b0f] text-slate-100 antialiased">
     {{template "app-header" .}}
 
-    <main class="mx-auto max-w-[1500px] px-5 py-8 lg:px-8 lg:py-10">
-      <div class="min-w-0">
-        <section aria-labelledby="chat-heading">
-          <div class="mb-7">
-            <p class="mb-2 text-xs font-semibold uppercase tracking-[0.24em] text-violet-300">Deep code conversation</p>
-            <h1 id="chat-heading" class="max-w-3xl text-3xl font-semibold tracking-[-0.04em] text-white sm:text-4xl">
-              Ask the map. Follow the evidence.
-            </h1>
-            <p class="mt-3 max-w-2xl text-sm leading-6 text-slate-400 sm:text-base">
-              Reason across projects with your local Codex or Claude login. RepoKarta gives the model read-only, commit-pinned code tools.
-            </p>
-          </div>
+    <main class="chat-app-shell" data-chat-workspace>
+      <button
+        type="button"
+        class="chat-panel-scrim"
+        data-session-panel-scrim
+        aria-label="Close conversations"
+        hidden
+      ></button>
 
-          <section class="conversation-panel conversation-page-panel" aria-labelledby="conversation-heading" data-conversation>
-            <header class="flex flex-wrap items-start justify-between gap-4 border-b border-white/[0.06] px-5 py-4">
-              <div>
-                <h2 id="conversation-heading" class="text-lg font-semibold tracking-tight text-white">Code conversation</h2>
-                <p class="mt-1 text-xs leading-5 text-slate-500">Answers retain inspectable source links from the indexed revisions.</p>
-              </div>
-              <div class="flex flex-wrap items-center justify-end gap-2">
-                <div class="conversation-telemetry" aria-label="Conversation status">
-                  <div class="conversation-telemetry-item">
-                    <span>Turn</span>
-                    <strong id="conversation-runtime">Ready</strong>
-                  </div>
-                  <div class="conversation-telemetry-item conversation-context">
-                    <span>Context</span>
-                    <strong id="conversation-context-value" title="Context usage appears after the first turn.">After first turn</strong>
-                    <span id="conversation-context-meter" class="conversation-context-meter" data-state="pending" aria-hidden="true"></span>
-                  </div>
-                </div>
-                <button type="button" class="secondary-button debug-toggle" data-debug-toggle aria-controls="conversation-debug" aria-expanded="false">
-                  Debug <span data-debug-count>0</span>
-                </button>
-                <button type="button" class="secondary-button" data-new-conversation>New conversation</button>
-              </div>
-            </header>
-
-            <div id="conversation-messages" class="conversation-messages" aria-live="polite">
-              <div class="conversation-empty" data-conversation-empty>
-                <p class="text-sm text-slate-400">What do you want to understand about these repositories?</p>
-                <div class="conversation-starters" aria-label="Suggested questions">
-                  <button type="button" data-chat-prompt="Map the authentication flow across these repositories.">Map the authentication flow</button>
-                  <button type="button" data-chat-prompt="Explain the deployment architecture and cite the relevant configuration.">Explain deployment architecture</button>
-                  <button type="button" data-chat-prompt="Find the shared dependencies across these projects and explain how they are used.">Compare shared dependencies</button>
-                </div>
-              </div>
+      <aside class="conversation-history-panel" data-session-panel aria-labelledby="conversation-history-heading">
+        <header class="conversation-history-header">
+          <div class="conversation-history-heading">
+            <span class="conversation-history-mark" aria-hidden="true">
+              <img src="/assets/repokarta-mark-192.png" alt="" width="24" height="24">
+            </span>
+            <div>
+              <p>Code workspace</p>
+              <h1 id="conversation-history-heading">Conversations</h1>
             </div>
+          </div>
+          <button type="button" class="chat-panel-close" data-session-panel-close aria-label="Close conversations">×</button>
+        </header>
 
-            <form id="conversation-form" class="border-t border-white/[0.06] p-4">
-              <label for="conversation-message" class="sr-only">Question about your code</label>
-              <textarea
-                id="conversation-message"
-                name="message"
-                rows="3"
-                maxlength="12000"
-                placeholder="Ask about architecture, behavior, dependencies, or code flow…"
-                class="conversation-input"
-              ></textarea>
-              <div id="conversation-attachments" class="conversation-attachment-tray" aria-live="polite" hidden></div>
-              <div class="mt-3 flex flex-wrap items-center gap-2">
+        <button type="button" class="conversation-new-button" data-new-conversation>
+          <svg viewBox="0 0 20 20" aria-hidden="true">
+            <path d="M10 4v12M4 10h12"></path>
+          </svg>
+          New conversation
+          <kbd>Ctrl N</kbd>
+        </button>
+
+        <label class="conversation-history-search">
+          <svg viewBox="0 0 20 20" aria-hidden="true">
+            <circle cx="8.5" cy="8.5" r="4.75"></circle>
+            <path d="m12 12 4 4"></path>
+          </svg>
+          <span class="sr-only">Filter saved conversations</span>
+          <input type="search" placeholder="Search conversations" data-conversation-filter autocomplete="off">
+        </label>
+
+        <div class="conversation-history-scroll">
+          <p class="conversation-history-group-label">Recent</p>
+          <ol id="conversation-history" class="conversation-history" aria-live="polite"></ol>
+          <p class="conversation-history-empty" data-conversation-history-empty>Loading saved chats…</p>
+        </div>
+
+        <footer class="conversation-history-footer">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span>Stored locally</span>
+          <span aria-hidden="true">·</span>
+          <span>{{len .Repositories}} repos indexed</span>
+        </footer>
+      </aside>
+
+      <section class="conversation-panel conversation-page-panel" aria-labelledby="conversation-heading" data-conversation>
+        <header class="conversation-header">
+          <div class="conversation-header-leading">
+            <button type="button" class="conversation-icon-button conversation-mobile-only" data-session-panel-open aria-label="Open conversations">
+              <svg viewBox="0 0 20 20" aria-hidden="true">
+                <path d="M3.5 5h13M3.5 10h13M3.5 15h13"></path>
+              </svg>
+            </button>
+            <div class="conversation-heading-copy">
+              <div class="conversation-title-row">
+                <h2 id="conversation-heading"><span id="conversation-title">New conversation</span></h2>
+                <button type="button" class="conversation-title-edit" data-conversation-title-edit aria-label="Rename conversation" hidden>
+                  <svg viewBox="0 0 20 20" aria-hidden="true">
+                    <path d="m4 14.5-.5 2 2-.5L14.8 6.7 12.3 4.2 4 14.5Z"></path>
+                    <path d="m10.8 5.7 2.5 2.5"></path>
+                  </svg>
+                </button>
+              </div>
+              <p id="conversation-header-status">Ready for a grounded question</p>
+            </div>
+          </div>
+          <div class="conversation-header-actions">
+            <button type="button" class="conversation-header-button" data-inspector-toggle aria-controls="conversation-inspector" aria-expanded="false">
+              <svg viewBox="0 0 20 20" aria-hidden="true">
+                <path d="M3.5 4.5h13v11h-13zM7.5 4.5v11"></path>
+              </svg>
+              <span>Evidence</span>
+              <strong data-evidence-count>0</strong>
+            </button>
+            <button type="button" class="conversation-header-button debug-toggle" data-debug-toggle aria-controls="conversation-debug" aria-expanded="false">
+              <svg viewBox="0 0 20 20" aria-hidden="true">
+                <path d="M7 4.5h6M7 15.5h6M5.5 7.5h9v5h-9z"></path>
+              </svg>
+              <span>Debug</span>
+              <strong data-debug-count>0</strong>
+            </button>
+            <button type="button" class="conversation-icon-button" data-new-conversation aria-label="Start a new conversation">
+              <svg viewBox="0 0 20 20" aria-hidden="true">
+                <path d="M10 4v12M4 10h12"></path>
+              </svg>
+            </button>
+          </div>
+        </header>
+
+        <div id="conversation-messages" class="conversation-messages" aria-live="polite">
+          <div class="conversation-empty" data-conversation-empty>
+            <span class="conversation-empty-mark" aria-hidden="true">
+              <img src="/assets/repokarta-mark-192.png" alt="" width="44" height="44">
+            </span>
+            <p class="conversation-empty-kicker">Grounded in your code</p>
+            <h3>What do you want to understand?</h3>
+            <p class="conversation-empty-copy">
+              Ask across {{len .Repositories}} indexed repositories. Every answer stays read-only and links back to commit-pinned evidence.
+            </p>
+            <div class="conversation-starters" aria-label="Suggested questions">
+              <button type="button" data-chat-prompt="Map the authentication flow across these repositories.">
+                <span>Trace a system</span>
+                Map the authentication flow
+              </button>
+              <button type="button" data-chat-prompt="Explain the deployment architecture and cite the relevant configuration.">
+                <span>Understand architecture</span>
+                Explain deployment configuration
+              </button>
+              <button type="button" data-chat-prompt="Find the shared dependencies across these projects and explain how they are used.">
+                <span>Compare repositories</span>
+                Find shared dependencies
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <form id="conversation-form" class="conversation-composer">
+          <div class="conversation-composer-surface">
+            <label for="conversation-message" class="sr-only">Question about your code</label>
+            <textarea
+              id="conversation-message"
+              name="message"
+              rows="2"
+              maxlength="12000"
+              placeholder="Ask RepoKarta about your code…"
+              class="conversation-input"
+            ></textarea>
+            <div id="conversation-attachments" class="conversation-attachment-tray" aria-live="polite" hidden></div>
+
+            <div class="conversation-composer-toolbar">
+              <div class="conversation-composer-tools">
                 <input
                   id="conversation-image-input"
                   type="file"
@@ -84,48 +163,164 @@
                   multiple
                   hidden
                 >
-                <button type="button" class="conversation-attach-button" data-image-attach disabled>
-                  <svg viewBox="0 0 24 24" aria-hidden="true">
-                    <path d="M8.5 12.5 14.7 6.3a3 3 0 0 1 4.2 4.2l-8.3 8.3a5 5 0 0 1-7.1-7.1l8.5-8.5"></path>
+                <button type="button" class="conversation-tool-button" data-image-attach disabled aria-label="Attach images" title="Attach images">
+                  <svg viewBox="0 0 20 20" aria-hidden="true">
+                    <path d="m6.5 10.5 5.2-5.2a2.5 2.5 0 0 1 3.5 3.5l-7 7a4 4 0 0 1-5.7-5.7l7-7"></path>
                   </svg>
-                  Attach image
                 </button>
-                <label class="conversation-control">
-                  <span>Provider</span>
-                  <select id="conversation-provider" name="provider" disabled>
-                    <option value="">Checking local providers…</option>
-                  </select>
-                </label>
-                <label class="conversation-control">
-                  <span>Model</span>
-                  <input id="conversation-model" name="model" list="conversation-model-options" maxlength="200" placeholder="Provider default" autocomplete="off" disabled>
-                  <datalist id="conversation-model-options"></datalist>
-                </label>
-                <label class="conversation-control">
-                  <span>Effort</span>
-                  <select id="conversation-effort" name="effort" disabled>
-                    <option value="">Provider default</option>
-                  </select>
-                </label>
-                <button id="conversation-interrupt" class="conversation-interrupt-button ml-auto" type="button" hidden disabled>Interrupt</button>
-                <button id="conversation-submit" class="search-button" type="submit" disabled>Ask Code</button>
-              </div>
-              <div class="mt-2 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-600">
-                <div>
-                  <p id="provider-detail">Checking your installed provider harnesses…</p>
-                  <p id="image-support-detail" class="mt-0.5" aria-live="polite"></p>
-                </div>
-                <div class="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono">
-                  <p><kbd class="text-slate-500">Enter</kbd> send · <kbd class="text-slate-500">Shift+Enter</kbd> new line</p>
-                  <p>Read-only · ephemeral session</p>
-                </div>
-              </div>
-            </form>
-          </section>
-        </section>
-      </div>
 
-      {{template "repository-sidebar" .}}
+                <details class="conversation-settings">
+                  <summary>
+                    <span class="conversation-provider-dot" aria-hidden="true"></span>
+                    <span id="conversation-provider-label">Checking providers…</span>
+                    <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m6.5 8 3.5 4 3.5-4"></path></svg>
+                  </summary>
+                  <div class="conversation-settings-popover">
+                    <div class="conversation-settings-heading">
+                      <div>
+                        <p>Run settings</p>
+                        <span>Locked after this conversation starts</span>
+                      </div>
+                      <span class="conversation-read-only-badge">Read only</span>
+                    </div>
+                    <label class="conversation-control">
+                      <span>Provider</span>
+                      <select id="conversation-provider" name="provider" disabled>
+                        <option value="">Checking local providers…</option>
+                      </select>
+                    </label>
+                    <label class="conversation-control">
+                      <span>Model</span>
+                      <input id="conversation-model" name="model" list="conversation-model-options" maxlength="200" placeholder="Provider default" autocomplete="off" disabled>
+                      <datalist id="conversation-model-options"></datalist>
+                    </label>
+                    <div class="conversation-settings-grid">
+                      <label class="conversation-control">
+                        <span>Effort</span>
+                        <select id="conversation-effort" name="effort" disabled>
+                          <option value="">Provider default</option>
+                        </select>
+                      </label>
+                      <label class="conversation-control">
+                        <span>Timeout</span>
+                        <select id="conversation-timeout" name="timeout">
+                          <option value="60">1 min</option>
+                          <option value="180" selected>3 min</option>
+                          <option value="300">5 min</option>
+                          <option value="600">10 min</option>
+                        </select>
+                      </label>
+                      <label class="conversation-control">
+                        <span>Output budget</span>
+                        <select id="conversation-token-budget" name="token_budget">
+                          <option value="4000">4k</option>
+                          <option value="12000" selected>12k</option>
+                          <option value="32000">32k</option>
+                          <option value="64000">64k</option>
+                        </select>
+                      </label>
+                    </div>
+                    <p id="provider-detail" class="conversation-provider-detail">Checking your installed provider harnesses…</p>
+                    <p id="image-support-detail" class="conversation-image-support-detail" aria-live="polite"></p>
+                  </div>
+                </details>
+              </div>
+
+              <div class="conversation-composer-actions">
+                <span class="conversation-shortcut"><kbd>Enter</kbd> send</span>
+                <button id="conversation-interrupt" class="conversation-interrupt-button" type="button" hidden disabled>
+                  <span aria-hidden="true"></span>
+                  Stop
+                </button>
+                <button id="conversation-submit" class="conversation-submit-button" type="submit" disabled aria-label="Ask RepoKarta">
+                  <svg viewBox="0 0 20 20" aria-hidden="true">
+                    <path d="M10 15.5v-11M5.5 9 10 4.5 14.5 9"></path>
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </div>
+          <p class="conversation-composer-note">RepoKarta can make mistakes. Verify important claims in the linked source.</p>
+        </form>
+      </section>
+
+      <button
+        type="button"
+        class="chat-panel-scrim"
+        data-inspector-scrim
+        aria-label="Close evidence"
+        hidden
+      ></button>
+
+      <aside id="conversation-inspector" class="conversation-inspector" data-inspector data-open="false" aria-labelledby="conversation-inspector-heading" aria-hidden="true" inert>
+        <header class="conversation-inspector-header">
+          <div>
+            <p>Grounding</p>
+            <h2 id="conversation-inspector-heading">Evidence & session</h2>
+          </div>
+          <button type="button" class="chat-panel-close" data-inspector-close aria-label="Close evidence">×</button>
+        </header>
+
+        <div class="conversation-inspector-scroll">
+          <section class="conversation-inspector-section" aria-labelledby="evidence-sources-heading">
+            <div class="conversation-inspector-section-heading">
+              <div>
+                <p>Sources</p>
+                <h3 id="evidence-sources-heading">Commit-pinned evidence</h3>
+              </div>
+              <span data-evidence-count>0</span>
+            </div>
+            <ol id="conversation-evidence-list" class="conversation-evidence-list"></ol>
+            <p class="conversation-evidence-empty" data-evidence-empty>Sources used by answers will collect here.</p>
+          </section>
+
+          <section class="conversation-inspector-section" aria-labelledby="session-health-heading">
+            <div class="conversation-inspector-section-heading">
+              <div>
+                <p>Session</p>
+                <h3 id="session-health-heading">Run health</h3>
+              </div>
+            </div>
+            <div class="conversation-telemetry" aria-label="Conversation status">
+              <div class="conversation-telemetry-item">
+                <span>Turn</span>
+                <strong id="conversation-runtime">Ready</strong>
+              </div>
+              <div class="conversation-telemetry-item conversation-context">
+                <span>Context</span>
+                <strong id="conversation-context-value" title="Context usage appears after the first turn.">After first turn</strong>
+                <span id="conversation-context-meter" class="conversation-context-meter" data-state="pending" aria-hidden="true"></span>
+              </div>
+              <div class="conversation-telemetry-item">
+                <span>Usage</span>
+                <strong id="conversation-usage-value" title="Token usage appears when the provider reports it.">After first turn</strong>
+              </div>
+            </div>
+          </section>
+
+          <section class="conversation-inspector-section" aria-labelledby="scope-heading">
+            <div class="conversation-inspector-section-heading">
+              <div>
+                <p>Retrieval scope</p>
+                <h3 id="scope-heading">{{len .Repositories}} indexed repositories</h3>
+              </div>
+            </div>
+            <ul class="conversation-repository-list">
+              {{range .Repositories}}
+              <li>
+                <span>{{.Name}}</span>
+                <strong class="status-{{.IndexState}}">{{statusLabel .IndexState}}</strong>
+              </li>
+              {{else}}
+              <li><span>No repositories indexed</span></li>
+              {{end}}
+            </ul>
+            <p class="conversation-safety-note">
+              Repository content is read-only. Provider credentials are never stored with transcripts.
+            </p>
+          </section>
+        </div>
+      </aside>
     </main>
 
     <aside id="conversation-debug" class="debug-window" aria-labelledby="debug-heading" hidden>
@@ -142,9 +337,9 @@
       </header>
       <div class="debug-window-summary">
         <span class="status-dot" aria-hidden="true"></span>
-        <span>Browser session only</span>
+        <span>Diagnostics stay in this browser session</span>
         <span>·</span>
-        <span>Prompts and response text are not logged</span>
+        <span>Saved chats persist locally; credentials never do</span>
       </div>
       <ol id="debug-entries" class="debug-entries" aria-live="polite"></ol>
       <p class="debug-empty" data-debug-empty>No diagnostics yet.</p>

@@ -5,8 +5,8 @@ your laptop. Point it at a ghorg directory (or any repository root), and it
 discovers, incrementally indexes, and searches committed source without
 modifying a worktree.
 
-The current implementation delivers the M1 search slice and the first complete
-M2 conversation slice:
+The current implementation delivers M1 code search and M2 grounded code
+questions:
 
 - regular, linked-worktree, and bare Git repository discovery;
 - origin, default revision, HEAD, scan, and index metadata in SQLite;
@@ -30,22 +30,28 @@ M2 conversation slice:
   catalogue's recorded indexed or HEAD commits;
 - live indexing state through Server-Sent Events;
 - loopback Host and Origin validation;
-- streamed, multi-turn questions through either a local Codex or Claude Code
-  harness;
+- streamed, multi-turn questions through a local Codex or Claude Code harness,
+  or a Go-native Anthropic Messages API loop;
 - animation-frame-batched response streaming with one final Markdown,
   sanitization, syntax-highlighting, and Mermaid pass per answer;
 - reuse of the provider's existing ChatGPT/Codex or Claude login without
-  collecting subscription credentials;
+  collecting subscription credentials, plus `ANTHROPIC_API_KEY` configuration
+  that is read only from the launch environment;
 - one provider-neutral Go conversation interface;
 - a JSON code-intelligence API used by the UI and protocol adapters;
 - authenticated loopback HTTP MCP plus a stdio MCP adapter with read-only
-  `list_repositories`, `search_code`, `get_file`, `list_tree`, `git_log`, and
-  `git_diff` tools;
+  `list_repositories`, `search_code`, `find_symbol`, `get_file`, `list_tree`,
+  `git_log`, and `git_diff` tools;
 - read-only Codex sandboxes, Claude plan mode, and disabled mutation/shell
   tools;
 - authoritative citation chips recorded from the exact MCP tool results rather
   than trusting a model to reproduce source URLs;
-- ephemeral conversations that are not written to RepoKarta's database;
+- locally persisted, automatically titled conversations with reopen, rename,
+  delete, native provider resume, and bounded transcript-replay fallback;
+- visible token usage plus per-turn cancellation, timeout, and output-token
+  budget controls;
+- adversarial coverage that keeps instructions found in repository content
+  from expanding the agent's read-only tool permissions;
 - embedded frontend assets in one native Go executable.
 
 Architecture maps and generated DeepWiki-style documentation remain later
@@ -103,11 +109,16 @@ The JSON API is the capability boundary used by non-browser clients:
 
 ```text
 GET /api/search?q=OpenFile&mode=literal&repo=RepoKarta&lang=Go&limit=100
+GET /api/symbol?symbol=OpenFile&repo=RepoKarta&lang=Go&limit=100
 GET /api/repositories
 GET /api/file/{repository}?rev={commit}&path={path}&lines=1-200
 GET /api/tree/{repository}?rev={commit}&path={directory}
 GET /api/git/log/{repository}?rev={commit}&path={path}&limit=50
 GET /api/git/diff/{repository}?from={commit}&to={commit}&path={path}&context=3
+GET /api/conversations
+GET /api/conversations/{conversation-id}
+PATCH /api/conversations/{conversation-id}
+DELETE /api/conversations/{conversation-id}
 ```
 
 Search responses always include `returned_files`, `matching_files`,
@@ -139,13 +150,15 @@ The stdio adapter is deliberately thin: it calls the JSON API and exposes no
 MCP-only code capability. RepoKarta's own Codex and Claude harnesses use the
 same tool definitions over its authenticated loopback HTTP MCP endpoint.
 
-## Ask with Codex or Claude
+## Ask with Codex, Claude, or the Anthropic API
 
 RepoKarta detects local provider CLIs when it starts:
 
 - Codex uses `codex app-server` and your existing `codex login` session.
 - Claude uses the Claude Code `stream-json` protocol and your existing
   `claude auth login` session.
+- Anthropic API uses the official Go SDK and reads `ANTHROPIC_API_KEY` from the
+  environment that launches RepoKarta.
 
 RepoKarta never receives the provider password or subscription credential. It
 starts the installed harness as a child process and gives it a temporary bearer
@@ -159,6 +172,16 @@ interactive terminal is logged in. RepoKarta rechecks authentication when each
 new conversation starts and again after a harness startup failure; launch it
 from the same session where `codex login` or `claude auth login` succeeds.
 
+To enable the direct Anthropic provider without persisting its secret:
+
+```powershell
+$env:ANTHROPIC_API_KEY = "..."
+go run ./cmd/repokarta serve C:\Work\ghorg
+```
+
+RepoKarta never writes that environment value to SQLite, browser storage,
+logs, generated content, or repository configuration.
+
 Override CLI discovery when needed:
 
 ```powershell
@@ -171,9 +194,16 @@ go run ./cmd/repokarta serve `
 Model and effort are configured per provider before a conversation starts.
 Leaving either field on its default lets the selected harness choose. RepoKarta
 passes Codex effort through app-server turn configuration and Claude effort
-through Claude Code's `--effort` option.
-Conversation state lives only in memory for this first slice and disappears
-when RepoKarta stops.
+through Claude Code's `--effort` option. Each turn also has a bounded timeout
+and, for the direct API loop, an output-token budget.
+
+Conversation titles, messages, citations, status, and usage are stored locally.
+Uploaded conversation images are stored as exact RepoKarta-owned files outside
+SQLite. Provider processes are intentionally disposable: after an idle period
+RepoKarta closes them while retaining the transcript and an opaque provider
+resume cursor. Reopening a chat first attempts provider-native resume and
+falls back to a bounded replay of the durable transcript when that cursor is
+stale.
 
 ## Storage and safety
 
@@ -192,8 +222,10 @@ RepoKarta-owned state is kept outside source repositories:
 - macOS: `~/Library/Caches/RepoKarta/`
 - Linux: the operating system user cache directory
 
-SQLite stores catalogue and job metadata. Zoekt shards live under `indexes/`;
-future generated documentation will live under `docs/`.
+SQLite stores catalogue, job, and conversation metadata and transcripts.
+Conversation images, Zoekt shards, and future generated documentation are
+filesystem-backed under RepoKarta's own data directory. Deleting a chat removes
+its transcript and its exact owned image files.
 
 ## Validate and package
 

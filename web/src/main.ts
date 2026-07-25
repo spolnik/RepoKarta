@@ -199,12 +199,14 @@ function highlightSearchResults(root: ParentNode = document): void {
 }
 
 type ConversationEvent = {
-  type: "meta" | "delta" | "sources" | "images" | "context" | "interrupted" | "done" | "error";
+  type: "meta" | "delta" | "sources" | "images" | "context" | "usage" | "interrupted" | "done" | "error";
   conversation_id?: string;
+  title?: string;
   text?: string;
   sources?: Array<{ label: string; url: string }>;
   images?: ConversationImage[];
   context?: ContextUsage;
+  usage?: TokenUsage;
 };
 
 type ContextUsage = {
@@ -220,6 +222,40 @@ type ConversationImage = {
   data: string;
 };
 
+type TokenUsage = {
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  budget_tokens?: number;
+};
+
+type ConversationRecord = {
+  id: string;
+  title: string;
+  provider: string;
+  model?: string;
+  effort?: string;
+  created_at: string;
+  updated_at: string;
+  message_count: number;
+  input_tokens: number;
+  output_tokens: number;
+  messages?: ConversationRecordMessage[];
+};
+
+type ConversationRecordMessage = {
+  id: number;
+  role: "user" | "assistant";
+  text?: string;
+  images?: ConversationImage[];
+  sources?: Array<{ label: string; url: string }>;
+  status?: string;
+  error?: string;
+  input_tokens?: number;
+  output_tokens?: number;
+  created_at: string;
+};
+
 type ProviderStatus = {
   id: string;
   name: string;
@@ -233,6 +269,8 @@ type ProviderStatus = {
   image_output: boolean;
   interrupt: boolean;
   context_usage: boolean;
+  token_usage: boolean;
+  token_budget: boolean;
 };
 
 const supportedImageTypes = new Set(["image/gif", "image/jpeg", "image/png", "image/webp"]);
@@ -286,6 +324,20 @@ function formatDebugDetails(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+function conversationErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error || "Conversation failed.");
+  if (/401 unauthorized|authentication_error|invalid x-api-key/i.test(message)) {
+    return "Provider authentication failed. Check the configured API key or sign-in, then try again.";
+  }
+  if (/429|rate.?limit|too many requests/i.test(message)) {
+    return "The provider rate limit was reached. Wait a moment, then try again.";
+  }
+  if (/timeout|deadline exceeded|context canceled/i.test(message)) {
+    return "The provider did not finish before the timeout. Increase the timeout in Run settings or try a narrower question.";
+  }
+  return message;
 }
 
 function enableDebugLogger(): DebugLogger | undefined {
@@ -350,9 +402,6 @@ function enableDebugLogger(): DebugLogger | undefined {
     count.textContent = String(entries.length);
     if (!panel.hidden) {
       list.scrollTop = list.scrollHeight;
-    }
-    if (level === "error") {
-      setOpen(true);
     }
   };
 
@@ -797,6 +846,8 @@ function enableConversations(debug?: DebugLogger): void {
   const model = document.querySelector<HTMLInputElement>("#conversation-model");
   const modelOptions = document.querySelector<HTMLDataListElement>("#conversation-model-options");
   const effort = document.querySelector<HTMLSelectElement>("#conversation-effort");
+  const timeout = document.querySelector<HTMLSelectElement>("#conversation-timeout");
+  const tokenBudget = document.querySelector<HTMLSelectElement>("#conversation-token-budget");
   const input = document.querySelector<HTMLTextAreaElement>("#conversation-message");
   const imageInput = document.querySelector<HTMLInputElement>("#conversation-image-input");
   const attachButton = document.querySelector<HTMLButtonElement>("[data-image-attach]");
@@ -807,8 +858,29 @@ function enableConversations(debug?: DebugLogger): void {
   const runtime = document.querySelector<HTMLElement>("#conversation-runtime");
   const contextValue = document.querySelector<HTMLElement>("#conversation-context-value");
   const contextMeter = document.querySelector<HTMLElement>("#conversation-context-meter");
+  const usageValue = document.querySelector<HTMLElement>("#conversation-usage-value");
   const detail = document.querySelector<HTMLElement>("#provider-detail");
-  const newConversation = document.querySelector<HTMLButtonElement>("[data-new-conversation]");
+  const newConversationButtons = Array.from(document.querySelectorAll<HTMLButtonElement>("[data-new-conversation]"));
+  const history = document.querySelector<HTMLOListElement>("#conversation-history");
+  const historyEmpty = document.querySelector<HTMLElement>("[data-conversation-history-empty]");
+  const historyFilter = document.querySelector<HTMLInputElement>("[data-conversation-filter]");
+  const workspace = document.querySelector<HTMLElement>("[data-chat-workspace]");
+  const sessionPanel = document.querySelector<HTMLElement>("[data-session-panel]");
+  const sessionPanelOpen = document.querySelector<HTMLButtonElement>("[data-session-panel-open]");
+  const sessionPanelClose = document.querySelector<HTMLButtonElement>("[data-session-panel-close]");
+  const sessionPanelScrim = document.querySelector<HTMLButtonElement>("[data-session-panel-scrim]");
+  const inspector = document.querySelector<HTMLElement>("[data-inspector]");
+  const inspectorToggle = document.querySelector<HTMLButtonElement>("[data-inspector-toggle]");
+  const inspectorClose = document.querySelector<HTMLButtonElement>("[data-inspector-close]");
+  const inspectorScrim = document.querySelector<HTMLButtonElement>("[data-inspector-scrim]");
+  const title = document.querySelector<HTMLElement>("#conversation-title");
+  const titleEdit = document.querySelector<HTMLButtonElement>("[data-conversation-title-edit]");
+  const headerStatus = document.querySelector<HTMLElement>("#conversation-header-status");
+  const providerLabel = document.querySelector<HTMLElement>("#conversation-provider-label");
+  const settings = document.querySelector<HTMLDetailsElement>(".conversation-settings");
+  const evidenceList = document.querySelector<HTMLOListElement>("#conversation-evidence-list");
+  const evidenceEmpty = document.querySelector<HTMLElement>("[data-evidence-empty]");
+  const evidenceCounts = Array.from(document.querySelectorAll<HTMLElement>("[data-evidence-count]"));
   if (
     !form ||
     !messages ||
@@ -816,6 +888,8 @@ function enableConversations(debug?: DebugLogger): void {
     !model ||
     !modelOptions ||
     !effort ||
+    !timeout ||
+    !tokenBudget ||
     !input ||
     !imageInput ||
     !attachButton ||
@@ -826,8 +900,29 @@ function enableConversations(debug?: DebugLogger): void {
     !runtime ||
     !contextValue ||
     !contextMeter ||
+    !usageValue ||
     !detail ||
-    !newConversation
+    newConversationButtons.length === 0 ||
+    !history ||
+    !historyEmpty ||
+    !historyFilter ||
+    !workspace ||
+    !sessionPanel ||
+    !sessionPanelOpen ||
+    !sessionPanelClose ||
+    !sessionPanelScrim ||
+    !inspector ||
+    !inspectorToggle ||
+    !inspectorClose ||
+    !inspectorScrim ||
+    !title ||
+    !titleEdit ||
+    !headerStatus ||
+    !providerLabel ||
+    !settings ||
+    !evidenceList ||
+    !evidenceEmpty ||
+    evidenceCounts.length === 0
   ) {
     return;
   }
@@ -837,10 +932,13 @@ function enableConversations(debug?: DebugLogger): void {
   let attachedImages: ConversationImage[] = [];
   let attachmentFeedback = "";
   let statuses: ProviderStatus[] = [];
+  let conversationSummaries: ConversationRecord[] = [];
   let configuredProviderID = "";
   let runtimeTimer = 0;
   let messageScrollFrame = 0;
   const providerPreferences = new Map<string, { model: string; effort: string }>();
+  const evidenceSources = new Map<string, { label: string; url: string }>();
+  const emptyStateTemplate = empty?.cloneNode(true) as HTMLElement | undefined;
 
   const scheduleMessageScroll = (): void => {
     if (messageScrollFrame) {
@@ -850,6 +948,67 @@ function enableConversations(debug?: DebugLogger): void {
       messageScrollFrame = 0;
       messages.scrollTop = messages.scrollHeight;
     });
+  };
+
+  const setSessionPanelOpen = (open: boolean): void => {
+    sessionPanel.dataset.open = String(open);
+    sessionPanelScrim.hidden = !open;
+    sessionPanelOpen.setAttribute("aria-expanded", String(open));
+  };
+
+  const setInspectorOpen = (open: boolean): void => {
+    inspector.dataset.open = String(open);
+    inspector.setAttribute("aria-hidden", String(!open));
+    inspector.inert = !open;
+    inspectorToggle.setAttribute("aria-expanded", String(open));
+    workspace.dataset.inspectorOpen = String(open);
+    inspectorScrim.hidden = !open || window.matchMedia("(min-width: 1280px)").matches;
+  };
+
+  const renderEvidenceSources = (): void => {
+    evidenceList.replaceChildren();
+    evidenceEmpty.hidden = evidenceSources.size > 0;
+    for (const source of evidenceSources.values()) {
+      const item = document.createElement("li");
+      const link = document.createElement("a");
+      link.href = source.url;
+      link.target = "_blank";
+      link.rel = "noreferrer";
+      const label = document.createElement("strong");
+      label.textContent = source.label;
+      const location = document.createElement("span");
+      location.textContent = source.url;
+      link.append(label, location);
+      item.append(link);
+      evidenceList.append(item);
+    }
+    for (const count of evidenceCounts) {
+      count.textContent = String(evidenceSources.size);
+    }
+  };
+
+  const addEvidenceSources = (sources: Array<{ label: string; url: string }> = []): void => {
+    for (const source of sources) {
+      if (source.url) {
+        evidenceSources.set(source.url, source);
+      }
+    }
+    renderEvidenceSources();
+  };
+
+  const clearEvidenceSources = (): void => {
+    evidenceSources.clear();
+    renderEvidenceSources();
+  };
+
+  const syncConversationChrome = (): void => {
+    const summary = conversationSummaries.find((candidate) => candidate.id === conversationID);
+    title.textContent = summary?.title || "New conversation";
+    titleEdit.hidden = !summary;
+    const status = statuses.find((candidate) => candidate.id === provider.value);
+    const providerName = status?.name || provider.value || "Choose a provider";
+    providerLabel.textContent = model.value.trim() ? `${providerName} · ${model.value.trim()}` : providerName;
+    settings.dataset.ready = String(Boolean(status?.available && status.authenticated));
   };
 
   const stopRuntimeTimer = (): void => {
@@ -862,7 +1021,9 @@ function enableConversations(debug?: DebugLogger): void {
   const startRuntimeTimer = (started: number): void => {
     stopRuntimeTimer();
     const update = (): void => {
-      runtime.textContent = `Working · ${formatElapsed(performance.now() - started)}`;
+      const elapsed = formatElapsed(performance.now() - started);
+      runtime.textContent = `Working · ${elapsed}`;
+      headerStatus.textContent = `Reading indexed code · ${elapsed}`;
     };
     update();
     runtime.classList.add("conversation-telemetry-active");
@@ -871,7 +1032,9 @@ function enableConversations(debug?: DebugLogger): void {
 
   const finishRuntimeTimer = (started: number): void => {
     stopRuntimeTimer();
-    runtime.textContent = `Last turn · ${formatElapsed(performance.now() - started)}`;
+    const elapsed = formatElapsed(performance.now() - started);
+    runtime.textContent = `Last turn · ${elapsed}`;
+    headerStatus.textContent = `Answer complete · ${elapsed}`;
     runtime.classList.remove("conversation-telemetry-active");
   };
 
@@ -891,6 +1054,36 @@ function enableConversations(debug?: DebugLogger): void {
     contextValue.title = `${usage.used_tokens.toLocaleString()} of ${usage.max_tokens.toLocaleString()} context tokens${usage.model ? ` · ${usage.model}` : ""}`;
     contextMeter.style.setProperty("--context-usage", `${percentage}%`);
     contextMeter.dataset.state = percentage >= 90 ? "critical" : percentage >= 75 ? "warning" : "ready";
+  };
+
+  const renderTokenUsage = (usage?: TokenUsage): void => {
+    const status = statuses.find((candidate) => candidate.id === provider.value);
+    if (!usage) {
+      usageValue.textContent = status?.token_usage ? "After first turn" : "Provider managed";
+      usageValue.title = status?.token_usage
+        ? "Input and output token usage appears after the provider completes a turn."
+        : "This provider harness does not report token usage to RepoKarta.";
+      return;
+    }
+    usageValue.textContent = `${formatTokenCount(usage.input_tokens)} in · ${formatTokenCount(usage.output_tokens)} out`;
+    const budget = usage.budget_tokens ? ` · ${usage.output_tokens.toLocaleString()} / ${usage.budget_tokens.toLocaleString()} output budget` : "";
+    usageValue.title = `${usage.total_tokens.toLocaleString()} total tokens${budget}`;
+  };
+
+  const setConversationURL = (id: string): void => {
+    const url = new URL(window.location.href);
+    if (id) {
+      url.searchParams.set("conversation", id);
+    } else {
+      url.searchParams.delete("conversation");
+    }
+    window.history.replaceState(null, "", url);
+  };
+
+  const setNewConversationDisabled = (disabled: boolean): void => {
+    for (const button of newConversationButtons) {
+      button.disabled = disabled;
+    }
   };
 
   const renderAttachmentTray = (): void => {
@@ -933,6 +1126,7 @@ function enableConversations(debug?: DebugLogger): void {
   const configureImageControls = (): void => {
     const status = statuses.find((candidate) => candidate.id === provider.value);
     const ready = Boolean(status?.available && status.authenticated);
+    submit.disabled = busy || !ready;
     attachButton.disabled = busy || !ready || !status?.image_input;
     if (attachmentFeedback) {
       imageSupportDetail.textContent = attachmentFeedback;
@@ -1017,12 +1211,15 @@ function enableConversations(debug?: DebugLogger): void {
     effort.value = status?.efforts?.includes(preferences?.effort ?? "") ? preferences?.effort ?? "" : "";
 
     const ready = Boolean(status?.available && status.authenticated);
-    model.disabled = !ready;
-    effort.disabled = !ready || !status?.efforts?.length;
+    model.disabled = !ready || Boolean(conversationID);
+    effort.disabled = !ready || Boolean(conversationID) || !status?.efforts?.length;
+    timeout.disabled = busy || !ready;
+    tokenBudget.disabled = busy || !ready || !status?.token_budget;
     detail.textContent = status?.detail ?? "Choose an authenticated local provider.";
     configureImageControls();
     if (!conversationID) {
       renderContextUsage();
+      renderTokenUsage();
     }
     debug?.add("info", "ui.provider.configured", {
       provider: status?.id || null,
@@ -1032,9 +1229,315 @@ function enableConversations(debug?: DebugLogger): void {
       image_input: status?.image_input ?? false,
       image_output: status?.image_output ?? false,
       interrupt: status?.interrupt ?? false,
-      context_usage: status?.context_usage ?? false
+      context_usage: status?.context_usage ?? false,
+      token_usage: status?.token_usage ?? false,
+      token_budget: status?.token_budget ?? false
     });
+    syncConversationChrome();
   };
+
+  const appendSources = (
+    message: HTMLElement,
+    sources: Array<{ label: string; url: string }> = []
+  ): void => {
+    if (sources.length === 0) {
+      return;
+    }
+    addEvidenceSources(sources);
+    const container = document.createElement("div");
+    container.className = "conversation-sources";
+    for (const source of sources) {
+      const link = document.createElement("a");
+      link.href = source.url;
+      link.textContent = source.label;
+      link.target = "_blank";
+      link.rel = "noreferrer";
+      container.append(link);
+    }
+    message.append(container);
+  };
+
+  const renderStoredTranscript = (conversation: ConversationRecord): void => {
+    messages.replaceChildren();
+    clearEvidenceSources();
+    for (const stored of conversation.messages ?? []) {
+      const message = conversationMessage(stored.role);
+      const content = message.querySelector<HTMLElement>(".conversation-content");
+      if (content && stored.text) {
+        if (stored.role === "assistant") {
+          renderAssistantMarkdown(content, stored.text, debug, true);
+        } else {
+          content.textContent = stored.text;
+        }
+      }
+      appendConversationImages(message, stored.images ?? [], stored.role === "user" ? "input" : "output");
+      appendSources(message, stored.sources);
+      if (stored.status === "interrupted") {
+        const notice = document.createElement("p");
+        notice.className = "conversation-turn-status conversation-turn-status-interrupted";
+        notice.textContent = "Interrupted by you.";
+        message.append(notice);
+      } else if (stored.error) {
+        const notice = document.createElement("p");
+        notice.className = "conversation-turn-status conversation-turn-status-error";
+        notice.textContent = conversationErrorMessage(stored.error);
+        message.append(notice);
+      }
+      messages.append(message);
+    }
+    if (!messages.childElementCount) {
+      const replacement = document.createElement("div");
+      replacement.className = "conversation-empty";
+      replacement.dataset.conversationEmpty = "";
+      replacement.textContent = "This saved conversation has no messages yet.";
+      messages.append(replacement);
+    }
+    scheduleMessageScroll();
+  };
+
+  const renderConversationHistory = (): void => {
+    history.replaceChildren();
+    for (const summary of conversationSummaries) {
+      const item = document.createElement("li");
+      item.className = "conversation-history-item";
+      item.dataset.conversationId = summary.id;
+      item.dataset.searchText = `${summary.title} ${summary.provider}`.toLocaleLowerCase();
+      if (summary.id === conversationID) {
+        item.dataset.active = "true";
+      }
+      const open = document.createElement("button");
+      open.type = "button";
+      open.className = "conversation-history-open";
+      if (summary.id === conversationID) {
+        open.setAttribute("aria-current", "page");
+      }
+      const title = document.createElement("strong");
+      title.textContent = summary.title;
+      const metadata = document.createElement("span");
+      const updated = new Date(summary.updated_at);
+      const updatedLabel = Number.isNaN(updated.valueOf())
+        ? "Saved"
+        : new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(updated);
+      metadata.textContent = `${summary.provider} · ${summary.message_count} messages · ${updatedLabel}`;
+      open.append(title, metadata);
+      open.addEventListener("click", () => void openConversation(summary.id));
+
+      const actions = document.createElement("div");
+      actions.className = "conversation-history-actions";
+      const rename = document.createElement("button");
+      rename.type = "button";
+      rename.textContent = "Rename";
+      rename.setAttribute("aria-label", `Rename ${summary.title}`);
+      rename.addEventListener("click", () => {
+        item.dataset.editing = "true";
+        const editor = document.createElement("form");
+        editor.className = "conversation-history-editor";
+        const titleInput = document.createElement("input");
+        titleInput.value = summary.title;
+        titleInput.maxLength = 120;
+        titleInput.setAttribute("aria-label", "Conversation title");
+        const save = document.createElement("button");
+        save.type = "submit";
+        save.textContent = "Save";
+        const cancel = document.createElement("button");
+        cancel.type = "button";
+        cancel.textContent = "Cancel";
+        cancel.addEventListener("click", () => renderConversationHistory());
+        editor.addEventListener("submit", (event) => {
+          event.preventDefault();
+          void renameSavedConversation(summary, titleInput.value);
+        });
+        editor.append(titleInput, save, cancel);
+        item.append(editor);
+        titleInput.focus();
+        titleInput.select();
+      });
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.textContent = "Delete";
+      remove.setAttribute("aria-label", `Delete ${summary.title}`);
+      remove.addEventListener("click", () => {
+        if (remove.dataset.confirmDelete === "true") {
+          void deleteSavedConversation(summary);
+          return;
+        }
+        remove.dataset.confirmDelete = "true";
+        remove.textContent = "Confirm delete";
+        remove.setAttribute("aria-label", `Confirm delete ${summary.title}`);
+      });
+      actions.append(rename, remove);
+      item.append(open, actions);
+      history.append(item);
+    }
+    const query = historyFilter.value.trim().toLocaleLowerCase();
+    let visibleConversations = 0;
+    for (const item of history.querySelectorAll<HTMLElement>(".conversation-history-item")) {
+      const filtered = Boolean(query) && !(item.dataset.searchText ?? "").includes(query);
+      item.dataset.filtered = String(filtered);
+      if (!filtered) {
+        visibleConversations++;
+      }
+    }
+    historyEmpty.hidden = visibleConversations > 0;
+    historyEmpty.textContent = conversationSummaries.length === 0
+      ? "No saved chats yet."
+      : visibleConversations === 0
+        ? `No conversations match “${historyFilter.value.trim()}”.`
+        : "";
+    syncConversationChrome();
+  };
+
+  const refreshConversationHistory = async (): Promise<void> => {
+    try {
+      const response = await fetch("/api/conversations", { headers: { Accept: "application/json" } });
+      if (!response.ok) {
+        throw new Error(await response.text() || `Saved chats failed (${response.status})`);
+      }
+      const result = await response.json() as { conversations: ConversationRecord[] };
+      conversationSummaries = result.conversations ?? [];
+      renderConversationHistory();
+    } catch (error: unknown) {
+      historyEmpty.hidden = false;
+      historyEmpty.textContent = error instanceof Error ? error.message : "Could not load saved chats.";
+      debug?.add("error", "conversations.list.failed", describeError(error));
+    }
+  };
+
+  const openConversation = async (id: string): Promise<void> => {
+    if (!id || busy) {
+      return;
+    }
+    try {
+      const response = await fetch(`/api/conversations/${encodeURIComponent(id)}`, {
+        headers: { Accept: "application/json" }
+      });
+      if (!response.ok) {
+        throw new Error(await response.text() || `Saved chat failed (${response.status})`);
+      }
+      const stored = await response.json() as ConversationRecord;
+      conversationID = stored.id;
+      if (!Array.from(provider.options).some((option) => option.value === stored.provider)) {
+        const unavailableProvider = document.createElement("option");
+        unavailableProvider.value = stored.provider;
+        unavailableProvider.textContent = `${stored.provider} — unavailable`;
+        unavailableProvider.disabled = true;
+        provider.append(unavailableProvider);
+      }
+      provider.value = stored.provider;
+      configureProvider();
+      model.value = stored.model ?? "";
+      effort.value = stored.effort ?? "";
+      provider.disabled = true;
+      model.disabled = true;
+      effort.disabled = true;
+      const status = statuses.find((candidate) => candidate.id === stored.provider);
+      submit.disabled = !status?.available || !status.authenticated;
+      renderStoredTranscript(stored);
+      renderContextUsage();
+      renderTokenUsage({
+        input_tokens: stored.input_tokens,
+        output_tokens: stored.output_tokens,
+        total_tokens: stored.input_tokens + stored.output_tokens
+      });
+      runtime.textContent = "Restored";
+      headerStatus.textContent = `${stored.message_count} messages · restored locally`;
+      setConversationURL(stored.id);
+      renderConversationHistory();
+      setSessionPanelOpen(false);
+      input.focus();
+      debug?.add("info", "conversation.restored", {
+        conversation_id: stored.id,
+        message_count: stored.message_count,
+        provider: stored.provider
+      });
+    } catch (error: unknown) {
+      debug?.add("error", "conversation.restore.failed", describeError(error));
+      historyEmpty.hidden = false;
+      historyEmpty.textContent = error instanceof Error ? error.message : "Could not open saved chat.";
+    }
+  };
+
+  const renameSavedConversation = async (
+    conversation: ConversationRecord,
+    requestedTitle: string
+  ): Promise<void> => {
+    if (busy) {
+      return;
+    }
+    const title = requestedTitle.trim();
+    if (!title || title === conversation.title) {
+      renderConversationHistory();
+      return;
+    }
+    try {
+      const response = await fetch(`/api/conversations/${encodeURIComponent(conversation.id)}`, {
+        method: "PATCH",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ title })
+      });
+      if (!response.ok) {
+        throw new Error(await response.text() || `Rename failed (${response.status})`);
+      }
+      await refreshConversationHistory();
+    } catch (error: unknown) {
+      debug?.add("error", "conversation.rename.failed", describeError(error));
+      historyEmpty.hidden = false;
+      historyEmpty.textContent = error instanceof Error ? error.message : "Could not rename chat.";
+    }
+  };
+
+  const deleteSavedConversation = async (conversation: ConversationRecord): Promise<void> => {
+    if (busy) {
+      return;
+    }
+    try {
+      const response = await fetch(`/api/conversations/${encodeURIComponent(conversation.id)}`, {
+        method: "DELETE",
+        headers: { Accept: "application/json" }
+      });
+      if (!response.ok) {
+        throw new Error(await response.text() || `Delete failed (${response.status})`);
+      }
+      if (conversation.id === conversationID) {
+        resetConversation();
+      }
+      await refreshConversationHistory();
+    } catch (error: unknown) {
+      debug?.add("error", "conversation.delete.failed", describeError(error));
+      historyEmpty.hidden = false;
+      historyEmpty.textContent = error instanceof Error ? error.message : "Could not delete chat.";
+    }
+  };
+
+  const resetConversation = (): void => {
+    conversationID = "";
+    setConversationURL("");
+    provider.disabled = statuses.every((status) => !status.available || !status.authenticated);
+    const status = statuses.find((candidate) => candidate.id === provider.value);
+    model.disabled = !status?.available || !status.authenticated;
+    effort.disabled = !status?.available || !status.authenticated || !status.efforts?.length;
+    attachedImages = [];
+    attachmentFeedback = "";
+    runtime.textContent = "Ready";
+    headerStatus.textContent = "Ready for a grounded question";
+    runtime.classList.remove("conversation-telemetry-active");
+    clearEvidenceSources();
+    renderContextUsage();
+    renderTokenUsage();
+    renderAttachmentTray();
+    configureImageControls();
+    messages.replaceChildren();
+    if (emptyStateTemplate) {
+      messages.append(emptyStateTemplate.cloneNode(true));
+    }
+    renderConversationHistory();
+    setSessionPanelOpen(false);
+    input.focus();
+  };
+
+  renderEvidenceSources();
+  setSessionPanelOpen(false);
+  setInspectorOpen(false);
 
   debug?.add("info", "providers.request.started", { endpoint: "/api/providers" });
   void fetch("/api/providers", { headers: { Accept: "application/json" } })
@@ -1076,9 +1579,20 @@ function enableConversations(debug?: DebugLogger): void {
     .catch((error: unknown) => {
       debug?.add("error", "providers.request.failed", describeError(error));
       detail.textContent = error instanceof Error ? error.message : "Could not check providers.";
+      providerLabel.textContent = "Provider unavailable";
+      headerStatus.textContent = "A provider could not be loaded";
+    })
+    .finally(() => {
+      void refreshConversationHistory().then(() => {
+        const requestedConversation = new URL(window.location.href).searchParams.get("conversation");
+        if (requestedConversation) {
+          void openConversation(requestedConversation);
+        }
+      });
     });
 
   provider.addEventListener("change", configureProvider);
+  model.addEventListener("input", syncConversationChrome);
   attachButton.addEventListener("click", () => imageInput.click());
   imageInput.addEventListener("change", () => {
     void addImageFiles(Array.from(imageInput.files ?? []));
@@ -1096,14 +1610,57 @@ function enableConversations(debug?: DebugLogger): void {
       effort: effort.value || "provider-default"
     });
   });
-  document.querySelectorAll<HTMLButtonElement>("[data-chat-prompt]").forEach((button) => {
-    button.addEventListener("click", () => {
+  historyFilter.addEventListener("input", renderConversationHistory);
+  sessionPanelOpen.addEventListener("click", () => setSessionPanelOpen(true));
+  sessionPanelClose.addEventListener("click", () => setSessionPanelOpen(false));
+  sessionPanelScrim.addEventListener("click", () => setSessionPanelOpen(false));
+  inspectorToggle.addEventListener("click", () => setInspectorOpen(inspector.dataset.open !== "true"));
+  inspectorClose.addEventListener("click", () => setInspectorOpen(false));
+  inspectorScrim.addEventListener("click", () => setInspectorOpen(false));
+  titleEdit.addEventListener("click", () => {
+    if (historyFilter.value) {
+      historyFilter.value = "";
+      renderConversationHistory();
+    }
+    const active = history.querySelector<HTMLElement>(".conversation-history-item[data-active='true']");
+    const rename = active?.querySelector<HTMLButtonElement>(".conversation-history-actions button:first-child");
+    if (!rename) {
+      return;
+    }
+    if (window.matchMedia("(max-width: 1023px)").matches) {
+      setSessionPanelOpen(true);
+    }
+    rename.click();
+  });
+  document.addEventListener("pointerdown", (event) => {
+    if (settings.open && !settings.contains(event.target as Node)) {
+      settings.open = false;
+    }
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      setSessionPanelOpen(false);
+      setInspectorOpen(false);
+      settings.open = false;
+      return;
+    }
+    if (event.ctrlKey && event.key.toLocaleLowerCase() === "n" && !busy) {
+      event.preventDefault();
+      resetConversation();
+    }
+  });
+  window.addEventListener("resize", () => {
+    inspectorScrim.hidden = inspector.dataset.open !== "true" || window.matchMedia("(min-width: 1280px)").matches;
+  });
+  messages.addEventListener("click", (event) => {
+    const button = (event.target as Element | null)?.closest<HTMLButtonElement>("[data-chat-prompt]");
+    if (button) {
       input.value = button.dataset.chatPrompt ?? "";
       input.focus();
       debug?.add("info", "ui.starter.selected", {
         message_length: input.value.length
       });
-    });
+    }
   });
   input.addEventListener("keydown", (event) => {
     if (event.key !== "Enter" || event.isComposing) {
@@ -1168,34 +1725,18 @@ function enableConversations(debug?: DebugLogger): void {
       debug?.add("error", "chat.interrupt.failed", describeError(error));
     }
   });
-  newConversation.addEventListener("click", () => {
-    if (busy) {
-      return;
-    }
-    debug?.add("info", "ui.conversation.new", {
-      previous_conversation: conversationID || null,
-      provider: provider.value
+  for (const button of newConversationButtons) {
+    button.addEventListener("click", () => {
+      if (busy) {
+        return;
+      }
+      debug?.add("info", "ui.conversation.new", {
+        previous_conversation: conversationID || null,
+        provider: provider.value
+      });
+      resetConversation();
     });
-    conversationID = "";
-    provider.disabled = false;
-    const status = statuses.find((candidate) => candidate.id === provider.value);
-    model.disabled = false;
-    effort.disabled = !status?.efforts?.length;
-    attachedImages = [];
-    attachmentFeedback = "";
-    runtime.textContent = "Ready";
-    runtime.classList.remove("conversation-telemetry-active");
-    renderContextUsage();
-    renderAttachmentTray();
-    configureImageControls();
-    messages.replaceChildren();
-    const replacement = document.createElement("div");
-    replacement.className = "conversation-empty";
-    replacement.dataset.conversationEmpty = "";
-    replacement.textContent = "Start a fresh read-only conversation about the indexed code.";
-    messages.append(replacement);
-    input.focus();
-  });
+  }
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -1220,8 +1761,10 @@ function enableConversations(debug?: DebugLogger): void {
       effort: effort.value
     });
     submit.disabled = true;
-    submit.textContent = "Working…";
-    newConversation.disabled = true;
+    submit.setAttribute("aria-label", "RepoKarta is working");
+    setNewConversationDisabled(true);
+    timeout.disabled = true;
+    tokenBudget.disabled = true;
     const providerStatus = statuses.find((candidate) => candidate.id === provider.value);
     interrupt.hidden = !providerStatus?.interrupt;
     interrupt.disabled = true;
@@ -1269,7 +1812,9 @@ function enableConversations(debug?: DebugLogger): void {
           model: model.value.trim(),
           effort: effort.value,
           message: question,
-          images: requestImages
+          images: requestImages,
+          timeout_seconds: Number.parseInt(timeout.value, 10),
+          token_budget: Number.parseInt(tokenBudget.value, 10)
         })
       });
       debug?.add(response.ok ? "info" : "warn", "chat.response.received", {
@@ -1306,12 +1851,21 @@ function enableConversations(debug?: DebugLogger): void {
           }
           if (message.type === "meta" && message.conversation_id) {
             conversationID = message.conversation_id;
+            setConversationURL(conversationID);
             provider.disabled = true;
             model.disabled = true;
             effort.disabled = true;
             interrupt.disabled = !providerStatus?.interrupt;
+            if (message.title) {
+              title.textContent = message.title;
+              titleEdit.hidden = false;
+              conversationSummaries = conversationSummaries.map((summary) =>
+                summary.id === conversationID ? { ...summary, title: message.title ?? summary.title } : summary
+              );
+            }
             debug?.add("info", "chat.stream.started", {
-              conversation_id: conversationID
+              conversation_id: conversationID,
+              title: message.title || null
             });
           } else if (message.type === "delta" && message.text && answer) {
             deltaEvents++;
@@ -1321,6 +1875,7 @@ function enableConversations(debug?: DebugLogger): void {
             debug?.add("info", "chat.stream.sources", {
               count: message.sources.length
             });
+            addEvidenceSources(message.sources);
             let sources = assistant.querySelector<HTMLElement>(".conversation-sources");
             if (!sources) {
               sources = document.createElement("div");
@@ -1351,6 +1906,9 @@ function enableConversations(debug?: DebugLogger): void {
               percentage: message.context.percentage,
               model: message.context.model || null
             });
+          } else if (message.type === "usage" && message.usage) {
+            renderTokenUsage(message.usage);
+            debug?.add("info", "chat.stream.usage", message.usage);
           } else if (message.type === "interrupted") {
             streamCompleted = true;
             renderMetrics = streamRenderer?.finish(true);
@@ -1367,6 +1925,7 @@ function enableConversations(debug?: DebugLogger): void {
           } else if (message.type === "done") {
             streamCompleted = true;
             renderMetrics = streamRenderer?.finish(true);
+            void refreshConversationHistory();
             debug?.add("info", "chat.stream.completed", {
               delta_events: deltaEvents,
               answer_characters: answerCharacters,
@@ -1406,17 +1965,21 @@ function enableConversations(debug?: DebugLogger): void {
         await probeServerHealth(debug);
       }
       assistant.remove();
-      messages.append(conversationMessage("error", error instanceof Error ? error.message : "Conversation failed."));
+      messages.append(conversationMessage("error", conversationErrorMessage(error)));
     } finally {
       busy = false;
       finishRuntimeTimer(requestStarted);
       submit.disabled = false;
-      submit.textContent = "Ask Code";
+      submit.setAttribute("aria-label", "Ask RepoKarta");
       interrupt.hidden = true;
       interrupt.disabled = true;
       interrupt.textContent = "Interrupt";
-      newConversation.disabled = false;
+      setNewConversationDisabled(false);
       configureImageControls();
+      configureProvider();
+      if (conversationID) {
+        void refreshConversationHistory();
+      }
       input.focus();
       debug?.add("info", "chat.request.settled", {
         duration_ms: Math.round(performance.now() - requestStarted),

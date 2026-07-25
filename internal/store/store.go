@@ -3,19 +3,22 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
 
+	"github.com/spolnik/RepoKarta/internal/agent"
 	"github.com/spolnik/RepoKarta/internal/catalog"
 	_ "modernc.org/sqlite"
 )
 
 const (
-	currentSchemaVersion = 3
+	currentSchemaVersion = 4
 
 	schemaV1 = `
 CREATE TABLE IF NOT EXISTS repositories (
@@ -45,11 +48,57 @@ CREATE TABLE IF NOT EXISTS app_settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );`
+
+	schemaV4 = `
+CREATE TABLE IF NOT EXISTS conversations (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL DEFAULT '',
+    effort TEXT NOT NULL DEFAULT '',
+    resume_cursor TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS conversations_updated_at_index
+ON conversations(updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS conversation_messages (
+    id INTEGER PRIMARY KEY,
+    conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
+    text TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'complete',
+    error TEXT NOT NULL DEFAULT '',
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS conversation_messages_conversation_index
+ON conversation_messages(conversation_id, id);
+
+CREATE TABLE IF NOT EXISTS conversation_message_images (
+    id INTEGER PRIMARY KEY,
+    message_id INTEGER NOT NULL REFERENCES conversation_messages(id) ON DELETE CASCADE,
+    name TEXT NOT NULL DEFAULT '',
+    media_type TEXT NOT NULL,
+    storage_path TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS conversation_message_citations (
+    id INTEGER PRIMARY KEY,
+    message_id INTEGER NOT NULL REFERENCES conversation_messages(id) ON DELETE CASCADE,
+    label TEXT NOT NULL,
+    url TEXT NOT NULL
+);`
 )
 
 // Store persists RepoKarta-owned metadata. Repository source remains read-only.
 type Store struct {
-	db *sql.DB
+	db                    *sql.DB
+	conversationDirectory string
 }
 
 // Open opens the SQLite database, enables WAL, and applies migrations.
@@ -68,8 +117,13 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	conversationDirectory := filepath.Join(filepath.Dir(path), "conversations")
+	if err := os.MkdirAll(conversationDirectory, 0o700); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("create conversation storage: %w", err)
+	}
 
-	return &Store{db: db}, nil
+	return &Store{db: db, conversationDirectory: conversationDirectory}, nil
 }
 
 func migrate(db *sql.DB) error {
@@ -91,6 +145,8 @@ func migrate(db *sql.DB) error {
 			migration = schemaV2
 		case 3:
 			migration = schemaV3
+		case 4:
+			migration = schemaV4
 		default:
 			return fmt.Errorf("missing migration for schema version %d", next)
 		}
@@ -378,4 +434,429 @@ func parseTime(value string) time.Time {
 		return time.Time{}
 	}
 	return parsed
+}
+
+// CreateConversation creates durable metadata for a provider-neutral chat.
+func (s *Store) CreateConversation(ctx context.Context, conversation agent.Conversation) error {
+	if strings.TrimSpace(conversation.ID) == "" {
+		return errors.New("conversation id is required")
+	}
+	now := conversation.CreatedAt
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	updated := conversation.UpdatedAt
+	if updated.IsZero() {
+		updated = now
+	}
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO conversations (
+    id, title, provider, model, effort, resume_cursor, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		conversation.ID,
+		strings.TrimSpace(conversation.Title),
+		strings.TrimSpace(conversation.Provider),
+		strings.TrimSpace(conversation.Model),
+		strings.TrimSpace(conversation.Effort),
+		strings.TrimSpace(conversation.ResumeCursor),
+		formatTime(now),
+		formatTime(updated),
+	)
+	if err != nil {
+		return fmt.Errorf("create conversation: %w", err)
+	}
+	return nil
+}
+
+// ListConversations returns newest-first durable chat summaries.
+func (s *Store) ListConversations(ctx context.Context) ([]agent.Conversation, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT
+    c.id, c.title, c.provider, c.model, c.effort, c.resume_cursor,
+    c.created_at, c.updated_at, c.input_tokens, c.output_tokens,
+    COUNT(m.id)
+FROM conversations c
+LEFT JOIN conversation_messages m ON m.conversation_id = c.id
+GROUP BY c.id
+ORDER BY c.updated_at DESC, c.id DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var conversations []agent.Conversation
+	for rows.Next() {
+		var conversation agent.Conversation
+		var createdAt, updatedAt string
+		if err := rows.Scan(
+			&conversation.ID,
+			&conversation.Title,
+			&conversation.Provider,
+			&conversation.Model,
+			&conversation.Effort,
+			&conversation.ResumeCursor,
+			&createdAt,
+			&updatedAt,
+			&conversation.InputTokens,
+			&conversation.OutputTokens,
+			&conversation.MessageCount,
+		); err != nil {
+			return nil, err
+		}
+		conversation.CreatedAt = parseTime(createdAt)
+		conversation.UpdatedAt = parseTime(updatedAt)
+		conversations = append(conversations, conversation)
+	}
+	return conversations, rows.Err()
+}
+
+// GetConversation returns durable metadata and the complete ordered transcript.
+func (s *Store) GetConversation(ctx context.Context, id string) (agent.Conversation, error) {
+	var conversation agent.Conversation
+	var createdAt, updatedAt string
+	err := s.db.QueryRowContext(ctx, `
+SELECT
+    id, title, provider, model, effort, resume_cursor, created_at, updated_at,
+    input_tokens, output_tokens
+FROM conversations
+WHERE id = ?`, id).Scan(
+		&conversation.ID,
+		&conversation.Title,
+		&conversation.Provider,
+		&conversation.Model,
+		&conversation.Effort,
+		&conversation.ResumeCursor,
+		&createdAt,
+		&updatedAt,
+		&conversation.InputTokens,
+		&conversation.OutputTokens,
+	)
+	if err != nil {
+		return agent.Conversation{}, err
+	}
+	conversation.CreatedAt = parseTime(createdAt)
+	conversation.UpdatedAt = parseTime(updatedAt)
+
+	rows, err := s.db.QueryContext(ctx, `
+SELECT
+    id, conversation_id, role, text, status, error,
+    input_tokens, output_tokens, created_at
+FROM conversation_messages
+WHERE conversation_id = ?
+ORDER BY id`, id)
+	if err != nil {
+		return agent.Conversation{}, err
+	}
+	for rows.Next() {
+		var message agent.Message
+		var messageCreatedAt string
+		if err := rows.Scan(
+			&message.ID,
+			&message.ConversationID,
+			&message.Role,
+			&message.Text,
+			&message.Status,
+			&message.Error,
+			&message.InputTokens,
+			&message.OutputTokens,
+			&messageCreatedAt,
+		); err != nil {
+			rows.Close()
+			return agent.Conversation{}, err
+		}
+		message.CreatedAt = parseTime(messageCreatedAt)
+		conversation.Messages = append(conversation.Messages, message)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return agent.Conversation{}, err
+	}
+	if err := rows.Close(); err != nil {
+		return agent.Conversation{}, err
+	}
+	for index := range conversation.Messages {
+		message := &conversation.Messages[index]
+		message.Images, err = s.messageImages(ctx, message.ID)
+		if err != nil {
+			return agent.Conversation{}, err
+		}
+		message.Sources, err = s.messageCitations(ctx, message.ID)
+		if err != nil {
+			return agent.Conversation{}, err
+		}
+	}
+	conversation.MessageCount = len(conversation.Messages)
+	return conversation, nil
+}
+
+// AppendMessage stores one transcript entry and its filesystem-backed images.
+func (s *Store) AppendMessage(ctx context.Context, message agent.Message) (agent.Message, error) {
+	if message.Role != agent.RoleUser && message.Role != agent.RoleAssistant {
+		return agent.Message{}, fmt.Errorf("invalid conversation role %q", message.Role)
+	}
+	if err := agent.ValidateImages(message.Images); err != nil {
+		return agent.Message{}, err
+	}
+	if message.CreatedAt.IsZero() {
+		message.CreatedAt = time.Now().UTC()
+	}
+	if message.Status == "" {
+		message.Status = "complete"
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return agent.Message{}, err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `
+INSERT INTO conversation_messages (
+    conversation_id, role, text, status, error,
+    input_tokens, output_tokens, created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		message.ConversationID,
+		message.Role,
+		message.Text,
+		message.Status,
+		message.Error,
+		message.InputTokens,
+		message.OutputTokens,
+		formatTime(message.CreatedAt),
+	)
+	if err != nil {
+		return agent.Message{}, fmt.Errorf("append conversation message: %w", err)
+	}
+	message.ID, err = result.LastInsertId()
+	if err != nil {
+		return agent.Message{}, err
+	}
+
+	var writtenPaths []string
+	defer func() {
+		if err != nil {
+			for _, path := range writtenPaths {
+				_ = os.Remove(path)
+			}
+		}
+	}()
+	for index, image := range message.Images {
+		decoded, decodeErr := agent.DecodeImage(image)
+		if decodeErr != nil {
+			err = decodeErr
+			return agent.Message{}, err
+		}
+		fileName := fmt.Sprintf("%d-%d%s", message.ID, index+1, conversationImageExtension(image.MediaType))
+		absolutePath := filepath.Join(s.conversationDirectory, fileName)
+		if writeErr := os.WriteFile(absolutePath, decoded, 0o600); writeErr != nil {
+			err = writeErr
+			return agent.Message{}, fmt.Errorf("persist conversation image: %w", writeErr)
+		}
+		writtenPaths = append(writtenPaths, absolutePath)
+		imageName := strings.TrimSpace(image.Name)
+		if imageName != "" {
+			imageName = strings.ReplaceAll(imageName, `\`, "/")
+			imageName = filepath.Base(imageName)
+		}
+		if _, insertErr := tx.ExecContext(ctx, `
+INSERT INTO conversation_message_images (message_id, name, media_type, storage_path)
+VALUES (?, ?, ?, ?)`,
+			message.ID,
+			imageName,
+			strings.ToLower(strings.TrimSpace(image.MediaType)),
+			fileName,
+		); insertErr != nil {
+			err = insertErr
+			return agent.Message{}, insertErr
+		}
+	}
+	for _, citation := range message.Sources {
+		if strings.TrimSpace(citation.URL) == "" {
+			continue
+		}
+		if _, err = tx.ExecContext(ctx, `
+INSERT INTO conversation_message_citations (message_id, label, url)
+VALUES (?, ?, ?)`, message.ID, citation.Label, citation.URL); err != nil {
+			return agent.Message{}, err
+		}
+	}
+	if _, err = tx.ExecContext(ctx, `
+UPDATE conversations
+SET
+    updated_at = ?,
+    input_tokens = input_tokens + ?,
+    output_tokens = output_tokens + ?
+WHERE id = ?`,
+		formatTime(message.CreatedAt),
+		message.InputTokens,
+		message.OutputTokens,
+		message.ConversationID,
+	); err != nil {
+		return agent.Message{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return agent.Message{}, err
+	}
+	return message, nil
+}
+
+// RenameConversation changes only user-visible metadata.
+func (s *Store) RenameConversation(ctx context.Context, id, title string) error {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return errors.New("conversation title is required")
+	}
+	if len([]rune(title)) > 120 {
+		return errors.New("conversation title exceeds 120 characters")
+	}
+	result, err := s.db.ExecContext(ctx, `
+UPDATE conversations SET title = ?, updated_at = ? WHERE id = ?`,
+		title,
+		formatTime(time.Now().UTC()),
+		id,
+	)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+// UpdateConversationCursor stores a provider-owned opaque resume identifier.
+// It is local session metadata, never an authentication credential.
+func (s *Store) UpdateConversationCursor(ctx context.Context, id, cursor string) error {
+	result, err := s.db.ExecContext(ctx, `
+UPDATE conversations SET resume_cursor = ? WHERE id = ?`,
+		strings.TrimSpace(cursor),
+		id,
+	)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+// DeleteConversation removes the transcript and only its exact RepoKarta-owned
+// image files.
+func (s *Store) DeleteConversation(ctx context.Context, id string) error {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT i.storage_path
+FROM conversation_message_images i
+JOIN conversation_messages m ON m.id = i.message_id
+WHERE m.conversation_id = ?`, id)
+	if err != nil {
+		return err
+	}
+	var storagePaths []string
+	for rows.Next() {
+		var storagePath string
+		if err := rows.Scan(&storagePath); err != nil {
+			rows.Close()
+			return err
+		}
+		storagePaths = append(storagePaths, storagePath)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	result, err := s.db.ExecContext(ctx, "DELETE FROM conversations WHERE id = ?", id)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	for _, storagePath := range storagePaths {
+		if filepath.Base(storagePath) != storagePath {
+			continue
+		}
+		_ = os.Remove(filepath.Join(s.conversationDirectory, storagePath))
+	}
+	return nil
+}
+
+func (s *Store) messageImages(ctx context.Context, messageID int64) ([]agent.Image, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT name, media_type, storage_path
+FROM conversation_message_images
+WHERE message_id = ?
+ORDER BY id`, messageID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var images []agent.Image
+	for rows.Next() {
+		var name, mediaType, storagePath string
+		if err := rows.Scan(&name, &mediaType, &storagePath); err != nil {
+			return nil, err
+		}
+		if filepath.Base(storagePath) != storagePath {
+			return nil, errors.New("invalid conversation image path")
+		}
+		content, err := os.ReadFile(filepath.Join(s.conversationDirectory, storagePath))
+		if err != nil {
+			return nil, err
+		}
+		images = append(images, agent.Image{
+			Name:      name,
+			MediaType: mediaType,
+			Data:      base64.StdEncoding.EncodeToString(content),
+		})
+	}
+	return images, rows.Err()
+}
+
+func (s *Store) messageCitations(ctx context.Context, messageID int64) ([]agent.Citation, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT label, url
+FROM conversation_message_citations
+WHERE message_id = ?
+ORDER BY id`, messageID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var citations []agent.Citation
+	for rows.Next() {
+		var citation agent.Citation
+		if err := rows.Scan(&citation.Label, &citation.URL); err != nil {
+			return nil, err
+		}
+		citations = append(citations, citation)
+	}
+	return citations, rows.Err()
+}
+
+func conversationImageExtension(mediaType string) string {
+	switch strings.ToLower(strings.TrimSpace(mediaType)) {
+	case "image/gif":
+		return ".gif"
+	case "image/jpeg":
+		return ".jpg"
+	case "image/webp":
+		return ".webp"
+	default:
+		return ".png"
+	}
 }

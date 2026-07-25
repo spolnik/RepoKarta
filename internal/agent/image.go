@@ -25,8 +25,8 @@ var supportedImageTypes = map[string]string{
 	"image/webp": ".webp",
 }
 
-// Image is an ephemeral base64-encoded image attachment. Image bytes are never
-// persisted by RepoKarta beyond the active provider turn.
+// Image is a provider-neutral base64-encoded image attachment. Durable
+// conversations store decoded bytes in RepoKarta-owned filesystem storage.
 type Image struct {
 	Name      string `json:"name"`
 	MediaType string `json:"media_type"`

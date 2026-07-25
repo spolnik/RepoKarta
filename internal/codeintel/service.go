@@ -5,6 +5,7 @@ package codeintel
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -105,6 +106,18 @@ type SearchResponse struct {
 	Warnings            []search.Warning `json:"warnings,omitempty"`
 	Matches             []SearchMatch    `json:"matches"`
 }
+
+// SymbolRequest selects bounded symbol-index matches.
+type SymbolRequest struct {
+	Symbol     string `json:"symbol"`
+	Repository string `json:"repository,omitempty"`
+	Language   string `json:"language,omitempty"`
+	Limit      int    `json:"limit,omitempty"`
+}
+
+// SymbolResponse uses the same explicit completeness and citation contract as
+// deterministic code search.
+type SymbolResponse = SearchResponse
 
 // SearchMatch is one commit-pinned matched file.
 type SearchMatch struct {
@@ -339,6 +352,27 @@ func (s *Service) Search(ctx context.Context, request SearchRequest) (SearchResp
 		output.Matches = append(output.Matches, outputMatch)
 	}
 	return output, nil
+}
+
+// FindSymbol performs an explicit Zoekt symbol query. When Universal Ctags was
+// unavailable at index time, the normal machine-readable warning is returned.
+func (s *Service) FindSymbol(ctx context.Context, request SymbolRequest) (SymbolResponse, error) {
+	symbol := strings.TrimSpace(request.Symbol)
+	if symbol == "" {
+		return SymbolResponse{}, errors.New("symbol is required")
+	}
+	if len([]rune(symbol)) > 200 || strings.ContainsAny(symbol, "\r\n\x00") {
+		return SymbolResponse{}, errors.New("symbol is invalid")
+	}
+	escaped := strings.ReplaceAll(symbol, `\`, `\\`)
+	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
+	return s.Search(ctx, SearchRequest{
+		Query:      `sym:"` + escaped + `"`,
+		Repository: request.Repository,
+		Language:   request.Language,
+		Mode:       "zoekt",
+		Limit:      request.Limit,
+	})
 }
 
 // GetFile reads a commit-pinned source range.

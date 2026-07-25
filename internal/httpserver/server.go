@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -46,6 +47,14 @@ type ConversationService interface {
 	Interrupt(context.Context, string) error
 }
 
+// ConversationHistoryService supplies durable titled transcripts.
+type ConversationHistoryService interface {
+	ListConversations(context.Context) ([]agent.Conversation, error)
+	GetConversation(context.Context, string) (agent.Conversation, error)
+	RenameConversation(context.Context, string, string) error
+	DeleteConversation(context.Context, string) error
+}
+
 // Config controls the local HTTP server.
 type Config struct {
 	Address        string
@@ -64,6 +73,7 @@ type Server struct {
 	intelligence *codeintel.Service
 	refresher    CatalogueRefresher
 	agents       ConversationService
+	history      ConversationHistoryService
 }
 
 type pageData struct {
@@ -158,6 +168,7 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 		refresher:    refresher,
 		agents:       config.Conversations,
 	}
+	server.history, _ = config.Conversations.(ConversationHistoryService)
 
 	mux := http.NewServeMux()
 	mux.Handle("GET /assets/", http.FileServer(http.FS(dist)))
@@ -167,6 +178,7 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 	mux.HandleFunc("GET /search", server.search)
 	mux.HandleFunc("GET /source/{repositoryID}", server.source)
 	mux.HandleFunc("GET /api/search", server.apiSearch)
+	mux.HandleFunc("GET /api/symbol", server.apiSymbol)
 	mux.HandleFunc("GET /api/repositories", server.apiRepositories)
 	mux.HandleFunc("GET /api/file/{repository}", server.apiFile)
 	mux.HandleFunc("GET /api/tree/{repository}", server.apiTree)
@@ -182,6 +194,12 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 		mux.HandleFunc("GET /api/providers", server.providerStatuses)
 		mux.HandleFunc("POST /api/chat", server.chat)
 		mux.HandleFunc("POST /api/chat/{conversationID}/interrupt", server.interruptChat)
+		if server.history != nil {
+			mux.HandleFunc("GET /api/conversations", server.listConversations)
+			mux.HandleFunc("GET /api/conversations/{conversationID}", server.getConversation)
+			mux.HandleFunc("PATCH /api/conversations/{conversationID}", server.renameConversation)
+			mux.HandleFunc("DELETE /api/conversations/{conversationID}", server.deleteConversation)
+		}
 	}
 
 	server.server = &http.Server{
@@ -192,6 +210,72 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 	}
 
 	return server, nil
+}
+
+func (s *Server) listConversations(response http.ResponseWriter, request *http.Request) {
+	conversations, err := s.history.ListConversations(request.Context())
+	if err != nil {
+		writeAPIError(response, http.StatusInternalServerError, err)
+		return
+	}
+	if conversations == nil {
+		conversations = []agent.Conversation{}
+	}
+	writeJSON(response, http.StatusOK, map[string]any{"conversations": conversations})
+}
+
+func (s *Server) getConversation(response http.ResponseWriter, request *http.Request) {
+	conversation, err := s.history.GetConversation(
+		request.Context(),
+		strings.TrimSpace(request.PathValue("conversationID")),
+	)
+	if err != nil {
+		writeConversationError(response, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, conversation)
+}
+
+func (s *Server) renameConversation(response http.ResponseWriter, request *http.Request) {
+	request.Body = http.MaxBytesReader(response, request.Body, 4<<10)
+	var input struct {
+		Title string `json:"title"`
+	}
+	if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+		writeAPIError(response, http.StatusBadRequest, errors.New("invalid conversation title"))
+		return
+	}
+	if err := s.history.RenameConversation(
+		request.Context(),
+		strings.TrimSpace(request.PathValue("conversationID")),
+		input.Title,
+	); err != nil {
+		writeConversationError(response, err)
+		return
+	}
+	response.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) deleteConversation(response http.ResponseWriter, request *http.Request) {
+	if err := s.history.DeleteConversation(
+		request.Context(),
+		strings.TrimSpace(request.PathValue("conversationID")),
+	); err != nil {
+		writeConversationError(response, err)
+		return
+	}
+	response.WriteHeader(http.StatusNoContent)
+}
+
+func writeConversationError(response http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, agent.ErrConversationNotFound), errors.Is(err, sql.ErrNoRows):
+		writeAPIError(response, http.StatusNotFound, errors.New("conversation not found"))
+	case strings.Contains(err.Error(), "required"), strings.Contains(err.Error(), "exceeds"):
+		writeAPIError(response, http.StatusBadRequest, err)
+	default:
+		writeAPIError(response, http.StatusInternalServerError, err)
+	}
 }
 
 func (s *Server) providerStatuses(response http.ResponseWriter, request *http.Request) {
@@ -282,6 +366,25 @@ func (s *Server) apiSearch(response http.ResponseWriter, request *http.Request) 
 		Path:       request.URL.Query().Get("path"),
 		File:       request.URL.Query().Get("file"),
 		Mode:       request.URL.Query().Get("mode"),
+		Limit:      limit,
+	})
+	if err != nil {
+		writeAPIError(response, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
+func (s *Server) apiSymbol(response http.ResponseWriter, request *http.Request) {
+	limit, err := apiSearchLimit(request.URL.Query().Get("limit"))
+	if err != nil {
+		writeAPIError(response, http.StatusBadRequest, err)
+		return
+	}
+	result, err := s.intelligence.FindSymbol(request.Context(), codeintel.SymbolRequest{
+		Symbol:     request.URL.Query().Get("symbol"),
+		Repository: request.URL.Query().Get("repo"),
+		Language:   request.URL.Query().Get("lang"),
 		Limit:      limit,
 	})
 	if err != nil {

@@ -6,8 +6,10 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/spolnik/RepoKarta/internal/agent"
+	anthropicprovider "github.com/spolnik/RepoKarta/internal/agent/anthropic"
 	"github.com/spolnik/RepoKarta/internal/agent/claude"
 	"github.com/spolnik/RepoKarta/internal/agent/codex"
 	"github.com/spolnik/RepoKarta/internal/codeintel"
@@ -112,7 +114,9 @@ func Run(ctx context.Context, cfg Config) error {
 		mcpToken,
 		&codex.Adapter{Command: cfg.CodexCommand},
 		&claude.Adapter{Command: cfg.ClaudeCommand},
-	).UseCitations(citations)
+		&anthropicprovider.Adapter{Intelligence: intelligence, Citations: citations},
+	).UseCitations(citations).UsePersistence(database)
+	conversations.StartIdleReaper(ctx, 30*time.Minute)
 	defer conversations.Close()
 
 	server, err := httpserver.New(httpserver.Config{

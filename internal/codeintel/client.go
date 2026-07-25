@@ -51,6 +51,21 @@ func (c *Client) Search(ctx context.Context, request SearchRequest) (SearchRespo
 	return output, err
 }
 
+// FindSymbol calls GET /api/symbol.
+func (c *Client) FindSymbol(ctx context.Context, request SymbolRequest) (SymbolResponse, error) {
+	values := url.Values{
+		"symbol": []string{request.Symbol},
+		"repo":   []string{request.Repository},
+		"lang":   []string{request.Language},
+	}
+	if request.Limit > 0 {
+		values.Set("limit", strconv.Itoa(request.Limit))
+	}
+	var output SymbolResponse
+	err := c.get(ctx, "/api/symbol", values, &output)
+	return output, err
+}
+
 // GetFile calls GET /api/file/{repository}.
 func (c *Client) GetFile(ctx context.Context, request FileRequest) (FileResponse, error) {
 	values := url.Values{

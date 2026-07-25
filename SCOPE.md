@@ -129,7 +129,8 @@ repositories on managed Windows and Apple Silicon macOS laptops.
   - `read_generated_document`
 - Stream answer progress and citations to the browser.
 - Make repository scope and estimated/actual usage visible.
-- Persist conversations only when the user enables persistence.
+- Persist titled conversations locally by default, keep provider credentials
+  out of that storage, and provide explicit per-conversation deletion.
 - Keep an AI-provider interface so additional hosted or local models can be
   added later.
 - Keep the default orchestration Go-native. The Claude Agent SDK may remain an
@@ -291,7 +292,7 @@ SQLite owns small relational state:
 - repository catalogue;
 - scan and job state;
 - document metadata and citations;
-- conversations when enabled;
+- titled conversation metadata and transcripts;
 - configuration that is not secret;
 - schema version.
 
@@ -346,18 +347,19 @@ directory, and display the discovered repositories.
 - [x] Search query endpoint with cancellation and limits.
 - [x] Search page with repository, language, path, and file filtering.
 - [x] Source viewer and stable citations.
-- [ ] Optional Universal Ctags detection.
+- [x] Optional Universal Ctags detection.
 
 Exit condition: cross-repository search is fast and useful without AI.
 
 ### M2: grounded code questions
 
-- [ ] Anthropic API configuration without secret persistence.
-- [ ] Read-only Go agent loop.
-- [ ] Search, file, tree, symbol, log, and diff tools.
-- [ ] Streamed UI with file-and-line citations.
-- [ ] Usage, cancellation, timeout, and budget controls.
-- [ ] Adversarial tests for prompt injection from repository content.
+- [x] Anthropic API configuration without secret persistence.
+- [x] Read-only Go agent loop.
+- [x] Search, file, tree, symbol, log, and diff tools.
+- [x] Streamed UI with file-and-line citations.
+- [x] Persistent titled conversations with native resume and transcript replay.
+- [x] Usage, cancellation, timeout, and budget controls.
+- [x] Adversarial tests for prompt injection from repository content.
 
 Exit condition: answers about multiple repositories are useful, traceable to
 source, and cannot modify or execute repository content.

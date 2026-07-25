@@ -101,6 +101,7 @@ type session struct {
 	attachments   *agent.AttachmentStore
 	activeMu      sync.RWMutex
 	activeTurnID  string
+	restored      bool
 	closeOnce     sync.Once
 }
 
@@ -185,7 +186,6 @@ func startSession(ctx context.Context, command string, config agent.SessionConfi
 		"approvalPolicy":        "never",
 		"sandbox":               "read-only",
 		"developerInstructions": providerInstructions,
-		"ephemeral":             true,
 	}
 	if config.Model != "" {
 		params["model"] = config.Model
@@ -195,17 +195,41 @@ func startSession(ctx context.Context, command string, config agent.SessionConfi
 			ID string `json:"id"`
 		} `json:"thread"`
 	}
-	if err := s.call(initializeContext, "thread/start", params, &started); err != nil {
-		s.Close()
-		return nil, fmt.Errorf("start Codex thread: %w", err)
+	method := "thread/start"
+	if strings.TrimSpace(config.ResumeCursor) != "" {
+		method = "thread/resume"
+		params["threadId"] = strings.TrimSpace(config.ResumeCursor)
+	}
+	if err := s.call(initializeContext, method, params, &started); err != nil {
+		if method == "thread/resume" {
+			delete(params, "threadId")
+			if fallbackErr := s.call(initializeContext, "thread/start", params, &started); fallbackErr == nil {
+				method = "thread/start"
+			} else {
+				s.Close()
+				return nil, fmt.Errorf(
+					"resume Codex thread: %v; fresh start fallback: %w",
+					err,
+					fallbackErr,
+				)
+			}
+		} else {
+			s.Close()
+			return nil, fmt.Errorf("start Codex thread: %w", err)
+		}
 	}
 	if started.Thread.ID == "" {
 		s.Close()
 		return nil, errors.New("Codex app-server returned an empty thread id")
 	}
 	s.threadID = started.Thread.ID
+	s.restored = method == "thread/resume"
 	return s, nil
 }
+
+func (s *session) ResumeCursor() string { return s.threadID }
+
+func (s *session) Restored() bool { return s.restored }
 
 func (s *session) Send(ctx context.Context, turn agent.Turn, emit func(agent.Event) error) error {
 	imagePaths, err := s.attachments.Write(turn.Images)
@@ -362,10 +386,11 @@ func (s *session) clearActiveTurn(turnID string) {
 
 func turnStartParams(threadID string, turn agent.Turn, imagePaths []string, effort string) map[string]any {
 	input := make([]map[string]any, 0, 1+len(imagePaths))
-	if turn.Message != "" {
+	message := agent.PromptWithHistory(turn)
+	if message != "" {
 		input = append(input, map[string]any{
 			"type": "text",
-			"text": turn.Message,
+			"text": message,
 		})
 	}
 	for _, path := range imagePaths {

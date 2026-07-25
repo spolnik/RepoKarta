@@ -133,6 +133,8 @@ func (a *Adapter) Start(ctx context.Context, config agent.SessionConfig) (agent.
 		stderr:      &stderr,
 		attachments: attachments,
 		pending:     make(map[string]chan controlResponse),
+		sessionID:   strings.TrimSpace(config.ResumeCursor),
+		restored:    strings.TrimSpace(config.ResumeCursor) != "",
 	}
 	go s.read(stdout)
 	return s, nil
@@ -145,7 +147,6 @@ func commandArguments(config agent.SessionConfig, mcpConfig, attachmentDirectory
 		"--output-format", "stream-json",
 		"--include-partial-messages",
 		"--verbose",
-		"--no-session-persistence",
 		"--strict-mcp-config",
 		"--mcp-config", mcpConfig,
 		"--permission-mode", "plan",
@@ -160,6 +161,9 @@ func commandArguments(config agent.SessionConfig, mcpConfig, attachmentDirectory
 	}
 	if config.Effort != "" {
 		arguments = append(arguments, "--effort", config.Effort)
+	}
+	if strings.TrimSpace(config.ResumeCursor) != "" {
+		arguments = append(arguments, "--resume", strings.TrimSpace(config.ResumeCursor))
 	}
 	return arguments
 }
@@ -178,6 +182,9 @@ type session struct {
 	active      atomic.Bool
 	interrupted atomic.Bool
 	sendMu      sync.Mutex
+	cursorMu    sync.RWMutex
+	sessionID   string
+	restored    bool
 	closeOnce   sync.Once
 }
 
@@ -225,16 +232,22 @@ func (s *session) Send(ctx context.Context, turn agent.Turn, emit func(agent.Eve
 			return fmt.Errorf("Claude Code stopped: %w", err)
 		case raw := <-s.messages:
 			var envelope struct {
-				Type    string          `json:"type"`
-				Subtype string          `json:"subtype"`
-				IsError bool            `json:"is_error"`
-				Result  string          `json:"result"`
-				Error   string          `json:"error"`
-				Event   json.RawMessage `json:"event"`
-				Message json.RawMessage `json:"message"`
+				Type      string          `json:"type"`
+				Subtype   string          `json:"subtype"`
+				IsError   bool            `json:"is_error"`
+				Result    string          `json:"result"`
+				Error     string          `json:"error"`
+				Event     json.RawMessage `json:"event"`
+				Message   json.RawMessage `json:"message"`
+				SessionID string          `json:"session_id"`
 			}
 			if json.Unmarshal(raw, &envelope) != nil {
 				continue
+			}
+			if envelope.SessionID != "" {
+				s.cursorMu.Lock()
+				s.sessionID = envelope.SessionID
+				s.cursorMu.Unlock()
 			}
 			switch envelope.Type {
 			case "stream_event":
@@ -291,6 +304,14 @@ func (s *session) Send(ctx context.Context, turn agent.Turn, emit func(agent.Eve
 		}
 	}
 }
+
+func (s *session) ResumeCursor() string {
+	s.cursorMu.RLock()
+	defer s.cursorMu.RUnlock()
+	return s.sessionID
+}
+
+func (s *session) Restored() bool { return s.restored }
 
 type controlResponse struct {
 	Subtype   string          `json:"subtype"`
@@ -457,12 +478,13 @@ func (s *session) Close() error {
 }
 
 func promptWithAttachments(turn agent.Turn, imagePaths []string) string {
+	message := agent.PromptWithHistory(turn)
 	if len(imagePaths) == 0 {
-		return turn.Message
+		return message
 	}
 	var prompt strings.Builder
-	if turn.Message != "" {
-		prompt.WriteString(turn.Message)
+	if message != "" {
+		prompt.WriteString(message)
 		prompt.WriteString("\n\n")
 	}
 	prompt.WriteString("The user attached the following image")

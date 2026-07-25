@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 type fakeAdapter struct {
@@ -38,13 +39,19 @@ func (a *fakeAdapter) Start(_ context.Context, config SessionConfig) (Session, e
 type fakeSession struct {
 	prompts    []string
 	images     [][]Image
+	turns      []Turn
+	deadlines  []time.Duration
 	closed     bool
 	interrupts int
 }
 
-func (s *fakeSession) Send(_ context.Context, turn Turn, emit func(Event) error) error {
+func (s *fakeSession) Send(ctx context.Context, turn Turn, emit func(Event) error) error {
 	s.prompts = append(s.prompts, turn.Message)
 	s.images = append(s.images, turn.Images)
+	s.turns = append(s.turns, turn)
+	if deadline, ok := ctx.Deadline(); ok {
+		s.deadlines = append(s.deadlines, time.Until(deadline))
+	}
 	return emit(Event{Type: EventDelta, Text: "answer:" + turn.Message})
 }
 
@@ -144,6 +151,37 @@ func TestManagerReusesEphemeralProviderSession(t *testing.T) {
 	}
 	if got := adapter.sessions[0].prompts; len(got) != 2 || got[0] != "one" || got[1] != "two" {
 		t.Fatalf("unexpected prompts: %#v", got)
+	}
+}
+
+func TestManagerAppliesTurnTimeoutAndTokenBudget(t *testing.T) {
+	adapter := &fakeAdapter{id: "test"}
+	manager := NewManager("", "", "", adapter)
+	defer manager.Close()
+
+	if err := manager.Send(context.Background(), TurnRequest{
+		Provider:       "test",
+		Message:        "bounded",
+		TimeoutSeconds: 45,
+		TokenBudget:    2222,
+	}, func(Event) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	session := adapter.sessions[0]
+	if len(session.turns) != 1 || session.turns[0].TokenBudget != 2222 {
+		t.Fatalf("turn budget = %#v", session.turns)
+	}
+	if len(session.deadlines) != 1 || session.deadlines[0] < 44*time.Second ||
+		session.deadlines[0] > 45*time.Second {
+		t.Fatalf("turn deadline = %v", session.deadlines)
+	}
+	for _, request := range []TurnRequest{
+		{Provider: "test", Message: "bad timeout", TimeoutSeconds: MaximumTurnTimeoutSeconds + 1},
+		{Provider: "test", Message: "bad budget", TokenBudget: MaximumTokenBudget + 1},
+	} {
+		if err := manager.Send(context.Background(), request, func(Event) error { return nil }); err == nil {
+			t.Fatalf("invalid controls unexpectedly succeeded: %#v", request)
+		}
 	}
 }
 
@@ -386,5 +424,181 @@ func TestManagerInterruptsActiveTurnWithoutDroppingConversation(t *testing.T) {
 	}
 	if err := manager.Interrupt(context.Background(), id); !errors.Is(err, ErrNoActiveTurn) {
 		t.Fatalf("idle interrupt error = %v, want %v", err, ErrNoActiveTurn)
+	}
+}
+
+type memoryConversationStore struct {
+	conversations map[string]Conversation
+}
+
+func (s *memoryConversationStore) CreateConversation(_ context.Context, conversation Conversation) error {
+	if s.conversations == nil {
+		s.conversations = make(map[string]Conversation)
+	}
+	s.conversations[conversation.ID] = conversation
+	return nil
+}
+
+func (s *memoryConversationStore) ListConversations(context.Context) ([]Conversation, error) {
+	result := make([]Conversation, 0, len(s.conversations))
+	for _, conversation := range s.conversations {
+		result = append(result, conversation)
+	}
+	return result, nil
+}
+
+func (s *memoryConversationStore) GetConversation(_ context.Context, id string) (Conversation, error) {
+	conversation, ok := s.conversations[id]
+	if !ok {
+		return Conversation{}, ErrConversationNotFound
+	}
+	return conversation, nil
+}
+
+func (s *memoryConversationStore) AppendMessage(_ context.Context, message Message) (Message, error) {
+	conversation, ok := s.conversations[message.ConversationID]
+	if !ok {
+		return Message{}, ErrConversationNotFound
+	}
+	message.ID = int64(len(conversation.Messages) + 1)
+	conversation.Messages = append(conversation.Messages, message)
+	conversation.MessageCount = len(conversation.Messages)
+	conversation.InputTokens += message.InputTokens
+	conversation.OutputTokens += message.OutputTokens
+	s.conversations[conversation.ID] = conversation
+	return message, nil
+}
+
+func (s *memoryConversationStore) RenameConversation(_ context.Context, id, title string) error {
+	conversation, ok := s.conversations[id]
+	if !ok {
+		return ErrConversationNotFound
+	}
+	conversation.Title = title
+	s.conversations[id] = conversation
+	return nil
+}
+
+func (s *memoryConversationStore) UpdateConversationCursor(_ context.Context, id, cursor string) error {
+	conversation, ok := s.conversations[id]
+	if !ok {
+		return ErrConversationNotFound
+	}
+	conversation.ResumeCursor = cursor
+	s.conversations[id] = conversation
+	return nil
+}
+
+func (s *memoryConversationStore) DeleteConversation(_ context.Context, id string) error {
+	if _, ok := s.conversations[id]; !ok {
+		return ErrConversationNotFound
+	}
+	delete(s.conversations, id)
+	return nil
+}
+
+type resumeAdapter struct {
+	configs []SessionConfig
+	fresh   *fakeSession
+}
+
+func (*resumeAdapter) ID() string { return "resume" }
+
+func (a *resumeAdapter) Status(context.Context) Status {
+	return Status{ID: a.ID(), Name: "Resume", Available: true, Authenticated: true}
+}
+
+func (a *resumeAdapter) Start(_ context.Context, config SessionConfig) (Session, error) {
+	a.configs = append(a.configs, config)
+	if config.ResumeCursor != "" {
+		return &staleResumeSession{cursor: config.ResumeCursor}, nil
+	}
+	a.fresh = &fakeSession{}
+	return a.fresh, nil
+}
+
+type staleResumeSession struct {
+	cursor string
+	closed bool
+}
+
+func (*staleResumeSession) Send(context.Context, Turn, func(Event) error) error {
+	return errors.New("provider session no longer exists")
+}
+func (*staleResumeSession) Interrupt(context.Context) error { return nil }
+func (s *staleResumeSession) Close() error {
+	s.closed = true
+	return nil
+}
+func (s *staleResumeSession) ResumeCursor() string { return s.cursor }
+func (*staleResumeSession) Restored() bool         { return true }
+
+func TestManagerFallsBackToDurableTranscriptWhenResumeCursorIsStale(t *testing.T) {
+	store := &memoryConversationStore{conversations: map[string]Conversation{
+		"saved": {
+			ID:           "saved",
+			Title:        "Saved conversation",
+			Provider:     "resume",
+			ResumeCursor: "stale-cursor",
+			Messages: []Message{
+				{Role: RoleUser, Text: "Earlier question"},
+				{Role: RoleAssistant, Text: "Earlier answer"},
+			},
+		},
+	}}
+	adapter := &resumeAdapter{}
+	manager := NewManager("", "", "", adapter).UsePersistence(store)
+	defer manager.Close()
+
+	if err := manager.Send(context.Background(), TurnRequest{
+		ConversationID: "saved",
+		Message:        "Continue",
+	}, func(Event) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if len(adapter.configs) != 2 || adapter.configs[0].ResumeCursor != "stale-cursor" || adapter.configs[1].ResumeCursor != "" {
+		t.Fatalf("resume attempts = %#v", adapter.configs)
+	}
+	if adapter.fresh == nil || len(adapter.fresh.turns) != 1 || len(adapter.fresh.turns[0].History) != 2 {
+		t.Fatalf("fresh transcript replay = %#v", adapter.fresh)
+	}
+	if got := store.conversations["saved"].ResumeCursor; got != "" {
+		t.Fatalf("stale resume cursor was not cleared: %q", got)
+	}
+	if got := store.conversations["saved"].MessageCount; got != 4 {
+		t.Fatalf("persisted message count = %d, want 4", got)
+	}
+}
+
+func TestManagerReapsIdleProviderProcessButKeepsDurableConversation(t *testing.T) {
+	store := &memoryConversationStore{}
+	adapter := &fakeAdapter{id: "test"}
+	manager := NewManager("", "", "", adapter).UsePersistence(store)
+	defer manager.Close()
+
+	var conversationID string
+	if err := manager.Send(context.Background(), TurnRequest{
+		Provider: "test",
+		Message:  "Persist me",
+	}, func(event Event) error {
+		if event.Type == EventMeta {
+			conversationID = event.ConversationID
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	manager.mu.RLock()
+	conversation := manager.conversations[conversationID]
+	manager.mu.RUnlock()
+	conversation.lastUsed.Store(time.Now().Add(-time.Hour).UnixNano())
+	if reaped := manager.reapIdle(time.Now().Add(-30 * time.Minute)); reaped != 1 {
+		t.Fatalf("reaped %d sessions, want 1", reaped)
+	}
+	if !adapter.sessions[0].closed {
+		t.Fatal("idle provider process was not closed")
+	}
+	if _, err := store.GetConversation(context.Background(), conversationID); err != nil {
+		t.Fatalf("durable conversation was lost: %v", err)
 	}
 }

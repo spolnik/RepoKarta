@@ -125,6 +125,7 @@ func (testRefresher) Refresh(context.Context) error { return nil }
 
 type testConversations struct {
 	interrupted string
+	lastRequest agent.TurnRequest
 }
 
 func (*testConversations) Statuses(context.Context) []agent.Status {
@@ -140,7 +141,8 @@ func (*testConversations) Statuses(context.Context) []agent.Status {
 	}}
 }
 
-func (*testConversations) Send(_ context.Context, request agent.TurnRequest, emit func(agent.Event) error) error {
+func (s *testConversations) Send(_ context.Context, request agent.TurnRequest, emit func(agent.Event) error) error {
+	s.lastRequest = request
 	if err := emit(agent.Event{Type: agent.EventMeta, ConversationID: "conversation"}); err != nil {
 		return err
 	}
@@ -169,6 +171,103 @@ func (*testConversations) Send(_ context.Context, request agent.TurnRequest, emi
 func (s *testConversations) Interrupt(_ context.Context, conversationID string) error {
 	s.interrupted = conversationID
 	return nil
+}
+
+type testHistoryConversations struct {
+	testConversations
+	conversation agent.Conversation
+	deleted      bool
+}
+
+func (s *testHistoryConversations) ListConversations(context.Context) ([]agent.Conversation, error) {
+	if s.deleted {
+		return []agent.Conversation{}, nil
+	}
+	summary := s.conversation
+	summary.Messages = nil
+	return []agent.Conversation{summary}, nil
+}
+
+func (s *testHistoryConversations) GetConversation(context.Context, string) (agent.Conversation, error) {
+	if s.deleted {
+		return agent.Conversation{}, agent.ErrConversationNotFound
+	}
+	return s.conversation, nil
+}
+
+func (s *testHistoryConversations) RenameConversation(_ context.Context, _ string, title string) error {
+	s.conversation.Title = strings.TrimSpace(title)
+	return nil
+}
+
+func (s *testHistoryConversations) DeleteConversation(context.Context, string) error {
+	s.deleted = true
+	return nil
+}
+
+func TestConversationHistoryCRUDAPI(t *testing.T) {
+	conversations := &testHistoryConversations{conversation: agent.Conversation{
+		ID:           "saved",
+		Title:        "Saved chat",
+		Provider:     "test",
+		ResumeCursor: "opaque-provider-cursor",
+		CreatedAt:    time.Now().UTC(),
+		UpdatedAt:    time.Now().UTC(),
+		MessageCount: 1,
+		Messages: []agent.Message{{
+			ID:             1,
+			ConversationID: "saved",
+			Role:           agent.RoleUser,
+			Text:           "hello",
+		}},
+	}}
+	server, err := New(
+		Config{Address: "127.0.0.1:7331", Conversations: conversations},
+		codeintel.New(testStore{}, testSearcher{}, "http://127.0.0.1:7331"),
+		testRefresher{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7331/api/conversations", nil)
+	response := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"title":"Saved chat"`) {
+		t.Fatalf("list status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), "opaque-provider-cursor") {
+		t.Fatal("provider resume cursor leaked through conversation list API")
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7331/api/conversations/saved", nil)
+	response = httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"text":"hello"`) {
+		t.Fatalf("get status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), "opaque-provider-cursor") {
+		t.Fatal("provider resume cursor leaked through conversation detail API")
+	}
+
+	request = httptest.NewRequest(
+		http.MethodPatch,
+		"http://127.0.0.1:7331/api/conversations/saved",
+		bytes.NewBufferString(`{"title":"Renamed chat"}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	response = httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent || conversations.conversation.Title != "Renamed chat" {
+		t.Fatalf("rename status = %d, title = %q", response.Code, conversations.conversation.Title)
+	}
+
+	request = httptest.NewRequest(http.MethodDelete, "http://127.0.0.1:7331/api/conversations/saved", nil)
+	response = httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent || !conversations.deleted {
+		t.Fatalf("delete status = %d, deleted = %v", response.Code, conversations.deleted)
+	}
 }
 
 func TestSearchRendersSafeHighlightedCommitPinnedResult(t *testing.T) {
@@ -276,12 +375,16 @@ func TestSearchAndChatRenderAsSeparatePages(t *testing.T) {
 		`data-image-attach`,
 		`id="conversation-runtime"`,
 		`id="conversation-context-value"`,
+		`id="conversation-usage-value"`,
+		`id="conversation-history"`,
+		`id="conversation-timeout"`,
+		`id="conversation-token-budget"`,
 		`id="conversation-interrupt"`,
-		`>Ask Code</button>`,
-		`data-repository-drawer`,
-		`data-expanded="false"`,
-		`aria-label="Open repositories"`,
-		`id="repository-drawer-panel" class="repository-drawer-panel" aria-hidden="true" inert`,
+		`id="conversation-title"`,
+		`id="conversation-inspector"`,
+		`id="conversation-evidence-list"`,
+		`data-conversation-filter`,
+		`aria-label="Ask RepoKarta"`,
 	} {
 		if !strings.Contains(chatBody, expected) {
 			t.Fatalf("chat page does not contain %q", expected)
@@ -290,13 +393,17 @@ func TestSearchAndChatRenderAsSeparatePages(t *testing.T) {
 	if strings.Contains(chatBody, `action="/search"`) {
 		t.Fatal("chat page unexpectedly contains the search form")
 	}
+	if strings.Contains(chatBody, `data-repository-drawer`) {
+		t.Fatal("chat page unexpectedly contains the global repository drawer")
+	}
 }
 
 func TestChatStreamsNDJSON(t *testing.T) {
+	conversations := &testConversations{}
 	server, err := New(
 		Config{
 			Address:       "127.0.0.1:7331",
-			Conversations: &testConversations{},
+			Conversations: conversations,
 		},
 		codeintel.New(testStore{}, testSearcher{}, "http://127.0.0.1:7331"),
 		testRefresher{},
@@ -307,7 +414,7 @@ func TestChatStreamsNDJSON(t *testing.T) {
 	request := httptest.NewRequest(
 		http.MethodPost,
 		"http://127.0.0.1:7331/api/chat",
-		bytes.NewBufferString(`{"provider":"test","message":"hello","images":[{"name":"pixel.png","media_type":"image/png","data":"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="}]}`),
+		bytes.NewBufferString(`{"provider":"test","message":"hello","timeout_seconds":300,"token_budget":32000,"images":[{"name":"pixel.png","media_type":"image/png","data":"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="}]}`),
 	)
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
@@ -333,6 +440,9 @@ func TestChatStreamsNDJSON(t *testing.T) {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("body does not contain %q: %s", expected, body)
 		}
+	}
+	if conversations.lastRequest.TimeoutSeconds != 300 || conversations.lastRequest.TokenBudget != 32000 {
+		t.Fatalf("turn controls = %#v", conversations.lastRequest)
 	}
 }
 

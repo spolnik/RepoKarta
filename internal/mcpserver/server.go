@@ -33,6 +33,7 @@ type Config struct {
 type Intelligence interface {
 	Repositories(context.Context) (codeintel.RepositoryList, error)
 	Search(context.Context, codeintel.SearchRequest) (codeintel.SearchResponse, error)
+	FindSymbol(context.Context, codeintel.SymbolRequest) (codeintel.SymbolResponse, error)
 	GetFile(context.Context, codeintel.FileRequest) (codeintel.FileResponse, error)
 	ListTree(context.Context, codeintel.TreeRequest) (codeintel.TreeResponse, error)
 	GitLog(context.Context, codeintel.GitLogRequest) (codeintel.GitLogResponse, error)
@@ -184,6 +185,27 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
+		Name:        "find_symbol",
+		Title:       "Find indexed symbols",
+		Description: "Find definitions and other indexed symbol occurrences by exact symbol name. Results are bounded, commit-pinned, and include explicit warnings when Universal Ctags symbol indexing is unavailable.",
+		Annotations: readOnly,
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input findSymbolInput) (*mcp.CallToolResult, findSymbolOutput, error) {
+		result, err := intelligence.FindSymbol(ctx, codeintel.SymbolRequest{
+			Symbol:     input.Symbol,
+			Repository: input.Repository,
+			Language:   input.Language,
+			Limit:      input.Limit,
+		})
+		if err != nil {
+			return nil, findSymbolOutput{}, err
+		}
+		for _, match := range result.Matches {
+			tracker.Record(conversationID, agent.Citation{Label: match.Citation, URL: match.SourceURL})
+		}
+		return nil, result, nil
+	})
+
+	mcp.AddTool(server, &mcp.Tool{
 		Name:        "list_tree",
 		Title:       "List repository tree",
 		Description: "List files and directories at a repository's pinned indexed commit. This never reads the worktree.",
@@ -262,6 +284,15 @@ type searchCodeInput struct {
 	Limit      int    `json:"limit,omitempty" jsonschema:"Maximum files to return from 1 to 500. Defaults to 100."`
 }
 type searchCodeOutput = codeintel.SearchResponse
+
+type findSymbolInput struct {
+	Symbol     string `json:"symbol" jsonschema:"required,Exact symbol name to find."`
+	Repository string `json:"repository,omitempty" jsonschema:"Optional exact repository name."`
+	Language   string `json:"language,omitempty" jsonschema:"Optional programming language filter."`
+	Limit      int    `json:"limit,omitempty" jsonschema:"Maximum files to return from 1 to 500. Defaults to 100."`
+}
+
+type findSymbolOutput = codeintel.SymbolResponse
 
 type openFileInput struct {
 	Repository string `json:"repository" jsonschema:"required,Exact repository name returned by list_repositories."`
