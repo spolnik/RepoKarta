@@ -29,11 +29,14 @@ import (
 )
 
 const (
-	snapshotVersion       = 1
+	snapshotVersion       = 2
 	maximumFiles          = 20_000
-	maximumSourceFiles    = 800
+	maximumSourceFiles    = 5_000
 	maximumSourceFileSize = 1 << 20
-	commandTimeout        = 20 * time.Second
+	// Curated layer budgets keep large Java and Kotlin services legible.
+	maximumComponentsPerRepository = 300
+	maximumRoutesPerRepository     = 900
+	commandTimeout                 = 20 * time.Second
 )
 
 // RepositoryStore supplies the catalogue without exposing paths to clients.
@@ -217,26 +220,36 @@ func snapshotSignature(repositories []catalog.Repository) string {
 }
 
 type builder struct {
-	baseURL      string
-	repositories []Repository
-	languages    map[string]int
-	manifests    []Manifest
-	nodes        map[string]Node
-	edges        map[string]Edge
-	fileCount    int
-	truncated    bool
+	baseURL          string
+	repositories     []Repository
+	languages        map[string]int
+	manifests        []Manifest
+	nodes            map[string]Node
+	edges            map[string]Edge
+	serviceTargets   map[string]string
+	clientReferences []clientReference
+	fileCount        int
+	truncated        bool
+}
+
+type clientReference struct {
+	sourceRepositoryID int64
+	target             string
+	evidence           Evidence
 }
 
 func newBuilder(baseURL string) *builder {
 	return &builder{
-		baseURL:   baseURL,
-		languages: make(map[string]int),
-		nodes:     make(map[string]Node),
-		edges:     make(map[string]Edge),
+		baseURL:        baseURL,
+		languages:      make(map[string]int),
+		nodes:          make(map[string]Node),
+		edges:          make(map[string]Edge),
+		serviceTargets: make(map[string]string),
 	}
 }
 
 func (b *builder) snapshot(signature string) Snapshot {
+	b.resolveClientReferences()
 	nodes := make([]Node, 0, len(b.nodes))
 	for _, node := range b.nodes {
 		nodes = append(nodes, node)
@@ -305,6 +318,7 @@ func (b *builder) analyzeRepository(ctx context.Context, repository catalog.Repo
 	evidencePath := evidenceFile(files)
 	repositoryEvidence := b.evidence(repository, revision, evidencePath, 1, repository.Name)
 	repositoryNodeID := fmt.Sprintf("repository:%d", repository.ID)
+	b.registerServiceTarget(repository.Name, repositoryNodeID)
 	b.addNode(Node{
 		ID:           repositoryNodeID,
 		Kind:         "repository",
@@ -320,7 +334,8 @@ func (b *builder) analyzeRepository(ctx context.Context, repository catalog.Repo
 	contents := make(map[string][]byte)
 	sourceCount := 0
 	for _, filePath := range files {
-		if !isManifest(filePath) && !isAnalyzedSource(filePath) {
+		if !isManifest(filePath) && !isAnalyzedSource(filePath) &&
+			!isServiceConfiguration(filePath) {
 			continue
 		}
 		if isAnalyzedSource(filePath) {
@@ -343,6 +358,9 @@ func (b *builder) analyzeRepository(ctx context.Context, repository catalog.Repo
 	}
 	packageIDs := b.addPackages(repository, revision, repositoryNodeID, files, contents)
 	b.addGoImportsAndRoutes(repository, revision, goModule, packageIDs, contents)
+	b.addServiceIdentity(repositoryNodeID, contents)
+	b.addJavaStructure(repository, revision, repositoryNodeID, contents)
+	b.addGradleManifests(repository, revision, repositoryNodeID, contents)
 	b.addOtherManifests(repository, revision, repositoryNodeID, contents)
 	return nil
 }
@@ -621,6 +639,866 @@ func (b *builder) addGoImportsAndRoutes(
 	}
 }
 
+type gradleDependency struct {
+	coordinate string
+	line       int
+}
+
+// gradleConfigurations lists the dependency configurations RepoKarta reads from
+// Groovy and Kotlin Gradle build scripts. gradleContainers are the wrapper
+// functions that may surround a coordinate, notably BOM imports.
+const (
+	gradleConfigurations = `(?:api|implementation|compileOnly|compileOnlyApi|runtimeOnly|developmentOnly|` +
+		`annotationProcessor|kapt|kaptTest|ksp|kspTest|classpath|` +
+		`testApi|testImplementation|testCompileOnly|testRuntimeOnly|testAnnotationProcessor|` +
+		`testFixturesApi|testFixturesImplementation|` +
+		`integrationTestImplementation|intTestImplementation|e2eTestImplementation)`
+	gradleContainers = `(?:(?:enforcedPlatform|platform|testFixtures)\s*\(\s*)?`
+	gradleConfigOpen = `\s*(?:\(\s*)?`
+)
+
+var (
+	gradleStringDependency = regexp.MustCompile(
+		`(?m)^\s*` + gradleConfigurations + gradleConfigOpen + gradleContainers + `["']([^"']+)["']`,
+	)
+	// gradleNamedDependency covers both Groovy map syntax
+	// (`implementation group: "g", name: "a", version: "v"`) and Kotlin named
+	// arguments (`implementation(group = "g", name = "a", version = "v")`) in
+	// any argument order.
+	gradleNamedDependency = regexp.MustCompile(
+		`(?m)^\s*` + gradleConfigurations + gradleConfigOpen + gradleContainers +
+			`((?:group|name|version|module)\s*[:=]\s*["'][^"']*["']` +
+			`(?:\s*,\s*[A-Za-z]+\s*[:=]\s*["'][^"']*["'])*)`,
+	)
+	gradleNamedField = regexp.MustCompile(
+		`(?:^|,)\s*([A-Za-z]+)\s*[:=]\s*["']([^"']*)["']`,
+	)
+	catalogInlineField = regexp.MustCompile(
+		`(?:^|[,{]\s*)([A-Za-z][A-Za-z.]*)\s*=\s*["']([^"']*)["']`,
+	)
+	gradleProjectDependency = regexp.MustCompile(
+		`(?m)^\s*` + gradleConfigurations + gradleConfigOpen + gradleContainers +
+			`project\s*\(\s*(?:path\s*[:=]\s*)?["'](:?[^"']+)["']`,
+	)
+	gradleCatalogDependency = regexp.MustCompile(
+		`(?m)^\s*` + gradleConfigurations + gradleConfigOpen + gradleContainers +
+			`libs\.([A-Za-z0-9_.-]+)`,
+	)
+	gradleProjectName = regexp.MustCompile(
+		`(?m)^\s*rootProject\.name\s*[:=]\s*["']([^"']+)["']`,
+	)
+	springApplicationNameProperty = regexp.MustCompile(
+		`(?m)^\s*spring\.application\.name\s*[=:]\s*["']?([A-Za-z0-9][A-Za-z0-9_.-]*)["']?\s*$`,
+	)
+	yamlKeyValue     = regexp.MustCompile(`^(\s*)([A-Za-z0-9_.-]+)\s*:\s*(.*)$`)
+	javaClassPattern = regexp.MustCompile(
+		`(?m)^[^/*\n]*\b(?:class|interface|object)\s+([A-Za-z_$][A-Za-z0-9_$]*)`,
+	)
+	springMappingPattern = regexp.MustCompile(
+		`(?s)@(?:[A-Za-z0-9_$.]+\.)?(GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping|RequestMapping|HttpExchange|GetExchange|PostExchange|PutExchange|DeleteExchange|PatchExchange)\s*(?:\((.*?)\))?`,
+	)
+	quotedJavaString      = regexp.MustCompile(`["']([^"']*)["']`)
+	springFunctionalRoute = regexp.MustCompile(
+		`(?m)\b(?:RequestPredicates\.)?(GET|POST|PUT|DELETE|PATCH)\s*\(\s*["']([^"']+)["']`,
+	)
+	feignClientPattern = regexp.MustCompile(`(?s)@FeignClient\s*\((.*?)\)`)
+	feignNamedTarget   = regexp.MustCompile(
+		`(?i)(?:name|value|serviceId)\s*=\s*["']([^"']+)["']`,
+	)
+	// springClientIndicator gates URL harvesting so RepoKarta only reads hosts
+	// out of files that actually build an outbound HTTP client.
+	springClientIndicator = regexp.MustCompile(
+		`@FeignClient|@HttpExchange|\bWebClient\b|\bRestClient\b|\bRestTemplate\b|` +
+			`HttpServiceProxyFactory|\bbaseUrl\s*\(|\brootUri\s*\(|URI\.create|\bWebTarget\b|\bHttpRequest\b`,
+	)
+	serviceURLPattern = regexp.MustCompile(
+		`(?i)(?:https?://|lb://)([a-z0-9][a-z0-9_.-]*)(?::\d+)?`,
+	)
+)
+
+// infrastructureHosts are hostname labels that never identify a sibling service
+// in the indexed collection. They keep license headers, XML schema namespaces,
+// and package registries from inventing inter-service relationships.
+var infrastructureHosts = map[string]bool{
+	"0-0-0-0":         true,
+	"127-0-0-1":       true,
+	"apache":          true,
+	"amazonaws":       true,
+	"azure":           true,
+	"bitbucket":       true,
+	"cloudflare":      true,
+	"docker":          true,
+	"eclipse":         true,
+	"example":         true,
+	"github":          true,
+	"gitlab":          true,
+	"google":          true,
+	"googleapis":      true,
+	"host":            true,
+	"java":            true,
+	"jcenter":         true,
+	"jetbrains":       true,
+	"json-schema":     true,
+	"localhost":       true,
+	"maven":           true,
+	"microsoft":       true,
+	"mozilla":         true,
+	"mvnrepository":   true,
+	"npmjs":           true,
+	"opensource":      true,
+	"oracle":          true,
+	"plugins":         true,
+	"registry":        true,
+	"repo1":           true,
+	"schemas":         true,
+	"sonatype":        true,
+	"springframework": true,
+	"sun":             true,
+	"w3":              true,
+	"www":             true,
+	"xmlns":           true,
+}
+
+func (b *builder) addGradleManifests(
+	repository catalog.Repository,
+	revision, repositoryNodeID string,
+	contents map[string][]byte,
+) {
+	paths := make([]string, 0)
+	for filePath := range contents {
+		switch path.Base(filePath) {
+		case "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts",
+			"libs.versions.toml":
+			paths = append(paths, filePath)
+		}
+	}
+	versionCatalog := parseGradleVersionCatalogs(contents)
+	sort.Strings(paths)
+	for _, filePath := range paths {
+		content := contents[filePath]
+		if match := gradleProjectName.FindSubmatch(content); len(match) == 2 {
+			b.registerServiceTarget(string(match[1]), repositoryNodeID)
+		}
+		dependencies := parseGradleDependencies(content, versionCatalog)
+		if path.Base(filePath) == "libs.versions.toml" {
+			dependencies = catalogDependencies(content)
+		}
+		labels := make([]string, 0, len(dependencies))
+		for _, dependency := range dependencies {
+			labels = append(labels, dependency.coordinate)
+		}
+		kind := manifestKind(filePath)
+		projectName := repository.Name
+		if directory := path.Dir(filePath); directory != "." {
+			projectName = path.Base(directory)
+		}
+		evidence := b.evidence(repository, revision, filePath, 1, kind)
+		manifestID := fmt.Sprintf("manifest:%d:%s", repository.ID, normalizeID(filePath))
+		b.addNode(Node{
+			ID:           manifestID,
+			Kind:         "manifest",
+			Label:        path.Base(filePath),
+			Subtitle:     kind,
+			Layer:        "Packages",
+			RepositoryID: repository.ID,
+			Repository:   repository.Name,
+			Path:         filePath,
+			Evidence:     []Evidence{evidence},
+		})
+		b.addEdge(Edge{
+			ID:       edgeID(repositoryNodeID, manifestID, "declares"),
+			Source:   repositoryNodeID,
+			Target:   manifestID,
+			Kind:     "manifest",
+			Label:    "declares",
+			Evidence: []Evidence{evidence},
+		})
+		b.manifests = append(b.manifests, Manifest{
+			RepositoryID: repository.ID,
+			Repository:   repository.Name,
+			Kind:         kind,
+			Path:         filePath,
+			Name:         projectName,
+			Dependencies: labels,
+			Evidence:     evidence,
+		})
+		for _, dependency := range dependencies {
+			dependencyEvidence := b.evidence(
+				repository,
+				revision,
+				filePath,
+				dependency.line,
+				dependency.coordinate,
+			)
+			label, version := gradleCoordinateParts(dependency.coordinate)
+			subtitle := "Gradle"
+			if version != "" {
+				subtitle += " · " + version
+			}
+			dependencyNodeID := "dependency:gradle:" + normalizeID(dependency.coordinate)
+			b.addNode(Node{
+				ID:       dependencyNodeID,
+				Kind:     "dependency",
+				Label:    label,
+				Subtitle: subtitle,
+				Layer:    "Dependencies",
+				Evidence: []Evidence{dependencyEvidence},
+			})
+			b.addEdge(Edge{
+				ID:       edgeID(manifestID, dependencyNodeID, "depends"),
+				Source:   manifestID,
+				Target:   dependencyNodeID,
+				Kind:     "dependency",
+				Label:    "declares",
+				Evidence: []Evidence{dependencyEvidence},
+			})
+		}
+	}
+}
+
+func parseGradleDependencies(content []byte, catalog map[string]string) []gradleDependency {
+	byCoordinate := make(map[string]gradleDependency)
+	for _, match := range gradleStringDependency.FindAllSubmatchIndex(content, -1) {
+		coordinate := dropInterpolatedVersion(strings.TrimSpace(string(content[match[2]:match[3]])))
+		if !validGradleCoordinate(coordinate) {
+			continue
+		}
+		byCoordinate[coordinate] = gradleDependency{
+			coordinate: coordinate,
+			line:       lineAtOffset(content, match[0]),
+		}
+	}
+	for _, match := range gradleNamedDependency.FindAllSubmatchIndex(content, -1) {
+		coordinate := parseGradleNamedCoordinate(string(content[match[2]:match[3]]))
+		if !validGradleCoordinate(coordinate) {
+			continue
+		}
+		byCoordinate[coordinate] = gradleDependency{
+			coordinate: coordinate,
+			line:       lineAtOffset(content, match[0]),
+		}
+	}
+	for _, match := range gradleProjectDependency.FindAllSubmatchIndex(content, -1) {
+		projectName := strings.TrimPrefix(strings.TrimSpace(string(content[match[2]:match[3]])), ":")
+		coordinate := "project:" + strings.ReplaceAll(projectName, ":", "/")
+		byCoordinate[coordinate] = gradleDependency{
+			coordinate: coordinate,
+			line:       lineAtOffset(content, match[0]),
+		}
+	}
+	for _, match := range gradleCatalogDependency.FindAllSubmatchIndex(content, -1) {
+		alias := normalizeCatalogAlias(string(content[match[2]:match[3]]))
+		coordinate := catalog[alias]
+		if coordinate == "" {
+			continue
+		}
+		byCoordinate[coordinate] = gradleDependency{
+			coordinate: coordinate,
+			line:       lineAtOffset(content, match[0]),
+		}
+	}
+	output := make([]gradleDependency, 0, len(byCoordinate))
+	for _, dependency := range byCoordinate {
+		output = append(output, dependency)
+	}
+	slices.SortFunc(output, func(left, right gradleDependency) int {
+		return strings.Compare(left.coordinate, right.coordinate)
+	})
+	return output
+}
+
+func parseGradleVersionCatalogs(contents map[string][]byte) map[string]string {
+	output := make(map[string]string)
+	for filePath, content := range contents {
+		if path.Base(filePath) != "libs.versions.toml" {
+			continue
+		}
+		for alias, entry := range catalogCoordinates(content) {
+			output[alias] = entry.value
+		}
+	}
+	return output
+}
+
+type catalogEntry struct {
+	value string
+	line  int
+}
+
+// catalogCoordinates resolves every `[libraries]` alias of one version catalog
+// to `group:artifact[:version]` and records the exact declaring line. Versions
+// are read in a separate pass so `version.ref` resolves regardless of table
+// order.
+func catalogCoordinates(content []byte) map[string]catalogEntry {
+	versions := make(map[string]string)
+	for alias, entry := range catalogSection(content, "versions") {
+		versions[alias] = strings.Trim(strings.TrimSpace(stripTOMLComment(entry.value)), `"'`)
+	}
+	output := make(map[string]catalogEntry)
+	for alias, entry := range catalogSection(content, "libraries") {
+		if coordinate := parseCatalogCoordinate(entry.value, versions); coordinate != "" {
+			output[alias] = catalogEntry{value: coordinate, line: entry.line}
+		}
+	}
+	return output
+}
+
+// catalogSection returns the normalized alias, raw value, and one-based line of
+// every entry in one TOML table of a Gradle version catalog.
+func catalogSection(content []byte, wanted string) map[string]catalogEntry {
+	values := make(map[string]catalogEntry)
+	section := ""
+	number := 0
+	scanner := bufio.NewScanner(bytes.NewReader(content))
+	scanner.Buffer(make([]byte, 0, 64*1024), maximumSourceFileSize)
+	for scanner.Scan() {
+		number++
+		line := strings.TrimSpace(scanner.Text())
+		if strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			section = strings.Trim(line, "[] ")
+			continue
+		}
+		if section != wanted {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		alias := normalizeCatalogAlias(strings.TrimSpace(key))
+		if alias == "" {
+			continue
+		}
+		values[alias] = catalogEntry{value: strings.TrimSpace(value), line: number}
+	}
+	return values
+}
+
+// stripTOMLComment removes a trailing comment while preserving `#` characters
+// inside quoted values.
+func stripTOMLComment(value string) string {
+	quote := byte(0)
+	for index := 0; index < len(value); index++ {
+		switch character := value[index]; {
+		case quote != 0 && character == quote:
+			quote = 0
+		case quote == 0 && (character == '"' || character == '\''):
+			quote = character
+		case quote == 0 && character == '#':
+			return value[:index]
+		}
+	}
+	return value
+}
+
+func parseCatalogCoordinate(value string, versions map[string]string) string {
+	if !strings.HasPrefix(strings.TrimSpace(value), "{") {
+		coordinate := strings.Trim(strings.TrimSpace(stripTOMLComment(value)), `"'`)
+		if validGradleCoordinate(coordinate) {
+			return coordinate
+		}
+		return ""
+	}
+	fields := make(map[string]string)
+	for _, match := range catalogInlineField.FindAllStringSubmatch(value, -1) {
+		fields[strings.ToLower(match[1])] = strings.TrimSpace(match[2])
+	}
+	module := fields["module"]
+	if module == "" && fields["group"] != "" && fields["name"] != "" {
+		module = fields["group"] + ":" + fields["name"]
+	}
+	if module == "" {
+		return ""
+	}
+	version := fields["version"]
+	// Both `version.ref = "x"` and the nested `version = { ref = "x" }` form
+	// point at the `[versions]` table.
+	if reference := firstNonEmpty(fields["version.ref"], fields["ref"]); reference != "" {
+		version = versions[normalizeCatalogAlias(reference)]
+	}
+	if version != "" && !strings.Contains(version, "$") {
+		return module + ":" + version
+	}
+	return module
+}
+
+// catalogDependencies lists every library declared by one version catalog with
+// the exact line that declares it.
+func catalogDependencies(content []byte) []gradleDependency {
+	entries := catalogCoordinates(content)
+	output := make([]gradleDependency, 0, len(entries))
+	for _, entry := range entries {
+		output = append(output, gradleDependency{
+			coordinate: entry.value,
+			line:       entry.line,
+		})
+	}
+	slices.SortFunc(output, func(left, right gradleDependency) int {
+		return strings.Compare(left.coordinate, right.coordinate)
+	})
+	return output
+}
+
+func normalizeCatalogAlias(value string) string {
+	value = strings.TrimSpace(strings.ToLower(value))
+	value = strings.TrimSuffix(value, ".get")
+	value = strings.NewReplacer("-", ".", "_", ".").Replace(value)
+	for strings.Contains(value, "..") {
+		value = strings.ReplaceAll(value, "..", ".")
+	}
+	return strings.Trim(value, ".")
+}
+
+// parseGradleNamedCoordinate reads Groovy map arguments and Kotlin named
+// arguments in any order and returns `group:artifact[:version]`. Interpolated
+// versions are dropped rather than recorded as literal build-script text.
+func parseGradleNamedCoordinate(arguments string) string {
+	fields := make(map[string]string)
+	for _, match := range gradleNamedField.FindAllStringSubmatch(arguments, -1) {
+		fields[strings.ToLower(match[1])] = strings.TrimSpace(match[2])
+	}
+	module := fields["module"]
+	if module == "" && fields["group"] != "" && fields["name"] != "" {
+		module = fields["group"] + ":" + fields["name"]
+	}
+	if module == "" {
+		return ""
+	}
+	if version := fields["version"]; version != "" && !strings.Contains(version, "$") {
+		return module + ":" + version
+	}
+	return module
+}
+
+// dropInterpolatedVersion keeps `group:artifact` when the version segment is a
+// build-script variable, so the Dependencies view never claims a version it
+// cannot prove from source.
+func dropInterpolatedVersion(coordinate string) string {
+	parts := strings.SplitN(coordinate, ":", 3)
+	if len(parts) == 3 && strings.Contains(parts[2], "$") {
+		return parts[0] + ":" + parts[1]
+	}
+	return coordinate
+}
+
+func validGradleCoordinate(value string) bool {
+	if strings.HasPrefix(value, "project:") {
+		return true
+	}
+	if strings.Count(value, ":") < 1 ||
+		strings.HasPrefix(value, "libs.") ||
+		strings.Contains(value, " ") ||
+		strings.Contains(value, "/") {
+		return false
+	}
+	// An unresolved Groovy or Kotlin interpolation is not evidence of a
+	// specific artifact, so only fully literal group and artifact segments
+	// become dependency nodes.
+	parts := strings.SplitN(value, ":", 3)
+	return !strings.Contains(parts[0], "$") && !strings.Contains(parts[1], "$") &&
+		parts[0] != "" && parts[1] != ""
+}
+
+func gradleCoordinateParts(coordinate string) (string, string) {
+	if strings.HasPrefix(coordinate, "project:") {
+		return coordinate, ""
+	}
+	parts := strings.Split(coordinate, ":")
+	if len(parts) < 2 {
+		return coordinate, ""
+	}
+	label := parts[0] + ":" + parts[1]
+	if len(parts) > 2 {
+		return label, strings.Join(parts[2:], ":")
+	}
+	return label, ""
+}
+
+func (b *builder) addJavaStructure(
+	repository catalog.Repository,
+	revision, repositoryNodeID string,
+	contents map[string][]byte,
+) {
+	paths := make([]string, 0)
+	for filePath := range contents {
+		extension := strings.ToLower(path.Ext(filePath))
+		if extension == ".java" || extension == ".kt" {
+			paths = append(paths, filePath)
+		}
+	}
+	sort.Strings(paths)
+	components, routeCount := 0, 0
+	for _, filePath := range paths {
+		content := contents[filePath]
+		routes := springRoutes(content)
+		clientTargets := springClientTargets(content)
+		if len(routes) == 0 && len(clientTargets) == 0 {
+			continue
+		}
+		// Client targets are recorded before the component budget because
+		// service edges land on the repository node, not on a component.
+		for _, target := range clientTargets {
+			b.clientReferences = append(b.clientReferences, clientReference{
+				sourceRepositoryID: repository.ID,
+				target:             target.name,
+				evidence: b.evidence(
+					repository,
+					revision,
+					filePath,
+					target.line,
+					target.name,
+				),
+			})
+		}
+		// Bound the curated layers so a large Spring codebase stays a readable
+		// map rather than a file-level hairball.
+		if components >= maximumComponentsPerRepository {
+			b.truncated = true
+			continue
+		}
+		if routeCount+len(routes) > maximumRoutesPerRepository {
+			b.truncated = true
+			routes = routes[:max(0, maximumRoutesPerRepository-routeCount)]
+		}
+		if len(routes) == 0 && len(clientTargets) == 0 {
+			continue
+		}
+		routeCount += len(routes)
+		components++
+		className := strings.TrimSuffix(path.Base(filePath), path.Ext(filePath))
+		if match := javaClassPattern.FindSubmatch(content); len(match) == 2 {
+			className = string(match[1])
+		}
+		componentEvidence := b.evidence(
+			repository,
+			revision,
+			filePath,
+			lineContaining(content, className),
+			className,
+		)
+		componentID := fmt.Sprintf("component:%d:%s", repository.ID, normalizeID(filePath))
+		b.addNode(Node{
+			ID:           componentID,
+			Kind:         "component",
+			Label:        className,
+			Subtitle:     filePath,
+			Layer:        "Components",
+			RepositoryID: repository.ID,
+			Repository:   repository.Name,
+			Path:         filePath,
+			Evidence:     []Evidence{componentEvidence},
+		})
+		b.addEdge(Edge{
+			ID:       edgeID(repositoryNodeID, componentID, "contains"),
+			Source:   repositoryNodeID,
+			Target:   componentID,
+			Kind:     "contains",
+			Label:    "contains",
+			Evidence: []Evidence{componentEvidence},
+		})
+		for _, route := range routes {
+			evidence := b.evidence(repository, revision, filePath, route.line, route.label)
+			routeID := fmt.Sprintf(
+				"route:%d:%s:%s",
+				repository.ID,
+				normalizeID(filePath),
+				normalizeID(route.label),
+			)
+			b.addNode(Node{
+				ID:           routeID,
+				Kind:         "route",
+				Label:        route.label,
+				Subtitle:     className,
+				Layer:        "Routes",
+				RepositoryID: repository.ID,
+				Repository:   repository.Name,
+				Path:         filePath,
+				Evidence:     []Evidence{evidence},
+			})
+			b.addEdge(Edge{
+				ID:       edgeID(componentID, routeID, "serves"),
+				Source:   componentID,
+				Target:   routeID,
+				Kind:     "route",
+				Label:    "serves",
+				Evidence: []Evidence{evidence},
+			})
+		}
+	}
+}
+
+type springRoute struct {
+	label string
+	line  int
+}
+
+func springRoutes(content []byte) []springRoute {
+	classOffset := len(content)
+	if match := javaClassPattern.FindIndex(content); match != nil {
+		classOffset = match[0]
+	}
+	classPrefix := ""
+	mappings := springMappingPattern.FindAllSubmatchIndex(content, -1)
+	for _, match := range mappings {
+		annotation := string(content[match[2]:match[3]])
+		if match[0] >= classOffset ||
+			(annotation != "RequestMapping" && annotation != "HttpExchange") {
+			continue
+		}
+		paths := annotationPaths(mappingArguments(content, match))
+		if len(paths) > 0 {
+			classPrefix = paths[0]
+			break
+		}
+	}
+	byLabel := make(map[string]springRoute)
+	for _, match := range mappings {
+		if match[0] < classOffset {
+			continue
+		}
+		annotation := string(content[match[2]:match[3]])
+		arguments := mappingArguments(content, match)
+		paths := annotationPaths(arguments)
+		if len(paths) == 0 {
+			paths = []string{""}
+		}
+		method := strings.ToUpper(
+			strings.TrimSuffix(strings.TrimSuffix(annotation, "Mapping"), "Exchange"),
+		)
+		if annotation == "RequestMapping" || annotation == "HttpExchange" {
+			method = requestMappingMethod(arguments)
+		}
+		for _, routePath := range paths {
+			label := strings.TrimSpace(method + " " + joinRoutePath(classPrefix, routePath))
+			byLabel[label] = springRoute{label: label, line: lineAtOffset(content, match[0])}
+		}
+	}
+	for _, match := range springFunctionalRoute.FindAllSubmatchIndex(content, -1) {
+		method := strings.ToUpper(string(content[match[2]:match[3]]))
+		routePath := string(content[match[4]:match[5]])
+		label := method + " " + joinRoutePath("", routePath)
+		byLabel[label] = springRoute{label: label, line: lineAtOffset(content, match[0])}
+	}
+	output := make([]springRoute, 0, len(byLabel))
+	for _, route := range byLabel {
+		output = append(output, route)
+	}
+	slices.SortFunc(output, func(left, right springRoute) int {
+		return strings.Compare(left.label, right.label)
+	})
+	return output
+}
+
+func mappingArguments(content []byte, match []int) string {
+	if len(match) < 6 || match[4] < 0 {
+		return ""
+	}
+	return string(content[match[4]:match[5]])
+}
+
+func annotationPaths(arguments string) []string {
+	matches := quotedJavaString.FindAllStringSubmatch(arguments, -1)
+	paths := make([]string, 0, len(matches))
+	for _, match := range matches {
+		if len(match) != 2 {
+			continue
+		}
+		value := strings.TrimSpace(match[1])
+		if strings.HasPrefix(value, "/") || value == "" {
+			paths = append(paths, value)
+		}
+	}
+	return uniqueSorted(paths)
+}
+
+func requestMappingMethod(arguments string) string {
+	for _, method := range []string{"GET", "POST", "PUT", "DELETE", "PATCH"} {
+		if strings.Contains(arguments, "RequestMethod."+method) {
+			return method
+		}
+	}
+	return "ANY"
+}
+
+func joinRoutePath(prefix, suffix string) string {
+	joined := "/" + strings.Trim(strings.TrimSpace(prefix), "/")
+	if trimmed := strings.Trim(strings.TrimSpace(suffix), "/"); trimmed != "" {
+		joined += "/" + trimmed
+	}
+	joined = strings.ReplaceAll(joined, "//", "/")
+	if joined == "" {
+		return "/"
+	}
+	return joined
+}
+
+type springClientTarget struct {
+	name string
+	line int
+}
+
+// springClientTargets reads outbound service names from Spring HTTP clients.
+// Bare URLs are only harvested from files that actually construct a client
+// (Feign, WebClient, RestClient, RestTemplate, or an HTTP interface proxy), so
+// license headers and XML namespaces never become service relationships.
+func springClientTargets(content []byte) []springClientTarget {
+	byName := make(map[string]springClientTarget)
+	for _, match := range feignClientPattern.FindAllSubmatchIndex(content, -1) {
+		arguments := string(content[match[2]:match[3]])
+		target := ""
+		if named := feignNamedTarget.FindStringSubmatch(arguments); len(named) == 2 {
+			target = named[1]
+		} else if quoted := quotedJavaString.FindStringSubmatch(arguments); len(quoted) == 2 {
+			target = quoted[1]
+		}
+		if target = normalizeServiceName(target); target != "" {
+			byName[target] = springClientTarget{name: target, line: lineAtOffset(content, match[0])}
+		}
+	}
+	if springClientIndicator.Match(content) {
+		for _, match := range serviceURLPattern.FindAllSubmatchIndex(content, -1) {
+			target := normalizeServiceName(string(content[match[2]:match[3]]))
+			if target == "" || infrastructureHosts[target] {
+				continue
+			}
+			byName[target] = springClientTarget{
+				name: target,
+				line: lineAtOffset(content, match[0]),
+			}
+		}
+	}
+	output := make([]springClientTarget, 0, len(byName))
+	for _, target := range byName {
+		output = append(output, target)
+	}
+	slices.SortFunc(output, func(left, right springClientTarget) int {
+		return strings.Compare(left.name, right.name)
+	})
+	return output
+}
+
+// normalizeServiceName reduces a Feign service id, Spring application name, or
+// URL host to its first DNS label so `inventory-service`,
+// `inventory-service:8080`, and `inventory-service.default.svc.cluster.local`
+// resolve to the same service.
+func normalizeServiceName(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.TrimPrefix(value, "http://")
+	value = strings.TrimPrefix(value, "https://")
+	value = strings.TrimPrefix(value, "lb://")
+	value = strings.SplitN(value, "/", 2)[0]
+	value = strings.SplitN(value, ":", 2)[0]
+	value = strings.SplitN(value, ".", 2)[0]
+	value = strings.NewReplacer("_", "-", " ", "-").Replace(value)
+	return strings.Trim(value, "-")
+}
+
+// registerServiceTarget records one name that identifies this repository as a
+// callable service.
+func (b *builder) registerServiceTarget(name, repositoryNodeID string) {
+	normalized := normalizeServiceName(name)
+	if normalized == "" || infrastructureHosts[normalized] {
+		return
+	}
+	b.serviceTargets[normalized] = repositoryNodeID
+}
+
+// addServiceIdentity registers the Spring application name so a Feign client
+// naming a logical service resolves even when it differs from the directory
+// name.
+func (b *builder) addServiceIdentity(repositoryNodeID string, contents map[string][]byte) {
+	paths := make([]string, 0)
+	for filePath := range contents {
+		if isServiceConfiguration(filePath) {
+			paths = append(paths, filePath)
+		}
+	}
+	sort.Strings(paths)
+	for _, filePath := range paths {
+		if name := springApplicationName(filePath, contents[filePath]); name != "" {
+			b.registerServiceTarget(name, repositoryNodeID)
+		}
+	}
+}
+
+// isServiceConfiguration reports whether a file can declare a Spring
+// application name.
+func isServiceConfiguration(filePath string) bool {
+	switch path.Base(filePath) {
+	case "application.yml", "application.yaml", "application.properties",
+		"bootstrap.yml", "bootstrap.yaml", "bootstrap.properties":
+		return true
+	default:
+		return false
+	}
+}
+
+// springApplicationName reads `spring.application.name` from either the flat
+// property form or the nested YAML form.
+func springApplicationName(filePath string, content []byte) string {
+	if match := springApplicationNameProperty.FindSubmatch(content); len(match) == 2 {
+		return string(match[1])
+	}
+	if strings.HasSuffix(filePath, ".properties") {
+		return ""
+	}
+	type level struct {
+		key    string
+		indent int
+	}
+	stack := make([]level, 0, 8)
+	scanner := bufio.NewScanner(bytes.NewReader(content))
+	scanner.Buffer(make([]byte, 0, 64*1024), maximumSourceFileSize)
+	for scanner.Scan() {
+		line := strings.ReplaceAll(scanner.Text(), "\t", "  ")
+		if trimmed := strings.TrimSpace(line); trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		match := yamlKeyValue.FindStringSubmatch(line)
+		if match == nil {
+			continue
+		}
+		indent := len(match[1])
+		for len(stack) > 0 && stack[len(stack)-1].indent >= indent {
+			stack = stack[:len(stack)-1]
+		}
+		stack = append(stack, level{key: strings.ToLower(match[2]), indent: indent})
+		value := strings.Trim(strings.TrimSpace(match[3]), `"'`)
+		if value == "" || len(stack) != 3 {
+			continue
+		}
+		if stack[0].key == "spring" && stack[1].key == "application" && stack[2].key == "name" {
+			return value
+		}
+	}
+	return ""
+}
+
+// resolveClientReferences turns observed client targets into repository edges,
+// but only when the target resolves to a discovered repository or Spring
+// application name. Unresolved hosts and interpolated placeholders are dropped
+// rather than invented as relationships.
+func (b *builder) resolveClientReferences() {
+	for _, reference := range b.clientReferences {
+		targetID := b.serviceTargets[normalizeServiceName(reference.target)]
+		sourceID := fmt.Sprintf("repository:%d", reference.sourceRepositoryID)
+		if targetID == "" || targetID == sourceID {
+			continue
+		}
+		b.addEdge(Edge{
+			ID:       edgeID(sourceID, targetID, "service-call"),
+			Source:   sourceID,
+			Target:   targetID,
+			Kind:     "service_call",
+			Label:    "calls over HTTP",
+			Evidence: []Evidence{reference.evidence},
+		})
+	}
+}
+
 func (b *builder) addOtherManifests(
 	repository catalog.Repository,
 	revision, repositoryNodeID string,
@@ -628,7 +1506,14 @@ func (b *builder) addOtherManifests(
 ) {
 	paths := make([]string, 0, len(contents))
 	for filePath := range contents {
-		if isManifest(filePath) && path.Base(filePath) != "go.mod" && path.Base(filePath) != "package.json" {
+		if isManifest(filePath) &&
+			path.Base(filePath) != "go.mod" &&
+			path.Base(filePath) != "package.json" &&
+			path.Base(filePath) != "build.gradle" &&
+			path.Base(filePath) != "build.gradle.kts" &&
+			path.Base(filePath) != "settings.gradle" &&
+			path.Base(filePath) != "settings.gradle.kts" &&
+			path.Base(filePath) != "libs.versions.toml" {
 			paths = append(paths, filePath)
 		}
 	}
@@ -898,7 +1783,8 @@ func languageSummary(counts map[string]int) []Language {
 func isManifest(filePath string) bool {
 	switch path.Base(filePath) {
 	case "go.mod", "package.json", "pnpm-workspace.yaml", "Cargo.toml", "pyproject.toml",
-		"requirements.txt", "pom.xml", "build.gradle", "build.gradle.kts", "composer.json",
+		"requirements.txt", "pom.xml", "build.gradle", "build.gradle.kts",
+		"settings.gradle", "settings.gradle.kts", "libs.versions.toml", "composer.json",
 		"Gemfile", "Package.swift":
 		return true
 	default:
@@ -920,6 +1806,10 @@ func manifestKind(filePath string) string {
 		return "Maven project"
 	case "build.gradle", "build.gradle.kts":
 		return "Gradle project"
+	case "settings.gradle", "settings.gradle.kts":
+		return "Gradle settings"
+	case "libs.versions.toml":
+		return "Gradle version catalog"
 	case "composer.json":
 		return "Composer package"
 	case "Gemfile":
@@ -940,7 +1830,7 @@ func manifestKind(filePath string) string {
 
 func isAnalyzedSource(filePath string) bool {
 	switch strings.ToLower(path.Ext(filePath)) {
-	case ".go":
+	case ".go", ".java", ".kt":
 		return true
 	default:
 		return false
