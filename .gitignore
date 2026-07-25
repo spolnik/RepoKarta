@@ -18,3 +18,6 @@ coverage.out
 .DS_Store
 .idea/
 .vscode/
+
+# Local Go build cache overrides
+/.tmp-go-cache/

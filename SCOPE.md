@@ -64,6 +64,9 @@ repositories on managed Windows and Apple Silicon macOS laptops.
 - Record repository path, display name, origin URL, default revision, HEAD
   commit, scan state, index state, and timestamps.
 - Allow repositories and directories to be excluded.
+- Skip hidden directories such as `.jobguard-wt` worktrees by default.
+- Disambiguate repositories that share a name in every picker using a stable
+  path or identity suffix.
 - Never fetch, pull, checkout, reset, clean, or otherwise modify repositories.
 - Detect updates manually and, later, with a filesystem watcher.
 
@@ -129,6 +132,20 @@ repositories on managed Windows and Apple Silicon macOS laptops.
   - `read_generated_document`
 - Stream answer progress and citations to the browser.
 - Make repository scope and estimated/actual usage visible.
+- Expose only a hardcoded, provider-specific model catalog with human-readable
+  labels, and reject any model outside it in the backend. Free-text model entry
+  is not supported.
+- Bound turn controls to a 5-minute minimum, 30-minute default, and 60-minute
+  maximum, and show the selected timeout next to elapsed time.
+- Show the output budget only for providers that map it to a real request
+  limit, and explain in the interface that it is a ceiling rather than a target
+  or a context-window limit.
+- Select repositories by the stable numeric repository ID in every
+  repository-specific MCP tool and JSON endpoint. Cross-repository search keeps
+  it optional. Repository names are not unique and are never the advertised
+  selector.
+- Run provider harnesses outside every indexed repository, with personal and
+  project memory disabled, so answers rest only on RepoKarta tool evidence.
 - Persist titled conversations locally by default, keep provider credentials
   out of that storage, and provide explicit per-conversation deletion.
 - Keep an AI-provider interface so additional hosted or local models can be
@@ -155,6 +172,21 @@ repositories on managed Windows and Apple Silicon macOS laptops.
   - executable entry points
   - HTTP routes where reliably detectable
   - databases and external services where reliably detectable
+- Read Gradle builds in both Groovy and Kotlin syntax: string coordinates,
+  Groovy map and Kotlin named `group`/`name`/`version` arguments,
+  `platform`/`enforcedPlatform` BOM imports, `project(...)` dependencies, and
+  `libs.*` version-catalog accessors resolved through `libs.versions.toml`.
+  Interpolated versions are recorded without a version rather than as literal
+  build-script text.
+- Read Spring routes from `@RequestMapping`, the HTTP-method mapping
+  annotations, class-level path prefixes, `@HttpExchange` HTTP interfaces, and
+  `RouterFunctions` predicates.
+- Derive repository-to-repository `service_call` edges from `@FeignClient`
+  targets and from `http://`, `https://`, and `lb://` hosts found in files that
+  actually build a client (Feign, WebClient, RestClient, RestTemplate, or an
+  HTTP interface proxy). Only targets that resolve to a discovered repository,
+  Gradle `rootProject.name`, or `spring.application.name` become edges;
+  unresolved variables and infrastructure hosts are dropped.
 - Provide repository, package, component, and dependency views.
 - Use a small TypeScript visualization island within the otherwise
   server-rendered HTMX application.
@@ -215,6 +247,15 @@ repositories on managed Windows and Apple Silicon macOS laptops.
 
 - A hosted SaaS or cloud control plane.
 - Multiple users, organizations, SSO, or repository permission synchronization.
+- Shared or team deployment. RepoKarta binds to loopback with no authentication
+  because it is a single-user local product. A configurable bind address,
+  authentication, and shared deployment are deliberately deferred to M6 and are
+  not implemented.
+- Scheduled ghorg synchronization. RepoKarta never fetches or updates
+  repositories.
+- Compiler-precise Sourcegraph or SCIP parity. Structural extraction is
+  regex-and-manifest based: it is evidence-backed and commit-pinned, but it is
+  not a compiler front end and does not resolve every reference.
 - GitHub, GitLab, or Bitbucket repository cloning and synchronization. ghorg or
   the user remains responsible for local repository acquisition and updates.
 - Searching every historical commit or every branch.
@@ -397,6 +438,17 @@ rendering an unreadable file-level hairball.
 - [x] Commit-aware staleness and selective regeneration.
 - [x] `.repokarta.yml` steering.
 - [x] Markdown export.
+- [x] Hardcoded per-harness model catalogs with human-readable labels and
+  backend rejection of any other model.
+- [x] Five-minute minimum, thirty-minute default, and sixty-minute maximum
+  checkpoint timeouts taken from the interface, with the chosen timeout shown
+  beside elapsed time.
+- [x] Output budget limited to providers that map it to a request limit, with
+  an in-product explanation.
+- [x] Neutral harness grounding: provider processes run outside every indexed
+  repository with personal and project memory disabled.
+- [x] Gradle dependency, Spring route, and inter-service HTTP extraction with
+  exact revision, path, and line evidence.
 
 Exit condition: generated documentation explains real subsystems, flows,
 types, state, failure paths, and tests with commit-pinned evidence, while
@@ -412,6 +464,16 @@ changes.
 - [ ] macOS signing and notarization.
 - [ ] Homebrew formula.
 - [ ] Upgrade and database migration tests.
+
+### M6: shared deployment (not started)
+
+Nothing in this milestone is implemented. RepoKarta remains loopback-only with
+no authentication, and documenting these items does not complete them.
+
+- [ ] Configurable bind address beyond `127.0.0.1`.
+- [ ] Authentication and per-user separation for a shared instance.
+- [ ] Scheduled ghorg synchronization.
+- [ ] Shared or team deployment packaging and operations.
 
 ## Definition of quality
 
@@ -462,6 +524,11 @@ completion criteria include:
 - Whether an optional Claude Agent SDK helper materially improves Q&A enough to
   justify a Node-based companion.
 
+## Current implementation version
+
+`0.20.0-dev`. M0 through M4 are complete. M5 is in progress and M6 has not
+started.
+
 ## Recommended next session
 
 Complete M5 without weakening the local-first boundary:
@@ -472,3 +539,7 @@ Complete M5 without weakening the local-first boundary:
 4. Produce checksummed Windows and macOS release artifacts.
 5. Add Windows packaging and macOS signing/notarization.
 6. Publish and verify the Homebrew formula.
+
+Do not mark any M6 item complete by documenting it. Shared deployment,
+authentication, a configurable bind address, and scheduled ghorg
+synchronization only count when they exist in the executable and are tested.
