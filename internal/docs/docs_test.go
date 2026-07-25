@@ -119,7 +119,7 @@ func TestKnowledgePresetRequiresCuratedModelAndHighEffort(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			err := validateKnowledgePreset(test.request)
+			err := validateKnowledgePreset(test.request, standardKnowledgeProfile())
 			if (err != nil) != test.wantErr {
 				t.Fatalf("validateKnowledgePreset() error = %v, wantErr %v", err, test.wantErr)
 			}
@@ -693,5 +693,83 @@ func TestExportReportsAnEmptyWikiAsARecoverableState(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "generate at least one page") {
 		t.Fatalf("empty export message = %q", err.Error())
+	}
+}
+
+// TestProfileScalesToRepositoryShape pins the classification that decides how
+// demanding the Deep Wiki pipeline is. A repository with no entry point and no
+// routes cannot evidence sections about runtime composition, persistence, or
+// trust boundaries, and previously spent minutes of provider time before
+// failing the citation gate.
+func TestProfileScalesToRepositoryShape(t *testing.T) {
+	site := Site{RepositoryID: 1}
+	node := func(kind, path string) graph.Node {
+		return graph.Node{Kind: kind, Path: path, RepositoryID: 1}
+	}
+
+	staticSite := graph.Snapshot{Nodes: []graph.Node{
+		node("repository", "."),
+		node("package", "sass"),
+		node("dependency", "bower.json"),
+	}}
+	compact := profileForRepository(site, staticSite)
+	if compact.ID != "compact" {
+		t.Fatalf("a repository with no entry point or route should use the compact profile, got %q", compact.ID)
+	}
+	if compact.MinimumFiles >= standardKnowledgeProfile().MinimumFiles {
+		t.Fatalf("compact profile must lower the evidence bar, got %d", compact.MinimumFiles)
+	}
+	if compact.MinimumPages >= minimumKnowledgePages {
+		t.Fatalf("compact profile must lower the page floor, got %d", compact.MinimumPages)
+	}
+
+	service := graph.Snapshot{Nodes: []graph.Node{
+		node("repository", "."),
+		node("entrypoint", "cmd/app/main.go"),
+		node("route", "internal/http/router.go"),
+		node("package", "internal/app"),
+		node("package", "internal/store"),
+		node("package", "internal/http"),
+		node("package", "internal/agent"),
+	}}
+	if standard := profileForRepository(site, service); standard.ID != "standard" {
+		t.Fatalf("a repository with an entry point and routes should use the standard profile, got %q", standard.ID)
+	}
+
+	// The compact gate must accept what a small repository can actually cite.
+	markdown := "# Repository Survey\n" + strings.Join(compact.Sections, "\n\n") + "\n" +
+		strings.Repeat("Evidence-backed prose about this repository. ", 60)
+	citations := []graph.Evidence{
+		{Path: "index.html"}, {Path: "Gruntfile.js"}, {Path: "sass/main.scss"},
+	}
+	if err := validateKnowledgeSurvey(markdown, citations, compact); err != nil {
+		t.Fatalf("compact survey should validate with three files: %v", err)
+	}
+	if err := validateKnowledgeSurvey(markdown, citations, standardKnowledgeProfile()); err == nil {
+		t.Fatal("the standard profile must still demand deeper evidence")
+	}
+}
+
+// TestCompactProfileLowersTheReasoningFloor records why a trivial repository is
+// allowed a cheaper preset: the standard floor exists to make a large service's
+// architecture legible, and on a repository with no runtime composition it
+// mostly buys latency.
+func TestCompactProfileLowersTheReasoningFloor(t *testing.T) {
+	request := GenerateRequest{Provider: "codex", Model: "gpt-5.6-sol", Effort: "medium"}
+	if err := validateKnowledgePreset(request, standardKnowledgeProfile()); err == nil {
+		t.Fatal("the standard profile must still require high reasoning effort")
+	}
+	if err := validateKnowledgePreset(request, compactKnowledgeProfile()); err != nil {
+		t.Fatalf("the compact profile should accept medium effort: %v", err)
+	}
+	low := GenerateRequest{Provider: "codex", Model: "gpt-5.6-sol", Effort: "low"}
+	if err := validateKnowledgePreset(low, compactKnowledgeProfile()); err == nil {
+		t.Fatal("even the compact profile keeps a floor above the weakest effort")
+	}
+	// The Wiki-grade model requirement is unchanged: citation quality depends
+	// on it regardless of repository size.
+	weak := GenerateRequest{Provider: "codex", Model: "gpt-5.6-luna", Effort: "high"}
+	if err := validateKnowledgePreset(weak, compactKnowledgeProfile()); err == nil {
+		t.Fatal("compact must still demand a Wiki-grade model")
 	}
 }

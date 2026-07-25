@@ -44,6 +44,16 @@ function enableRepositoryDrawer(): void {
   toggle.addEventListener("click", () => {
     setExpanded(drawer.dataset.expanded !== "true");
   });
+  // On the search page the health chip opens the catalogue rather than
+  // navigating; on every other surface it stays an ordinary link home.
+  document.addEventListener("click", (event) => {
+    const chip = (event.target as HTMLElement | null)?.closest("[data-index-health]");
+    if (!chip) {
+      return;
+    }
+    event.preventDefault();
+    setExpanded(true);
+  });
   scrim.addEventListener("click", () => {
     setExpanded(false);
     toggle.focus();
@@ -59,6 +69,69 @@ function enableRepositoryDrawer(): void {
   setExpanded(false);
 }
 
+interface EvidenceDrawer {
+  open: (open: boolean) => void;
+  isOverlay: () => boolean;
+}
+
+/**
+ * Shared behaviour for evidence rails that dock at wide widths and become
+ * overlays below a breakpoint. Docked panels stay in the tab order; overlays
+ * are inert until opened, dismiss on Escape or scrim, and return focus to the
+ * trigger. Used by the Wiki provenance rail and the map inspector so no
+ * evidence surface is ever removed from the page.
+ */
+function enableEvidenceDrawer(options: {
+  panel: string;
+  toggle: string;
+  close: string;
+  scrim: string;
+  dockedFrom: string;
+}): EvidenceDrawer | undefined {
+  const panel = document.querySelector<HTMLElement>(options.panel);
+  const toggle = document.querySelector<HTMLButtonElement>(options.toggle);
+  const close = document.querySelector<HTMLButtonElement>(options.close);
+  const scrim = document.querySelector<HTMLButtonElement>(options.scrim);
+  if (!panel || !toggle || !close || !scrim) {
+    return undefined;
+  }
+
+  const docked = window.matchMedia(options.dockedFrom);
+  const isOverlay = (): boolean => !docked.matches;
+
+  const apply = (open: boolean): void => {
+    const overlay = isOverlay();
+    panel.dataset.open = String(open);
+    // A docked rail is always available; only an overlay is ever inert.
+    panel.inert = overlay && !open;
+    panel.setAttribute("aria-hidden", String(overlay && !open));
+    toggle.setAttribute("aria-expanded", String(overlay && open));
+    scrim.hidden = !overlay || !open;
+  };
+
+  toggle.addEventListener("click", () => apply(panel.dataset.open !== "true"));
+  close.addEventListener("click", () => {
+    apply(false);
+    toggle.focus();
+  });
+  scrim.addEventListener("click", () => {
+    apply(false);
+    toggle.focus();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || !isOverlay() || panel.dataset.open !== "true") {
+      return;
+    }
+    apply(false);
+    toggle.focus();
+  });
+  // Re-evaluate inert and scrim when the layout crosses the breakpoint.
+  docked.addEventListener("change", () => apply(panel.dataset.open === "true"));
+
+  apply(false);
+  return { open: apply, isOverlay };
+}
+
 function enableQueryChips(): void {
   const form = document.querySelector<HTMLFormElement>('form[action="/search"]');
   const input = document.querySelector<HTMLInputElement>("#search-query");
@@ -71,6 +144,137 @@ function enableQueryChips(): void {
       input.value = button.dataset.query ?? "";
       form.requestSubmit();
     });
+  });
+}
+
+/**
+ * Search feedback. Previously the only in-flight signal was the submit button
+ * relabelling itself, so a slow cross-repository search left stale results
+ * looking current, and aria-busy was hardcoded false in the template.
+ */
+function enableSearchFeedback(): void {
+  const results = document.querySelector<HTMLElement>("[data-search-results]");
+  const form = document.querySelector<HTMLFormElement>('form[action="/search"]');
+  if (!results || !form) {
+    return;
+  }
+
+  const setBusy = (busy: boolean): void => {
+    results.setAttribute("aria-busy", String(busy));
+  };
+  document.body.addEventListener("htmx:beforeRequest", (event) => {
+    if ((event as CustomEvent<{ elt: HTMLElement }>).detail?.elt === form) {
+      setBusy(true);
+    }
+  });
+  /*
+   * htmx:afterRequest is the only event guaranteed to fire once a request
+   * settles, whatever the outcome. Listening for swap/load events alone left
+   * the busy flag stuck whenever a response produced no swap, and a stuck flag
+   * is indistinguishable from a broken search.
+   */
+  for (const name of ["htmx:afterRequest", "htmx:responseError", "htmx:sendError", "htmx:abort"]) {
+    document.body.addEventListener(name, () => setBusy(false));
+  }
+  // Belt and braces: never leave the results inert if an event is missed.
+  window.setInterval(() => {
+    if (results.getAttribute("aria-busy") === "true" && !document.querySelector(".htmx-request")) {
+      setBusy(false);
+    }
+  }, 1000);
+
+  // "Show more" re-runs the current query against a higher file limit instead
+  // of making the reader scroll back up and edit the numeric limit field.
+  results.addEventListener("click", (event) => {
+    const button = (event.target as HTMLElement | null)?.closest<HTMLButtonElement>("[data-search-more]");
+    if (!button) {
+      return;
+    }
+    const limit = form.querySelector<HTMLInputElement>('input[name="limit"]');
+    if (!limit) {
+      return;
+    }
+    limit.value = button.dataset.searchMore ?? limit.value;
+    form.requestSubmit();
+  });
+}
+
+/**
+ * Mirrors live catalogue counts into the first-run panel. The catalogue list is
+ * swapped by SSE; this keeps the indexing headline and bar in step without
+ * replacing the results region, which would clobber an active search.
+ */
+function enableFirstRunProgress(): void {
+  const panel = document.querySelector<HTMLElement>("[data-first-run]");
+  const metrics = document.querySelector<HTMLElement>("#repository-metrics");
+  if (!panel || !metrics) {
+    return;
+  }
+  const heading = panel.querySelector<HTMLElement>("[data-first-run-heading]");
+  const detail = panel.querySelector<HTMLElement>("[data-first-run-detail]");
+  const bar = panel.querySelector<HTMLElement>("[data-first-run-bar]");
+  const total = Number(panel.dataset.total ?? "0");
+  if (!heading || !detail || !bar || total <= 0) {
+    return;
+  }
+
+  const sync = (): void => {
+    const values = Array.from(metrics.querySelectorAll("strong")).map((node) => Number(node.textContent ?? "0"));
+    const [ready = 0, pending = 0, failed = 0] = values;
+    if (pending === 0) {
+      heading.textContent = `Indexed ${ready} of ${total} repositories`;
+      detail.textContent = "Search now covers every indexed repository. Run a query to begin.";
+    } else {
+      heading.textContent = `Indexing ${pending} of ${total} repositories`;
+      detail.textContent =
+        `Search works now, but results stay partial until every repository is indexed. ${ready} ready` +
+        (failed ? ` · ${failed} need attention` : "") + ".";
+    }
+    bar.style.width = `${Math.min(100, Math.round((ready / total) * 100))}%`;
+  };
+
+  new MutationObserver(sync).observe(metrics, { childList: true, subtree: true, characterData: true });
+  sync();
+}
+
+/**
+ * Focus the search field from anywhere. A cross-repository code search tool
+ * with no keyboard entry point is the highest-cost omission for its audience.
+ */
+function enableSearchShortcut(): void {
+  const input = document.querySelector<HTMLInputElement>("#search-query");
+  document.addEventListener("keydown", (event) => {
+    const target = event.target as HTMLElement | null;
+    const typing =
+      target instanceof HTMLInputElement ||
+      target instanceof HTMLTextAreaElement ||
+      target instanceof HTMLSelectElement ||
+      target?.isContentEditable === true;
+
+    const palette = (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k";
+    const slash = event.key === "/" && !typing && !event.metaKey && !event.ctrlKey && !event.altKey;
+    if (!palette && !slash) {
+      return;
+    }
+    event.preventDefault();
+    if (input) {
+      input.focus();
+      input.select();
+      return;
+    }
+    // Every other surface routes back to search, which is the shared entry point.
+    window.location.assign("/");
+  });
+}
+
+/** Shows the platform's own modifier rather than always naming Ctrl. */
+function localiseShortcutHints(): void {
+  const apple = /Mac|iPhone|iPad/.test(navigator.platform) || /Mac/.test(navigator.userAgent);
+  if (!apple) {
+    return;
+  }
+  document.querySelectorAll<HTMLElement>("[data-platform-shortcut]").forEach((node) => {
+    node.textContent = `⌘ ${node.dataset.platformShortcut}`;
   });
 }
 
@@ -420,6 +624,7 @@ function enableDebugLogger(): DebugLogger | undefined {
     list.append(item);
     empty.hidden = true;
     count.textContent = String(entries.length);
+    count.dataset.empty = String(entries.length === 0);
     if (!panel.hidden) {
       list.scrollTop = list.scrollHeight;
     }
@@ -432,6 +637,7 @@ function enableDebugLogger(): DebugLogger | undefined {
     list.replaceChildren();
     empty.hidden = false;
     count.textContent = "0";
+    count.dataset.empty = "true";
     toggle.classList.remove("debug-toggle-debug-error");
   });
   copy.addEventListener("click", async () => {
@@ -1581,7 +1787,14 @@ function enableConversations(debug?: DebugLogger): void {
     } else {
       url.searchParams.delete("conversation");
     }
-    window.history.replaceState(null, "", url);
+    // Switching conversations is navigation, so it earns a history entry;
+    // re-stating the current one does not.
+    const entry = { conversation: id };
+    if (window.location.href === url.href) {
+      window.history.replaceState(entry, "", url);
+    } else {
+      window.history.pushState(entry, "", url);
+    }
   };
 
   const setNewConversationDisabled = (disabled: boolean): void => {
@@ -1720,6 +1933,10 @@ function enableConversations(debug?: DebugLogger): void {
     const ready = Boolean(status?.available && status.authenticated);
     model.disabled = !ready || Boolean(conversationID);
     effort.disabled = !ready || Boolean(conversationID) || !status?.efforts?.length;
+    const settingsLock = document.querySelector<HTMLElement>("[data-settings-lock]");
+    if (settingsLock) {
+      settingsLock.hidden = !conversationID;
+    }
     timeout.disabled = busy || !ready;
     tokenBudget.disabled = busy || !ready || !status?.token_budget;
     tokenBudgetField.hidden = !status?.token_budget;
@@ -2099,6 +2316,19 @@ function enableConversations(debug?: DebugLogger): void {
       });
     });
 
+  // Back and Forward move between saved conversations.
+  window.addEventListener("popstate", (event) => {
+    const state = event.state as { conversation?: string } | null;
+    if (!state || typeof state.conversation !== "string") {
+      return;
+    }
+    if (state.conversation && state.conversation !== conversationID) {
+      void openConversation(state.conversation);
+    } else if (!state.conversation && conversationID) {
+      resetConversation();
+    }
+  });
+
   provider.addEventListener("change", configureProvider);
   model.addEventListener("change", syncConversationChrome);
   attachButton.addEventListener("click", () => imageInput.click());
@@ -2152,7 +2382,8 @@ function enableConversations(debug?: DebugLogger): void {
       settings.open = false;
       return;
     }
-    if (event.ctrlKey && event.key.toLocaleLowerCase() === "n" && !busy) {
+    // macOS is a first-class target, so accept the platform modifier too.
+    if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === "n" && !busy) {
       event.preventDefault();
       resetConversation();
     }
@@ -2577,6 +2808,17 @@ function enableRepositoryMaps(debug?: DebugLogger): void {
   const inspectorPath = document.querySelector<HTMLElement>("[data-map-inspector-path]");
   const inspectorEvidence = document.querySelector<HTMLOListElement>("[data-map-evidence]");
   const inspectorEvidenceCount = document.querySelector<HTMLElement>("[data-map-evidence-count]");
+  const inspectorTotal = document.querySelector<HTMLElement>("[data-map-evidence-total]");
+  const nodeList = document.querySelector<HTMLElement>("[data-map-node-list]");
+  const nodeListItems = document.querySelector<HTMLOListElement>("[data-map-node-list-items]");
+  const listToggle = document.querySelector<HTMLButtonElement>("[data-map-list-toggle]");
+  const inspectorDrawer = enableEvidenceDrawer({
+    panel: "#map-inspector",
+    toggle: "[data-map-inspector-toggle]",
+    close: "[data-map-inspector-close]",
+    scrim: "[data-map-inspector-scrim]",
+    dockedFrom: "(min-width: 1101px)"
+  });
   const viewButtons = Array.from(document.querySelectorAll<HTMLButtonElement>("[data-map-view]"));
   if (
     !workspace || !canvas || !loading || !repository || !search || !searchResults || !refresh || !exportLink || !status ||
@@ -2612,12 +2854,22 @@ function enableRepositoryMaps(debug?: DebugLogger): void {
     focus.disabled = true;
     inspectorEmpty.hidden = false;
     inspectorContent.hidden = true;
-    inspector.dataset.open = "false";
+    if (inspectorDrawer) {
+      inspectorDrawer.open(false);
+    } else {
+      inspector.dataset.open = "false";
+    }
+    if (inspectorTotal) {
+      inspectorTotal.textContent = "0";
+    }
   };
 
   const showEvidence = (evidence: MapEvidence[]): void => {
     inspectorEvidence.replaceChildren();
     inspectorEvidenceCount.textContent = String(evidence.length);
+    if (inspectorTotal) {
+      inspectorTotal.textContent = String(evidence.length);
+    }
     for (const item of evidence) {
       const listItem = document.createElement("li");
       const link = document.createElement("a");
@@ -2639,7 +2891,13 @@ function enableRepositoryMaps(debug?: DebugLogger): void {
     focus.disabled = false;
     inspectorEmpty.hidden = true;
     inspectorContent.hidden = false;
-    inspector.dataset.open = "true";
+    // Selecting a fact reveals the rail on narrow layouts too, so evidence is
+    // never produced into a panel the reader cannot see.
+    if (inspectorDrawer) {
+      inspectorDrawer.open(true);
+    } else {
+      inspector.dataset.open = "true";
+    }
     if (element.isNode()) {
       const fact = element.data("fact") as MapNode;
       inspectorKind.textContent = fact.kind;
@@ -2752,6 +3010,46 @@ function enableRepositoryMaps(debug?: DebugLogger): void {
       });
     });
     renderSearchResults();
+    renderNodeList();
+  };
+
+  /**
+   * DOM mirror of the visible graph nodes. Cytoscape draws to a canvas, so the
+   * graph itself carries no keyboard focus and no accessible names; this list
+   * gives the same facts and the same inspector to keyboard and screen-reader
+   * users without touching the renderer.
+   */
+  const renderNodeList = (): void => {
+    if (!nodeList || !nodeListItems || nodeList.hidden || !graph) {
+      return;
+    }
+    nodeListItems.replaceChildren();
+    const visible = graph.nodes().filter((node) => !node.hasClass("map-hidden"));
+    visible.forEach((node) => {
+      const fact = node.data("fact") as MapNode | undefined;
+      const item = document.createElement("li");
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "map-node-list-item";
+      const label = document.createElement("strong");
+      label.textContent = String(node.data("label"));
+      const meta = document.createElement("span");
+      meta.textContent = [fact?.kind, fact?.repository, fact?.path].filter(Boolean).join(" · ") ||
+        "Deterministic structural fact";
+      button.append(label, meta);
+      button.addEventListener("click", () => {
+        graph?.center(node);
+        inspectElement(node);
+      });
+      item.append(button);
+      nodeListItems.append(item);
+    });
+    if (visible.length === 0) {
+      const empty = document.createElement("li");
+      empty.className = "map-node-list-empty";
+      empty.textContent = "No nodes match the current scope, view, and filter.";
+      nodeListItems.append(empty);
+    }
   };
 
   const fitGraph = (): void => {
@@ -3119,15 +3417,72 @@ function enableRepositoryMaps(debug?: DebugLogger): void {
     }
   };
 
-  repository.addEventListener("change", () => void loadMap(false));
+  /*
+   * Map scope lives in the URL. Without it a map view could not be linked,
+   * bookmarked, or survive a reload, and Back did nothing on this surface.
+   */
+  const setMapURL = (repositoryID: string, view: string): void => {
+    const url = new URL(window.location.href);
+    if (repositoryID) {
+      url.searchParams.set("repository", repositoryID);
+    } else {
+      url.searchParams.delete("repository");
+    }
+    if (view && view !== "all") {
+      url.searchParams.set("view", view);
+    } else {
+      url.searchParams.delete("view");
+    }
+    const entry = { map: { repository: repositoryID, view } };
+    if (window.location.href === url.href) {
+      window.history.replaceState(entry, "", url);
+    } else {
+      window.history.pushState(entry, "", url);
+    }
+  };
+
+  const selectView = (view: string): void => {
+    activeView = view;
+    for (const candidate of viewButtons) {
+      candidate.setAttribute("aria-pressed", String(candidate.dataset.mapView === view));
+    }
+  };
+
+  repository.addEventListener("change", () => {
+    setMapURL(repository.value, activeView);
+    void loadMap(false);
+  });
   refresh.addEventListener("click", () => void loadMap(true));
   search.addEventListener("input", applyFilters);
+
+  listToggle?.addEventListener("click", () => {
+    if (!nodeList) {
+      return;
+    }
+    const showing = nodeList.hidden !== false;
+    nodeList.hidden = !showing;
+    listToggle.setAttribute("aria-pressed", String(showing));
+    canvas.classList.toggle("map-canvas-behind", showing);
+    renderNodeList();
+  });
+
+  window.addEventListener("popstate", (event) => {
+    const state = (event.state as { map?: { repository: string; view: string } } | null)?.map;
+    if (!state) {
+      return;
+    }
+    selectView(state.view || "all");
+    if (state.repository !== repository.value) {
+      repository.value = state.repository;
+      void loadMap(false);
+    } else {
+      applyFilters();
+    }
+  });
   for (const button of viewButtons) {
     button.addEventListener("click", () => {
-      activeView = button.dataset.mapView || "all";
-      for (const candidate of viewButtons) {
-        candidate.setAttribute("aria-pressed", String(candidate === button));
-      }
+      selectView(button.dataset.mapView || "all");
+      setMapURL(repository.value, activeView);
       applyFilters();
       layoutGraph();
     });
@@ -3156,6 +3511,18 @@ function enableRepositoryMaps(debug?: DebugLogger): void {
     }
   });
   window.addEventListener("resize", () => graph?.resize());
+
+  // Restore scope and view from the URL so a shared map link opens as sent.
+  const initialParameters = new URL(window.location.href).searchParams;
+  const initialRepository = initialParameters.get("repository");
+  if (initialRepository && Array.from(repository.options).some((option) => option.value === initialRepository)) {
+    repository.value = initialRepository;
+  }
+  const initialView = initialParameters.get("view");
+  if (initialView && viewButtons.some((button) => button.dataset.mapView === initialView)) {
+    selectView(initialView);
+  }
+  setMapURL(repository.value, activeView);
 
   updateExportLink();
   void loadMap(false);
@@ -3194,6 +3561,9 @@ type WikiSite = {
   repository: string;
   revision: string;
   updated_at: string;
+  /** How the pipeline scaled itself: "standard" or "compact". */
+  profile?: string;
+  profile_pages?: string;
   steering: {
     title?: string;
     include?: string[];
@@ -3205,6 +3575,8 @@ type WikiSite = {
   survey_stale: boolean;
   survey_status?: string;
   survey_error?: string;
+  /** Survey checkpoint, which carries its own provider token usage. */
+  survey?: { input_tokens?: number; output_tokens?: number };
   plan_ready: boolean;
   plan_stale: boolean;
   plan_revision?: string;
@@ -3245,8 +3617,19 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
   const content = document.querySelector<HTMLElement>("[data-wiki-content]");
   const empty = document.querySelector<HTMLElement>("[data-wiki-empty]");
   const loading = document.querySelector<HTMLElement>("[data-wiki-loading]");
-  const generationLive = document.querySelector<HTMLElement>("[data-wiki-generation-live]");
-  const generationElapsed = document.querySelector<HTMLElement>("[data-wiki-generation-elapsed]");
+  const runPanel = document.querySelector<HTMLElement>("[data-wiki-run]");
+  const loadingQuiet = document.querySelector<HTMLElement>("[data-wiki-loading-quiet]");
+  const runTitle = document.querySelector<HTMLElement>("[data-wiki-run-title]");
+  const runEngine = document.querySelector<HTMLElement>("[data-wiki-run-engine]");
+  const runProgress = document.querySelector<HTMLElement>("[data-wiki-run-progress]");
+  const runBar = document.querySelector<HTMLElement>("[data-wiki-run-bar]");
+  const runCurrent = document.querySelector<HTMLElement>("[data-wiki-run-current]");
+  const runPages = document.querySelector<HTMLOListElement>("[data-wiki-run-pages]");
+  const runDone = document.querySelector<HTMLElement>("[data-wiki-run-done]");
+  const runStepElapsed = document.querySelector<HTMLElement>("[data-wiki-run-step-elapsed]");
+  const runTotalElapsed = document.querySelector<HTMLElement>("[data-wiki-run-total-elapsed]");
+  const runTokens = document.querySelector<HTMLElement>("[data-wiki-run-tokens]");
+  const runNote = document.querySelector<HTMLElement>("[data-wiki-run-note]");
   const cancelGeneration = document.querySelector<HTMLButtonElement>("[data-wiki-cancel-generation]");
   const error = document.querySelector<HTMLElement>("[data-wiki-error]");
   const errorMessage = document.querySelector<HTMLElement>("[data-wiki-error-message]");
@@ -3257,6 +3640,14 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
   const supportCount = document.querySelector<HTMLElement>("[data-wiki-support-count]");
   const supportingFiles = document.querySelector<HTMLUListElement>("[data-wiki-supporting-files]");
   const citationCount = document.querySelector<HTMLElement>("[data-wiki-citation-count]");
+  const evidenceCount = document.querySelector<HTMLElement>("[data-wiki-evidence-count]");
+  const provenanceDrawer = enableEvidenceDrawer({
+    panel: "[data-wiki-provenance]",
+    toggle: "[data-wiki-provenance-toggle]",
+    close: "[data-wiki-provenance-close]",
+    scrim: "[data-wiki-provenance-scrim]",
+    dockedFrom: "(min-width: 1181px)"
+  });
   const citations = document.querySelector<HTMLOListElement>("[data-wiki-citations]");
   const outline = document.querySelector<HTMLElement>("[data-wiki-outline]");
   if (
@@ -3265,19 +3656,25 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
     !generateAll || !exportLink || !steering || !pages || !repositoryName || !pageTitle || !pageStatus ||
     !refreshPage || !content || !empty || !loading || !error || !errorMessage || !pageRevision ||
     !pageGenerator || !pageGenerated || !pageTokens || !supportCount || !supportingFiles ||
-    !citationCount || !citations || !outline || !pageSearch || !generationLive ||
-    !generationElapsed || !cancelGeneration
+    !citationCount || !citations || !outline || !pageSearch || !runPanel ||
+    !loadingQuiet || !runTitle || !runEngine || !runProgress || !runBar || !runCurrent ||
+    !runPages || !runDone || !runStepElapsed || !runTotalElapsed || !runTokens || !runNote ||
+    !cancelGeneration
   ) {
     return;
   }
 
   let site: WikiSite | undefined;
   let activeSlug = "";
+  // Collapse state survives re-renders: the page list is rebuilt after every
+  // generated page, and a section snapping back open mid-build is disorienting.
+  const collapsedSections = new Set<string>();
   let requestRevision = 0;
   let generating = false;
   let providerStatuses: ProviderStatus[] = [];
   let configuredProvider = "";
   let generationTimer: number | undefined;
+  let runStartedAt: number | undefined;
   let generationAbort: AbortController | undefined;
 
   const selectedProvider = (): ProviderStatus | undefined =>
@@ -3441,9 +3838,9 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
     empty.hidden = state !== "empty";
     loading.hidden = state !== "loading";
     error.hidden = state !== "error";
-    if (state !== "loading" || !generating) {
-      generationLive.hidden = true;
-    }
+    const running = state === "loading" && generating;
+    runPanel.hidden = !running;
+    loadingQuiet.hidden = running;
   };
 
   const formatElapsed = (milliseconds: number): string => {
@@ -3453,27 +3850,170 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
     return `${minutes}:${seconds}`;
   };
 
-  const beginGenerationProgress = (heading: string, detail: string): void => {
+  /*
+   * Run model for the generation pipeline. Survey and knowledge map each run at
+   * most once and are frequently reused from a saved checkpoint; the page stage
+   * is a loop of one provider call per page. Modelling that explicitly lets the
+   * UI show which stage is live, which were skipped because a checkpoint already
+   * existed, and exactly which page is being written.
+   */
+  type RunStageID = "survey" | "plan" | "pages";
+  type RunStageState = "pending" | "active" | "done" | "reused" | "failed";
+  interface RunTarget {
+    slug: string;
+    number: string;
+    title: string;
+    state: "queued" | "active" | "done" | "failed";
+  }
+
+  const runTargets: RunTarget[] = [];
+  let runStepStartedAt: number | undefined;
+
+  const stageStates: Record<RunStageID, RunStageState> = {
+    survey: "pending",
+    plan: "pending",
+    pages: "pending"
+  };
+
+  const setStageState = (id: RunStageID, state: RunStageState, note = ""): void => {
+    stageStates[id] = state;
+    renderRunCounters();
+    const row = runPanel.querySelector<HTMLElement>(`[data-stage="${id}"]`);
+    if (!row) {
+      return;
+    }
+    row.dataset.state = state;
+    const label = row.querySelector<HTMLElement>("[data-stage-state]");
+    if (label) {
+      label.textContent = note || {
+        pending: "Waiting",
+        active: "Running",
+        done: "Done",
+        reused: "Reused",
+        failed: "Failed"
+      }[state];
+    }
+  };
+
+  const setStageDetail = (id: RunStageID, detail: string): void => {
+    runPanel.querySelector<HTMLElement>(`[data-stage="${id}"] [data-stage-detail]`)
+      ?.replaceChildren(document.createTextNode(detail));
+  };
+
+  /*
+   * The counter reports whichever unit is meaningful right now. Before the plan
+   * exists there are no pages to count, so a page counter reads "0 / 0" and
+   * looks broken; stage progress is the honest measure at that point, and a
+   * reused survey legitimately counts as one of three stages already done.
+   */
+  const renderRunCounters = (): void => {
+    const done = runTargets.filter((target) => target.state === "done").length;
+    if (runTargets.length > 0) {
+      runDone.textContent = `${done} / ${runTargets.length} pages`;
+      runBar.style.width = `${Math.round((done / runTargets.length) * 100)}%`;
+      return;
+    }
+    const settled = (["survey", "plan", "pages"] as RunStageID[])
+      .filter((id) => stageStates[id] === "done" || stageStates[id] === "reused").length;
+    runDone.textContent = `${settled} / 3 stages`;
+    runBar.style.width = `${Math.round((settled / 3) * 100)}%`;
+  };
+
+  const renderRunTargets = (): void => {
+    runPages.replaceChildren();
+    for (const target of runTargets) {
+      const item = document.createElement("li");
+      item.dataset.state = target.state;
+      item.textContent = target.number || target.slug;
+      item.title = `${target.number} ${target.title} · ${target.state}`;
+      runPages.append(item);
+    }
+    renderRunCounters();
+  };
+
+  const renderRunTokens = (): void => {
+    if (!site) {
+      return;
+    }
+    /*
+     * The survey checkpoint carries its own usage, so counting pages alone
+     * under-reported a run and showed a flat zero for the whole of stages one
+     * and two.
+     */
+    const totals = site.pages.reduce(
+      (sum, page) => ({
+        input: sum.input + (page.input_tokens || 0),
+        output: sum.output + (page.output_tokens || 0)
+      }),
+      {
+        input: site.survey?.input_tokens || 0,
+        output: site.survey?.output_tokens || 0
+      }
+    );
+    /*
+     * Not every harness reports usage. Codex in particular returns no usage
+     * event for an ephemeral turn, so a literal "0 in · 0 out" would claim the
+     * run was free rather than admitting the number is unknown.
+     */
+    if (totals.input === 0 && totals.output === 0) {
+      const finished = site.pages.some((page) => page.status === "ready" || page.status === "stale");
+      runTokens.textContent = finished || site.survey_ready ? "not reported" : "—";
+      return;
+    }
+    runTokens.textContent = `${formatTokenCount(totals.input)} in · ${formatTokenCount(totals.output)} out`;
+  };
+
+  const startRunStep = (id: RunStageID, current: string, note?: string): void => {
     if (generationTimer !== undefined) {
       window.clearInterval(generationTimer);
     }
-    const startedAt = Date.now();
-    loading.querySelector("strong")!.textContent = heading;
-    loading.querySelector("p")!.textContent = detail;
-    generationLive.hidden = false;
+    runStepStartedAt = Date.now();
+    if (runStartedAt === undefined) {
+      runStartedAt = runStepStartedAt;
+    }
+    setStageState(id, "active");
+    runCurrent.textContent = current;
+    if (note) {
+      runNote.textContent = note;
+    }
     cancelGeneration.disabled = false;
     cancelGeneration.textContent = "Cancel";
-    const updateElapsed = (): void => {
-      generationElapsed.textContent =
-        `${formatElapsed(Date.now() - startedAt)} elapsed · ${formatElapsed(Number.parseInt(timeout.value, 10) * 1000)} timeout`;
+
+    const tick = (): void => {
+      runStepElapsed.textContent = formatElapsed(Date.now() - (runStepStartedAt ?? Date.now()));
+      runTotalElapsed.textContent = formatElapsed(Date.now() - (runStartedAt ?? Date.now()));
     };
-    updateElapsed();
-    generationTimer = window.setInterval(updateElapsed, 1000);
+    tick();
+    generationTimer = window.setInterval(tick, 1000);
   };
 
-  const updateGenerationProgress = (heading: string, detail: string): void => {
-    loading.querySelector("strong")!.textContent = heading;
-    loading.querySelector("p")!.textContent = detail;
+  const beginRun = (): void => {
+    runTargets.length = 0;
+    runStartedAt = undefined;
+    runStepStartedAt = undefined;
+    for (const id of ["survey", "plan", "pages"] as RunStageID[]) {
+      setStageState(id, "pending");
+    }
+    runProgress.hidden = true;
+    runPages.replaceChildren();
+    runCurrent.textContent = "";
+    renderRunCounters();
+    runStepElapsed.textContent = "0:00";
+    runTotalElapsed.textContent = "0:00";
+    runNote.textContent = "Completed work is saved as it finishes and survives cancellation.";
+    runTitle.textContent = site ? `Building ${site.repository}` : "Building the knowledge map";
+    const engine = [provider.options[provider.selectedIndex]?.textContent?.trim(), model.value.trim()]
+      .filter(Boolean)
+      .join(" · ");
+    runEngine.textContent = engine || "Provider default";
+    // Say out loud that a small repository runs a lighter pipeline, so a short
+    // wiki reads as intentional rather than as a truncated one.
+    if (site?.profile === "compact") {
+      runNote.textContent =
+        `Compact repository: no service entry point or routes were found, so this run uses the ` +
+        `lighter survey and a ${site.profile_pages || "shorter"} plan.`;
+    }
+    renderRunTokens();
   };
 
   const endGenerationProgress = (): void => {
@@ -3482,7 +4022,10 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
       generationTimer = undefined;
     }
     generationAbort = undefined;
-    generationLive.hidden = true;
+    runPanel.hidden = true;
+    loadingQuiet.hidden = false;
+    runStartedAt = undefined;
+    runStepStartedAt = undefined;
   };
 
   const resetProvenance = (): void => {
@@ -3492,6 +4035,9 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
     pageTokens.textContent = "0 in · 0 out";
     supportCount.textContent = "0";
     citationCount.textContent = "0";
+    if (evidenceCount) {
+      evidenceCount.textContent = "0";
+    }
     supportingFiles.replaceChildren();
     citations.replaceChildren();
     const outlineEmpty = document.createElement("p");
@@ -3565,6 +4111,9 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
       supportingFiles.append(item);
     }
     citationCount.textContent = String(pageCitations.length);
+    if (evidenceCount) {
+      evidenceCount.textContent = String(pageCitations.length);
+    }
     citations.replaceChildren();
     for (const citation of pageCitations) {
       const item = document.createElement("li");
@@ -3584,10 +4133,19 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
 
   const updatePageSelection = (): void => {
     pages.querySelectorAll<HTMLButtonElement>("[data-wiki-page]").forEach((button) => {
-      if (button.dataset.wikiPage === activeSlug) {
-        button.setAttribute("aria-current", "page");
-      } else {
+      if (button.dataset.wikiPage !== activeSlug) {
         button.removeAttribute("aria-current");
+        return;
+      }
+      button.setAttribute("aria-current", "page");
+      // Never leave the open page hidden inside a collapsed section.
+      const section = button.closest<HTMLElement>(".wiki-page-section");
+      if (section?.dataset.collapsed === "true") {
+        section.dataset.collapsed = "false";
+        const slug = section.querySelector<HTMLButtonElement>("[data-wiki-page]")?.dataset.wikiPage;
+        if (slug) {
+          collapsedSections.delete(slug);
+        }
       }
     });
   };
@@ -3616,6 +4174,9 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
     }
     activeSlug = slug;
     updatePageSelection();
+    // Opening a different page returns the reader to the article; a docked rail
+    // is unaffected because only overlays are hidden.
+    provenanceDrawer?.open(false);
     repositoryName.textContent = site.repository;
     pageTitle.textContent = page.title;
     pageStatus.textContent = page.status === "planned" ? "Not generated" : page.status;
@@ -3624,10 +4185,18 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
       ? "Generate page"
       : "Refresh page";
     refreshPage.disabled = generating || !providerReady();
+    // pushState, not replaceState: reading pages 1 -> 2 -> 3 and pressing Back
+    // used to leave the Wiki entirely instead of stepping back a page. The
+    // state object is what the popstate handler restores from.
     const location = new URL(window.location.href);
     location.searchParams.set("repository", String(site.repository_id));
     location.searchParams.set("page", page.slug);
-    window.history.replaceState(null, "", location);
+    const entry = { wiki: { repository: String(site.repository_id), page: page.slug } };
+    if (window.location.href === location.href) {
+      window.history.replaceState(entry, "", location);
+    } else {
+      window.history.pushState(entry, "", location);
+    }
     if (page.status !== "ready" && page.status !== "stale") {
       resetProvenance();
       showPlannedPage(page);
@@ -3721,58 +4290,109 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
         })
       });
       if (!response.ok) {
-        throw new Error(await response.text() || `Generation failed (${response.status})`);
+        // The API answers with {"error":{"message":"..."}}; showing that raw
+        // envelope put JSON punctuation in front of the reader instead of the
+        // reason.
+        const body = await response.text();
+        let message = body;
+        try {
+          const parsed = JSON.parse(body) as { error?: { message?: string } };
+          message = parsed.error?.message ?? body;
+        } catch {
+          // Not JSON; the raw body is the best available detail.
+        }
+        throw new Error(message.trim() || `Generation failed (${response.status})`);
       }
       return await response.json() as WikiSite;
     };
     let cancelled = false;
+    beginRun();
     try {
       if (!site.survey_ready || (site.survey_stale && !slug)) {
-        beginGenerationProgress(
-          "Checkpoint 1 of 3 · surveying the repository",
-          "Bounded code discovery is running. The evidence-backed survey is persisted as survey.md before planning begins."
+        setStageDetail("survey", "Bounded code discovery, persisted as survey.md");
+        startRunStep(
+          "survey",
+          "Discovering architecture, flows, tests, and domain concepts across the committed tree.",
+          "The survey is saved before planning begins, so this work is never repeated."
         );
         site = await requestGeneration("", false, true, site.survey_stale);
-        renderSite(site);
-      }
-      if (!site.plan_ready || (site.plan_stale && !slug)) {
-        beginGenerationProgress(
-          "Checkpoint 2 of 3 · designing the knowledge map",
-          "The saved survey is being organized into a repository-specific hierarchy without repeating full discovery."
-        );
-        site = await requestGeneration("", true, false, site.plan_stale);
-        renderSite(site);
-        activeSlug = site.pages.some((page) => page.slug === activeSlug) ? activeSlug : "";
-      }
-
-      if (slug) {
-        beginGenerationProgress(
-          "Checkpoint 3 of 3 · generating this page",
-          "Implementation, tests, diagrams, cross-links, and exact citations are being assembled into one Markdown file."
-        );
-        site = await requestGeneration(slug, false, false, true);
+        setStageState("survey", "done");
         renderSite(site);
       } else {
-        const targets = site.pages.filter((page) =>
-          refreshAll ||
-          page.status === "planned" ||
-          page.status === "stale" ||
-          page.status === "error"
+        setStageState("survey", "reused");
+        setStageDetail("survey", "Existing survey.md checkpoint reused");
+      }
+      renderRunTokens();
+
+      if (!site.plan_ready || (site.plan_stale && !slug)) {
+        setStageDetail("plan", "Survey organised into a page hierarchy");
+        startRunStep(
+          "plan",
+          "Turning the saved survey into a repository-specific page hierarchy.",
+          "Planning reuses the survey rather than repeating discovery."
         );
-        for (const [index, target] of targets.entries()) {
-          beginGenerationProgress(
-            `Checkpoint 3 of 3 · page ${index + 1} of ${targets.length}`,
-            `${target.number} ${target.title} · every completed page is already saved as Markdown and survives cancellation.`
+        site = await requestGeneration("", true, false, site.plan_stale);
+        setStageState("plan", "done");
+        renderSite(site);
+        activeSlug = site.pages.some((page) => page.slug === activeSlug) ? activeSlug : "";
+      } else {
+        setStageState("plan", "reused");
+        setStageDetail("plan", `Existing plan reused · ${site.pages.length} pages`);
+      }
+      renderRunTokens();
+
+      const targets = slug
+        ? site.pages.filter((page) => page.slug === slug)
+        : site.pages.filter((page) =>
+            refreshAll ||
+            page.status === "planned" ||
+            page.status === "stale" ||
+            page.status === "error"
           );
+      runTargets.push(...targets.map((page) => ({
+        slug: page.slug,
+        number: page.number || String(page.order),
+        title: page.title,
+        state: "queued" as const
+      })));
+      runProgress.hidden = runTargets.length === 0;
+      setStageDetail("pages", `${runTargets.length} page${runTargets.length === 1 ? "" : "s"} to write`);
+      renderRunTargets();
+
+      for (const [index, target] of targets.entries()) {
+        const tracked = runTargets[index];
+        if (tracked) {
+          tracked.state = "active";
+        }
+        renderRunTargets();
+        startRunStep(
+          "pages",
+          `${target.number} ${target.title}`,
+          "Implementation, diagrams, cross-links, and exact citations are assembled into one Markdown file."
+        );
+        setStageState("pages", "active", `${index + 1} / ${targets.length}`);
+        try {
           site = await requestGeneration(
             target.slug,
             false,
             false,
-            refreshAll || target.status !== "planned"
+            slug ? true : refreshAll || target.status !== "planned"
           );
-          renderSite(site);
+        } catch (pageError: unknown) {
+          if (tracked) {
+            tracked.state = "failed";
+          }
+          renderRunTargets();
+          throw pageError;
         }
+        if (tracked) {
+          tracked.state = "done";
+        }
+        renderSite(site);
+        renderRunTargets();
+        renderRunTokens();
       }
+      setStageState("pages", runTargets.length ? "done" : "reused");
 
       endGenerationProgress();
       const selected = site.pages.some((page) => page.slug === (slug || activeSlug))
@@ -3868,6 +4488,7 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
         : "The selected provider will inspect architecture, flows, tests, and domain concepts before planning pages.";
 
     pages.replaceChildren();
+    let currentChildren: HTMLElement | undefined;
     for (const page of value.pages) {
       const row = document.createElement("div");
       row.className = "wiki-page-row";
@@ -3901,12 +4522,51 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
       regenerate.textContent = page.status === "planned" ? "+" : "↻";
       regenerate.disabled = generating || !providerReady();
       regenerate.addEventListener("click", () => void generate(page.slug));
-      row.append(select, regenerate);
+
+      // Depth-0 pages open a collapsible section; their depth-1 children nest
+      // inside it. A 29-page plan is far too long to cross as a flat list.
+      if ((page.depth || 0) === 0) {
+        const section = document.createElement("div");
+        section.className = "wiki-page-section";
+        section.dataset.collapsed = collapsedSections.has(page.slug) ? "true" : "false";
+
+        const children = document.createElement("div");
+        children.className = "wiki-page-children";
+
+        const disclosure = document.createElement("button");
+        disclosure.type = "button";
+        disclosure.className = "wiki-page-disclosure";
+        disclosure.innerHTML = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 8 5 5 5-5"></path></svg>';
+        const syncDisclosure = (): void => {
+          const collapsed = section.dataset.collapsed === "true";
+          disclosure.setAttribute("aria-expanded", String(!collapsed));
+          disclosure.setAttribute("aria-label", `${collapsed ? "Expand" : "Collapse"} ${page.title}`);
+        };
+        disclosure.addEventListener("click", () => {
+          const collapsed = section.dataset.collapsed === "true";
+          section.dataset.collapsed = String(!collapsed);
+          if (collapsed) {
+            collapsedSections.delete(page.slug);
+          } else {
+            collapsedSections.add(page.slug);
+          }
+          syncDisclosure();
+        });
+        syncDisclosure();
+
+        row.append(disclosure, select, regenerate);
+        section.append(row, children);
+        pages.append(section);
+        currentChildren = children;
+      } else {
+        row.append(select, regenerate);
+        (currentChildren ?? pages).append(row);
+      }
+
       row.hidden = Boolean(
         pageSearch.value.trim() &&
         !row.dataset.wikiSearch.includes(pageSearch.value.trim().toLowerCase())
       );
-      pages.append(row);
     }
     updatePageSelection();
   };
@@ -3998,16 +4658,24 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
     }
     cancelGeneration.disabled = true;
     cancelGeneration.textContent = "Cancelling…";
-    updateGenerationProgress(
-      "Cancelling provider work",
-      "RepoKarta is interrupting the isolated read-only session. Completed checkpoints and pages remain on disk."
-    );
+    runNote.textContent =
+      "Interrupting the isolated read-only session. Completed checkpoints and pages remain on disk.";
     generationAbort.abort();
   });
   pageSearch.addEventListener("input", () => {
     const query = pageSearch.value.trim().toLowerCase();
     pages.querySelectorAll<HTMLElement>(".wiki-page-row").forEach((row) => {
       row.hidden = Boolean(query && !row.dataset.wikiSearch?.includes(query));
+    });
+    // A filter must be able to reach into collapsed sections, and a section
+    // with nothing left to show should not sit there as an empty heading.
+    pages.querySelectorAll<HTMLElement>(".wiki-page-section").forEach((section) => {
+      const rows = Array.from(section.querySelectorAll<HTMLElement>(".wiki-page-row"));
+      const visible = rows.filter((row) => !row.hidden);
+      section.hidden = query !== "" && visible.length === 0;
+      if (query) {
+        section.dataset.collapsed = "false";
+      }
     });
   });
   generateAll.addEventListener("click", () => void generate());
@@ -4019,6 +4687,22 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
   exportLink.addEventListener("click", (event) => {
     if (exportLink.getAttribute("aria-disabled") === "true") {
       event.preventDefault();
+    }
+  });
+
+  // Back and Forward move between Wiki pages instead of leaving the surface.
+  window.addEventListener("popstate", (event) => {
+    const state = (event.state as { wiki?: { repository: string; page: string } } | null)?.wiki;
+    if (!state) {
+      return;
+    }
+    if (state.repository !== repository.value) {
+      repository.value = state.repository;
+      void loadSite().then(() => loadPage(state.page));
+      return;
+    }
+    if (state.page !== activeSlug) {
+      void loadPage(state.page);
     }
   });
 
@@ -4037,6 +4721,10 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
 connectIndexEvents();
 enableRepositoryDrawer();
 enableQueryChips();
+enableSearchFeedback();
+enableFirstRunProgress();
+enableSearchShortcut();
+localiseShortcutHints();
 enableCopyButtons();
 enableTokenBudgetHelp();
 highlightSource();

@@ -1,6 +1,6 @@
 {{define "index"}}
 <!doctype html>
-<html lang="en" class="h-full bg-[#090b0f]">
+<html lang="en" class="h-full bg-surface-base">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -13,10 +13,11 @@
     <link rel="stylesheet" href="/assets/app.css">
     <script type="module" src="/assets/app.js"></script>
   </head>
-  <body class="min-h-full bg-[#090b0f] text-slate-100 antialiased">
+  <body class="min-h-full bg-surface-base text-ink antialiased">
+    <a class="skip-link" href="#search-query">Skip to search</a>
     {{template "app-header" .}}
 
-    <main class="mx-auto max-w-[1500px] px-5 py-8 lg:px-8 lg:py-10">
+    <main id="main-content" class="mx-auto max-w-[1500px] px-5 py-8 lg:px-8 lg:py-10">
       <div class="min-w-0">
         <section aria-labelledby="search-heading">
           <div class="mb-7">
@@ -24,7 +25,7 @@
             <h1 id="search-heading" class="max-w-3xl text-3xl font-semibold tracking-[-0.04em] text-white sm:text-4xl">
               Find the source. Keep the evidence.
             </h1>
-            <p class="mt-3 max-w-2xl text-sm leading-6 text-slate-400 sm:text-base">
+            <p class="mt-3 max-w-2xl text-sm leading-6 text-ink-soft sm:text-base">
               Search every indexed repository on this laptop. Every result is pinned to a commit and opens as a copyable citation.
             </p>
           </div>
@@ -45,7 +46,7 @@
                 id="search-query"
                 name="q"
                 value="{{.Search.Query.Text}}"
-                class="min-w-0 flex-1 bg-transparent py-4 text-[15px] text-white outline-none placeholder:text-slate-600"
+                class="min-w-0 flex-1 bg-transparent py-4 text-base text-white outline-none placeholder:text-ink-faint"
                 placeholder="Search code, symbols, or regex…"
                 autocomplete="off"
                 spellcheck="false"
@@ -55,7 +56,7 @@
             <button class="search-button" type="submit">
               <span id="search-progress" class="htmx-indicator">Searching</span>
               <span class="not-htmx-indicator">Search</span>
-              <kbd class="ml-2 hidden rounded border border-white/10 bg-black/20 px-1.5 py-0.5 font-mono text-[10px] text-emerald-100/60 sm:inline">↵</kbd>
+              <kbd class="ml-2 hidden rounded border border-white/10 bg-black/20 px-1.5 py-0.5 font-mono text-xs text-emerald-100/60 sm:inline">↵</kbd>
             </button>
 
             <div class="col-span-full grid gap-3 border-t border-white/[0.06] pt-3 sm:grid-cols-2 xl:grid-cols-6">
@@ -113,7 +114,7 @@
         <img src="/assets/repokarta-mark-192.png" alt="" width="32" height="32">
       </span>
       <span class="truncate font-semibold tracking-[-0.02em] text-white">RepoKarta</span>
-      <span class="hidden rounded-full border border-white/10 px-2 py-0.5 font-mono text-[10px] text-slate-500 lg:inline">{{.Version}}</span>
+      <span class="hidden rounded-full border border-white/10 px-2 py-0.5 font-mono text-xs text-ink-soft lg:inline">{{.Version}}</span>
     </a>
     <nav class="app-nav" aria-label="Primary">
       <a href="/" class="app-nav-link{{if eq .ActivePage "search"}} app-nav-link-active{{end}}" {{if eq .ActivePage "search"}}aria-current="page"{{end}}>Search</a>
@@ -125,42 +126,103 @@
       <a href="/chat" class="app-nav-link{{if eq .ActivePage "chat"}} app-nav-link-active{{end}}" {{if eq .ActivePage "chat"}}aria-current="page"{{end}}>Chat</a>
       {{end}}
     </nav>
-    <div class="hidden items-center justify-end gap-2 text-xs text-slate-500 sm:flex">
-      <span class="status-dot" aria-hidden="true"></span>
-      <span>Local only</span>
-      <span class="hidden text-slate-700 lg:inline">·</span>
-      <span class="hidden font-mono lg:inline">127.0.0.1</span>
+    <div class="hidden items-center justify-end gap-2 sm:flex">
+      <a id="index-health" href="/" class="index-health" data-index-health>{{template "index-health" .}}</a>
     </div>
   </div>
 </header>
 {{end}}
 
+{{/*
+  Live index health. Replaces a decorative always-green dot: a repository that
+  fails to index used to leave the primary surface looking healthy while
+  searches silently returned partial results. Re-rendered out of band whenever
+  the catalogue changes, so the counts cannot go stale.
+*/}}
+{{define "index-health"}}
+{{if .ErrorCount}}
+<span class="index-health-dot" data-state="error" aria-hidden="true"></span>
+<span>{{.ErrorCount}} failed</span>
+{{else if .PendingCount}}
+<span class="index-health-dot" data-state="pending" aria-hidden="true"></span>
+<span>Indexing {{.PendingCount}}</span>
+{{else}}
+<span class="index-health-dot" data-state="ready" aria-hidden="true"></span>
+<span>{{.ReadyCount}} indexed</span>
+{{end}}
+<span class="index-health-scope">· local only</span>
+{{end}}
+
+{{/*
+  Shared diagnostics window.
+
+  Every surface logs through the same debug logger, but this markup used to
+  exist only on the chat page, so Wiki and Maps diagnostics — including the
+  exact reason a generation run was rejected — were written and then discarded.
+  The dot argument is the window heading.
+*/}}
+{{define "debug-window"}}
+<aside id="conversation-debug" class="debug-window" aria-labelledby="debug-heading" hidden>
+  <header class="debug-window-header">
+    <div>
+      <p class="debug-window-kicker">Session diagnostics</p>
+      <h2 id="debug-heading">{{.}}</h2>
+    </div>
+    <div class="flex items-center gap-1.5">
+      <button type="button" class="debug-action" data-debug-copy>Copy logs</button>
+      <button type="button" class="debug-action" data-debug-clear>Clear</button>
+      <button type="button" class="debug-close" data-debug-close aria-label="Close debug log">×</button>
+    </div>
+  </header>
+  <div class="debug-window-summary">
+    <span class="status-dot" aria-hidden="true"></span>
+    <span>Diagnostics stay in this browser session</span>
+    <span>·</span>
+    <span>Requests, responses, and rejection reasons</span>
+  </div>
+  <ol id="debug-entries" class="debug-entries" aria-live="polite"></ol>
+  <p class="debug-empty" data-debug-empty>No diagnostics yet.</p>
+</aside>
+{{end}}
+
 {{define "search-results"}}
-<section id="search-results" class="mt-7" aria-live="polite" aria-busy="false">
+<section id="search-results" class="mt-7" data-search-results aria-busy="false">
   {{if .Search.Error}}
   <div class="result-state border-rose-400/20 bg-rose-400/[0.04]">
     <p class="font-medium text-rose-200">Search could not be completed</p>
     <p class="mt-2 font-mono text-xs text-rose-200/60">{{.Search.Error}}</p>
   </div>
   {{else if .Search.Performed}}
-    <div class="mb-3 flex items-center justify-between gap-4 text-xs text-slate-500">
-      <p><span class="font-medium text-slate-300">{{.Search.ReturnedFiles}} files shown</span> · {{.Search.MatchCount}} matches · {{.Search.Duration}}</p>
+    <div class="mb-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 text-sm text-ink-faint">
+      {{/* Only the summary announces. The results list itself is not a live
+           region: announcing every card on every search made a screen reader
+           re-read the whole page. */}}
+      <p role="status"><span class="font-medium text-ink">{{.Search.ReturnedFiles}} files shown</span> · {{.Search.MatchCount}} matches · {{.Search.Duration}}</p>
       {{if .Search.Truncated}}
-      <p class="text-right text-amber-300/80">
-        Showing {{.Search.ReturnedFiles}} of
-        {{if .Search.TotalFilesExact}}{{.Search.FileCount}}{{else}}~{{.Search.EstimatedFiles}}{{end}}
-        files · limit {{.Search.Limit}}
+      <p class="flex items-center gap-2 text-right text-amber-300">
+        <span>
+          Showing {{.Search.ReturnedFiles}} of
+          {{if .Search.TotalFilesExact}}{{.Search.FileCount}}{{else}}~{{.Search.EstimatedFiles}}{{end}}
+          files
+        </span>
+        {{/* Truncation used to be a dead end: recovering meant scrolling back
+             up and hand-editing the numeric limit field. */}}
+        {{if lt .Search.Limit 500}}
+        <button type="button" class="search-more-button" data-search-more="{{nextSearchLimit .Search.Limit}}">
+          Show {{nextSearchLimit .Search.Limit}}
+        </button>
+        {{end}}
       </p>
       {{end}}
     </div>
     {{range .Search.Warnings}}
-    <div class="mb-3 rounded-xl border border-amber-300/20 bg-amber-300/[0.05] px-4 py-3 text-xs text-amber-100/80">
-      <span class="font-mono text-[10px] uppercase tracking-wider text-amber-300">{{.Code}}</span>
+    <div class="mb-3 rounded-xl border border-amber-300/20 bg-amber-300/[0.05] px-4 py-3 text-sm text-amber-100">
+      <span class="font-mono text-xs uppercase tracking-wider text-amber-300">{{.Code}}</span>
       <span class="ml-2">{{.Message}}</span>
     </div>
     {{end}}
     {{if or .Search.FilesSkipped .Search.ShardsSkipped}}
-    <p class="mb-3 text-right font-mono text-[10px] text-amber-300/60">
+    <p class="mb-3 text-right font-mono text-xs text-amber-300">
       {{.Search.FilesSkipped}} candidate files skipped · {{.Search.ShardsSkipped}} shards skipped
     </p>
     {{end}}
@@ -172,17 +234,26 @@
         <header class="flex flex-wrap items-center justify-between gap-3 border-b border-white/[0.06] px-4 py-3">
           <div class="min-w-0">
             <div class="flex min-w-0 items-center gap-2">
-              <span class="shrink-0 rounded bg-white/[0.05] px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">{{.Repository}}</span>
+              <span class="shrink-0 rounded bg-white/[0.05] px-2 py-1 text-xs font-semibold uppercase tracking-wider text-ink-soft">{{.Repository}}</span>
               {{if .RepositoryID}}
-              <a class="truncate font-mono text-xs text-slate-200 hover:text-emerald-300" href="/source/{{.RepositoryID}}?rev={{.Revision}}&path={{urlquery .Path}}{{if .FocusLine}}&lines={{sourceWindowStart .FocusLine}}-{{sourceWindowEnd .FocusLine}}&focus={{.FocusLine}}-{{.FocusLine}}#L{{.FocusLine}}{{else}}&lines=1-200{{end}}">{{.Path}}</a>
+              <a class="truncate font-mono text-xs text-ink-strong hover:text-emerald-300" href="/source/{{.RepositoryID}}?rev={{.Revision}}&path={{urlquery .Path}}{{if .FocusLine}}&lines={{sourceWindowStart .FocusLine}}-{{sourceWindowEnd .FocusLine}}&focus={{.FocusLine}}-{{.FocusLine}}#L{{.FocusLine}}{{else}}&lines=1-200{{end}}">{{.Path}}</a>
               {{else}}
-              <span class="truncate font-mono text-xs text-slate-200">{{.Path}}</span>
+              <span class="truncate font-mono text-xs text-ink-strong">{{.Path}}</span>
               {{end}}
             </div>
           </div>
-          <div class="flex shrink-0 items-center gap-2 font-mono text-[10px] text-slate-600">
+          <div class="flex shrink-0 items-center gap-2 font-mono text-xs text-ink-faint">
             {{if .Language}}<span>{{.Language}}</span><span>·</span>{{end}}
             <span>{{shortCommit .Revision}}</span>
+            {{/* Four strong surfaces that previously did not link to each other. */}}
+            {{if .RepositoryID}}
+            <span class="result-cross-links">
+              <a href="/maps?repository={{.RepositoryID}}" title="Open {{.Repository}} in Maps">Map</a>
+              {{if $.WikiEnabled}}
+              <a href="/wiki?repository={{.RepositoryID}}" title="Open {{.Repository}} in the Wiki">Wiki</a>
+              {{end}}
+            </span>
+            {{end}}
           </div>
         </header>
         <div class="divide-y divide-white/[0.035]">
@@ -196,8 +267,8 @@
             aria-disabled="true"
             {{end}}
           >
-            <span class="select-none border-r border-white/[0.05] px-3 py-2 text-right font-mono text-[11px] text-slate-800">{{previousLine .Number}}</span>
-            <code class="overflow-x-auto whitespace-pre px-3 py-2 font-mono text-xs leading-5 text-slate-600" data-search-highlight-language="{{$match.Language}}">{{.Before}}</code>
+            <span class="select-none border-r border-white/[0.05] px-3 py-2 text-right font-mono text-xs text-ink-faint">{{previousLine .Number}}</span>
+            <code class="overflow-x-auto whitespace-pre px-3 py-2 font-mono text-xs leading-5 text-ink-faint" data-search-highlight-language="{{$match.Language}}">{{.Before}}</code>
           </a>
           {{end}}
           <a
@@ -209,8 +280,8 @@
             {{end}}
             data-source-line="{{.Number}}"
           >
-            <span class="select-none border-r border-white/[0.05] px-3 py-2.5 text-right font-mono text-[11px] text-slate-700 group-hover:text-emerald-400/70">{{.Number}}</span>
-            <code class="overflow-x-auto whitespace-pre px-3 py-2.5 font-mono text-xs leading-5 text-slate-300" data-search-highlight-language="{{$match.Language}}" data-match-ranges="{{fragmentRanges .}}">{{highlightLine .}}</code>
+            <span class="select-none border-r border-white/[0.05] px-3 py-2.5 text-right font-mono text-xs text-ink-faint group-hover:text-emerald-400/70">{{.Number}}</span>
+            <code class="overflow-x-auto whitespace-pre px-3 py-2.5 font-mono text-xs leading-5 text-ink" data-search-highlight-language="{{$match.Language}}" data-match-ranges="{{fragmentRanges .}}">{{highlightLine .}}</code>
           </a>
           {{if .After}}
           <a
@@ -221,8 +292,8 @@
             aria-disabled="true"
             {{end}}
           >
-            <span class="select-none border-r border-white/[0.05] px-3 py-2 text-right font-mono text-[11px] text-slate-800">{{nextLine .Number}}</span>
-            <code class="overflow-x-auto whitespace-pre px-3 py-2 font-mono text-xs leading-5 text-slate-600" data-search-highlight-language="{{$match.Language}}">{{.After}}</code>
+            <span class="select-none border-r border-white/[0.05] px-3 py-2 text-right font-mono text-xs text-ink-faint">{{nextLine .Number}}</span>
+            <code class="overflow-x-auto whitespace-pre px-3 py-2 font-mono text-xs leading-5 text-ink-faint" data-search-highlight-language="{{$match.Language}}">{{.After}}</code>
           </a>
           {{end}}
           {{end}}
@@ -232,18 +303,41 @@
     </div>
     {{else}}
     <div class="result-state">
-      <p class="font-medium text-slate-300">No matches found</p>
-      <p class="mt-2 text-sm text-slate-600">Try a shorter term, remove a filter, or switch off regular expressions.</p>
+      <p class="font-medium text-ink">No matches found</p>
+      <p class="mt-2 text-sm text-ink-faint">Try a shorter term, remove a filter, or switch off regular expressions.</p>
     </div>
     {{end}}
+  {{else if .PendingCount}}
+  {{/*
+    First run. The idle "Search is ready" state used to render while indexing
+    was still in flight, so early searches returned quietly partial results.
+    This panel is replaced out of band as the catalogue progresses.
+  */}}
+  <div class="result-state" role="status" data-first-run data-total="{{len .Repositories}}">
+    <p class="flex items-center gap-2 font-medium text-ink">
+      <span class="index-health-dot" data-state="pending" aria-hidden="true"></span>
+      <span data-first-run-heading>Indexing {{.PendingCount}} of {{len .Repositories}} repositories</span>
+    </p>
+    <p class="mt-2 max-w-xl text-sm leading-6 text-ink-soft" data-first-run-detail>
+      Search works now, but results stay partial until every repository is indexed.
+      {{.ReadyCount}} ready{{if .ErrorCount}} · {{.ErrorCount}} need attention{{end}}.
+    </p>
+    <div class="index-progress" aria-hidden="true">
+      <span data-first-run-bar style="width: {{indexProgress .ReadyCount (len .Repositories)}}%"></span>
+    </div>
+  </div>
   {{else}}
   <div class="result-state">
-    <p class="font-medium text-slate-300">Search is ready</p>
-    <p class="mt-2 max-w-xl text-sm leading-6 text-slate-600">Try a function name, an error message, or a dependency. RepoKarta searches the committed revision stored in each local index.</p>
-    <div class="mt-5 flex flex-wrap gap-2 font-mono text-[11px] text-slate-500">
+    <p class="font-medium text-ink">Search is ready</p>
+    <p class="mt-2 max-w-xl text-sm leading-6 text-ink-soft">Try a function name, an error message, or a dependency. RepoKarta searches the committed revision stored in each local index.</p>
+    {{/*
+      Language-neutral starting points. The previous set led with `http.Handle`,
+      which is dead weight in a catalogue with no Go in it.
+    */}}
+    <div class="mt-5 flex flex-wrap gap-2 font-mono text-xs text-ink-soft">
       <button class="query-chip" type="button" data-query="TODO">TODO</button>
-      <button class="query-chip" type="button" data-query="http.Handle">http.Handle</button>
-      <button class="query-chip" type="button" data-query="DATABASE_URL">DATABASE_URL</button>
+      <button class="query-chip" type="button" data-query="FIXME">FIXME</button>
+      <button class="query-chip" type="button" data-query="deprecated">deprecated</button>
     </div>
   </div>
   {{end}}
@@ -285,8 +379,8 @@
     <section class="rounded-2xl border border-white/[0.07] bg-white/[0.025] p-5">
       <div class="mb-4 flex items-center justify-between">
         <div>
-          <p class="text-xs font-medium uppercase tracking-widest text-slate-500">Index</p>
-          <p class="mt-1 text-2xl font-semibold tracking-tight text-white">{{len .Repositories}} <span class="text-sm font-normal text-slate-500">repos</span></p>
+          <p class="text-xs font-medium uppercase tracking-widest text-ink-soft">Index</p>
+          <p class="mt-1 text-2xl font-semibold tracking-tight text-white">{{len .Repositories}} <span class="text-sm font-normal text-ink-soft">repos</span></p>
         </div>
         <button
           type="button"
@@ -298,17 +392,13 @@
           hx-swap="outerHTML"
         >↻</button>
       </div>
-      <div class="grid grid-cols-3 gap-2">
-        <div class="metric"><strong class="text-emerald-300">{{.ReadyCount}}</strong><span>Ready</span></div>
-        <div class="metric"><strong class="text-amber-300">{{.PendingCount}}</strong><span>Active</span></div>
-        <div class="metric"><strong class="text-rose-300">{{.ErrorCount}}</strong><span>Errors</span></div>
-      </div>
-      <p class="mt-4 truncate border-t border-white/[0.06] pt-4 font-mono text-[10px] leading-5 text-slate-600" title="{{.RepositoryRoot}}">{{.RepositoryRoot}}</p>
+      <div id="repository-metrics" class="grid grid-cols-3 gap-2">{{template "repository-metrics" .}}</div>
+      <p class="mt-4 truncate border-t border-white/[0.06] pt-4 font-mono text-xs leading-5 text-ink-faint" title="{{.RepositoryRoot}}">{{.RepositoryRoot}}</p>
     </section>
 
     {{template "repository-list" .}}
 
-    <p class="px-1 text-xs leading-5 text-slate-600">
+    <p class="px-1 text-xs leading-5 text-ink-faint">
       Source is read-only. Indexes live in RepoKarta’s own local storage.
     </p>
     </div>
@@ -316,32 +406,51 @@
 </aside>
 {{end}}
 
+{{define "repository-metrics"}}
+<div class="metric"><strong class="text-emerald-300">{{.ReadyCount}}</strong><span>Ready</span></div>
+<div class="metric"><strong class="text-amber-300">{{.PendingCount}}</strong><span>Active</span></div>
+<div class="metric"><strong class="text-rose-300">{{.ErrorCount}}</strong><span>Errors</span></div>
+{{end}}
+
+{{/*
+  Fragment served to htmx when the catalogue changes. The SSE handler swaps
+  only #repository-list, so the header chip and the drawer's Ready/Active/Errors
+  tiles previously never updated after the initial render. They ride along as
+  out-of-band swaps. This wrapper is deliberately separate from the full-page
+  render, which must not contain duplicate ids.
+*/}}
+{{define "repository-list-fragment"}}
+<a id="index-health" href="/" class="index-health" data-index-health hx-swap-oob="true">{{template "index-health" .}}</a>
+<div id="repository-metrics" class="grid grid-cols-3 gap-2" hx-swap-oob="true">{{template "repository-metrics" .}}</div>
+{{template "repository-list" .}}
+{{end}}
+
 {{define "repository-list"}}
 <section id="repository-list" class="overflow-hidden rounded-2xl border border-white/[0.07] bg-white/[0.025]">
   <div class="border-b border-white/[0.06] px-4 py-3">
-    <h2 class="text-xs font-medium uppercase tracking-widest text-slate-500">Repositories</h2>
+    <h2 class="text-xs font-medium uppercase tracking-widest text-ink-soft">Repositories</h2>
   </div>
   {{if .Repositories}}
   <ul class="max-h-[25rem] divide-y divide-white/[0.045] overflow-y-auto">
     {{range .Repositories}}
     <li class="px-4 py-3">
       <div class="flex items-center justify-between gap-3">
-        <span class="truncate text-sm font-medium text-slate-300" title="{{.Path}}">{{index $.RepositoryLabels .ID}}</span>
+        <span class="truncate text-sm font-medium text-ink" title="{{.Path}}">{{index $.RepositoryLabels .ID}}</span>
         <span class="status-badge status-{{.IndexState}}"><i></i>{{statusLabel .IndexState}}</span>
       </div>
-      <div class="mt-1.5 flex items-center gap-2 font-mono text-[10px] text-slate-600">
+      <div class="mt-1.5 flex items-center gap-2 font-mono text-xs text-ink-faint">
         {{if .HeadCommit}}<span>{{shortCommit .HeadCommit}}</span>{{end}}
         {{if .DefaultRevision}}<span>·</span><span class="truncate">{{.DefaultRevision}}</span>{{end}}
         {{if .Bare}}<span>· bare</span>{{end}}
       </div>
-      {{if .IndexError}}<p class="mt-2 line-clamp-2 text-[10px] leading-4 text-rose-300/70" title="{{.IndexError}}">{{.IndexError}}</p>{{end}}
+      {{if .IndexError}}<p class="mt-2 line-clamp-2 text-xs leading-4 text-rose-300/70" title="{{.IndexError}}">{{.IndexError}}</p>{{end}}
     </li>
     {{end}}
   </ul>
   {{else}}
   <div class="px-4 py-10 text-center">
-    <p class="text-sm text-slate-400">No Git repositories found.</p>
-    <p class="mt-2 text-xs leading-5 text-slate-600">Point RepoKarta at a ghorg directory or another repository root.</p>
+    <p class="text-sm text-ink-soft">No Git repositories found.</p>
+    <p class="mt-2 text-xs leading-5 text-ink-faint">Point RepoKarta at a ghorg directory or another repository root.</p>
   </div>
   {{end}}
 </section>

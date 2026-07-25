@@ -1,13 +1,77 @@
 @import "tailwindcss";
 @source "../templates";
 
+/*
+ * RepoKarta design tokens.
+ *
+ * Colour roles are semantic, not decorative. Use the role, never a raw literal:
+ *
+ *   accent  (emerald) brand identity and interactive affordances
+ *   ai      (violet)  content produced by a model — chat answers, generated Wiki
+ *   warn    (amber)   degraded, stale, partial, or truncated results
+ *   danger  (rose)    errors and failures
+ *
+ * Every ink-* token clears WCAG AA (4.5:1) on every surface-* token, so any
+ * legible pairing is safe. ink-faint is the floor at 4.50:1 on surface-overlay;
+ * nothing dimmer than ink-faint may carry text. Dimmer slate values remain
+ * available for borders and dividers via the line-* tokens, where contrast
+ * minimums do not apply.
+ */
 @theme {
   --font-sans: "Inter", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "SFMono-Regular", "Cascadia Code", "Roboto Mono", ui-monospace, monospace;
+
+  /* Surfaces, darkest to lightest. */
+  --color-surface-sunken: #070910;
+  --color-surface-base: #090b0f;
+  --color-surface-raised: #0d1117;
+  --color-surface-overlay: #12161d;
+
+  /* Text. All clear 4.5:1 on every surface above. */
+  --color-ink-strong: #f1f5f9;
+  --color-ink: #cbd5e1;
+  --color-ink-soft: #94a3b8;
+  --color-ink-faint: #708096;
+
+  /* Hairlines and dividers. Not for text. */
+  --color-line-subtle: rgb(255 255 255 / 0.06);
+  --color-line: rgb(255 255 255 / 0.09);
+  --color-line-strong: rgb(148 163 184 / 0.18);
+
+  /* Semantic accents. */
+  --color-accent: #34d399;
+  --color-accent-soft: #6ee7b7;
+  --color-ai: #c4b5fd;
+  --color-ai-soft: #ddd6fe;
+  --color-warn: #fcd34d;
+  --color-danger: #fda4af;
+  --color-on-accent: #071410;
 }
 
 :root {
   color-scheme: dark;
+
+  /*
+   * Type scale. 0.75rem (12px) is the floor for proportional text; --fs-micro
+   * (11px) is reserved for monospace metadata, whose glyphs read smaller at the
+   * same size. The previous stylesheet carried 35 distinct sub-1rem sizes
+   * reaching 0.45rem (7.2px).
+   */
+  --fs-micro: 0.6875rem;
+  --fs-meta: 0.75rem;
+  --fs-caption: 0.8125rem;
+  --fs-body: 0.875rem;
+  --fs-body-lg: 1rem;
+  --fs-title: 1.125rem;
+  --fs-title-lg: 1.375rem;
+  --fs-display: 1.75rem;
+
+  /* Radius scale, replacing 28 distinct hand-tuned values. */
+  --r-xs: 0.375rem;
+  --r-sm: 0.5rem;
+  --r-md: 0.625rem;
+  --r-lg: 0.875rem;
+  --r-xl: 1rem;
 }
 
 html {
@@ -38,6 +102,498 @@ select {
   outline-offset: 2px;
 }
 
+/* Keyboard users previously had to tab the whole header on every navigation. */
+.skip-link {
+  position: fixed;
+  z-index: 60;
+  top: 0.75rem;
+  left: 0.75rem;
+  border: 1px solid rgb(52 211 153 / 0.4);
+  border-radius: var(--r-sm);
+  padding: 0.55rem 0.9rem;
+  background: var(--color-surface-overlay);
+  color: var(--color-accent-soft);
+  font-size: var(--fs-caption);
+  font-weight: 600;
+  transform: translateY(-160%);
+  transition: transform 150ms ease;
+}
+
+.skip-link:focus-visible {
+  transform: translateY(0);
+}
+
+/* Live index health, replacing a decorative always-green dot. */
+.index-health {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  border: 1px solid var(--color-line);
+  border-radius: 999px;
+  padding: 0.3rem 0.7rem;
+  color: var(--color-ink-soft);
+  font-size: var(--fs-meta);
+  transition: 150ms ease;
+}
+
+.index-health:hover {
+  border-color: rgb(52 211 153 / 0.3);
+  color: var(--color-ink);
+}
+
+.index-health-scope {
+  display: none;
+  color: var(--color-ink-faint);
+}
+
+@media (min-width: 1024px) {
+  .index-health-scope {
+    display: inline;
+  }
+}
+
+.index-health-dot {
+  width: 0.45rem;
+  height: 0.45rem;
+  flex-shrink: 0;
+  border-radius: 999px;
+  background: var(--color-accent);
+  box-shadow: 0 0 0 4px rgb(52 211 153 / 0.08), 0 0 14px rgb(52 211 153 / 0.45);
+}
+
+.index-health-dot[data-state="pending"] {
+  background: var(--color-warn);
+  box-shadow: 0 0 0 4px rgb(252 211 77 / 0.08), 0 0 14px rgb(252 211 77 / 0.45);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+.index-health-dot[data-state="error"] {
+  background: var(--color-danger);
+  box-shadow: 0 0 0 4px rgb(253 164 175 / 0.1), 0 0 14px rgb(253 164 175 / 0.5);
+}
+
+/* First-run indexing progress. */
+.index-progress {
+  overflow: hidden;
+  margin-top: 1rem;
+  border-radius: 999px;
+  width: min(100%, 22rem);
+  height: 0.3rem;
+  background: rgb(255 255 255 / 0.07);
+}
+
+.index-progress span {
+  display: block;
+  border-radius: 999px;
+  height: 100%;
+  background: var(--color-accent);
+  transition: width 400ms ease;
+}
+
+/* Accessible mirror of the canvas graph. */
+.map-node-list {
+  position: absolute;
+  z-index: 5;
+  inset: 3.4rem 0 0;
+  overflow-y: auto;
+  padding: 1rem 1.15rem 2rem;
+  background: var(--color-surface-base);
+}
+
+.map-node-list-note {
+  margin: 0 0 0.85rem;
+  color: var(--color-ink-faint);
+  font-size: var(--fs-meta);
+}
+
+.map-node-list ol {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.map-node-list-item {
+  display: grid;
+  gap: 0.15rem;
+  width: 100%;
+  border: 1px solid var(--color-line-subtle);
+  border-radius: var(--r-sm);
+  padding: 0.55rem 0.7rem;
+  background: rgb(255 255 255 / 0.02);
+  text-align: left;
+  transition: 150ms ease;
+}
+
+.map-node-list-item:hover {
+  border-color: rgb(52 211 153 / 0.3);
+  background: rgb(16 185 129 / 0.06);
+}
+
+.map-node-list-item strong {
+  color: var(--color-ink);
+  font-size: var(--fs-caption);
+  font-weight: 600;
+}
+
+.map-node-list-item span {
+  color: var(--color-ink-faint);
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+}
+
+.map-node-list-empty {
+  color: var(--color-ink-faint);
+  font-size: var(--fs-caption);
+}
+
+.map-canvas-behind {
+  visibility: hidden;
+}
+
+.conversation-settings-lock {
+  border: 1px solid rgb(167 139 250 / 0.28);
+  border-radius: 999px;
+  padding: 0.05rem 0.4rem;
+  color: var(--color-ai-soft);
+  font-size: var(--fs-micro);
+  font-weight: 600;
+}
+
+/* ---- Deep Wiki run visualisation ---------------------------------------- */
+
+.wiki-run {
+  width: min(100%, 40rem);
+  margin: 0 auto;
+  border: 1px solid var(--color-line);
+  border-radius: var(--r-xl);
+  padding: 1.25rem;
+  background: var(--color-surface-raised);
+  text-align: left;
+  box-shadow: 0 20px 60px rgb(0 0 0 / 0.3);
+}
+
+.wiki-run-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.1rem;
+}
+
+.wiki-run-header h3 {
+  margin: 0;
+  color: var(--color-ink-strong);
+  font-size: var(--fs-title);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.wiki-run-engine {
+  flex-shrink: 0;
+  border: 1px solid rgb(167 139 250 / 0.28);
+  border-radius: 999px;
+  padding: 0.2rem 0.6rem;
+  color: var(--color-ai-soft);
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+}
+
+/* Stage rail */
+.wiki-run-stages {
+  display: grid;
+  gap: 0;
+  margin: 0 0 1.1rem;
+  padding: 0;
+  list-style: none;
+}
+
+.wiki-run-stages li {
+  display: grid;
+  position: relative;
+  grid-template-columns: 1.5rem minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.5rem 0;
+}
+
+/* Connector between stage marks. */
+.wiki-run-stages li:not(:last-child)::before {
+  position: absolute;
+  z-index: 0;
+  top: 2.05rem;
+  left: 0.7rem;
+  width: 1px;
+  height: calc(100% - 1.3rem);
+  background: var(--color-line-strong);
+  content: "";
+}
+
+.wiki-run-stage-mark {
+  display: grid;
+  z-index: 1;
+  place-items: center;
+  border: 1px solid var(--color-line-strong);
+  border-radius: 999px;
+  width: 1.5rem;
+  height: 1.5rem;
+  background: var(--color-surface-raised);
+  color: var(--color-ink-faint);
+  font-size: var(--fs-micro);
+}
+
+.wiki-run-stage-mark::before {
+  content: "";
+  border-radius: 999px;
+  width: 0.4rem;
+  height: 0.4rem;
+  background: currentColor;
+}
+
+.wiki-run-stage-copy {
+  display: grid;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.wiki-run-stage-copy strong {
+  color: var(--color-ink-soft);
+  font-size: var(--fs-caption);
+  font-weight: 650;
+}
+
+.wiki-run-stage-copy span {
+  color: var(--color-ink-faint);
+  font-size: var(--fs-meta);
+}
+
+.wiki-run-stage-state {
+  color: var(--color-ink-faint);
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  white-space: nowrap;
+}
+
+.wiki-run-stages li[data-state="active"] .wiki-run-stage-mark {
+  border-color: rgb(52 211 153 / 0.55);
+  color: var(--color-accent);
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+.wiki-run-stages li[data-state="active"] .wiki-run-stage-copy strong,
+.wiki-run-stages li[data-state="active"] .wiki-run-stage-state {
+  color: var(--color-accent-soft);
+}
+
+.wiki-run-stages li[data-state="done"] .wiki-run-stage-mark,
+.wiki-run-stages li[data-state="reused"] .wiki-run-stage-mark {
+  border-color: rgb(52 211 153 / 0.4);
+  background: rgb(52 211 153 / 0.14);
+  color: var(--color-accent);
+}
+
+.wiki-run-stages li[data-state="done"] .wiki-run-stage-copy strong,
+.wiki-run-stages li[data-state="reused"] .wiki-run-stage-copy strong {
+  color: var(--color-ink);
+}
+
+.wiki-run-stages li[data-state="failed"] .wiki-run-stage-mark {
+  border-color: rgb(253 164 175 / 0.5);
+  color: var(--color-danger);
+}
+
+.wiki-run-stages li[data-state="failed"] .wiki-run-stage-state {
+  color: var(--color-danger);
+}
+
+/* Page loop */
+.wiki-run-bar {
+  overflow: hidden;
+  border-radius: 999px;
+  height: 0.3rem;
+  background: rgb(255 255 255 / 0.07);
+}
+
+.wiki-run-bar span {
+  display: block;
+  border-radius: 999px;
+  height: 100%;
+  background: var(--color-accent);
+  transition: width 300ms ease;
+}
+
+.wiki-run-current {
+  margin: 0.6rem 0 0.75rem;
+  color: var(--color-ink);
+  font-size: var(--fs-caption);
+}
+
+.wiki-run-pages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.28rem;
+  margin: 0;
+  max-height: 7.5rem;
+  overflow-y: auto;
+  padding: 0;
+  list-style: none;
+}
+
+.wiki-run-pages li {
+  border: 1px solid var(--color-line-subtle);
+  border-radius: var(--r-xs);
+  padding: 0.12rem 0.4rem;
+  color: var(--color-ink-faint);
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+}
+
+.wiki-run-pages li[data-state="active"] {
+  border-color: rgb(52 211 153 / 0.5);
+  background: rgb(52 211 153 / 0.12);
+  color: var(--color-accent-soft);
+}
+
+.wiki-run-pages li[data-state="done"] {
+  border-color: rgb(52 211 153 / 0.28);
+  color: var(--color-accent);
+}
+
+.wiki-run-pages li[data-state="failed"] {
+  border-color: rgb(253 164 175 / 0.45);
+  color: var(--color-danger);
+}
+
+.wiki-run-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.5rem;
+  margin: 1.1rem 0 0;
+  border-top: 1px solid var(--color-line-subtle);
+  padding-top: 0.85rem;
+}
+
+.wiki-run-stats dt {
+  color: var(--color-ink-faint);
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  text-transform: uppercase;
+}
+
+.wiki-run-stats dd {
+  margin: 0.15rem 0 0;
+  color: var(--color-ink);
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  font-weight: 650;
+}
+
+.wiki-run-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin-top: 1rem;
+  border-top: 1px solid var(--color-line-subtle);
+  padding-top: 0.85rem;
+  color: var(--color-ink-faint);
+  font-size: var(--fs-meta);
+}
+
+.wiki-run-actions button {
+  margin-left: auto;
+  border: 1px solid rgb(253 164 175 / 0.3);
+  border-radius: var(--r-sm);
+  padding: 0.3rem 0.7rem;
+  background: rgb(253 164 175 / 0.08);
+  color: var(--color-danger);
+  font-size: var(--fs-meta);
+  font-weight: 600;
+}
+
+.wiki-run-actions button:hover:not(:disabled) {
+  border-color: rgb(253 164 175 / 0.6);
+  background: rgb(253 164 175 / 0.16);
+}
+
+@media (max-width: 620px) {
+  .wiki-run-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* Diagnostics badge, shown only once something has been logged. */
+.debug-toggle {
+  position: relative;
+}
+
+.debug-toggle-count {
+  position: absolute;
+  top: -0.25rem;
+  right: -0.25rem;
+  border-radius: 999px;
+  min-width: 1rem;
+  padding: 0 0.2rem;
+  background: rgb(253 164 175 / 0.9);
+  color: var(--color-surface-base);
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  line-height: 1rem;
+}
+
+.debug-toggle-count[data-empty="true"] {
+  display: none;
+}
+
+/* Jump from a search hit into that repository's map or generated docs. */
+.result-cross-links {
+  display: inline-flex;
+  gap: 0.3rem;
+  margin-left: 0.15rem;
+}
+
+.result-cross-links a {
+  border: 1px solid var(--color-line);
+  border-radius: var(--r-xs);
+  padding: 0.1rem 0.4rem;
+  color: var(--color-ink-faint);
+  transition: 150ms ease;
+}
+
+.result-cross-links a:hover {
+  border-color: rgb(52 211 153 / 0.35);
+  color: var(--color-accent-soft);
+}
+
+/* Truncated results are recoverable in one click. */
+.search-more-button {
+  border: 1px solid rgb(252 211 77 / 0.35);
+  border-radius: var(--r-sm);
+  padding: 0.2rem 0.55rem;
+  background: rgb(252 211 77 / 0.08);
+  color: var(--color-warn);
+  font-size: var(--fs-meta);
+  font-weight: 600;
+  white-space: nowrap;
+  transition: 150ms ease;
+}
+
+.search-more-button:hover {
+  border-color: rgb(252 211 77 / 0.6);
+  background: rgb(252 211 77 / 0.16);
+}
+
+/*
+ * Stale results read as stale while a search is in flight. Deliberately no
+ * pointer-events:none — blocking interaction turns any missed "finished" event
+ * into an apparently dead page, and dimming alone communicates the same thing.
+ */
+[data-search-results][aria-busy="true"] {
+  opacity: 0.5;
+  transition: opacity 120ms ease;
+}
+
 .status-dot {
   width: 0.45rem;
   height: 0.45rem;
@@ -53,7 +609,7 @@ select {
   flex-shrink: 0;
   place-items: center;
   border: 1px solid rgb(52 211 153 / 0.2);
-  border-radius: 0.65rem;
+  border-radius: var(--r-md);
   background:
     radial-gradient(circle at 50% 38%, rgb(52 211 153 / 0.12), transparent 72%),
     rgb(255 255 255 / 0.025);
@@ -86,29 +642,99 @@ a.brand-mark:hover,
   align-items: center;
   gap: 0.2rem;
   border: 1px solid rgb(255 255 255 / 0.07);
-  border-radius: 0.7rem;
+  border-radius: var(--r-lg);
   padding: 0.2rem;
   background: rgb(0 0 0 / 0.18);
 }
 
 .app-nav-link {
-  border-radius: 0.5rem;
+  border-radius: var(--r-sm);
   padding: 0.42rem 0.78rem;
-  color: rgb(100 116 139);
-  font-size: 0.75rem;
+  color: var(--color-ink-faint);
+  font-size: var(--fs-caption);
   font-weight: 600;
   text-decoration: none;
   transition: 150ms ease;
 }
 
 .app-nav-link:hover {
-  color: rgb(203 213 225);
+  color: var(--color-ink);
 }
 
 .app-nav-link-active {
   background: rgb(255 255 255 / 0.07);
-  color: rgb(241 245 249);
+  color: var(--color-ink-strong);
   box-shadow: inset 0 1px rgb(255 255 255 / 0.04);
+}
+
+/*
+ * Shared evidence-drawer chrome.
+ *
+ * Every surface that carries source evidence uses the same pattern: docked at
+ * wide widths, an overlay with an explicit trigger, scrim, close button, and
+ * inert management below its breakpoint. No evidence surface is ever removed.
+ */
+.evidence-drawer-scrim {
+  position: fixed;
+  z-index: 39;
+  inset: 4rem 0 0;
+  border: 0;
+  background: rgb(2 4 8 / 0.6);
+  backdrop-filter: blur(2px);
+}
+
+.evidence-drawer-toggle {
+  display: none;
+  align-items: center;
+  gap: 0.4rem;
+  border: 1px solid var(--color-line);
+  border-radius: var(--r-sm);
+  padding: 0.4rem 0.6rem;
+  background: rgb(255 255 255 / 0.04);
+  color: var(--color-ink-soft);
+  font-size: var(--fs-meta);
+  font-weight: 600;
+  transition: 150ms ease;
+}
+
+.evidence-drawer-toggle:hover {
+  border-color: rgb(52 211 153 / 0.35);
+  color: var(--color-accent-soft);
+}
+
+.evidence-drawer-toggle strong {
+  border-radius: 999px;
+  background: rgb(52 211 153 / 0.14);
+  padding: 0.05rem 0.4rem;
+  color: var(--color-accent-soft);
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+}
+
+.evidence-drawer-close {
+  display: none;
+  flex-shrink: 0;
+  border: 1px solid var(--color-line);
+  border-radius: var(--r-sm);
+  width: 1.9rem;
+  height: 1.9rem;
+  background: rgb(255 255 255 / 0.04);
+  color: var(--color-ink-soft);
+  font-size: var(--fs-body-lg);
+  line-height: 1;
+}
+
+.evidence-drawer-close:hover {
+  border-color: rgb(52 211 153 / 0.35);
+  color: var(--color-accent-soft);
+}
+
+/* Sticky rather than absolute: the inspector is itself a scroll container. */
+.map-inspector-close {
+  position: sticky;
+  z-index: 1;
+  top: 0;
+  margin-left: auto;
 }
 
 .search-panel {
@@ -117,7 +743,7 @@ a.brand-mark:hover,
   gap: 0 0.75rem;
   padding: 0.5rem;
   border: 1px solid rgb(255 255 255 / 0.09);
-  border-radius: 1rem;
+  border-radius: var(--r-xl);
   background: rgb(255 255 255 / 0.035);
   box-shadow:
     0 22px 70px rgb(0 0 0 / 0.22),
@@ -127,18 +753,11 @@ a.brand-mark:hover,
 .conversation-panel {
   overflow: hidden;
   border: 1px solid rgb(167 139 250 / 0.16);
-  border-radius: 1rem;
+  border-radius: var(--r-xl);
   background:
     radial-gradient(circle at 85% 0%, rgb(139 92 246 / 0.09), transparent 24rem),
     rgb(255 255 255 / 0.025);
   box-shadow: 0 22px 70px rgb(0 0 0 / 0.18);
-}
-
-.conversation-workspace {
-  display: grid;
-  grid-template-columns: minmax(13rem, 17rem) minmax(0, 1fr);
-  align-items: start;
-  gap: 1rem;
 }
 
 .conversation-history-panel {
@@ -147,7 +766,7 @@ a.brand-mark:hover,
   overflow: hidden;
   max-height: calc(100vh - 7rem);
   border: 1px solid rgb(255 255 255 / 0.07);
-  border-radius: 0.9rem;
+  border-radius: var(--r-lg);
   background: rgb(255 255 255 / 0.022);
 }
 
@@ -161,8 +780,8 @@ a.brand-mark:hover,
 }
 
 .conversation-history-panel > header p {
-  color: rgb(100 116 139);
-  font-size: 0.54rem;
+  color: var(--color-ink-faint);
+  font-size: var(--fs-meta);
   font-weight: 700;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -170,18 +789,18 @@ a.brand-mark:hover,
 
 .conversation-history-panel > header h2 {
   margin-top: 0.08rem;
-  color: rgb(226 232 240);
-  font-size: 0.88rem;
+  color: var(--color-ink);
+  font-size: var(--fs-body);
   font-weight: 650;
 }
 
 .conversation-history-panel > header button {
   border: 1px solid rgb(167 139 250 / 0.18);
-  border-radius: 0.45rem;
+  border-radius: var(--r-sm);
   padding: 0.32rem 0.5rem;
   background: rgb(139 92 246 / 0.07);
-  color: rgb(196 181 253);
-  font-size: 0.64rem;
+  color: var(--color-ai-soft);
+  font-size: var(--fs-meta);
 }
 
 .conversation-history-panel > header button:hover:not(:disabled) {
@@ -205,7 +824,7 @@ a.brand-mark:hover,
   display: grid;
   min-width: 0;
   border: 1px solid transparent;
-  border-radius: 0.62rem;
+  border-radius: var(--r-md);
   padding: 0.2rem;
 }
 
@@ -221,7 +840,7 @@ a.brand-mark:hover,
 .conversation-history-open {
   display: grid;
   min-width: 0;
-  border-radius: 0.48rem;
+  border-radius: var(--r-sm);
   padding: 0.45rem;
   text-align: left;
 }
@@ -238,16 +857,16 @@ a.brand-mark:hover,
 }
 
 .conversation-history-open strong {
-  color: rgb(203 213 225);
-  font-size: 0.71rem;
+  color: var(--color-ink);
+  font-size: var(--fs-caption);
   font-weight: 600;
 }
 
 .conversation-history-open span {
   margin-top: 0.22rem;
-  color: rgb(71 85 105);
+  color: var(--color-ink-faint);
   font-family: var(--font-mono);
-  font-size: 0.52rem;
+  font-size: var(--fs-meta);
 }
 
 .conversation-history-actions {
@@ -257,16 +876,16 @@ a.brand-mark:hover,
 }
 
 .conversation-history-actions button {
-  color: rgb(71 85 105);
-  font-size: 0.55rem;
+  color: var(--color-ink-faint);
+  font-size: var(--fs-meta);
 }
 
 .conversation-history-actions button:hover {
-  color: rgb(196 181 253);
+  color: var(--color-ai-soft);
 }
 
 .conversation-history-actions button:last-child:hover {
-  color: rgb(253 164 175);
+  color: var(--color-danger);
 }
 
 .conversation-history-item[data-editing="true"] > .conversation-history-open,
@@ -284,31 +903,31 @@ a.brand-mark:hover,
 .conversation-history-editor input {
   min-width: 0;
   border: 1px solid rgb(167 139 250 / 0.3);
-  border-radius: 0.42rem;
+  border-radius: var(--r-xs);
   padding: 0.35rem 0.42rem;
   background: rgb(2 6 23 / 0.7);
-  color: rgb(226 232 240);
-  font-size: 0.66rem;
+  color: var(--color-ink);
+  font-size: var(--fs-meta);
   outline: none;
 }
 
 .conversation-history-editor button {
   border: 1px solid rgb(255 255 255 / 0.08);
-  border-radius: 0.4rem;
+  border-radius: var(--r-xs);
   padding: 0.3rem 0.4rem;
-  color: rgb(148 163 184);
-  font-size: 0.57rem;
+  color: var(--color-ink-soft);
+  font-size: var(--fs-meta);
 }
 
 .conversation-history-editor button[type="submit"] {
   border-color: rgb(52 211 153 / 0.18);
-  color: rgb(110 231 183);
+  color: var(--color-accent-soft);
 }
 
 .conversation-history-empty {
   padding: 1.4rem 0.8rem;
-  color: rgb(71 85 105);
-  font-size: 0.67rem;
+  color: var(--color-ink-faint);
+  font-size: var(--fs-meta);
   line-height: 1.1rem;
   text-align: center;
 }
@@ -334,8 +953,8 @@ a.brand-mark:hover,
 .conversation-empty {
   align-self: center;
   padding: 1.5rem;
-  color: rgb(100 116 139);
-  font-size: 0.82rem;
+  color: var(--color-ink-faint);
+  font-size: var(--fs-body);
   line-height: 1.5rem;
   text-align: center;
 }
@@ -353,21 +972,21 @@ a.brand-mark:hover,
   border-radius: 999px;
   padding: 0.38rem 0.65rem;
   background: rgb(139 92 246 / 0.045);
-  color: rgb(148 163 184);
-  font-size: 0.7rem;
+  color: var(--color-ink-soft);
+  font-size: var(--fs-caption);
   transition: 150ms ease;
 }
 
 .conversation-starters button:hover {
   border-color: rgb(167 139 250 / 0.3);
   background: rgb(139 92 246 / 0.1);
-  color: rgb(221 214 254);
+  color: var(--color-ai-soft);
 }
 
 .conversation-message {
   max-width: min(88%, 52rem);
   border: 1px solid rgb(255 255 255 / 0.065);
-  border-radius: 0.8rem;
+  border-radius: var(--r-lg);
   padding: 0.8rem 0.9rem;
   background: rgb(0 0 0 / 0.15);
 }
@@ -385,16 +1004,16 @@ a.brand-mark:hover,
 
 .conversation-role {
   margin-bottom: 0.35rem;
-  color: rgb(100 116 139);
-  font-size: 0.61rem;
+  color: var(--color-ink-faint);
+  font-size: var(--fs-meta);
   font-weight: 700;
   letter-spacing: 0.1em;
   text-transform: uppercase;
 }
 
 .conversation-content {
-  color: rgb(203 213 225);
-  font-size: 0.84rem;
+  color: var(--color-ink);
+  font-size: var(--fs-body);
   line-height: 1.45rem;
   overflow-wrap: anywhere;
 }
@@ -434,20 +1053,20 @@ a.brand-mark:hover,
   align-items: center;
   gap: 0.38rem;
   margin: 0.35rem 0;
-  color: rgb(100 116 139);
-  font-size: 0.68rem;
+  color: var(--color-ink-faint);
+  font-size: var(--fs-meta);
   font-weight: 600;
 }
 
 .conversation-thinking[data-state="complete"] {
-  color: rgb(71 85 105);
+  color: var(--color-ink-faint);
 }
 
 .conversation-thinking time,
 .conversation-composer-activity time {
-  color: rgb(71 85 105);
+  color: var(--color-ink-faint);
   font-family: var(--font-mono);
-  font-size: 0.62rem;
+  font-size: var(--fs-meta);
   font-weight: 500;
 }
 
@@ -516,22 +1135,22 @@ a.brand-mark:hover,
 .conversation-message-assistant .conversation-content h3,
 .conversation-message-assistant .conversation-content h4 {
   margin: 1.1rem 0 0.5rem;
-  color: rgb(241 245 249);
+  color: var(--color-ink-strong);
   font-weight: 650;
   line-height: 1.25;
 }
 
 .conversation-message-assistant .conversation-content h1 {
-  font-size: 1.2rem;
+  font-size: var(--fs-title);
 }
 
 .conversation-message-assistant .conversation-content h2 {
-  font-size: 1.08rem;
+  font-size: var(--fs-title);
 }
 
 .conversation-message-assistant .conversation-content h3,
 .conversation-message-assistant .conversation-content h4 {
-  font-size: 0.96rem;
+  font-size: var(--fs-body-lg);
 }
 
 .conversation-message-assistant .conversation-content ul,
@@ -558,18 +1177,18 @@ a.brand-mark:hover,
 }
 
 .conversation-message-assistant .conversation-content strong {
-  color: rgb(241 245 249);
+  color: var(--color-ink-strong);
   font-weight: 650;
 }
 
 .conversation-message-assistant .conversation-content code {
   border: 1px solid rgb(148 163 184 / 0.1);
-  border-radius: 0.32rem;
+  border-radius: var(--r-xs);
   padding: 0.08rem 0.3rem;
   background: rgb(15 23 42 / 0.72);
-  color: rgb(196 181 253);
+  color: var(--color-ai-soft);
   font-family: var(--font-mono);
-  font-size: 0.78rem;
+  font-size: var(--fs-caption);
 }
 
 .conversation-message-assistant .conversation-content pre {
@@ -577,7 +1196,7 @@ a.brand-mark:hover,
   margin: 0.8rem 0;
   overflow: auto;
   border: 1px solid rgb(148 163 184 / 0.1);
-  border-radius: 0.58rem;
+  border-radius: var(--r-md);
   background: rgb(2 6 23 / 0.76);
 }
 
@@ -588,7 +1207,7 @@ a.brand-mark:hover,
   border-radius: 0;
   padding: 0.75rem 0.85rem;
   background: transparent;
-  color: rgb(203 213 225);
+  color: var(--color-ink);
   line-height: 1.35rem;
 }
 
@@ -597,7 +1216,7 @@ a.brand-mark:hover,
   margin: 0.9rem 0;
   overflow: hidden;
   border: 1px solid rgb(52 211 153 / 0.14);
-  border-radius: 0.72rem;
+  border-radius: var(--r-lg);
   background:
     radial-gradient(circle at 50% 0%, rgb(52 211 153 / 0.055), transparent 44%),
     rgb(2 6 23 / 0.66);
@@ -617,12 +1236,12 @@ a.brand-mark:hover,
   align-items: center;
   gap: 0.4rem;
   border: 1px solid rgb(148 163 184 / 0.14);
-  border-radius: 0.42rem;
+  border-radius: var(--r-xs);
   padding: 0.32rem 0.52rem;
   background: rgb(15 23 42 / 0.72);
-  color: rgb(148 163 184);
+  color: var(--color-ink-soft);
   font-family: var(--font-mono);
-  font-size: 0.64rem;
+  font-size: var(--fs-meta);
   font-weight: 650;
   transition:
     border-color 150ms ease,
@@ -643,7 +1262,7 @@ a.brand-mark:hover,
 .mermaid-diagram-action:hover:not(:disabled) {
   border-color: rgb(52 211 153 / 0.34);
   background: rgb(16 185 129 / 0.09);
-  color: rgb(167 243 208);
+  color: var(--color-accent-soft);
 }
 
 .mermaid-diagram-action:disabled {
@@ -670,9 +1289,9 @@ a.brand-mark:hover,
   display: grid;
   min-width: 0;
   place-items: center;
-  color: rgb(100 116 139);
+  color: var(--color-ink-faint);
   font-family: var(--font-mono);
-  font-size: 0.68rem;
+  font-size: var(--fs-meta);
   text-align: center;
 }
 
@@ -681,14 +1300,14 @@ a.brand-mark:hover,
 }
 
 .mermaid-diagram-error {
-  color: rgb(251 191 36);
+  color: var(--color-warn);
 }
 
 .mermaid-diagram-source {
   border-top: 1px solid rgb(255 255 255 / 0.055);
-  color: rgb(100 116 139);
+  color: var(--color-ink-faint);
   font-family: var(--font-mono);
-  font-size: 0.64rem;
+  font-size: var(--fs-meta);
 }
 
 .mermaid-diagram-source summary {
@@ -699,7 +1318,7 @@ a.brand-mark:hover,
 }
 
 .mermaid-diagram-source summary:hover {
-  color: rgb(167 139 250);
+  color: var(--color-ai);
 }
 
 .conversation-message-assistant .conversation-content .mermaid-diagram-source pre {
@@ -729,10 +1348,10 @@ a.brand-mark:hover,
   margin: auto;
   overflow: hidden;
   border: 1px solid rgb(148 163 184 / 0.2);
-  border-radius: 0.85rem;
+  border-radius: var(--r-lg);
   padding: 0;
   background: rgb(7 10 15);
-  color: rgb(226 232 240);
+  color: var(--color-ink);
   box-shadow: 0 30px 90px rgb(0 0 0 / 0.68);
 }
 
@@ -769,9 +1388,9 @@ a.brand-mark:hover,
 
 .mermaid-viewer-heading p {
   margin: 0 0 0.15rem;
-  color: rgb(52 211 153);
+  color: var(--color-accent);
   font-family: var(--font-mono);
-  font-size: 0.58rem;
+  font-size: var(--fs-meta);
   font-weight: 700;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -780,8 +1399,8 @@ a.brand-mark:hover,
 .mermaid-viewer-heading h2 {
   overflow: hidden;
   margin: 0;
-  color: rgb(241 245 249);
-  font-size: 0.9rem;
+  color: var(--color-ink-strong);
+  font-size: var(--fs-body);
   font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -798,9 +1417,9 @@ a.brand-mark:hover,
 .mermaid-viewer-zoom select {
   height: 2rem;
   border: 1px solid rgb(148 163 184 / 0.16);
-  border-radius: 0.45rem;
+  border-radius: var(--r-sm);
   background: rgb(15 23 42 / 0.82);
-  color: rgb(203 213 225);
+  color: var(--color-ink);
 }
 
 .mermaid-viewer-controls button {
@@ -814,7 +1433,7 @@ a.brand-mark:hover,
 .mermaid-viewer-zoom select:hover:not(:disabled) {
   border-color: rgb(52 211 153 / 0.34);
   background: rgb(16 185 129 / 0.09);
-  color: rgb(167 243 208);
+  color: var(--color-accent-soft);
 }
 
 .mermaid-viewer-controls button:disabled,
@@ -836,7 +1455,7 @@ a.brand-mark:hover,
   min-width: 5.2rem;
   padding: 0 1.65rem 0 0.65rem;
   font-family: var(--font-mono);
-  font-size: 0.68rem;
+  font-size: var(--fs-meta);
   font-weight: 650;
 }
 
@@ -848,7 +1467,7 @@ a.brand-mark:hover,
 }
 
 .mermaid-viewer-close {
-  color: rgb(148 163 184);
+  color: var(--color-ink-soft);
 }
 
 .mermaid-viewer-stage {
@@ -866,7 +1485,7 @@ a.brand-mark:hover,
 .mermaid-viewer-canvas {
   min-height: 100%;
   margin: 0 auto;
-  border-radius: 0.7rem;
+  border-radius: var(--r-lg);
   padding: clamp(0.75rem, 2vw, 1.75rem);
   background:
     radial-gradient(circle at 50% 0%, rgb(52 211 153 / 0.045), transparent 42%),
@@ -889,9 +1508,9 @@ a.brand-mark:hover,
   display: grid;
   width: 100%;
   place-items: center;
-  color: rgb(100 116 139);
+  color: var(--color-ink-faint);
   font-family: var(--font-mono);
-  font-size: 0.72rem;
+  font-size: var(--fs-caption);
   text-align: center;
 }
 
@@ -900,20 +1519,20 @@ a.brand-mark:hover,
 }
 
 .mermaid-viewer-canvas-error {
-  color: rgb(251 191 36);
+  color: var(--color-warn);
 }
 
 .mermaid-viewer-footer {
   border-top-style: solid;
   border-top-width: 1px;
   padding: 0.55rem 1rem;
-  color: rgb(100 116 139);
+  color: var(--color-ink-faint);
   font-family: var(--font-mono);
-  font-size: 0.61rem;
+  font-size: var(--fs-meta);
 }
 
 .mermaid-viewer-footer span:first-child {
-  color: rgb(167 243 208);
+  color: var(--color-accent-soft);
 }
 
 @media (max-width: 640px) {
@@ -946,8 +1565,8 @@ a.brand-mark:hover,
 /* Evidence-backed repository maps */
 .map-workspace {
   display: grid;
-  grid-template-columns: 19rem minmax(0, 1fr) 20rem;
-  height: calc(100vh - 4rem);
+  grid-template-columns: 20.5rem minmax(0, 1fr) 21rem;
+  height: calc(100dvh - 4rem);
   min-height: 34rem;
   background: rgb(5 8 13);
 }
@@ -971,9 +1590,9 @@ a.brand-mark:hover,
 .map-kicker,
 .map-section-heading p {
   margin: 0 0 0.25rem;
-  color: rgb(52 211 153);
+  color: var(--color-accent);
   font-family: var(--font-mono);
-  font-size: 0.58rem;
+  font-size: var(--fs-meta);
   font-weight: 750;
   letter-spacing: 0.13em;
   text-transform: uppercase;
@@ -981,16 +1600,16 @@ a.brand-mark:hover,
 
 .map-sidebar-heading h1 {
   margin: 0;
-  color: rgb(248 250 252);
-  font-size: 1.2rem;
+  color: var(--color-ink-strong);
+  font-size: var(--fs-title);
   font-weight: 700;
   letter-spacing: -0.025em;
 }
 
 .map-sidebar-heading > p:last-child {
   margin: 0.45rem 0 0;
-  color: rgb(100 116 139);
-  font-size: 0.72rem;
+  color: var(--color-ink-faint);
+  font-size: var(--fs-caption);
   line-height: 1.2rem;
 }
 
@@ -1002,9 +1621,9 @@ a.brand-mark:hover,
 
 .map-field > span:first-child,
 .map-field > label {
-  color: rgb(100 116 139);
+  color: var(--color-ink-faint);
   font-family: var(--font-mono);
-  font-size: 0.59rem;
+  font-size: var(--fs-meta);
   font-weight: 650;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -1014,15 +1633,15 @@ a.brand-mark:hover,
 .map-search-input {
   width: 100%;
   border: 1px solid rgb(148 163 184 / 0.12);
-  border-radius: 0.55rem;
+  border-radius: var(--r-md);
   background: rgb(15 23 42 / 0.58);
-  color: rgb(203 213 225);
+  color: var(--color-ink);
 }
 
 .map-field select {
   height: 2.35rem;
   padding: 0 2rem 0 0.7rem;
-  font-size: 0.72rem;
+  font-size: var(--fs-caption);
 }
 
 .map-view-switcher {
@@ -1034,11 +1653,11 @@ a.brand-mark:hover,
 .map-view-switcher button,
 .map-stage-actions button {
   border: 1px solid rgb(148 163 184 / 0.11);
-  border-radius: 0.48rem;
+  border-radius: var(--r-sm);
   background: rgb(15 23 42 / 0.48);
-  color: rgb(100 116 139);
+  color: var(--color-ink-faint);
   font-family: var(--font-mono);
-  font-size: 0.61rem;
+  font-size: var(--fs-meta);
   font-weight: 650;
   transition:
     border-color 150ms ease,
@@ -1055,7 +1674,7 @@ a.brand-mark:hover,
 .map-stage-actions button:hover:not(:disabled) {
   border-color: rgb(52 211 153 / 0.3);
   background: rgb(16 185 129 / 0.08);
-  color: rgb(167 243 208);
+  color: var(--color-accent-soft);
 }
 
 .map-search-input {
@@ -1085,13 +1704,13 @@ a.brand-mark:hover,
   min-width: 0;
   padding: 0.62rem 0;
   background: transparent;
-  color: rgb(226 232 240);
-  font-size: 0.7rem;
+  color: var(--color-ink);
+  font-size: var(--fs-caption);
   outline: none;
 }
 
 .map-search-input input::placeholder {
-  color: rgb(71 85 105);
+  color: var(--color-ink-faint);
 }
 
 .map-search-results {
@@ -1099,7 +1718,7 @@ a.brand-mark:hover,
   max-height: 11.5rem;
   overflow-y: auto;
   border: 1px solid rgb(148 163 184 / 0.1);
-  border-radius: 0.55rem;
+  border-radius: var(--r-md);
   background: rgb(8 13 24 / 0.94);
   box-shadow: 0 16px 32px rgb(0 0 0 / 0.22);
 }
@@ -1118,7 +1737,7 @@ a.brand-mark:hover,
   border-bottom: 1px solid rgb(148 163 184 / 0.07);
   padding: 0.55rem 0.65rem;
   background: transparent;
-  color: rgb(203 213 225);
+  color: var(--color-ink);
   text-align: left;
 }
 
@@ -1141,22 +1760,22 @@ a.brand-mark:hover,
 }
 
 .map-search-result strong {
-  font-size: 0.67rem;
+  font-size: var(--fs-meta);
   font-weight: 620;
 }
 
 .map-search-result span {
-  color: rgb(100 116 139);
+  color: var(--color-ink-faint);
   font-family: var(--font-mono);
-  font-size: 0.52rem;
+  font-size: var(--fs-meta);
   text-transform: uppercase;
 }
 
 .map-search-empty {
   margin: 0;
   padding: 0.65rem;
-  color: rgb(100 116 139);
-  font-size: 0.65rem;
+  color: var(--color-ink-faint);
+  font-size: var(--fs-meta);
 }
 
 .map-summary {
@@ -1175,8 +1794,8 @@ a.brand-mark:hover,
 .map-section-heading h2,
 .map-section-heading h3 {
   margin: 0;
-  color: rgb(203 213 225);
-  font-size: 0.75rem;
+  color: var(--color-ink);
+  font-size: var(--fs-caption);
   font-weight: 650;
 }
 
@@ -1184,9 +1803,9 @@ a.brand-mark:hover,
   border: 1px solid rgb(148 163 184 / 0.1);
   border-radius: 99px;
   padding: 0.18rem 0.42rem;
-  color: rgb(100 116 139);
+  color: var(--color-ink-faint);
   font-family: var(--font-mono);
-  font-size: 0.54rem;
+  font-size: var(--fs-meta);
 }
 
 .map-metrics {
@@ -1198,23 +1817,23 @@ a.brand-mark:hover,
 
 .map-metrics div {
   border: 1px solid rgb(148 163 184 / 0.08);
-  border-radius: 0.5rem;
+  border-radius: var(--r-sm);
   padding: 0.55rem;
   background: rgb(15 23 42 / 0.34);
 }
 
 .map-metrics dt {
-  color: rgb(71 85 105);
+  color: var(--color-ink-faint);
   font-family: var(--font-mono);
-  font-size: 0.53rem;
+  font-size: var(--fs-meta);
   text-transform: uppercase;
 }
 
 .map-metrics dd {
   margin: 0.15rem 0 0;
-  color: rgb(226 232 240);
+  color: var(--color-ink);
   font-family: var(--font-mono);
-  font-size: 0.78rem;
+  font-size: var(--fs-caption);
   font-weight: 700;
 }
 
@@ -1230,9 +1849,9 @@ a.brand-mark:hover,
   border-radius: 99px;
   padding: 0.22rem 0.45rem;
   background: rgb(139 92 246 / 0.055);
-  color: rgb(196 181 253);
+  color: var(--color-ai-soft);
   font-family: var(--font-mono);
-  font-size: 0.54rem;
+  font-size: var(--fs-meta);
 }
 
 .map-sidebar-actions {
@@ -1249,18 +1868,18 @@ a.brand-mark:hover,
   justify-content: center;
   gap: 0.35rem;
   border: 1px solid rgb(148 163 184 / 0.12);
-  border-radius: 0.5rem;
+  border-radius: var(--r-sm);
   padding: 0.48rem;
   background: rgb(15 23 42 / 0.48);
-  color: rgb(148 163 184);
+  color: var(--color-ink-soft);
   font-family: var(--font-mono);
-  font-size: 0.58rem;
+  font-size: var(--fs-meta);
   text-decoration: none;
 }
 
 .map-secondary-action:hover {
   border-color: rgb(52 211 153 / 0.28);
-  color: rgb(167 243 208);
+  color: var(--color-accent-soft);
 }
 
 .map-secondary-action svg {
@@ -1307,18 +1926,18 @@ a.brand-mark:hover,
   align-items: center;
   gap: 0.45rem;
   border: 1px solid rgb(148 163 184 / 0.1);
-  border-radius: 0.52rem;
+  border-radius: var(--r-sm);
   padding: 0.4rem 0.58rem;
   background: rgb(9 12 18 / 0.86);
-  color: rgb(100 116 139);
+  color: var(--color-ink-faint);
   font-family: var(--font-mono);
-  font-size: 0.57rem;
+  font-size: var(--fs-meta);
   backdrop-filter: blur(10px);
   pointer-events: auto;
 }
 
 .map-stage-toolbar strong {
-  color: rgb(148 163 184);
+  color: var(--color-ink-soft);
   font-weight: 600;
 }
 
@@ -1364,15 +1983,15 @@ a.brand-mark:hover,
 }
 
 .map-loading strong {
-  color: rgb(226 232 240);
-  font-size: 0.88rem;
+  color: var(--color-ink);
+  font-size: var(--fs-body);
 }
 
 .map-loading p {
   max-width: 25rem;
   margin: 0.35rem 0 0;
-  color: rgb(100 116 139);
-  font-size: 0.67rem;
+  color: var(--color-ink-faint);
+  font-size: var(--fs-meta);
   line-height: 1.1rem;
 }
 
@@ -1393,12 +2012,12 @@ a.brand-mark:hover,
   gap: 0.5rem;
   max-width: calc(100% - 1.6rem);
   border: 1px solid rgb(148 163 184 / 0.09);
-  border-radius: 0.5rem;
+  border-radius: var(--r-sm);
   padding: 0.42rem 0.55rem;
   background: rgb(9 12 18 / 0.84);
-  color: rgb(100 116 139);
+  color: var(--color-ink-faint);
   font-family: var(--font-mono);
-  font-size: 0.53rem;
+  font-size: var(--fs-meta);
   backdrop-filter: blur(8px);
   pointer-events: none;
 }
@@ -1458,24 +2077,24 @@ a.brand-mark:hover,
   margin-bottom: 0.8rem;
   place-items: center;
   border: 1px solid rgb(52 211 153 / 0.16);
-  border-radius: 0.65rem;
+  border-radius: var(--r-md);
   background: rgb(16 185 129 / 0.06);
-  color: rgb(52 211 153);
+  color: var(--color-accent);
 }
 
 .map-inspector-empty h2,
 .map-inspector-content h2 {
   margin: 0;
-  color: rgb(226 232 240);
-  font-size: 0.9rem;
+  color: var(--color-ink);
+  font-size: var(--fs-body);
   font-weight: 650;
 }
 
 .map-inspector-empty p,
 .map-inspector-content > p {
   margin: 0.4rem 0 0;
-  color: rgb(100 116 139);
-  font-size: 0.68rem;
+  color: var(--color-ink-faint);
+  font-size: var(--fs-meta);
   line-height: 1.1rem;
 }
 
@@ -1486,9 +2105,9 @@ a.brand-mark:hover,
   border-radius: 99px;
   padding: 0.2rem 0.45rem;
   background: rgb(16 185 129 / 0.06);
-  color: rgb(110 231 183);
+  color: var(--color-accent-soft);
   font-family: var(--font-mono);
-  font-size: 0.54rem;
+  font-size: var(--fs-meta);
   font-weight: 700;
   text-transform: uppercase;
 }
@@ -1507,18 +2126,18 @@ a.brand-mark:hover,
 }
 
 .map-inspector-meta dt {
-  color: rgb(71 85 105);
+  color: var(--color-ink-faint);
   font-family: var(--font-mono);
-  font-size: 0.52rem;
+  font-size: var(--fs-meta);
   text-transform: uppercase;
 }
 
 .map-inspector-meta dd {
   overflow-wrap: anywhere;
   margin: 0;
-  color: rgb(148 163 184);
+  color: var(--color-ink-soft);
   font-family: var(--font-mono);
-  font-size: 0.62rem;
+  font-size: var(--fs-meta);
 }
 
 .map-evidence {
@@ -1539,7 +2158,7 @@ a.brand-mark:hover,
   display: grid;
   gap: 0.22rem;
   border: 1px solid rgb(148 163 184 / 0.08);
-  border-radius: 0.5rem;
+  border-radius: var(--r-sm);
   padding: 0.55rem;
   background: rgb(15 23 42 / 0.34);
   text-decoration: none;
@@ -1552,17 +2171,17 @@ a.brand-mark:hover,
 
 .map-evidence strong {
   overflow: hidden;
-  color: rgb(203 213 225);
+  color: var(--color-ink);
   font-family: var(--font-mono);
-  font-size: 0.59rem;
+  font-size: var(--fs-meta);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .map-evidence span {
-  color: rgb(71 85 105);
+  color: var(--color-ink-faint);
   font-family: var(--font-mono);
-  font-size: 0.52rem;
+  font-size: var(--fs-meta);
 }
 
 @media (max-width: 1100px) {
@@ -1586,6 +2205,14 @@ a.brand-mark:hover,
   .map-inspector[data-open="true"] {
     transform: translateX(0);
   }
+
+  .map-inspector .evidence-drawer-close {
+    display: block;
+  }
+
+  .map-stage .evidence-drawer-toggle {
+    display: inline-flex;
+  }
 }
 
 @media (max-width: 720px) {
@@ -1599,9 +2226,16 @@ a.brand-mark:hover,
     border-bottom: 1px solid rgb(148 163 184 / 0.09);
   }
 
-  .map-sidebar-heading > p:last-child,
-  .map-summary {
+  .map-sidebar-heading > p:last-child {
     display: none;
+  }
+
+  /*
+   * The snapshot counts stay visible; they are the only confirmation that the
+   * graph reflects the whole selection. They reflow instead of disappearing.
+   */
+  .map-metrics {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
   .map-stage {
@@ -1611,17 +2245,13 @@ a.brand-mark:hover,
   .map-stage-toolbar {
     align-items: flex-start;
   }
-
-  .map-stage-toolbar > div:first-child {
-    display: none;
-  }
 }
 
 .conversation-message-assistant .conversation-content blockquote {
   margin: 0.8rem 0;
   border-left: 2px solid rgb(167 139 250 / 0.5);
   padding: 0.15rem 0 0.15rem 0.8rem;
-  color: rgb(148 163 184);
+  color: var(--color-ink-soft);
 }
 
 .conversation-message-assistant .conversation-content blockquote p {
@@ -1641,7 +2271,7 @@ a.brand-mark:hover,
   margin: 0.8rem 0;
   overflow-x: auto;
   border-collapse: collapse;
-  font-size: 0.78rem;
+  font-size: var(--fs-caption);
 }
 
 .conversation-message-assistant .conversation-content th,
@@ -1653,11 +2283,11 @@ a.brand-mark:hover,
 
 .conversation-message-assistant .conversation-content th {
   background: rgb(15 23 42 / 0.62);
-  color: rgb(241 245 249);
+  color: var(--color-ink-strong);
 }
 
 .conversation-source-link {
-  color: rgb(110 231 183);
+  color: var(--color-accent-soft);
   text-decoration: underline;
   text-decoration-color: rgb(52 211 153 / 0.3);
   text-underline-offset: 0.18rem;
@@ -1679,9 +2309,9 @@ a.brand-mark:hover,
   border-radius: 999px;
   padding: 0.25rem 0.5rem;
   background: rgb(16 185 129 / 0.055);
-  color: rgb(110 231 183);
+  color: var(--color-accent-soft);
   font-family: var(--font-mono);
-  font-size: 0.61rem;
+  font-size: var(--fs-meta);
   text-overflow: ellipsis;
   text-decoration: none;
   white-space: nowrap;
@@ -1697,7 +2327,7 @@ a.brand-mark:hover,
   align-items: stretch;
   overflow: hidden;
   border: 1px solid rgb(255 255 255 / 0.065);
-  border-radius: 0.58rem;
+  border-radius: var(--r-md);
   background: rgb(0 0 0 / 0.14);
 }
 
@@ -1716,8 +2346,8 @@ a.brand-mark:hover,
 }
 
 .conversation-telemetry-item > span:first-child {
-  color: rgb(71 85 105);
-  font-size: 0.52rem;
+  color: var(--color-ink-faint);
+  font-size: var(--fs-meta);
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
@@ -1725,16 +2355,16 @@ a.brand-mark:hover,
 .conversation-telemetry-item strong {
   overflow: hidden;
   margin-top: 0.12rem;
-  color: rgb(148 163 184);
+  color: var(--color-ink-soft);
   font-family: var(--font-mono);
-  font-size: 0.61rem;
+  font-size: var(--fs-meta);
   font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .conversation-telemetry-active {
-  color: rgb(110 231 183) !important;
+  color: var(--color-accent-soft) !important;
 }
 
 .conversation-telemetry-active::before {
@@ -1805,15 +2435,15 @@ a.brand-mark:hover,
   border-top: 1px solid rgb(255 255 255 / 0.055);
   padding-top: 0.55rem;
   font-family: var(--font-mono);
-  font-size: 0.62rem;
+  font-size: var(--fs-meta);
 }
 
 .conversation-turn-status-interrupted {
-  color: rgb(251 191 36);
+  color: var(--color-warn);
 }
 
 .conversation-turn-status-error {
-  color: rgb(253 164 175);
+  color: var(--color-danger);
 }
 
 .conversation-image-gallery {
@@ -1823,16 +2453,12 @@ a.brand-mark:hover,
   margin-top: 0.7rem;
 }
 
-.conversation-image-gallery-input {
-  grid-template-columns: repeat(auto-fit, minmax(7rem, 10rem));
-  justify-content: end;
-}
 
 .conversation-image-card {
   min-width: 0;
   overflow: hidden;
   border: 1px solid rgb(255 255 255 / 0.08);
-  border-radius: 0.62rem;
+  border-radius: var(--r-md);
   background: rgb(2 6 23 / 0.65);
 }
 
@@ -1845,9 +2471,6 @@ a.brand-mark:hover,
     linear-gradient(-45deg, rgb(255 255 255 / 0.018) 25%, transparent 25%) 0 6px / 12px 12px;
 }
 
-.conversation-image-gallery-output .conversation-image-card > a {
-  min-height: 12rem;
-}
 
 .conversation-image-card img {
   display: block;
@@ -1863,9 +2486,9 @@ a.brand-mark:hover,
   gap: 0.7rem;
   border-top: 1px solid rgb(255 255 255 / 0.055);
   padding: 0.45rem 0.55rem;
-  color: rgb(100 116 139);
+  color: var(--color-ink-faint);
   font-family: var(--font-mono);
-  font-size: 0.59rem;
+  font-size: var(--fs-meta);
 }
 
 .conversation-image-card figcaption span {
@@ -1876,7 +2499,7 @@ a.brand-mark:hover,
 
 .conversation-image-card figcaption a {
   flex: none;
-  color: rgb(110 231 183);
+  color: var(--color-accent-soft);
   text-decoration: none;
 }
 
@@ -1904,11 +2527,11 @@ a.brand-mark:hover,
   width: 100%;
   resize: vertical;
   border: 1px solid rgb(255 255 255 / 0.075);
-  border-radius: 0.7rem;
+  border-radius: var(--r-lg);
   padding: 0.75rem 0.85rem;
   background: rgb(0 0 0 / 0.18);
-  color: white;
-  font-size: 0.86rem;
+  color: var(--color-ink-strong);
+  font-size: var(--fs-body);
   line-height: 1.4rem;
   outline: none;
 }
@@ -1919,7 +2542,7 @@ a.brand-mark:hover,
 }
 
 .conversation-input::placeholder {
-  color: rgb(71 85 105);
+  color: var(--color-ink-faint);
 }
 
 .conversation-attachment-tray {
@@ -1940,7 +2563,7 @@ a.brand-mark:hover,
   gap: 0.45rem;
   overflow: hidden;
   border: 1px solid rgb(52 211 153 / 0.14);
-  border-radius: 0.58rem;
+  border-radius: var(--r-md);
   padding: 0.3rem;
   background: rgb(16 185 129 / 0.05);
 }
@@ -1948,7 +2571,7 @@ a.brand-mark:hover,
 .conversation-attachment img {
   width: 2.5rem;
   height: 2.5rem;
-  border-radius: 0.38rem;
+  border-radius: var(--r-xs);
   object-fit: cover;
 }
 
@@ -1966,15 +2589,15 @@ a.brand-mark:hover,
 }
 
 .conversation-attachment strong {
-  color: rgb(203 213 225);
-  font-size: 0.62rem;
+  color: var(--color-ink);
+  font-size: var(--fs-meta);
   font-weight: 600;
 }
 
 .conversation-attachment span {
   margin-top: 0.12rem;
-  color: rgb(71 85 105);
-  font-size: 0.56rem;
+  color: var(--color-ink-faint);
+  font-size: var(--fs-meta);
 }
 
 .conversation-attachment button {
@@ -1983,58 +2606,28 @@ a.brand-mark:hover,
   height: 1.45rem;
   place-items: center;
   border-radius: 999px;
-  color: rgb(100 116 139);
-  font-size: 0.9rem;
+  color: var(--color-ink-faint);
+  font-size: var(--fs-body);
   transition: 150ms ease;
 }
 
 .conversation-attachment button:hover {
   background: rgb(251 113 133 / 0.1);
-  color: rgb(253 164 175);
+  color: var(--color-danger);
 }
 
-.conversation-attach-button {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  min-height: 2.35rem;
-  border: 1px solid rgb(52 211 153 / 0.13);
-  border-radius: 0.58rem;
-  padding: 0.4rem 0.6rem;
-  background: rgb(16 185 129 / 0.045);
-  color: rgb(110 231 183);
-  font-size: 0.68rem;
-  transition: 150ms ease;
-}
 
-.conversation-attach-button svg {
-  width: 0.9rem;
-  height: 0.9rem;
-  fill: none;
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 1.8;
-}
 
-.conversation-attach-button:hover:not(:disabled) {
-  border-color: rgb(52 211 153 / 0.32);
-  background: rgb(16 185 129 / 0.1);
-}
 
-.conversation-attach-button:disabled {
-  cursor: not-allowed;
-  opacity: 0.38;
-}
 
 .conversation-interrupt-button {
   min-height: 2.35rem;
   border: 1px solid rgb(251 113 133 / 0.28);
-  border-radius: 0.58rem;
+  border-radius: var(--r-md);
   padding: 0.45rem 0.78rem;
   background: rgb(244 63 94 / 0.07);
-  color: rgb(253 164 175);
-  font-size: 0.72rem;
+  color: var(--color-danger);
+  font-size: var(--fs-caption);
   font-weight: 600;
   transition: 150ms ease;
 }
@@ -2054,7 +2647,7 @@ a.brand-mark:hover,
 }
 
 .conversation-image-feedback {
-  color: rgb(251 191 36);
+  color: var(--color-warn);
 }
 
 .conversation-form-drop-target {
@@ -2068,14 +2661,14 @@ a.brand-mark:hover,
   gap: 0.45rem;
   min-height: 2.35rem;
   border: 1px solid rgb(255 255 255 / 0.065);
-  border-radius: 0.58rem;
+  border-radius: var(--r-md);
   padding: 0.4rem 0.6rem;
   background: rgb(0 0 0 / 0.13);
 }
 
 .conversation-control span {
-  color: rgb(71 85 105);
-  font-size: 0.64rem;
+  color: var(--color-ink-faint);
+  font-size: var(--fs-meta);
   text-transform: uppercase;
 }
 
@@ -2085,9 +2678,9 @@ a.brand-mark:hover,
   max-width: 15rem;
   border: 0;
   background: transparent;
-  color: rgb(203 213 225);
+  color: var(--color-ink);
   font-family: var(--font-mono);
-  font-size: 0.68rem;
+  font-size: var(--fs-meta);
   outline: 0;
 }
 
@@ -2103,14 +2696,14 @@ a.brand-mark:hover,
   place-items: center;
   border-radius: 999px;
   background: rgb(148 163 184 / 0.1);
-  color: rgb(148 163 184);
+  color: var(--color-ink-soft);
   font-family: var(--font-mono);
-  font-size: 0.58rem;
+  font-size: var(--fs-meta);
 }
 
 .debug-toggle-debug-error [data-debug-count] {
   background: rgb(251 113 133 / 0.14);
-  color: rgb(253 164 175);
+  color: var(--color-danger);
 }
 
 .debug-window {
@@ -2124,7 +2717,7 @@ a.brand-mark:hover,
   overflow: hidden;
   flex-direction: column;
   border: 1px solid rgb(167 139 250 / 0.24);
-  border-radius: 0.9rem;
+  border-radius: var(--r-lg);
   background: rgb(8 11 16 / 0.98);
   box-shadow:
     0 26px 90px rgb(0 0 0 / 0.65),
@@ -2147,26 +2740,26 @@ a.brand-mark:hover,
 
 .debug-window-kicker {
   margin-bottom: 0.1rem;
-  color: rgb(139 92 246);
-  font-size: 0.58rem;
+  color: var(--color-ai);
+  font-size: var(--fs-meta);
   font-weight: 700;
   letter-spacing: 0.13em;
   text-transform: uppercase;
 }
 
 .debug-window-header h2 {
-  color: rgb(226 232 240);
-  font-size: 0.84rem;
+  color: var(--color-ink);
+  font-size: var(--fs-body);
   font-weight: 650;
 }
 
 .debug-action,
 .debug-close {
   border: 1px solid rgb(255 255 255 / 0.07);
-  border-radius: 0.4rem;
+  border-radius: var(--r-xs);
   background: rgb(255 255 255 / 0.025);
-  color: rgb(100 116 139);
-  font-size: 0.64rem;
+  color: var(--color-ink-faint);
+  font-size: var(--fs-meta);
   transition: 150ms ease;
 }
 
@@ -2179,13 +2772,13 @@ a.brand-mark:hover,
   width: 1.7rem;
   height: 1.7rem;
   place-items: center;
-  font-size: 1rem;
+  font-size: var(--fs-body-lg);
 }
 
 .debug-action:hover,
 .debug-close:hover {
   border-color: rgb(167 139 250 / 0.25);
-  color: rgb(221 214 254);
+  color: var(--color-ai-soft);
 }
 
 .debug-window-summary {
@@ -2195,9 +2788,9 @@ a.brand-mark:hover,
   gap: 0.4rem;
   border-bottom: 1px solid rgb(255 255 255 / 0.05);
   padding: 0.55rem 0.85rem;
-  color: rgb(71 85 105);
+  color: var(--color-ink-faint);
   font-family: var(--font-mono);
-  font-size: 0.59rem;
+  font-size: var(--fs-meta);
 }
 
 .debug-window-summary .status-dot {
@@ -2218,37 +2811,37 @@ a.brand-mark:hover,
   gap: 0.5rem;
   border-bottom: 1px solid rgb(255 255 255 / 0.035);
   padding: 0.5rem 0.25rem;
-  color: rgb(148 163 184);
+  color: var(--color-ink-soft);
   font-family: var(--font-mono);
-  font-size: 0.64rem;
+  font-size: var(--fs-meta);
   line-height: 1rem;
 }
 
 .debug-entry time {
-  color: rgb(71 85 105);
+  color: var(--color-ink-faint);
 }
 
 .debug-entry-level {
-  font-size: 0.57rem;
+  font-size: var(--fs-meta);
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
 
 .debug-entry-info .debug-entry-level {
-  color: rgb(96 165 250);
+  color: var(--color-ai-soft);
 }
 
 .debug-entry-warn .debug-entry-level {
-  color: rgb(251 191 36);
+  color: var(--color-warn);
 }
 
 .debug-entry-error .debug-entry-level {
-  color: rgb(251 113 133);
+  color: var(--color-danger);
 }
 
 .debug-entry-event {
-  color: rgb(203 213 225);
+  color: var(--color-ink);
   overflow-wrap: anywhere;
 }
 
@@ -2258,15 +2851,15 @@ a.brand-mark:hover,
   overflow-x: auto;
   border-left: 1px solid rgb(167 139 250 / 0.16);
   padding-left: 0.55rem;
-  color: rgb(100 116 139);
+  color: var(--color-ink-faint);
   white-space: pre-wrap;
 }
 
 .debug-empty {
   padding: 2.4rem 1rem;
-  color: rgb(71 85 105);
+  color: var(--color-ink-faint);
   font-family: var(--font-mono);
-  font-size: 0.68rem;
+  font-size: var(--fs-meta);
   text-align: center;
 }
 
@@ -2280,11 +2873,11 @@ a.brand-mark:hover,
 .search-button {
   align-self: center;
   border: 1px solid rgb(52 211 153 / 0.22);
-  border-radius: 0.7rem;
+  border-radius: var(--r-lg);
   padding: 0.72rem 1rem;
   background: rgb(16 185 129 / 0.14);
-  color: rgb(167 243 208);
-  font-size: 0.78rem;
+  color: var(--color-accent-soft);
+  font-size: var(--fs-caption);
   font-weight: 600;
   transition: 160ms ease;
 }
@@ -2292,7 +2885,7 @@ a.brand-mark:hover,
 .search-button:hover {
   border-color: rgb(52 211 153 / 0.45);
   background: rgb(16 185 129 / 0.21);
-  color: white;
+  color: var(--color-ink-strong);
 }
 
 .filter-field {
@@ -2302,14 +2895,14 @@ a.brand-mark:hover,
   gap: 0.5rem;
   min-width: 0;
   border: 1px solid rgb(255 255 255 / 0.055);
-  border-radius: 0.55rem;
+  border-radius: var(--r-md);
   background: rgb(0 0 0 / 0.17);
   padding: 0.45rem 0.65rem;
 }
 
 .filter-field > span {
-  color: rgb(100 116 139);
-  font-size: 0.67rem;
+  color: var(--color-ink-faint);
+  font-size: var(--fs-meta);
   white-space: nowrap;
 }
 
@@ -2320,9 +2913,9 @@ a.brand-mark:hover,
   appearance: none;
   border: 0;
   background: transparent;
-  color: rgb(203 213 225);
+  color: var(--color-ink);
   font-family: var(--font-mono);
-  font-size: 0.68rem;
+  font-size: var(--fs-meta);
   outline: 0;
 }
 
@@ -2333,7 +2926,7 @@ a.brand-mark:hover,
 .result-card {
   overflow: hidden;
   border: 1px solid rgb(255 255 255 / 0.07);
-  border-radius: 0.8rem;
+  border-radius: var(--r-lg);
   background: rgb(255 255 255 / 0.025);
   box-shadow: 0 12px 36px rgb(0 0 0 / 0.12);
 }
@@ -2360,13 +2953,13 @@ a.brand-mark:hover,
   border-radius: 0.18rem;
   background: rgb(52 211 153 / 0.2);
   box-shadow: 0 0 0 1px rgb(52 211 153 / 0.08);
-  color: rgb(209 250 229);
+  color: var(--color-accent-soft);
 }
 
 .result-state {
   min-height: 13rem;
   border: 1px dashed rgb(255 255 255 / 0.08);
-  border-radius: 1rem;
+  border-radius: var(--r-xl);
   display: grid;
   align-content: center;
   justify-items: center;
@@ -2385,7 +2978,7 @@ a.brand-mark:hover,
 
 .query-chip:hover {
   border-color: rgb(52 211 153 / 0.25);
-  color: rgb(167 243 208);
+  color: var(--color-accent-soft);
 }
 
 .icon-button {
@@ -2394,33 +2987,33 @@ a.brand-mark:hover,
   height: 2.2rem;
   place-items: center;
   border: 1px solid rgb(255 255 255 / 0.08);
-  border-radius: 0.6rem;
+  border-radius: var(--r-md);
   background: rgb(255 255 255 / 0.025);
-  color: rgb(148 163 184);
+  color: var(--color-ink-soft);
   transition: 140ms ease;
 }
 
 .icon-button:hover {
   border-color: rgb(52 211 153 / 0.25);
-  color: rgb(110 231 183);
+  color: var(--color-accent-soft);
 }
 
 .metric {
   display: grid;
   gap: 0.15rem;
   border: 1px solid rgb(255 255 255 / 0.055);
-  border-radius: 0.65rem;
+  border-radius: var(--r-md);
   padding: 0.65rem;
   background: rgb(0 0 0 / 0.14);
 }
 
 .metric strong {
-  font-size: 0.95rem;
+  font-size: var(--fs-body-lg);
 }
 
 .metric span {
-  color: rgb(71 85 105);
-  font-size: 0.62rem;
+  color: var(--color-ink-faint);
+  font-size: var(--fs-meta);
   text-transform: uppercase;
   letter-spacing: 0.08em;
 }
@@ -2448,7 +3041,7 @@ a.brand-mark:hover,
   height: 100%;
   overflow-y: auto;
   border: 1px solid rgb(255 255 255 / 0.09);
-  border-radius: 1rem;
+  border-radius: var(--r-xl);
   background: rgb(9 11 15 / 0.97);
   box-shadow: 0 28px 90px rgb(0 0 0 / 0.48);
   backdrop-filter: blur(22px);
@@ -2473,8 +3066,8 @@ a.brand-mark:hover,
   padding: 0.55rem 0.72rem;
   background: rgb(12 15 20 / 0.97);
   box-shadow: -12px 14px 36px rgb(0 0 0 / 0.28);
-  color: rgb(148 163 184);
-  font-size: 0.68rem;
+  color: var(--color-ink-soft);
+  font-size: var(--fs-meta);
   font-weight: 600;
   transition: color 150ms ease, border-color 150ms ease, background-color 150ms ease;
   white-space: nowrap;
@@ -2485,7 +3078,7 @@ a.brand-mark:hover,
 .repository-drawer[data-expanded="true"] .repository-drawer-toggle {
   border-color: rgb(52 211 153 / 0.28);
   background: rgb(13 22 22 / 0.98);
-  color: rgb(167 243 208);
+  color: var(--color-accent-soft);
 }
 
 .repository-drawer-toggle svg {
@@ -2511,9 +3104,9 @@ a.brand-mark:hover,
   justify-content: center;
   border-radius: 999px;
   background: rgb(52 211 153 / 0.1);
-  color: rgb(110 231 183);
+  color: var(--color-accent-soft);
   font-family: var(--font-mono);
-  font-size: 0.58rem;
+  font-size: var(--fs-meta);
   font-weight: 600;
 }
 
@@ -2538,8 +3131,8 @@ a.brand-mark:hover,
   border-radius: 999px;
   padding: 0.22rem 0.45rem;
   background: rgb(255 255 255 / 0.04);
-  color: rgb(100 116 139);
-  font-size: 0.58rem;
+  color: var(--color-ink-faint);
+  font-size: var(--fs-meta);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -2554,13 +3147,13 @@ a.brand-mark:hover,
 
 .status-ready {
   background: rgb(52 211 153 / 0.08);
-  color: rgb(110 231 183 / 0.8);
+  color: var(--color-accent-soft);
 }
 
 .status-indexing,
 .status-pending {
   background: rgb(251 191 36 / 0.08);
-  color: rgb(252 211 77 / 0.8);
+  color: var(--color-warn);
 }
 
 .status-indexing i {
@@ -2569,7 +3162,7 @@ a.brand-mark:hover,
 
 .status-error {
   background: rgb(251 113 133 / 0.08);
-  color: rgb(253 164 175 / 0.8);
+  color: var(--color-danger);
 }
 
 .secondary-button {
@@ -2577,11 +3170,11 @@ a.brand-mark:hover,
   align-items: center;
   min-height: 2rem;
   border: 1px solid rgb(255 255 255 / 0.08);
-  border-radius: 0.55rem;
+  border-radius: var(--r-md);
   padding: 0.4rem 0.7rem;
   background: rgb(255 255 255 / 0.025);
-  color: rgb(148 163 184);
-  font-size: 0.7rem;
+  color: var(--color-ink-soft);
+  font-size: var(--fs-caption);
   font-weight: 500;
   text-decoration: none;
   transition: 140ms ease;
@@ -2589,14 +3182,14 @@ a.brand-mark:hover,
 
 .secondary-button:hover {
   border-color: rgb(52 211 153 / 0.25);
-  color: rgb(167 243 208);
+  color: var(--color-accent-soft);
 }
 
 .source-viewer {
   overflow: auto;
   max-height: calc(100vh - 10.5rem);
   border: 1px solid rgb(255 255 255 / 0.075);
-  border-radius: 0.75rem;
+  border-radius: var(--r-lg);
   background: #0c0f14;
   box-shadow: 0 24px 80px rgb(0 0 0 / 0.24);
 }
@@ -2616,7 +3209,7 @@ a.brand-mark:hover,
 .source-line-focused .source-line-number {
   box-shadow: inset 3px 0 rgb(52 211 153 / 0.75);
   background: #101b1a;
-  color: rgb(110 231 183);
+  color: var(--color-accent-soft);
 }
 
 .source-line-number {
@@ -2626,9 +3219,9 @@ a.brand-mark:hover,
   border-right: 1px solid rgb(255 255 255 / 0.05);
   padding: 0.12rem 0.85rem;
   background: #0c0f14;
-  color: rgb(51 65 85);
+  color: var(--color-ink-faint);
   font-family: var(--font-mono);
-  font-size: 0.68rem;
+  font-size: var(--fs-meta);
   line-height: 1.55rem;
   text-align: right;
   text-decoration: none;
@@ -2641,16 +3234,16 @@ a.brand-mark:hover,
 }
 
 .source-line-number:hover {
-  color: rgb(52 211 153);
+  color: var(--color-accent);
 }
 
 .source-code {
   display: block;
   min-width: max-content;
   padding: 0.12rem 1rem;
-  color: rgb(203 213 225);
+  color: var(--color-ink);
   font-family: var(--font-mono);
-  font-size: 0.76rem;
+  font-size: var(--fs-caption);
   line-height: 1.55rem;
   white-space: pre;
 }
@@ -2660,7 +3253,7 @@ a.brand-mark:hover,
 .hljs-literal,
 .hljs-section,
 .hljs-link {
-  color: #c4b5fd;
+  color: var(--color-ai-soft);
 }
 
 .hljs-string,
@@ -2674,20 +3267,20 @@ a.brand-mark:hover,
 .hljs-variable,
 .hljs-template-tag,
 .hljs-template-variable {
-  color: #86efac;
+  color: var(--color-accent-soft);
 }
 
 .hljs-comment,
 .hljs-quote,
 .hljs-deletion,
 .hljs-meta {
-  color: #64748b;
+  color: var(--color-ink-faint);
 }
 
 .hljs-number,
 .hljs-regexp,
 .hljs-literal {
-  color: #fbbf24;
+  color: var(--color-warn);
 }
 
 .htmx-indicator {
@@ -2835,7 +3428,7 @@ a.brand-mark:hover,
   flex: none;
   place-items: center;
   border: 1px solid rgb(52 211 153 / 0.16);
-  border-radius: 0.6rem;
+  border-radius: var(--r-md);
   background: rgb(16 185 129 / 0.055);
 }
 
@@ -2846,8 +3439,8 @@ a.brand-mark:hover,
 }
 
 .conversation-history-heading p {
-  color: rgb(71 85 105);
-  font-size: 0.54rem;
+  color: var(--color-ink-faint);
+  font-size: var(--fs-meta);
   font-weight: 700;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -2855,8 +3448,8 @@ a.brand-mark:hover,
 
 .conversation-history-heading h1 {
   margin-top: 0.08rem;
-  color: rgb(226 232 240);
-  font-size: 0.84rem;
+  color: var(--color-ink);
+  font-size: var(--fs-body);
   font-weight: 650;
 }
 
@@ -2866,15 +3459,15 @@ a.brand-mark:hover,
   height: 1.8rem;
   flex: none;
   place-items: center;
-  border-radius: 0.5rem;
-  color: rgb(100 116 139);
-  font-size: 1.1rem;
+  border-radius: var(--r-sm);
+  color: var(--color-ink-faint);
+  font-size: var(--fs-title);
   transition: 150ms ease;
 }
 
 .chat-panel-close:hover {
   background: rgb(255 255 255 / 0.055);
-  color: rgb(226 232 240);
+  color: var(--color-ink);
 }
 
 .conversation-history-header .chat-panel-close {
@@ -2888,11 +3481,11 @@ a.brand-mark:hover,
   gap: 0.55rem;
   margin: 0.35rem 0.7rem 0.55rem;
   border: 1px solid rgb(52 211 153 / 0.18);
-  border-radius: 0.62rem;
+  border-radius: var(--r-md);
   padding: 0.55rem 0.65rem;
   background: rgb(16 185 129 / 0.075);
-  color: rgb(167 243 208);
-  font-size: 0.7rem;
+  color: var(--color-accent-soft);
+  font-size: var(--fs-caption);
   font-weight: 650;
   text-align: left;
   transition: 150ms ease;
@@ -2927,9 +3520,9 @@ a.brand-mark:hover,
 
 .conversation-new-button kbd {
   margin-left: auto;
-  color: rgb(71 85 105);
+  color: var(--color-ink-faint);
   font-family: var(--font-mono);
-  font-size: 0.54rem;
+  font-size: var(--fs-meta);
   font-weight: 500;
 }
 
@@ -2940,16 +3533,16 @@ a.brand-mark:hover,
   gap: 0.45rem;
   margin: 0 0.7rem 0.5rem;
   border: 1px solid rgb(255 255 255 / 0.06);
-  border-radius: 0.58rem;
+  border-radius: var(--r-md);
   padding: 0.42rem 0.55rem;
   background: rgb(0 0 0 / 0.16);
-  color: rgb(71 85 105);
+  color: var(--color-ink-faint);
   transition: 150ms ease;
 }
 
 .conversation-history-search:focus-within {
   border-color: rgb(167 139 250 / 0.25);
-  color: rgb(148 163 184);
+  color: var(--color-ink-soft);
   box-shadow: 0 0 0 3px rgb(139 92 246 / 0.045);
 }
 
@@ -2958,13 +3551,13 @@ a.brand-mark:hover,
   flex: 1;
   border: 0;
   background: transparent;
-  color: rgb(203 213 225);
-  font-size: 0.68rem;
+  color: var(--color-ink);
+  font-size: var(--fs-meta);
   outline: 0;
 }
 
 .conversation-history-search input::placeholder {
-  color: rgb(71 85 105);
+  color: var(--color-ink-faint);
 }
 
 .conversation-history-scroll {
@@ -2976,8 +3569,8 @@ a.brand-mark:hover,
 
 .conversation-history-group-label {
   padding: 0.25rem 0.55rem 0.35rem;
-  color: rgb(71 85 105);
-  font-size: 0.54rem;
+  color: var(--color-ink-faint);
+  font-size: var(--fs-meta);
   font-weight: 700;
   letter-spacing: 0.09em;
   text-transform: uppercase;
@@ -2995,7 +3588,7 @@ a.brand-mark:hover,
   display: grid;
   min-width: 0;
   border: 0;
-  border-radius: 0.58rem;
+  border-radius: var(--r-md);
   padding: 0;
   transition: background 150ms ease;
 }
@@ -3031,16 +3624,16 @@ a.brand-mark:hover,
 }
 
 .conversation-history-open strong {
-  color: rgb(203 213 225);
-  font-size: 0.7rem;
+  color: var(--color-ink);
+  font-size: var(--fs-caption);
   font-weight: 580;
 }
 
 .conversation-history-open span {
   margin-top: 0.2rem;
-  color: rgb(71 85 105);
+  color: var(--color-ink-faint);
   font-family: var(--font-sans);
-  font-size: 0.56rem;
+  font-size: var(--fs-meta);
 }
 
 .conversation-history-actions {
@@ -3066,14 +3659,14 @@ a.brand-mark:hover,
   height: 1.65rem;
   place-items: center;
   overflow: hidden;
-  border-radius: 0.42rem;
-  color: rgb(100 116 139);
+  border-radius: var(--r-xs);
+  color: var(--color-ink-faint);
   font-size: 0;
 }
 
 .conversation-history-actions button::before {
   color: currentColor;
-  font-size: 0.72rem;
+  font-size: var(--fs-caption);
   line-height: 1;
 }
 
@@ -3083,25 +3676,25 @@ a.brand-mark:hover,
 
 .conversation-history-actions button:last-child::before {
   content: "×";
-  font-size: 1rem;
+  font-size: var(--fs-body-lg);
 }
 
 .conversation-history-actions button:hover {
   background: rgb(139 92 246 / 0.12);
-  color: rgb(196 181 253);
+  color: var(--color-ai-soft);
 }
 
 .conversation-history-actions button:last-child:hover {
   background: rgb(244 63 94 / 0.1);
-  color: rgb(253 164 175);
+  color: var(--color-danger);
 }
 
 .conversation-history-actions button[data-confirm-delete="true"] {
   width: auto;
   padding: 0 0.45rem;
   background: rgb(244 63 94 / 0.1);
-  color: rgb(253 164 175);
-  font-size: 0.54rem;
+  color: var(--color-danger);
+  font-size: var(--fs-meta);
 }
 
 .conversation-history-actions button[data-confirm-delete="true"]::before {
@@ -3121,8 +3714,8 @@ a.brand-mark:hover,
 
 .conversation-history-empty {
   padding: 1.5rem 0.8rem;
-  color: rgb(71 85 105);
-  font-size: 0.64rem;
+  color: var(--color-ink-faint);
+  font-size: var(--fs-meta);
 }
 
 .conversation-history-footer {
@@ -3132,8 +3725,8 @@ a.brand-mark:hover,
   gap: 0.35rem;
   border-top: 1px solid rgb(255 255 255 / 0.05);
   padding: 0.65rem 0.85rem;
-  color: rgb(71 85 105);
-  font-size: 0.56rem;
+  color: var(--color-ink-faint);
+  font-size: var(--fs-meta);
 }
 
 .conversation-history-footer .status-dot {
@@ -3195,8 +3788,8 @@ a.brand-mark:hover,
 
 .conversation-heading-copy h2 {
   overflow: hidden;
-  color: rgb(226 232 240);
-  font-size: 0.83rem;
+  color: var(--color-ink);
+  font-size: var(--fs-body);
   font-weight: 640;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3205,8 +3798,8 @@ a.brand-mark:hover,
 .conversation-heading-copy p {
   overflow: hidden;
   margin-top: 0.1rem;
-  color: rgb(71 85 105);
-  font-size: 0.59rem;
+  color: var(--color-ink-faint);
+  font-size: var(--fs-meta);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -3217,8 +3810,8 @@ a.brand-mark:hover,
   height: 1.35rem;
   flex: none;
   place-items: center;
-  border-radius: 0.36rem;
-  color: rgb(71 85 105);
+  border-radius: var(--r-xs);
+  color: var(--color-ink-faint);
 }
 
 .conversation-title-edit[hidden] {
@@ -3227,7 +3820,7 @@ a.brand-mark:hover,
 
 .conversation-title-edit:hover {
   background: rgb(255 255 255 / 0.055);
-  color: rgb(196 181 253);
+  color: var(--color-ai-soft);
 }
 
 .conversation-title-edit svg {
@@ -3243,10 +3836,10 @@ a.brand-mark:hover,
   justify-content: center;
   gap: 0.38rem;
   border: 1px solid rgb(255 255 255 / 0.065);
-  border-radius: 0.52rem;
+  border-radius: var(--r-sm);
   background: rgb(255 255 255 / 0.018);
-  color: rgb(100 116 139);
-  font-size: 0.62rem;
+  color: var(--color-ink-faint);
+  font-size: var(--fs-meta);
   font-weight: 600;
   transition: 150ms ease;
 }
@@ -3264,13 +3857,13 @@ a.brand-mark:hover,
 .conversation-icon-button:hover {
   border-color: rgb(167 139 250 / 0.2);
   background: rgb(139 92 246 / 0.07);
-  color: rgb(203 213 225);
+  color: var(--color-ink);
 }
 
 .conversation-header-button[aria-expanded="true"] {
   border-color: rgb(167 139 250 / 0.24);
   background: rgb(139 92 246 / 0.1);
-  color: rgb(221 214 254);
+  color: var(--color-ai-soft);
 }
 
 .conversation-header-button strong {
@@ -3280,9 +3873,9 @@ a.brand-mark:hover,
   place-items: center;
   border-radius: 999px;
   background: rgb(148 163 184 / 0.09);
-  color: rgb(148 163 184);
+  color: var(--color-ink-soft);
   font-family: var(--font-mono);
-  font-size: 0.52rem;
+  font-size: var(--fs-meta);
   font-weight: 600;
 }
 
@@ -3319,7 +3912,7 @@ a.brand-mark:hover,
   justify-content: center;
   flex-direction: column;
   padding: 3rem 1rem;
-  color: rgb(100 116 139);
+  color: var(--color-ink-faint);
   text-align: center;
 }
 
@@ -3329,7 +3922,7 @@ a.brand-mark:hover,
   height: 3.65rem;
   place-items: center;
   border: 1px solid rgb(52 211 153 / 0.15);
-  border-radius: 1rem;
+  border-radius: var(--r-xl);
   background:
     radial-gradient(circle at 50% 35%, rgb(52 211 153 / 0.12), transparent 70%),
     rgb(255 255 255 / 0.02);
@@ -3344,8 +3937,8 @@ a.brand-mark:hover,
 
 .conversation-empty-kicker {
   margin-top: 1.1rem;
-  color: rgb(52 211 153);
-  font-size: 0.58rem;
+  color: var(--color-accent);
+  font-size: var(--fs-meta);
   font-weight: 700;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -3353,7 +3946,7 @@ a.brand-mark:hover,
 
 .conversation-empty h3 {
   margin-top: 0.35rem;
-  color: rgb(241 245 249);
+  color: var(--color-ink-strong);
   font-size: clamp(1.35rem, 2.4vw, 1.85rem);
   font-weight: 620;
   letter-spacing: -0.035em;
@@ -3362,8 +3955,8 @@ a.brand-mark:hover,
 .conversation-empty-copy {
   max-width: 33rem;
   margin-top: 0.65rem;
-  color: rgb(100 116 139);
-  font-size: 0.76rem;
+  color: var(--color-ink-faint);
+  font-size: var(--fs-caption);
   line-height: 1.3rem;
 }
 
@@ -3382,19 +3975,19 @@ a.brand-mark:hover,
   justify-content: flex-end;
   flex-direction: column;
   border: 1px solid rgb(255 255 255 / 0.065);
-  border-radius: 0.72rem;
+  border-radius: var(--r-lg);
   padding: 0.75rem;
   background: rgb(255 255 255 / 0.018);
-  color: rgb(148 163 184);
-  font-size: 0.67rem;
+  color: var(--color-ink-soft);
+  font-size: var(--fs-meta);
   line-height: 1.05rem;
   text-align: left;
 }
 
 .conversation-starters button span {
   margin-bottom: auto;
-  color: rgb(71 85 105);
-  font-size: 0.54rem;
+  color: var(--color-ink-faint);
+  font-size: var(--fs-meta);
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -3403,7 +3996,7 @@ a.brand-mark:hover,
 .conversation-starters button:hover {
   border-color: rgb(167 139 250 / 0.24);
   background: rgb(139 92 246 / 0.055);
-  color: rgb(221 214 254);
+  color: var(--color-ai-soft);
   transform: translateY(-1px);
 }
 
@@ -3438,30 +4031,30 @@ a.brand-mark:hover,
   border-radius: 0.85rem 0.85rem 0.25rem 0.85rem;
   padding: 0.68rem 0.82rem;
   background: rgb(16 185 129 / 0.06);
-  color: rgb(226 232 240);
+  color: var(--color-ink);
 }
 
 .conversation-message-error {
   border: 1px solid rgb(251 113 133 / 0.16);
-  border-radius: 0.72rem;
+  border-radius: var(--r-lg);
   padding: 0.72rem 0.82rem;
   background: rgb(251 113 133 / 0.045);
 }
 
 .conversation-role {
   margin-bottom: 0.42rem;
-  color: rgb(71 85 105);
-  font-size: 0.55rem;
+  color: var(--color-ink-faint);
+  font-size: var(--fs-meta);
   letter-spacing: 0.11em;
 }
 
 .conversation-message-assistant .conversation-role {
-  color: rgb(110 231 183 / 0.7);
+  color: var(--color-accent-soft);
 }
 
 .conversation-content {
-  color: rgb(203 213 225);
-  font-size: 0.82rem;
+  color: var(--color-ink);
+  font-size: var(--fs-body);
   line-height: 1.48rem;
 }
 
@@ -3475,7 +4068,7 @@ a.brand-mark:hover,
   max-width: 24rem;
   border-color: rgb(52 211 153 / 0.1);
   background: rgb(16 185 129 / 0.035);
-  font-size: 0.57rem;
+  font-size: var(--fs-meta);
 }
 
 .conversation-composer {
@@ -3488,7 +4081,7 @@ a.brand-mark:hover,
 .conversation-composer-surface {
   position: relative;
   border: 1px solid rgb(255 255 255 / 0.09);
-  border-radius: 0.92rem;
+  border-radius: var(--r-lg);
   background: rgb(20 23 29 / 0.96);
   box-shadow:
     0 18px 55px rgb(0 0 0 / 0.38),
@@ -3514,8 +4107,8 @@ a.brand-mark:hover,
   border-radius: 0;
   padding: 0.85rem 0.9rem 0.35rem;
   background: transparent;
-  color: rgb(241 245 249);
-  font-size: 0.82rem;
+  color: var(--color-ink-strong);
+  font-size: var(--fs-body);
   line-height: 1.35rem;
   outline: 0;
 }
@@ -3526,7 +4119,7 @@ a.brand-mark:hover,
 }
 
 .conversation-input::placeholder {
-  color: rgb(71 85 105);
+  color: var(--color-ink-faint);
 }
 
 .conversation-attachment-tray {
@@ -3540,8 +4133,8 @@ a.brand-mark:hover,
   margin: 0 0.72rem 0.18rem;
   border-top: 1px solid rgb(255 255 255 / 0.055);
   padding: 0.48rem 0.18rem 0.1rem;
-  color: rgb(110 231 183 / 0.82);
-  font-size: 0.64rem;
+  color: var(--color-accent-soft);
+  font-size: var(--fs-meta);
 }
 
 .conversation-composer-activity[hidden] {
@@ -3549,7 +4142,7 @@ a.brand-mark:hover,
 }
 
 .conversation-composer-activity[data-phase="answering"] {
-  color: rgb(167 139 250 / 0.82);
+  color: var(--color-ai);
 }
 
 .conversation-composer-activity strong {
@@ -3579,14 +4172,14 @@ a.brand-mark:hover,
   height: 2rem;
   flex: none;
   place-items: center;
-  border-radius: 0.52rem;
-  color: rgb(100 116 139);
+  border-radius: var(--r-sm);
+  color: var(--color-ink-faint);
   transition: 150ms ease;
 }
 
 .conversation-tool-button:hover:not(:disabled) {
   background: rgb(255 255 255 / 0.055);
-  color: rgb(203 213 225);
+  color: var(--color-ink);
 }
 
 .conversation-tool-button:disabled {
@@ -3606,10 +4199,10 @@ a.brand-mark:hover,
   cursor: pointer;
   align-items: center;
   gap: 0.38rem;
-  border-radius: 0.52rem;
+  border-radius: var(--r-sm);
   padding: 0.35rem 0.5rem;
-  color: rgb(100 116 139);
-  font-size: 0.62rem;
+  color: var(--color-ink-faint);
+  font-size: var(--fs-meta);
   transition: 150ms ease;
   user-select: none;
 }
@@ -3621,7 +4214,7 @@ a.brand-mark:hover,
 .conversation-settings > summary:hover,
 .conversation-settings[open] > summary {
   background: rgb(255 255 255 / 0.05);
-  color: rgb(203 213 225);
+  color: var(--color-ink);
 }
 
 .conversation-settings > summary span:nth-child(2) {
@@ -3668,7 +4261,7 @@ a.brand-mark:hover,
   width: min(26rem, calc(100vw - 2rem));
   gap: 0.55rem;
   border: 1px solid rgb(255 255 255 / 0.09);
-  border-radius: 0.78rem;
+  border-radius: var(--r-lg);
   padding: 0.75rem;
   background: rgb(12 15 20 / 0.98);
   box-shadow: 0 22px 70px rgb(0 0 0 / 0.55);
@@ -3684,16 +4277,16 @@ a.brand-mark:hover,
 }
 
 .conversation-settings-heading p {
-  color: rgb(226 232 240);
-  font-size: 0.72rem;
+  color: var(--color-ink);
+  font-size: var(--fs-caption);
   font-weight: 650;
 }
 
 .conversation-settings-heading div > span {
   display: block;
   margin-top: 0.12rem;
-  color: rgb(71 85 105);
-  font-size: 0.56rem;
+  color: var(--color-ink-faint);
+  font-size: var(--fs-meta);
 }
 
 .conversation-read-only-badge {
@@ -3701,8 +4294,8 @@ a.brand-mark:hover,
   border-radius: 999px;
   padding: 0.22rem 0.42rem;
   background: rgb(16 185 129 / 0.05);
-  color: rgb(110 231 183);
-  font-size: 0.52rem;
+  color: var(--color-accent-soft);
+  font-size: var(--fs-meta);
   font-weight: 700;
   text-transform: uppercase;
 }
@@ -3719,14 +4312,14 @@ a.brand-mark:hover,
   align-items: initial;
   gap: 0.3rem;
   border: 1px solid rgb(255 255 255 / 0.06);
-  border-radius: 0.56rem;
+  border-radius: var(--r-md);
   padding: 0.5rem 0.55rem;
   background: rgb(0 0 0 / 0.14);
 }
 
 .conversation-control span {
-  color: rgb(71 85 105);
-  font-size: 0.52rem;
+  color: var(--color-ink-faint);
+  font-size: var(--fs-meta);
   font-weight: 700;
   letter-spacing: 0.07em;
   text-transform: uppercase;
@@ -3745,9 +4338,9 @@ a.brand-mark:hover,
   place-items: center;
   border: 1px solid rgb(148 163 184 / 0.2);
   border-radius: 999px;
-  color: rgb(148 163 184);
+  color: var(--color-ink-soft);
   font-family: var(--font-sans);
-  font-size: 0.58rem;
+  font-size: var(--fs-meta);
   font-weight: 700;
   line-height: 1;
   text-transform: none;
@@ -3757,7 +4350,7 @@ a.brand-mark:hover,
 .conversation-help-button:hover {
   border-color: rgb(52 211 153 / 0.36);
   background: rgb(16 185 129 / 0.08);
-  color: rgb(167 243 208);
+  color: var(--color-accent-soft);
 }
 
 .conversation-control select,
@@ -3765,14 +4358,14 @@ a.brand-mark:hover,
   width: 100%;
   min-width: 0;
   max-width: none;
-  color: rgb(203 213 225);
-  font-size: 0.64rem;
+  color: var(--color-ink);
+  font-size: var(--fs-meta);
 }
 
 .conversation-provider-detail,
 .conversation-image-support-detail {
-  color: rgb(71 85 105);
-  font-size: 0.56rem;
+  color: var(--color-ink-faint);
+  font-size: var(--fs-meta);
   line-height: 0.9rem;
 }
 
@@ -3796,15 +4389,15 @@ a.brand-mark:hover,
 
 .settings-help-card {
   border: 1px solid rgb(52 211 153 / 0.2);
-  border-radius: 0.9rem;
+  border-radius: var(--r-lg);
   padding: 1.1rem;
   background: rgb(12 15 20 / 0.99);
   box-shadow: 0 28px 90px rgb(0 0 0 / 0.62);
 }
 
 .settings-help-card > p:first-child {
-  color: rgb(52 211 153);
-  font-size: 0.58rem;
+  color: var(--color-accent);
+  font-size: var(--fs-meta);
   font-weight: 700;
   letter-spacing: 0.11em;
   text-transform: uppercase;
@@ -3812,36 +4405,36 @@ a.brand-mark:hover,
 
 .settings-help-card h2 {
   margin-top: 0.2rem;
-  color: rgb(241 245 249);
-  font-size: 1rem;
+  color: var(--color-ink-strong);
+  font-size: var(--fs-body-lg);
   font-weight: 680;
 }
 
 .settings-help-card p:not(:first-child) {
   margin-top: 0.7rem;
-  color: rgb(148 163 184);
-  font-size: 0.72rem;
+  color: var(--color-ink-soft);
+  font-size: var(--fs-caption);
   line-height: 1.2rem;
 }
 
 .settings-help-card button {
   margin-top: 1rem;
   border: 1px solid rgb(52 211 153 / 0.22);
-  border-radius: 0.55rem;
+  border-radius: var(--r-md);
   padding: 0.48rem 0.72rem;
   background: rgb(16 185 129 / 0.1);
-  color: rgb(167 243 208);
-  font-size: 0.68rem;
+  color: var(--color-accent-soft);
+  font-size: var(--fs-meta);
   font-weight: 650;
 }
 
 .conversation-shortcut {
-  color: rgb(71 85 105);
-  font-size: 0.55rem;
+  color: var(--color-ink-faint);
+  font-size: var(--fs-meta);
 }
 
 .conversation-shortcut kbd {
-  color: rgb(100 116 139);
+  color: var(--color-ink-faint);
   font-family: var(--font-mono);
 }
 
@@ -3852,9 +4445,9 @@ a.brand-mark:hover,
   flex: none;
   place-items: center;
   border: 1px solid rgb(52 211 153 / 0.22);
-  border-radius: 0.58rem;
+  border-radius: var(--r-md);
   background: rgb(16 185 129 / 0.14);
-  color: rgb(167 243 208);
+  color: var(--color-accent-soft);
   transition: 150ms ease;
 }
 
@@ -3868,7 +4461,7 @@ a.brand-mark:hover,
   cursor: not-allowed;
   border-color: rgb(255 255 255 / 0.06);
   background: rgb(255 255 255 / 0.025);
-  color: rgb(71 85 105);
+  color: var(--color-ink-faint);
 }
 
 .conversation-interrupt-button {
@@ -3876,9 +4469,9 @@ a.brand-mark:hover,
   min-height: 2rem;
   align-items: center;
   gap: 0.38rem;
-  border-radius: 0.52rem;
+  border-radius: var(--r-sm);
   padding: 0.35rem 0.55rem;
-  font-size: 0.62rem;
+  font-size: var(--fs-meta);
 }
 
 .conversation-interrupt-button span {
@@ -3890,8 +4483,8 @@ a.brand-mark:hover,
 
 .conversation-composer-note {
   margin-top: 0.42rem;
-  color: rgb(51 65 85);
-  font-size: 0.52rem;
+  color: var(--color-ink-faint);
+  font-size: var(--fs-meta);
   text-align: center;
 }
 
@@ -3924,8 +4517,8 @@ a.brand-mark:hover,
 
 .conversation-inspector-header p,
 .conversation-inspector-section-heading p {
-  color: rgb(139 92 246);
-  font-size: 0.52rem;
+  color: var(--color-ai);
+  font-size: var(--fs-meta);
   font-weight: 700;
   letter-spacing: 0.11em;
   text-transform: uppercase;
@@ -3933,8 +4526,8 @@ a.brand-mark:hover,
 
 .conversation-inspector-header h2 {
   margin-top: 0.1rem;
-  color: rgb(226 232 240);
-  font-size: 0.8rem;
+  color: var(--color-ink);
+  font-size: var(--fs-body);
   font-weight: 650;
 }
 
@@ -3962,8 +4555,8 @@ a.brand-mark:hover,
 
 .conversation-inspector-section-heading h3 {
   margin-top: 0.12rem;
-  color: rgb(203 213 225);
-  font-size: 0.68rem;
+  color: var(--color-ink);
+  font-size: var(--fs-meta);
   font-weight: 620;
 }
 
@@ -3974,9 +4567,9 @@ a.brand-mark:hover,
   place-items: center;
   border-radius: 999px;
   background: rgb(139 92 246 / 0.1);
-  color: rgb(196 181 253);
+  color: var(--color-ai-soft);
   font-family: var(--font-mono);
-  font-size: 0.54rem;
+  font-size: var(--fs-meta);
 }
 
 .conversation-evidence-list {
@@ -3993,7 +4586,7 @@ a.brand-mark:hover,
   min-width: 0;
   gap: 0.16rem;
   border: 1px solid rgb(52 211 153 / 0.1);
-  border-radius: 0.56rem;
+  border-radius: var(--r-md);
   padding: 0.52rem 0.58rem;
   background: rgb(16 185 129 / 0.035);
   text-decoration: none;
@@ -4007,9 +4600,9 @@ a.brand-mark:hover,
 
 .conversation-evidence-list strong {
   overflow: hidden;
-  color: rgb(167 243 208);
+  color: var(--color-accent-soft);
   font-family: var(--font-mono);
-  font-size: 0.58rem;
+  font-size: var(--fs-meta);
   font-weight: 550;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4017,18 +4610,18 @@ a.brand-mark:hover,
 
 .conversation-evidence-list span {
   overflow: hidden;
-  color: rgb(71 85 105);
-  font-size: 0.52rem;
+  color: var(--color-ink-faint);
+  font-size: var(--fs-meta);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .conversation-evidence-empty {
   border: 1px dashed rgb(255 255 255 / 0.07);
-  border-radius: 0.56rem;
+  border-radius: var(--r-md);
   padding: 0.85rem 0.65rem;
-  color: rgb(71 85 105);
-  font-size: 0.58rem;
+  color: var(--color-ink-faint);
+  font-size: var(--fs-meta);
   line-height: 0.95rem;
   text-align: center;
 }
@@ -4050,7 +4643,7 @@ a.brand-mark:hover,
   min-width: 0;
   min-height: 2.75rem;
   border: 1px solid rgb(255 255 255 / 0.055);
-  border-radius: 0.56rem;
+  border-radius: var(--r-md);
   padding: 0.48rem 0.58rem;
   background: rgb(0 0 0 / 0.13);
 }
@@ -4069,7 +4662,7 @@ a.brand-mark:hover,
   max-height: 13rem;
   overflow-y: auto;
   border: 1px solid rgb(255 255 255 / 0.055);
-  border-radius: 0.56rem;
+  border-radius: var(--r-md);
 }
 
 .conversation-repository-list li {
@@ -4078,8 +4671,8 @@ a.brand-mark:hover,
   justify-content: space-between;
   gap: 0.8rem;
   padding: 0.48rem 0.58rem;
-  color: rgb(148 163 184);
-  font-size: 0.59rem;
+  color: var(--color-ink-soft);
+  font-size: var(--fs-meta);
 }
 
 .conversation-repository-list li + li {
@@ -4094,24 +4687,24 @@ a.brand-mark:hover,
 
 .conversation-repository-list li strong {
   flex: none;
-  color: rgb(100 116 139);
-  font-size: 0.5rem;
+  color: var(--color-ink-faint);
+  font-size: var(--fs-meta);
   font-weight: 700;
   text-transform: uppercase;
 }
 
 .conversation-repository-list li strong.status-ready {
-  color: rgb(110 231 183);
+  color: var(--color-accent-soft);
 }
 
 .conversation-repository-list li strong.status-error {
-  color: rgb(253 164 175);
+  color: var(--color-danger);
 }
 
 .conversation-safety-note {
   margin-top: 0.6rem;
-  color: rgb(71 85 105);
-  font-size: 0.55rem;
+  color: var(--color-ink-faint);
+  font-size: var(--fs-meta);
   line-height: 0.9rem;
 }
 
@@ -4259,8 +4852,8 @@ a.brand-mark:hover,
 /* Living documentation workspace */
 .wiki-workspace {
   display: grid;
-  grid-template-columns: 19rem minmax(0, 1fr) 19rem;
-  height: calc(100vh - 4rem);
+  grid-template-columns: 20.5rem minmax(0, 1fr) 20rem;
+  height: calc(100dvh - 4rem);
   min-height: 0;
   background:
     radial-gradient(circle at 52% 0%, rgb(16 185 129 / 0.035), transparent 28rem),
@@ -4270,15 +4863,32 @@ a.brand-mark:hover,
 .wiki-sidebar,
 .wiki-provenance {
   min-height: 0;
-  overflow-y: auto;
   background: rgb(8 11 17 / 0.92);
   scrollbar-color: rgb(51 65 85 / 0.6) transparent;
   scrollbar-width: thin;
 }
 
+/* The sidebar scrolls its page list only; the provenance rail scrolls whole. */
+.wiki-provenance {
+  overflow-y: auto;
+}
+
+/*
+ * The plan is repository-specific and routinely reaches ~29 pages. The sidebar
+ * is a fixed column with its own scrolling page list so the repository picker,
+ * generation controls, and plan counts stay put instead of scrolling away above
+ * the list on every page switch.
+ */
 .wiki-sidebar {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   border-right: 1px solid rgb(148 163 184 / 0.09);
   padding: 1.35rem 1rem 1.5rem;
+}
+
+.wiki-sidebar-controls {
+  flex-shrink: 0;
 }
 
 .wiki-provenance {
@@ -4288,9 +4898,9 @@ a.brand-mark:hover,
 
 .wiki-kicker {
   margin: 0 0 0.35rem;
-  color: rgb(52 211 153);
+  color: var(--color-accent);
   font-family: var(--font-mono);
-  font-size: 0.55rem;
+  font-size: var(--fs-meta);
   font-weight: 750;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -4299,18 +4909,25 @@ a.brand-mark:hover,
 .wiki-sidebar-heading h1,
 .wiki-provenance h2 {
   margin: 0;
-  color: rgb(248 250 252);
-  font-size: 1.18rem;
+  color: var(--color-ink-strong);
+  font-size: var(--fs-title);
   font-weight: 700;
   letter-spacing: -0.025em;
 }
 
 .wiki-sidebar-heading > p:last-child,
-.wiki-provenance header > p:last-child {
+.wiki-provenance-header p:last-child {
   margin: 0.45rem 0 0;
-  color: rgb(100 116 139);
-  font-size: 0.7rem;
+  color: var(--color-ink-faint);
+  font-size: var(--fs-caption);
   line-height: 1.15rem;
+}
+
+.wiki-provenance-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
 }
 
 .wiki-field {
@@ -4320,9 +4937,9 @@ a.brand-mark:hover,
 }
 
 .wiki-field > span {
-  color: rgb(100 116 139);
+  color: var(--color-ink-faint);
   font-family: var(--font-mono);
-  font-size: 0.57rem;
+  font-size: var(--fs-meta);
   font-weight: 650;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -4333,11 +4950,11 @@ a.brand-mark:hover,
   width: 100%;
   height: 2.45rem;
   border: 1px solid rgb(148 163 184 / 0.12);
-  border-radius: 0.58rem;
+  border-radius: var(--r-md);
   padding: 0 2rem 0 0.72rem;
   background: rgb(15 23 42 / 0.58);
-  color: rgb(203 213 225);
-  font-size: 0.72rem;
+  color: var(--color-ink);
+  font-size: var(--fs-caption);
 }
 
 .wiki-field input {
@@ -4347,7 +4964,7 @@ a.brand-mark:hover,
 .wiki-generation-controls {
   margin-top: 1rem;
   border: 1px solid rgb(167 139 250 / 0.12);
-  border-radius: 0.7rem;
+  border-radius: var(--r-lg);
   background:
     radial-gradient(circle at 100% 0%, rgb(139 92 246 / 0.08), transparent 9rem),
     rgb(15 23 42 / 0.34);
@@ -4365,8 +4982,8 @@ a.brand-mark:hover,
 
 .wiki-generation-controls > summary::after {
   content: "›";
-  color: rgb(71 85 105);
-  font-size: 0.9rem;
+  color: var(--color-ink-faint);
+  font-size: var(--fs-body);
   transform: rotate(0deg);
   transition: transform 150ms ease;
 }
@@ -4382,12 +4999,12 @@ a.brand-mark:hover,
 
 .wiki-generation-controls .wiki-section-heading > span[data-state="ready"] {
   border-color: rgb(52 211 153 / 0.18);
-  color: rgb(110 231 183);
+  color: var(--color-accent-soft);
 }
 
 .wiki-generation-controls .wiki-section-heading > span[data-state="error"] {
   border-color: rgb(251 113 133 / 0.18);
-  color: rgb(253 164 175);
+  color: var(--color-danger);
 }
 
 .wiki-field-compact {
@@ -4398,13 +5015,13 @@ a.brand-mark:hover,
 .wiki-field-compact select,
 .wiki-field-compact input {
   height: 2.1rem;
-  font-size: 0.65rem;
+  font-size: var(--fs-meta);
 }
 
 .wiki-provider-detail {
   margin: 0.65rem 0 0;
-  color: rgb(71 85 105);
-  font-size: 0.56rem;
+  color: var(--color-ink-faint);
+  font-size: var(--fs-meta);
   line-height: 0.9rem;
 }
 
@@ -4423,9 +5040,9 @@ a.brand-mark:hover,
 
 .wiki-section-heading p {
   margin: 0 0 0.15rem;
-  color: rgb(71 85 105);
+  color: var(--color-ink-faint);
   font-family: var(--font-mono);
-  font-size: 0.5rem;
+  font-size: var(--fs-meta);
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
@@ -4433,8 +5050,8 @@ a.brand-mark:hover,
 .wiki-section-heading h2,
 .wiki-section-heading h3 {
   margin: 0;
-  color: rgb(203 213 225);
-  font-size: 0.72rem;
+  color: var(--color-ink);
+  font-size: var(--fs-caption);
   font-weight: 650;
 }
 
@@ -4444,54 +5061,54 @@ a.brand-mark:hover,
   border: 1px solid rgb(148 163 184 / 0.1);
   border-radius: 99px;
   padding: 0.18rem 0.42rem;
-  color: rgb(100 116 139);
+  color: var(--color-ink-faint);
   font-family: var(--font-mono);
-  font-size: 0.52rem;
+  font-size: var(--fs-meta);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .wiki-plan-metrics {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0.3rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.3rem 0.5rem;
   margin: 0.7rem 0 0;
 }
 
 .wiki-plan-metrics div {
   min-width: 0;
   border: 1px solid rgb(148 163 184 / 0.08);
-  border-radius: 0.48rem;
+  border-radius: var(--r-sm);
   padding: 0.45rem 0.32rem;
   background: rgb(15 23 42 / 0.32);
   text-align: center;
 }
 
 .wiki-plan-metrics dt {
-  color: rgb(71 85 105);
+  color: var(--color-ink-faint);
   font-family: var(--font-mono);
-  font-size: 0.45rem;
+  font-size: var(--fs-meta);
   text-transform: uppercase;
 }
 
 .wiki-plan-metrics dd {
   margin: 0.18rem 0 0;
-  color: rgb(203 213 225);
+  color: var(--color-ink);
   font-family: var(--font-mono);
-  font-size: 0.7rem;
+  font-size: var(--fs-caption);
   font-weight: 700;
 }
 
 .wiki-plan-metrics [data-state="ready"] dd {
-  color: rgb(110 231 183);
+  color: var(--color-accent-soft);
 }
 
 .wiki-plan-metrics [data-state="stale"] dd {
-  color: rgb(251 191 36);
+  color: var(--color-warn);
 }
 
 .wiki-plan-metrics [data-state="error"] dd {
-  color: rgb(251 113 133);
+  color: var(--color-danger);
 }
 
 .wiki-sidebar-actions {
@@ -4509,10 +5126,10 @@ a.brand-mark:hover,
   align-items: center;
   justify-content: center;
   gap: 0.4rem;
-  border-radius: 0.5rem;
+  border-radius: var(--r-sm);
   padding: 0.55rem 0.5rem;
   font-family: var(--font-mono);
-  font-size: 0.57rem;
+  font-size: var(--fs-meta);
   font-weight: 700;
   text-decoration: none;
 }
@@ -4520,20 +5137,20 @@ a.brand-mark:hover,
 .wiki-primary-action {
   border: 1px solid rgb(52 211 153 / 0.28);
   background: rgb(16 185 129 / 0.13);
-  color: rgb(167 243 208);
+  color: var(--color-accent-soft);
 }
 
 .wiki-secondary-action {
   border: 1px solid rgb(148 163 184 / 0.11);
   background: rgb(15 23 42 / 0.42);
-  color: rgb(148 163 184);
+  color: var(--color-ink-soft);
 }
 
 .wiki-primary-action:hover:not(:disabled),
 .wiki-secondary-action:hover:not([aria-disabled="true"]) {
   border-color: rgb(52 211 153 / 0.42);
   background: rgb(16 185 129 / 0.17);
-  color: rgb(209 250 229);
+  color: var(--color-accent-soft);
 }
 
 .wiki-primary-action:disabled,
@@ -4565,7 +5182,7 @@ a.brand-mark:hover,
   gap: 0.55rem;
   margin-top: 0.8rem;
   border: 1px solid rgb(148 163 184 / 0.08);
-  border-radius: 0.55rem;
+  border-radius: var(--r-md);
   padding: 0.65rem;
   background: rgb(15 23 42 / 0.3);
 }
@@ -4576,24 +5193,24 @@ a.brand-mark:hover,
   height: 1.45rem;
   place-items: center;
   border: 1px solid rgb(167 139 250 / 0.22);
-  border-radius: 0.35rem;
-  color: rgb(196 181 253);
+  border-radius: var(--r-xs);
+  color: var(--color-ai-soft);
   font-family: var(--font-mono);
-  font-size: 0.45rem;
+  font-size: var(--fs-meta);
   font-weight: 750;
 }
 
 .wiki-steering strong {
   display: block;
-  color: rgb(148 163 184);
-  font-size: 0.62rem;
+  color: var(--color-ink-soft);
+  font-size: var(--fs-meta);
   font-weight: 650;
 }
 
 .wiki-steering p {
   margin: 0.2rem 0 0;
-  color: rgb(71 85 105);
-  font-size: 0.57rem;
+  color: var(--color-ink-faint);
+  font-size: var(--fs-meta);
   line-height: 0.9rem;
 }
 
@@ -4603,17 +5220,60 @@ a.brand-mark:hover,
 
 .wiki-page-list {
   display: grid;
+  flex: 1;
+  align-content: start;
   gap: 0.12rem;
+  min-height: 6rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   margin-top: 0.65rem;
   border-top: 1px solid rgb(148 163 184 / 0.08);
   padding-top: 0.9rem;
+}
+
+/* Collapsible plan sections: 29 flat rows is a lot of scrolling to cross. */
+.wiki-page-section[data-collapsed="true"] .wiki-page-children {
+  display: none;
+}
+
+.wiki-page-disclosure {
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+  border: 0;
+  border-radius: var(--r-xs);
+  width: 1.35rem;
+  height: 1.35rem;
+  background: transparent;
+  color: var(--color-ink-faint);
+  transition: 150ms ease;
+}
+
+.wiki-page-disclosure:hover {
+  background: rgb(255 255 255 / 0.06);
+  color: var(--color-ink);
+}
+
+.wiki-page-disclosure svg {
+  width: 0.7rem;
+  height: 0.7rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform 150ms ease;
+}
+
+.wiki-page-section[data-collapsed="true"] .wiki-page-disclosure svg {
+  transform: rotate(-90deg);
 }
 
 .wiki-page-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   border: 0;
-  border-radius: 0.45rem;
+  border-radius: var(--r-sm);
   background: transparent;
   overflow: hidden;
 }
@@ -4631,7 +5291,7 @@ a.brand-mark:hover,
 }
 
 .wiki-page-row[data-depth="1"] .wiki-page-copy strong {
-  color: rgb(148 163 184);
+  color: var(--color-ink-soft);
   font-weight: 560;
 }
 
@@ -4648,21 +5308,21 @@ a.brand-mark:hover,
   align-items: center;
   gap: 0.55rem;
   padding: 0.58rem 0.65rem;
-  color: rgb(148 163 184);
+  color: var(--color-ink-soft);
   text-align: left;
 }
 
 .wiki-page-select:hover,
 .wiki-page-select[aria-current="page"] {
-  border-radius: 0.45rem;
+  border-radius: var(--r-sm);
   background: rgb(16 185 129 / 0.065);
-  color: rgb(226 232 240);
+  color: var(--color-ink);
 }
 
 .wiki-page-index {
-  color: rgb(71 85 105);
+  color: var(--color-ink-faint);
   font-family: var(--font-mono);
-  font-size: 0.52rem;
+  font-size: var(--fs-meta);
 }
 
 .wiki-page-copy {
@@ -4679,39 +5339,39 @@ a.brand-mark:hover,
 }
 
 .wiki-page-copy strong {
-  font-size: 0.66rem;
+  font-size: var(--fs-meta);
   font-weight: 650;
 }
 
 .wiki-page-copy span {
-  color: rgb(71 85 105);
+  color: var(--color-ink-faint);
   font-family: var(--font-mono);
-  font-size: 0.49rem;
+  font-size: var(--fs-meta);
   text-transform: uppercase;
 }
 
 .wiki-page-copy span[data-state="ready"] {
-  color: rgb(52 211 153);
+  color: var(--color-accent);
 }
 
 .wiki-page-copy span[data-state="stale"] {
-  color: rgb(251 191 36);
+  color: var(--color-warn);
 }
 
 .wiki-page-copy span[data-state="error"] {
-  color: rgb(251 113 133);
+  color: var(--color-danger);
 }
 
 .wiki-page-generate {
   width: 2.2rem;
   border-left: 0;
-  color: rgb(71 85 105);
-  font-size: 0.85rem;
+  color: var(--color-ink-faint);
+  font-size: var(--fs-body);
 }
 
 .wiki-page-generate:hover:not(:disabled) {
   background: rgb(16 185 129 / 0.08);
-  color: rgb(110 231 183);
+  color: var(--color-accent-soft);
 }
 
 .wiki-page-generate:disabled {
@@ -4727,15 +5387,15 @@ a.brand-mark:hover,
   width: 100%;
   height: 2.15rem;
   border: 1px solid rgb(148 163 184 / 0.1);
-  border-radius: 0.5rem;
+  border-radius: var(--r-sm);
   padding: 0 0.65rem;
   background: rgb(15 23 42 / 0.34);
-  color: rgb(203 213 225);
-  font-size: 0.64rem;
+  color: var(--color-ink);
+  font-size: var(--fs-meta);
 }
 
 .wiki-page-search input::placeholder {
-  color: rgb(71 85 105);
+  color: var(--color-ink-faint);
 }
 
 .wiki-stage {
@@ -4771,19 +5431,19 @@ a.brand-mark:hover,
   flex: none;
   place-items: center;
   border: 1px solid rgb(52 211 153 / 0.16);
-  border-radius: 0.5rem;
+  border-radius: var(--r-sm);
   background: rgb(16 185 129 / 0.055);
-  color: rgb(52 211 153);
+  color: var(--color-accent);
   font-family: Georgia, serif;
-  font-size: 1rem;
+  font-size: var(--fs-body-lg);
 }
 
 .wiki-stage-heading p {
   margin: 0 0 0.1rem;
   overflow: hidden;
-  color: rgb(71 85 105);
+  color: var(--color-ink-faint);
   font-family: var(--font-mono);
-  font-size: 0.52rem;
+  font-size: var(--fs-meta);
   text-overflow: ellipsis;
   text-transform: uppercase;
   white-space: nowrap;
@@ -4792,8 +5452,8 @@ a.brand-mark:hover,
 .wiki-stage-heading h2 {
   margin: 0;
   overflow: hidden;
-  color: rgb(226 232 240);
-  font-size: 0.9rem;
+  color: var(--color-ink);
+  font-size: var(--fs-body);
   font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4810,9 +5470,9 @@ a.brand-mark:hover,
   border: 1px solid rgb(148 163 184 / 0.12);
   border-radius: 99px;
   padding: 0.22rem 0.48rem;
-  color: rgb(100 116 139);
+  color: var(--color-ink-faint);
   font-family: var(--font-mono);
-  font-size: 0.51rem;
+  font-size: var(--fs-meta);
   font-weight: 700;
   text-transform: uppercase;
 }
@@ -4820,35 +5480,35 @@ a.brand-mark:hover,
 .wiki-status-chip[data-state="ready"] {
   border-color: rgb(52 211 153 / 0.2);
   background: rgb(16 185 129 / 0.06);
-  color: rgb(110 231 183);
+  color: var(--color-accent-soft);
 }
 
 .wiki-status-chip[data-state="stale"] {
   border-color: rgb(251 191 36 / 0.22);
   background: rgb(245 158 11 / 0.06);
-  color: rgb(252 211 77);
+  color: var(--color-warn);
 }
 
 .wiki-status-chip[data-state="error"] {
   border-color: rgb(251 113 133 / 0.22);
   background: rgb(244 63 94 / 0.06);
-  color: rgb(253 164 175);
+  color: var(--color-danger);
 }
 
 .wiki-stage-meta button {
   min-height: 1.8rem;
   border: 1px solid rgb(148 163 184 / 0.1);
-  border-radius: 0.42rem;
+  border-radius: var(--r-xs);
   padding: 0 0.6rem;
   background: rgb(15 23 42 / 0.36);
-  color: rgb(100 116 139);
+  color: var(--color-ink-faint);
   font-family: var(--font-mono);
-  font-size: 0.52rem;
+  font-size: var(--fs-meta);
 }
 
 .wiki-stage-meta button:hover:not(:disabled) {
   border-color: rgb(52 211 153 / 0.25);
-  color: rgb(167 243 208);
+  color: var(--color-accent-soft);
 }
 
 .wiki-stage-meta button:disabled {
@@ -4864,17 +5524,22 @@ a.brand-mark:hover,
 }
 
 .wiki-markdown {
-  width: min(100%, 58rem);
+  /*
+   * Generated pages run to ~2,400 words. 68ch keeps the measure inside the
+   * comfortable 45-85ch band; the previous 58rem box held ~116 characters.
+   */
+  width: min(100%, 68ch);
+  box-sizing: content-box;
   margin: 0 auto;
-  padding: 3rem clamp(1.25rem, 4vw, 3.5rem) 6rem;
-  color: rgb(184 196 211);
-  font-size: 0.88rem;
+  padding: 3rem clamp(1.25rem, 4vw, 3rem) 6rem;
+  color: var(--color-ink);
+  font-size: var(--fs-body-lg);
   line-height: 1.75;
 }
 
 .wiki-markdown > h1:first-child {
   margin-top: 0;
-  color: rgb(248 250 252);
+  color: var(--color-ink-strong);
   font-size: clamp(1.9rem, 4vw, 2.6rem);
   letter-spacing: -0.045em;
 }
@@ -4883,33 +5548,33 @@ a.brand-mark:hover,
   margin-top: 2.5rem;
   border-bottom: 1px solid rgb(148 163 184 / 0.08);
   padding-bottom: 0.55rem;
-  color: rgb(226 232 240);
-  font-size: 1.15rem;
+  color: var(--color-ink);
+  font-size: var(--fs-title);
   letter-spacing: -0.025em;
 }
 
 .wiki-markdown h3 {
   margin-top: 1.8rem;
-  color: rgb(203 213 225);
-  font-size: 0.96rem;
+  color: var(--color-ink);
+  font-size: var(--fs-body-lg);
   letter-spacing: -0.015em;
 }
 
 .wiki-markdown a {
-  color: rgb(110 231 183);
+  color: var(--color-accent-soft);
   text-decoration-color: rgb(52 211 153 / 0.32);
   text-underline-offset: 0.18em;
 }
 
 .wiki-markdown a:hover {
-  color: rgb(167 243 208);
+  color: var(--color-accent-soft);
   text-decoration-color: currentColor;
 }
 
 .wiki-markdown table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.78rem;
+  font-size: var(--fs-caption);
 }
 
 .wiki-markdown th,
@@ -4920,9 +5585,9 @@ a.brand-mark:hover,
 }
 
 .wiki-markdown th {
-  color: rgb(148 163 184);
+  color: var(--color-ink-soft);
   font-family: var(--font-mono);
-  font-size: 0.62rem;
+  font-size: var(--fs-meta);
   text-transform: uppercase;
 }
 
@@ -4951,9 +5616,9 @@ a.brand-mark:hover,
   margin-bottom: 0.9rem;
   place-items: center;
   border: 1px solid rgb(52 211 153 / 0.16);
-  border-radius: 0.7rem;
+  border-radius: var(--r-lg);
   background: rgb(16 185 129 / 0.055);
-  color: rgb(52 211 153);
+  color: var(--color-accent);
   font-family: var(--font-mono);
 }
 
@@ -4961,8 +5626,8 @@ a.brand-mark:hover,
 .wiki-loading strong,
 .wiki-error h2 {
   margin: 0;
-  color: rgb(203 213 225);
-  font-size: 0.88rem;
+  color: var(--color-ink);
+  font-size: var(--fs-body);
   font-weight: 650;
 }
 
@@ -4971,8 +5636,8 @@ a.brand-mark:hover,
 .wiki-error p {
   max-width: 25rem;
   margin: 0.45rem 0 0;
-  color: rgb(71 85 105);
-  font-size: 0.7rem;
+  color: var(--color-ink-faint);
+  font-size: var(--fs-caption);
   line-height: 1.15rem;
 }
 
@@ -4995,9 +5660,9 @@ a.brand-mark:hover,
   border-radius: 999px;
   padding: 0.38rem 0.45rem 0.38rem 0.58rem;
   background: rgb(16 185 129 / 0.045);
-  color: rgb(100 116 139);
+  color: var(--color-ink-faint);
   font-family: var(--font-mono);
-  font-size: 0.58rem;
+  font-size: var(--fs-meta);
 }
 
 .wiki-generation-live[hidden] {
@@ -5018,14 +5683,14 @@ a.brand-mark:hover,
   border-radius: 999px;
   padding: 0.22rem 0.48rem;
   background: rgb(244 63 94 / 0.055);
-  color: rgb(251 113 133 / 0.82);
+  color: var(--color-danger);
   font: inherit;
 }
 
 .wiki-generation-live button:hover:not(:disabled) {
   border-color: rgb(251 113 133 / 0.3);
   background: rgb(244 63 94 / 0.1);
-  color: rgb(254 205 211);
+  color: var(--color-danger);
 }
 
 .wiki-generation-live button:disabled {
@@ -5045,7 +5710,7 @@ a.brand-mark:hover,
 .wiki-error > span {
   border-color: rgb(251 113 133 / 0.2);
   background: rgb(244 63 94 / 0.05);
-  color: rgb(251 113 133);
+  color: var(--color-danger);
 }
 
 .wiki-provenance-meta {
@@ -5062,18 +5727,18 @@ a.brand-mark:hover,
 }
 
 .wiki-provenance-meta dt {
-  color: rgb(71 85 105);
+  color: var(--color-ink-faint);
   font-family: var(--font-mono);
-  font-size: 0.5rem;
+  font-size: var(--fs-meta);
   text-transform: uppercase;
 }
 
 .wiki-provenance-meta dd {
   overflow-wrap: anywhere;
   margin: 0;
-  color: rgb(148 163 184);
+  color: var(--color-ink-soft);
   font-family: var(--font-mono);
-  font-size: 0.59rem;
+  font-size: var(--fs-meta);
   line-height: 0.9rem;
 }
 
@@ -5087,30 +5752,30 @@ a.brand-mark:hover,
 
 .wiki-outline p {
   margin: 0;
-  color: rgb(71 85 105);
-  font-size: 0.6rem;
+  color: var(--color-ink-faint);
+  font-size: var(--fs-meta);
   line-height: 1rem;
 }
 
 .wiki-outline a {
   border-left: 1px solid rgb(148 163 184 / 0.1);
   padding: 0.32rem 0.45rem;
-  color: rgb(100 116 139);
-  font-size: 0.62rem;
+  color: var(--color-ink-faint);
+  font-size: var(--fs-meta);
   line-height: 0.95rem;
   text-decoration: none;
 }
 
 .wiki-outline a[data-depth="1"] {
   padding-left: 1rem;
-  color: rgb(71 85 105);
-  font-size: 0.57rem;
+  color: var(--color-ink-faint);
+  font-size: var(--fs-meta);
 }
 
 .wiki-outline a:hover {
   border-left-color: rgb(52 211 153 / 0.6);
   background: rgb(16 185 129 / 0.035);
-  color: rgb(167 243 208);
+  color: var(--color-accent-soft);
 }
 
 .wiki-supporting-files,
@@ -5139,11 +5804,11 @@ a.brand-mark:hover,
 .wiki-supporting-files li {
   overflow: hidden;
   border: 1px solid rgb(148 163 184 / 0.07);
-  border-radius: 0.42rem;
+  border-radius: var(--r-xs);
   padding: 0.45rem 0.5rem;
-  color: rgb(100 116 139);
+  color: var(--color-ink-faint);
   font-family: var(--font-mono);
-  font-size: 0.54rem;
+  font-size: var(--fs-meta);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -5152,7 +5817,7 @@ a.brand-mark:hover,
   display: grid;
   gap: 0.16rem;
   border: 1px solid rgb(148 163 184 / 0.08);
-  border-radius: 0.45rem;
+  border-radius: var(--r-sm);
   padding: 0.5rem;
   background: rgb(15 23 42 / 0.3);
   text-decoration: none;
@@ -5165,26 +5830,53 @@ a.brand-mark:hover,
 
 .wiki-citations strong {
   overflow: hidden;
-  color: rgb(148 163 184);
+  color: var(--color-ink-soft);
   font-family: var(--font-mono);
-  font-size: 0.55rem;
+  font-size: var(--fs-meta);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .wiki-citations span {
-  color: rgb(71 85 105);
+  color: var(--color-ink-faint);
   font-family: var(--font-mono);
-  font-size: 0.49rem;
+  font-size: var(--fs-meta);
 }
 
 @media (max-width: 1180px) {
   .wiki-workspace {
-    grid-template-columns: 18rem minmax(0, 1fr);
+    grid-template-columns: 19.5rem minmax(0, 1fr);
   }
 
+  /*
+   * Never hide evidence. Below the docked breakpoint the provenance rail — page
+   * outline, source citations, revision, and token usage — becomes an overlay
+   * reachable from the stage header, matching the map inspector and the chat
+   * evidence panel.
+   */
   .wiki-provenance {
-    display: none;
+    position: fixed;
+    z-index: 40;
+    top: 4rem;
+    right: 0;
+    bottom: 0;
+    width: min(23rem, 92vw);
+    transform: translateX(100%);
+    border-left: 1px solid var(--color-line-strong);
+    box-shadow: -20px 0 60px rgb(0 0 0 / 0.5);
+    transition: transform 180ms ease;
+  }
+
+  .wiki-provenance[data-open="true"] {
+    transform: translateX(0);
+  }
+
+  .wiki-provenance .evidence-drawer-close {
+    display: block;
+  }
+
+  .wiki-stage .evidence-drawer-toggle {
+    display: inline-flex;
   }
 }
 
@@ -5205,8 +5897,10 @@ a.brand-mark:hover,
     border-bottom: 1px solid rgb(148 163 184 / 0.09);
   }
 
+  /* Sections nest, so the stacked layout keeps a single column here. */
   .wiki-page-list {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    flex: none;
+    overflow-y: visible;
   }
 
   .wiki-page-row {
@@ -5236,10 +5930,6 @@ a.brand-mark:hover,
 }
 
 @media (max-width: 520px) {
-  .wiki-page-list {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
   .wiki-stage-meta .wiki-status-chip {
     display: none;
   }

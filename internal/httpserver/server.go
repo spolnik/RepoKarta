@@ -2,7 +2,9 @@ package httpserver
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -174,8 +176,10 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 		"lineFocused": func(line, start, end int) bool {
 			return start > 0 && line >= start && line <= end
 		},
-		"shortCommit": shortCommit,
-		"statusLabel": statusLabel,
+		"shortCommit":     shortCommit,
+		"statusLabel":     statusLabel,
+		"nextSearchLimit": nextSearchLimit,
+		"indexProgress":   indexProgress,
 	}
 	templates, err := template.New("repokarta").Funcs(functions).ParseFS(web.Files, "templates/*.html")
 	if err != nil {
@@ -199,7 +203,7 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 	server.history, _ = config.Conversations.(ConversationHistoryService)
 
 	mux := http.NewServeMux()
-	mux.Handle("GET /assets/", http.FileServer(http.FS(dist)))
+	mux.Handle("GET /assets/", staticAssets(dist))
 	mux.HandleFunc("GET /{$}", server.home)
 	mux.HandleFunc("GET /repositories", server.repositoryList)
 	mux.HandleFunc("POST /repositories/refresh", server.refreshRepositories)
@@ -748,7 +752,9 @@ func (s *Server) repositoryList(response http.ResponseWriter, request *http.Requ
 		http.Error(response, "Could not load repositories", http.StatusInternalServerError)
 		return
 	}
-	s.render(response, "repository-list", data)
+	// The fragment carries out-of-band copies of the header health chip and the
+	// drawer metric tiles so a catalogue change updates all three together.
+	s.render(response, "repository-list-fragment", data)
 }
 
 func (s *Server) refreshRepositories(response http.ResponseWriter, request *http.Request) {
@@ -1027,6 +1033,13 @@ func writeDocumentationError(response http.ResponseWriter, err error) {
 		writeAPIError(response, http.StatusConflict, err)
 	case strings.Contains(err.Error(), ".repokarta.yml"):
 		writeAPIError(response, http.StatusUnprocessableEntity, err)
+	case errors.Is(err, docs.ErrGenerationRejected):
+		// A quality gate rejected the provider result. The reason is the whole
+		// value of the message and is safe to return: it names sections, counts,
+		// and page slugs, never filesystem paths or credentials. It is also
+		// logged so a completed run can be diagnosed after the fact.
+		slog.Warn("documentation generation rejected", "error", err)
+		writeAPIError(response, http.StatusUnprocessableEntity, err)
 	default:
 		slog.Error("documentation request", "error", err)
 		writeAPIError(response, http.StatusInternalServerError, errors.New("documentation request could not be completed"))
@@ -1270,6 +1283,75 @@ func statusLabel(state string) string {
 	default:
 		return "Queued"
 	}
+}
+
+// staticAssets serves the embedded frontend with a build-derived validator.
+//
+// Asset paths are unversioned (/assets/app.js, /assets/app.css) and embed.FS
+// reports a zero modification time, so http.ServeContent emitted no ETag, no
+// Last-Modified, and no Cache-Control. A browser was therefore free to keep
+// serving a previous build's JavaScript and CSS against freshly rendered HTML
+// after an upgrade, which presents as a badly broken page rather than as a
+// caching problem. Revalidating on every load costs nothing over loopback.
+func staticAssets(dist fs.FS) http.Handler {
+	tag := buildETag(dist)
+	files := http.FileServer(http.FS(dist))
+	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if tag != "" {
+			response.Header().Set("ETag", tag)
+		}
+		response.Header().Set("Cache-Control", "no-cache")
+		files.ServeHTTP(response, request)
+	})
+}
+
+// buildETag hashes every embedded asset once at startup so all assets from one
+// build share a validator. An empty result disables conditional requests rather
+// than failing to serve.
+func buildETag(dist fs.FS) string {
+	digest := sha256.New()
+	err := fs.WalkDir(dist, ".", func(path string, entry fs.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return err
+		}
+		content, readErr := fs.ReadFile(dist, path)
+		if readErr != nil {
+			return readErr
+		}
+		fmt.Fprintf(digest, "%s:%d:", path, len(content))
+		digest.Write(content)
+		return nil
+	})
+	if err != nil {
+		slog.Warn("compute asset etag", "error", err)
+		return ""
+	}
+	return fmt.Sprintf("%q", hex.EncodeToString(digest.Sum(nil))[:32])
+}
+
+// nextSearchLimit is the file limit a "Show more" control should request after
+// a truncated result set. It roughly doubles the current limit and stops at the
+// service ceiling so the control never offers a limit the API would reject.
+func nextSearchLimit(limit int) int {
+	if limit < 1 {
+		limit = codeintel.DefaultSearchLimit
+	}
+	next := limit * 2
+	if next > codeintel.MaximumSearchLimit {
+		next = codeintel.MaximumSearchLimit
+	}
+	return next
+}
+
+// indexProgress reports how far first-run indexing has advanced, as a
+// percentage suitable for a progress bar width. It is clamped so a catalogue
+// that changes size mid-scan cannot produce an out-of-range bar.
+func indexProgress(ready, total int) int {
+	if total <= 0 {
+		return 0
+	}
+	percent := ready * 100 / total
+	return min(100, max(0, percent))
 }
 
 func repositorySignature(repositories []catalog.Repository) string {
