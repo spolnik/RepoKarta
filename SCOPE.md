@@ -198,6 +198,10 @@ repositories on managed Windows and Apple Silicon macOS laptops.
   chain, and opening supporting source.
 - Prefer legible curated layers over an unfiltered graph containing every
   symbol.
+- Default the map to a single repository. The cross-repository view is an
+  explicit choice, is bounded to a fixed number of repositories, and reports
+  truncation rather than appearing complete, because analyzing several hundred
+  repositories at once is slow and rarely legible.
 
 ### Living documentation
 

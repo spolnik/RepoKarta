@@ -27,10 +27,10 @@
         <label class="map-field">
           <span>Repository scope</span>
           <select data-map-repository>
-            <option value="">All repositories</option>
-            {{range .Repositories}}
-            <option value="{{.ID}}">{{index $.RepositoryLabels .ID}}</option>
+            {{range $index, $repository := .Repositories}}
+            <option value="{{$repository.ID}}" {{if eq $index 0}}selected{{end}}>{{index $.RepositoryLabels $repository.ID}}</option>
             {{end}}
+            <option value="">All {{len .Repositories}} repositories (slower)</option>
           </select>
         </label>
 

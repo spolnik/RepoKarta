@@ -2,6 +2,7 @@ package graph
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -623,5 +624,55 @@ spring:
 	unrelated := []byte("name: build\njobs:\n  test:\n    name: unit\n")
 	if name := springApplicationName("src/main/resources/application.yaml", unrelated); name != "" {
 		t.Fatalf("unrelated YAML produced application name %q", name)
+	}
+}
+
+func TestCollectionSnapshotIsBoundedAndReportsTruncation(t *testing.T) {
+	// A large collection must not analyze every repository before rendering.
+	root, revision := javaGraphFixture(t, map[string]string{
+		"build.gradle": `dependencies {
+    implementation 'org.springframework.boot:spring-boot-starter-web:4.0.1'
+}`,
+	})
+	repositories := make([]catalog.Repository, 0, maximumCollectionRepositories+5)
+	for index := range maximumCollectionRepositories + 5 {
+		repositories = append(repositories, catalog.Repository{
+			ID:            int64(index + 1),
+			Name:          fmt.Sprintf("service-%02d", index),
+			Path:          root,
+			HeadCommit:    revision,
+			IndexedCommit: revision,
+			IndexState:    "ready",
+		})
+	}
+	service, err := New(
+		multiGraphStore{repositories: repositories},
+		filepath.Join(t.TempDir(), "maps"),
+		"http://127.0.0.1:7331",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	collection, err := service.Snapshot(context.Background(), 0, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(collection.Repositories) != maximumCollectionRepositories {
+		t.Fatalf("collection analyzed %d repositories, want %d",
+			len(collection.Repositories), maximumCollectionRepositories)
+	}
+	if !collection.Truncated {
+		t.Fatal("bounded collection did not report truncation")
+	}
+
+	// Selecting one repository stays complete.
+	single, err := service.Snapshot(context.Background(), 3, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(single.Repositories) != 1 || single.Truncated {
+		t.Fatalf("single repository snapshot = %d repositories, truncated=%v",
+			len(single.Repositories), single.Truncated)
 	}
 }

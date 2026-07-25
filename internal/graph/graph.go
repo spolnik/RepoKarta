@@ -36,7 +36,11 @@ const (
 	// Curated layer budgets keep large Java and Kotlin services legible.
 	maximumComponentsPerRepository = 300
 	maximumRoutesPerRepository     = 900
-	commandTimeout                 = 20 * time.Second
+	// maximumCollectionRepositories bounds the cross-repository view. A
+	// collection of several hundred repositories would otherwise be analyzed in
+	// full before anything could render.
+	maximumCollectionRepositories = 40
+	commandTimeout                = 20 * time.Second
 )
 
 // RepositoryStore supplies the catalogue without exposing paths to clients.
@@ -161,7 +165,16 @@ func (s *Service) Snapshot(ctx context.Context, repositoryID int64, refresh bool
 	}
 
 	builder := newBuilder(s.baseURL)
-	for _, repository := range repositories {
+	// A cross-repository map over a large collection is expensive and rarely
+	// legible, so the collection view analyzes a bounded number of
+	// repositories and reports the cut explicitly rather than appearing
+	// complete. Selecting one repository is never truncated.
+	analyzed := repositories
+	if repositoryID == 0 && len(analyzed) > maximumCollectionRepositories {
+		analyzed = analyzed[:maximumCollectionRepositories]
+		builder.truncated = true
+	}
+	for _, repository := range analyzed {
 		if err := builder.analyzeRepository(ctx, repository); err != nil {
 			return Snapshot{}, fmt.Errorf("map repository %s: %w", repository.Name, err)
 		}
