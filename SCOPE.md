@@ -64,7 +64,11 @@ repositories on managed Windows and Apple Silicon macOS laptops.
 - Record repository path, display name, origin URL, default revision, HEAD
   commit, scan state, index state, and timestamps.
 - Allow repositories and directories to be excluded.
-- Skip hidden directories such as `.jobguard-wt` worktrees by default.
+- Skip hidden directories such as `.git` internals and `.jobguard-wt`
+  worktrees by default.
+- Respect `.gitignore` rules while discovering repositories so vendored
+  copies, build output, and dependency caches are never registered as
+  repositories.
 - Disambiguate repositories that share a name in every picker using a stable
   path or identity suffix.
 - Never fetch, pull, checkout, reset, clean, or otherwise modify repositories.
