@@ -1,6 +1,6 @@
 {{define "maps"}}
 <!doctype html>
-<html lang="en" class="h-full bg-[#090b0f]">
+<html lang="en" class="h-full bg-surface-base">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -13,7 +13,8 @@
     <link rel="stylesheet" href="/assets/app.css">
     <script type="module" src="/assets/app.js"></script>
   </head>
-  <body class="h-full overflow-hidden bg-[#090b0f] text-slate-100 antialiased">
+  <body class="h-full overflow-hidden bg-surface-base text-ink-strong antialiased">
+    <a class="skip-link" href="#map-node-search">Skip to node search</a>
     {{template "app-header" .}}
 
     <main class="map-workspace" data-map-workspace>
@@ -98,9 +99,32 @@
           <div class="map-stage-actions">
             <button type="button" data-map-focus disabled>Focus neighbors</button>
             <button type="button" data-map-reset>Reset view</button>
+            <button type="button" data-map-list-toggle aria-pressed="false">List view</button>
+            <button type="button" data-debug-toggle aria-controls="conversation-debug" aria-expanded="false" title="Session diagnostics">
+              Debug <strong data-debug-count class="debug-toggle-count" data-empty="true">0</strong>
+            </button>
+            <button
+              type="button"
+              class="evidence-drawer-toggle"
+              data-map-inspector-toggle
+              aria-controls="map-inspector"
+              aria-expanded="false"
+            >
+              <span>Evidence</span>
+              <strong data-map-evidence-total>0</strong>
+            </button>
           </div>
         </div>
-        <div class="map-canvas" data-map-canvas aria-label="Repository dependency graph"></div>
+        {{/*
+          The graph renders to a canvas, which is unreachable by keyboard and
+          invisible to a screen reader. This list is the same node set in DOM
+          form: focusable, announced, and wired to the same inspector.
+        */}}
+        <div class="map-canvas" data-map-canvas role="presentation"></div>
+        <div class="map-node-list" data-map-node-list hidden>
+          <p class="map-node-list-note">Every node in the current view. Selecting one opens the same source evidence as the graph.</p>
+          <ol data-map-node-list-items aria-label="Repository graph nodes"></ol>
+        </div>
         <div class="map-loading" data-map-loading>
           <span class="map-loading-mark" aria-hidden="true"></span>
           <strong>Reading committed structure</strong>
@@ -115,7 +139,26 @@
         </div>
       </section>
 
-      <aside class="map-inspector" aria-labelledby="map-inspector-heading">
+      <button
+        type="button"
+        class="evidence-drawer-scrim"
+        data-map-inspector-scrim
+        aria-label="Close evidence"
+        hidden
+      ></button>
+
+      <aside
+        id="map-inspector"
+        class="map-inspector"
+        data-open="false"
+        aria-labelledby="map-inspector-heading"
+      >
+        <button
+          type="button"
+          class="evidence-drawer-close map-inspector-close"
+          data-map-inspector-close
+          aria-label="Close evidence"
+        >×</button>
         <div class="map-inspector-empty" data-map-inspector-empty>
           <span aria-hidden="true">↗</span>
           <h2 id="map-inspector-heading">Select a fact</h2>
@@ -143,6 +186,8 @@
         </div>
       </aside>
     </main>
+
+    {{template "debug-window" "Repository map debug log"}}
   </body>
 </html>
 {{end}}

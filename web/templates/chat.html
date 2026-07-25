@@ -1,6 +1,6 @@
 {{define "chat"}}
 <!doctype html>
-<html lang="en" class="h-full bg-[#090b0f]">
+<html lang="en" class="h-full bg-surface-base">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -13,7 +13,8 @@
     <link rel="stylesheet" href="/assets/app.css">
     <script type="module" src="/assets/app.js"></script>
   </head>
-  <body class="h-full overflow-hidden bg-[#090b0f] text-slate-100 antialiased">
+  <body class="h-full overflow-hidden bg-surface-base text-ink-strong antialiased">
+    <a class="skip-link" href="#conversation-message">Skip to the question box</a>
     {{template "app-header" .}}
 
     <main class="chat-app-shell" data-chat-workspace>
@@ -44,7 +45,7 @@
             <path d="M10 4v12M4 10h12"></path>
           </svg>
           New conversation
-          <kbd>Ctrl N</kbd>
+          <kbd data-platform-shortcut="N">Ctrl N</kbd>
         </button>
 
         <label class="conversation-history-search">
@@ -99,12 +100,17 @@
               <span>Evidence</span>
               <strong data-evidence-count>0</strong>
             </button>
-            <button type="button" class="conversation-header-button debug-toggle" data-debug-toggle aria-controls="conversation-debug" aria-expanded="false">
+            {{/*
+              Diagnostics are a support tool, not a co-primary action. It keeps
+              its full label for screen readers but drops to icon weight beside
+              Evidence, which is the panel that carries the product's value.
+            */}}
+            <button type="button" class="conversation-icon-button debug-toggle" data-debug-toggle aria-controls="conversation-debug" aria-expanded="false" title="Session diagnostics">
               <svg viewBox="0 0 20 20" aria-hidden="true">
                 <path d="M7 4.5h6M7 15.5h6M5.5 7.5h9v5h-9z"></path>
               </svg>
-              <span>Debug</span>
-              <strong data-debug-count>0</strong>
+              <span class="sr-only">Debug</span>
+              <strong data-debug-count class="debug-toggle-count" data-empty="true">0</strong>
             </button>
             <button type="button" class="conversation-icon-button" data-new-conversation aria-label="Start a new conversation">
               <svg viewBox="0 0 20 20" aria-hidden="true">
@@ -124,18 +130,27 @@
             <p class="conversation-empty-copy">
               Ask across {{len .Repositories}} indexed repositories. Every answer stays read-only and links back to commit-pinned evidence.
             </p>
+            {{/*
+              Starters name a repository actually present in the catalogue
+              rather than assuming a stack. Language-specific suggestions are
+              deliberately avoided: the only language inventory available is the
+              map snapshot, which is far too expensive to build on first paint.
+            */}}
             <div class="conversation-starters" aria-label="Suggested questions">
-              <button type="button" data-chat-prompt="Map the authentication flow across these repositories.">
-                <span>Trace a system</span>
-                Map the authentication flow
+              {{if .Repositories}}
+              {{$first := index .Repositories 0}}
+              <button type="button" data-chat-prompt="Give me an architectural tour of {{$first.Name}}: its entry points, main components, and how they fit together.">
+                <span>Start somewhere real</span>
+                Tour {{$first.Name}}
               </button>
-              <button type="button" data-chat-prompt="Explain the deployment architecture and cite the relevant configuration.">
-                <span>Understand architecture</span>
-                Explain deployment configuration
-              </button>
-              <button type="button" data-chat-prompt="Find the shared dependencies across these projects and explain how they are used.">
+              {{end}}
+              <button type="button" data-chat-prompt="Find the shared dependencies across these projects and explain how each one is used.">
                 <span>Compare repositories</span>
                 Find shared dependencies
+              </button>
+              <button type="button" data-chat-prompt="Where does configuration come from at runtime, and which files define it? Cite the exact sources.">
+                <span>Trace a system</span>
+                Explain configuration sources
               </button>
             </div>
           </div>
@@ -178,6 +193,12 @@
                   <summary>
                     <span class="conversation-provider-dot" aria-hidden="true"></span>
                     <span id="conversation-provider-label">Checking providers…</span>
+                    {{/*
+                      Provider and model cannot change once a conversation
+                      starts. That was only stated inside this popover, so the
+                      constraint is now visible on the trigger itself.
+                    */}}
+                    <span class="conversation-settings-lock" data-settings-lock hidden>Locked</span>
                     <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m6.5 8 3.5 4 3.5-4"></path></svg>
                   </summary>
                   <div class="conversation-settings-popover">
@@ -334,27 +355,7 @@
       </aside>
     </main>
 
-    <aside id="conversation-debug" class="debug-window" aria-labelledby="debug-heading" hidden>
-      <header class="debug-window-header">
-        <div>
-          <p class="debug-window-kicker">Session diagnostics</p>
-          <h2 id="debug-heading">Chat debug log</h2>
-        </div>
-        <div class="flex items-center gap-1.5">
-          <button type="button" class="debug-action" data-debug-copy>Copy logs</button>
-          <button type="button" class="debug-action" data-debug-clear>Clear</button>
-          <button type="button" class="debug-close" data-debug-close aria-label="Close debug log">×</button>
-        </div>
-      </header>
-      <div class="debug-window-summary">
-        <span class="status-dot" aria-hidden="true"></span>
-        <span>Diagnostics stay in this browser session</span>
-        <span>·</span>
-        <span>Saved chats persist locally; credentials never do</span>
-      </div>
-      <ol id="debug-entries" class="debug-entries" aria-live="polite"></ol>
-      <p class="debug-empty" data-debug-empty>No diagnostics yet.</p>
-    </aside>
+    {{template "debug-window" "Chat debug log"}}
 
     <dialog id="token-budget-help" class="settings-help-dialog" aria-labelledby="token-budget-help-title">
       <div class="settings-help-card">

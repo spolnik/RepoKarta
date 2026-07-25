@@ -1,6 +1,6 @@
 {{define "wiki"}}
 <!doctype html>
-<html lang="en" class="h-full bg-[#090b0f]">
+<html lang="en" class="h-full bg-surface-base">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -13,11 +13,13 @@
     <link rel="stylesheet" href="/assets/app.css">
     <script type="module" src="/assets/app.js"></script>
   </head>
-  <body class="h-full overflow-hidden bg-[#090b0f] text-slate-100 antialiased">
+  <body class="h-full overflow-hidden bg-surface-base text-ink-strong antialiased">
+    <a class="skip-link" href="#wiki-article">Skip to the page</a>
     {{template "app-header" .}}
 
     <main class="wiki-workspace" data-wiki-workspace>
       <aside class="wiki-sidebar" aria-label="Documentation controls">
+        <div class="wiki-sidebar-controls">
         <header class="wiki-sidebar-heading">
           <p class="wiki-kicker">Code knowledge</p>
           <h1>Deep Wiki</h1>
@@ -131,6 +133,7 @@
           <span class="sr-only">Filter Wiki pages</span>
           <input type="search" data-wiki-page-search placeholder="Filter knowledge pages…">
         </label>
+        </div>
         <nav class="wiki-page-list" data-wiki-pages aria-label="Documentation pages"></nav>
       </aside>
 
@@ -146,10 +149,34 @@
           <div class="wiki-stage-meta">
             <span class="wiki-status-chip" data-wiki-page-status data-state="planned">Not generated</span>
             <button type="button" data-wiki-refresh-page disabled>Refresh page</button>
+            <button
+              type="button"
+              class="conversation-icon-button debug-toggle"
+              data-debug-toggle
+              aria-controls="conversation-debug"
+              aria-expanded="false"
+              title="Session diagnostics"
+            >
+              <svg viewBox="0 0 20 20" aria-hidden="true">
+                <path d="M7 4.5h6M7 15.5h6M5.5 7.5h9v5h-9z"></path>
+              </svg>
+              <span class="sr-only">Debug</span>
+              <strong data-debug-count class="debug-toggle-count" data-empty="true">0</strong>
+            </button>
+            <button
+              type="button"
+              class="evidence-drawer-toggle"
+              data-wiki-provenance-toggle
+              aria-controls="wiki-provenance"
+              aria-expanded="false"
+            >
+              <span>Evidence</span>
+              <strong data-wiki-evidence-count>0</strong>
+            </button>
           </div>
         </header>
 
-        <div class="wiki-article-scroll">
+        <div class="wiki-article-scroll" id="wiki-article" tabindex="-1">
           <article class="conversation-markdown wiki-markdown" data-wiki-content hidden></article>
           <div class="wiki-empty" data-wiki-empty>
             <span class="wiki-empty-mark" aria-hidden="true">⌘</span>
@@ -157,14 +184,74 @@
             <p>RepoKarta will inspect the code and build a repository-specific hierarchy of concepts and implementation flows.</p>
           </div>
           <div class="wiki-loading" data-wiki-loading hidden>
-            <span class="wiki-loading-mark" aria-hidden="true"></span>
-            <strong>Reading structural evidence</strong>
-            <p>Planning pages from the commit-pinned repository map.</p>
-            <div class="wiki-generation-live" data-wiki-generation-live hidden>
-              <span class="wiki-generation-pulse" aria-hidden="true"></span>
-              <span data-wiki-generation-elapsed>0:00 elapsed · 10:00 timeout</span>
-              <button type="button" data-wiki-cancel-generation>Cancel</button>
+            {{/* Quiet spinner for ordinary page reads. */}}
+            <div class="wiki-loading-quiet" data-wiki-loading-quiet>
+              <span class="wiki-loading-mark" aria-hidden="true"></span>
+              <strong>Reading structural evidence</strong>
+              <p>Planning pages from the commit-pinned repository map.</p>
             </div>
+
+            {{/*
+              Generation is a three-stage pipeline whose last stage is a loop of
+              one provider call per page, and a full run can take half an hour.
+              A spinner and a "checkpoint N of 3" caption hid all of that, so the
+              run is drawn as the pipeline it actually is.
+            */}}
+            <section class="wiki-run" data-wiki-run hidden aria-label="Deep Wiki generation progress">
+              <header class="wiki-run-header">
+                <div>
+                  <p class="wiki-kicker">Deep Wiki run</p>
+                  <h3 data-wiki-run-title>Building the knowledge map</h3>
+                </div>
+                <span class="wiki-run-engine" data-wiki-run-engine></span>
+              </header>
+
+              <ol class="wiki-run-stages" data-wiki-run-stages>
+                <li data-stage="survey" data-state="pending">
+                  <span class="wiki-run-stage-mark" aria-hidden="true"></span>
+                  <span class="wiki-run-stage-copy">
+                    <strong>Survey</strong>
+                    <span data-stage-detail>Bounded code discovery, saved as survey.md</span>
+                  </span>
+                  <span class="wiki-run-stage-state" data-stage-state>Waiting</span>
+                </li>
+                <li data-stage="plan" data-state="pending">
+                  <span class="wiki-run-stage-mark" aria-hidden="true"></span>
+                  <span class="wiki-run-stage-copy">
+                    <strong>Knowledge map</strong>
+                    <span data-stage-detail>Survey organised into a page hierarchy</span>
+                  </span>
+                  <span class="wiki-run-stage-state" data-stage-state>Waiting</span>
+                </li>
+                <li data-stage="pages" data-state="pending">
+                  <span class="wiki-run-stage-mark" aria-hidden="true"></span>
+                  <span class="wiki-run-stage-copy">
+                    <strong>Pages</strong>
+                    <span data-stage-detail>One grounded Markdown file per page</span>
+                  </span>
+                  <span class="wiki-run-stage-state" data-stage-state>Waiting</span>
+                </li>
+              </ol>
+
+              <div class="wiki-run-progress" data-wiki-run-progress hidden>
+                <div class="wiki-run-bar"><span data-wiki-run-bar style="width: 0%"></span></div>
+                <p class="wiki-run-current" data-wiki-run-current></p>
+                <ol class="wiki-run-pages" data-wiki-run-pages aria-label="Pages in this run"></ol>
+              </div>
+
+              <dl class="wiki-run-stats">
+                <div><dt>Done</dt><dd data-wiki-run-done>0 / 0</dd></div>
+                <div><dt>This step</dt><dd data-wiki-run-step-elapsed>0:00</dd></div>
+                <div><dt>Total</dt><dd data-wiki-run-total-elapsed>0:00</dd></div>
+                <div><dt>Tokens</dt><dd data-wiki-run-tokens>0 in · 0 out</dd></div>
+              </dl>
+
+              <footer class="wiki-run-actions">
+                <span class="wiki-generation-pulse" aria-hidden="true"></span>
+                <span data-wiki-run-note>Completed pages are already saved and survive cancellation.</span>
+                <button type="button" data-wiki-cancel-generation>Cancel</button>
+              </footer>
+            </section>
           </div>
           <div class="wiki-error" data-wiki-error hidden>
             <span aria-hidden="true">!</span>
@@ -174,11 +261,33 @@
         </div>
       </section>
 
-      <aside class="wiki-provenance" aria-labelledby="wiki-provenance-heading">
-        <header>
-          <p class="wiki-kicker">Page navigation</p>
-          <h2 id="wiki-provenance-heading">On this page</h2>
-          <p>Jump between the concepts, flows, and implementation details explained here.</p>
+      <button
+        type="button"
+        class="evidence-drawer-scrim"
+        data-wiki-provenance-scrim
+        aria-label="Close evidence"
+        hidden
+      ></button>
+
+      <aside
+        id="wiki-provenance"
+        class="wiki-provenance"
+        data-wiki-provenance
+        data-open="false"
+        aria-labelledby="wiki-provenance-heading"
+      >
+        <header class="wiki-provenance-header">
+          <div>
+            <p class="wiki-kicker">Page navigation</p>
+            <h2 id="wiki-provenance-heading">On this page</h2>
+            <p>Jump between the concepts, flows, and implementation details explained here.</p>
+          </div>
+          <button
+            type="button"
+            class="evidence-drawer-close"
+            data-wiki-provenance-close
+            aria-label="Close evidence"
+          >×</button>
         </header>
         <nav class="wiki-outline" data-wiki-outline aria-label="On this page">
           <p>Headings appear after a page is generated.</p>
@@ -211,6 +320,8 @@
         </section>
       </aside>
     </main>
+
+    {{template "debug-window" "Deep Wiki debug log"}}
 
     <dialog id="token-budget-help" class="settings-help-dialog" aria-labelledby="token-budget-help-title">
       <div class="settings-help-card">
