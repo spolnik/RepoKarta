@@ -2445,6 +2445,633 @@ function enableConversations(debug?: DebugLogger): void {
   });
 }
 
+type MapEvidence = {
+  repository_id: number;
+  repository: string;
+  revision: string;
+  path: string;
+  line: number;
+  label: string;
+  url: string;
+};
+
+type MapNode = {
+  id: string;
+  kind: string;
+  label: string;
+  subtitle?: string;
+  layer: string;
+  repository_id?: number;
+  repository?: string;
+  path?: string;
+  evidence: MapEvidence[];
+};
+
+type MapEdge = {
+  id: string;
+  source: string;
+  target: string;
+  kind: string;
+  label: string;
+  evidence: MapEvidence[];
+};
+
+type MapSnapshot = {
+  id: string;
+  generated_at: string;
+  repositories: Array<{ id: number; name: string; revision: string; file_count: number }>;
+  languages: Array<{ name: string; files: number; percentage: number }>;
+  manifests: Array<{ kind: string; path: string }>;
+  nodes: MapNode[];
+  edges: MapEdge[];
+  file_count: number;
+  truncated: boolean;
+};
+
+function enableRepositoryMaps(debug?: DebugLogger): void {
+  const workspace = document.querySelector<HTMLElement>("[data-map-workspace]");
+  const canvas = document.querySelector<HTMLElement>("[data-map-canvas]");
+  const loading = document.querySelector<HTMLElement>("[data-map-loading]");
+  const repository = document.querySelector<HTMLSelectElement>("[data-map-repository]");
+  const search = document.querySelector<HTMLInputElement>("[data-map-search]");
+  const searchResults = document.querySelector<HTMLElement>("[data-map-search-results]");
+  const refresh = document.querySelector<HTMLButtonElement>("[data-map-refresh]");
+  const exportLink = document.querySelector<HTMLAnchorElement>("[data-map-export]");
+  const status = document.querySelector<HTMLElement>("[data-map-status]");
+  const summaryHeading = document.querySelector<HTMLElement>("#map-summary-heading");
+  const snapshotID = document.querySelector<HTMLElement>("[data-map-snapshot-id]");
+  const repositoryCount = document.querySelector<HTMLElement>("[data-map-repositories]");
+  const fileCount = document.querySelector<HTMLElement>("[data-map-files]");
+  const nodeCount = document.querySelector<HTMLElement>("[data-map-nodes]");
+  const edgeCount = document.querySelector<HTMLElement>("[data-map-edges]");
+  const languages = document.querySelector<HTMLElement>("[data-map-languages]");
+  const focus = document.querySelector<HTMLButtonElement>("[data-map-focus]");
+  const reset = document.querySelector<HTMLButtonElement>("[data-map-reset]");
+  const inspector = document.querySelector<HTMLElement>(".map-inspector");
+  const inspectorEmpty = document.querySelector<HTMLElement>("[data-map-inspector-empty]");
+  const inspectorContent = document.querySelector<HTMLElement>("[data-map-inspector-content]");
+  const inspectorKind = document.querySelector<HTMLElement>("[data-map-inspector-kind]");
+  const inspectorTitle = document.querySelector<HTMLElement>("[data-map-inspector-title]");
+  const inspectorSubtitle = document.querySelector<HTMLElement>("[data-map-inspector-subtitle]");
+  const inspectorLayer = document.querySelector<HTMLElement>("[data-map-inspector-layer]");
+  const inspectorRepository = document.querySelector<HTMLElement>("[data-map-inspector-repository]");
+  const inspectorPath = document.querySelector<HTMLElement>("[data-map-inspector-path]");
+  const inspectorEvidence = document.querySelector<HTMLOListElement>("[data-map-evidence]");
+  const inspectorEvidenceCount = document.querySelector<HTMLElement>("[data-map-evidence-count]");
+  const viewButtons = Array.from(document.querySelectorAll<HTMLButtonElement>("[data-map-view]"));
+  if (
+    !workspace || !canvas || !loading || !repository || !search || !searchResults || !refresh || !exportLink || !status ||
+    !summaryHeading || !snapshotID || !repositoryCount || !fileCount || !nodeCount || !edgeCount ||
+    !languages || !focus || !reset || !inspector || !inspectorEmpty || !inspectorContent ||
+    !inspectorKind || !inspectorTitle || !inspectorSubtitle || !inspectorLayer ||
+    !inspectorRepository || !inspectorPath || !inspectorEvidence || !inspectorEvidenceCount ||
+    viewButtons.length === 0
+  ) {
+    return;
+  }
+
+  type MapCore = import("cytoscape").Core;
+  type MapEvent = import("cytoscape").EventObject;
+  type MapSingular = import("cytoscape").NodeSingular | import("cytoscape").EdgeSingular;
+
+  let graph: MapCore | undefined;
+  let selected: MapSingular | undefined;
+  let activeView = "all";
+  let loadRevision = 0;
+  let sharedDependencyIDs = new Set<string>();
+
+  const selectedRepositoryQuery = (): string => repository.value ? `repository=${encodeURIComponent(repository.value)}` : "";
+
+  const updateExportLink = (): void => {
+    const query = selectedRepositoryQuery();
+    exportLink.href = `/api/maps/export${query ? `?${query}` : ""}`;
+  };
+
+  const clearInspector = (): void => {
+    selected = undefined;
+    focus.disabled = true;
+    inspectorEmpty.hidden = false;
+    inspectorContent.hidden = true;
+    inspector.dataset.open = "false";
+  };
+
+  const showEvidence = (evidence: MapEvidence[]): void => {
+    inspectorEvidence.replaceChildren();
+    inspectorEvidenceCount.textContent = String(evidence.length);
+    for (const item of evidence) {
+      const listItem = document.createElement("li");
+      const link = document.createElement("a");
+      link.href = item.url;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      const label = document.createElement("strong");
+      label.textContent = `${item.repository} · ${item.path}:${item.line}`;
+      const detail = document.createElement("span");
+      detail.textContent = `${item.revision.slice(0, 8)} · ${item.label}`;
+      link.append(label, detail);
+      listItem.append(link);
+      inspectorEvidence.append(listItem);
+    }
+  };
+
+  const inspectElement = (element: MapSingular): void => {
+    selected = element;
+    focus.disabled = false;
+    inspectorEmpty.hidden = true;
+    inspectorContent.hidden = false;
+    inspector.dataset.open = "true";
+    if (element.isNode()) {
+      const fact = element.data("fact") as MapNode;
+      inspectorKind.textContent = fact.kind;
+      inspectorTitle.textContent = fact.label;
+      inspectorSubtitle.textContent = fact.subtitle || "Deterministic structural fact";
+      inspectorLayer.textContent = fact.layer;
+      inspectorRepository.textContent = fact.repository || "Shared across repositories";
+      inspectorPath.textContent = fact.path || "—";
+      showEvidence(fact.evidence);
+    } else {
+      const fact = element.data("fact") as MapEdge;
+      inspectorKind.textContent = "relationship";
+      inspectorTitle.textContent = `${element.source().data("label")} → ${element.target().data("label")}`;
+      inspectorSubtitle.textContent = fact.label;
+      inspectorLayer.textContent = fact.kind;
+      inspectorRepository.textContent = fact.evidence[0]?.repository || "—";
+      inspectorPath.textContent = fact.evidence[0]?.path || "—";
+      showEvidence(fact.evidence);
+    }
+  };
+
+  const renderSearchResults = (): void => {
+    const query = search.value.trim().toLocaleLowerCase();
+    searchResults.replaceChildren();
+    if (!graph || query.length < 2) {
+      searchResults.hidden = true;
+      return;
+    }
+    const matches = graph.nodes()
+      .not(".map-hidden")
+      .filter((node) =>
+        String(node.data("label")).toLocaleLowerCase().includes(query) ||
+        String(node.data("subtitle") || "").toLocaleLowerCase().includes(query)
+      )
+      .slice(0, 8);
+    if (matches.length === 0) {
+      const empty = document.createElement("p");
+      empty.className = "map-search-empty";
+      empty.textContent = "No visible nodes match this view.";
+      searchResults.append(empty);
+    } else {
+      matches.forEach((node) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "map-search-result";
+        const label = document.createElement("strong");
+        label.textContent = String(node.data("label"));
+        const kind = document.createElement("span");
+        kind.textContent = String(node.data("kind"));
+        button.append(label, kind);
+        button.addEventListener("click", () => {
+          graph?.elements().unselect();
+          node.select();
+          inspectElement(node);
+          graph?.animate({
+            center: { eles: node },
+            zoom: Math.max(graph.zoom(), 1.05),
+            duration: 180
+          });
+          searchResults.hidden = true;
+        });
+        searchResults.append(button);
+      });
+    }
+    searchResults.hidden = false;
+  };
+
+  const applyFilters = (): void => {
+    if (!graph) {
+      return;
+    }
+    const allowedKinds: Record<string, Set<string>> = {
+      packages: new Set(["repository", "package", "manifest", "entrypoint"]),
+      dependencies: new Set(["repository", "package", "dependency"]),
+      routes: new Set(["repository", "package", "entrypoint", "route"])
+    };
+    const allowed = allowedKinds[activeView];
+    const query = search.value.trim().toLocaleLowerCase();
+    graph.batch(() => {
+      graph?.nodes().forEach((node) => {
+        const kind = String(node.data("kind"));
+        const kindVisible = activeView === "all"
+          ? kind === "repository" || (kind === "dependency" && sharedDependencyIDs.has(node.id()))
+          : !allowed || allowed.has(kind);
+        node.toggleClass("map-hidden", !kindVisible);
+        const matches = !query ||
+          String(node.data("label")).toLocaleLowerCase().includes(query) ||
+          String(node.data("subtitle") || "").toLocaleLowerCase().includes(query);
+        node.toggleClass("map-search-muted", kindVisible && !matches);
+        node.toggleClass("map-search-match", kindVisible && Boolean(query) && matches);
+      });
+      graph?.edges().forEach((edge) => {
+        const endpointsVisible =
+          !edge.source().hasClass("map-hidden") &&
+          !edge.target().hasClass("map-hidden") &&
+          (activeView === "all" ? Boolean(edge.data("system")) : !edge.data("system"));
+        edge.toggleClass("map-hidden", !endpointsVisible);
+        edge.toggleClass(
+          "map-search-muted",
+          endpointsVisible && Boolean(query) &&
+            edge.source().hasClass("map-search-muted") &&
+            edge.target().hasClass("map-search-muted")
+        );
+      });
+    });
+    renderSearchResults();
+  };
+
+  const fitGraph = (): void => {
+    if (!graph) {
+      return;
+    }
+    graph.elements().removeClass("map-focus-hidden");
+    applyFilters();
+    graph.fit(graph.elements().not(".map-hidden"), 72);
+    graph.center();
+  };
+
+  const layoutGraph = (): void => {
+    if (!graph) {
+      return;
+    }
+    const visible = graph.elements().not(".map-hidden");
+    if (visible.nodes().length === 0) {
+      return;
+    }
+    visible.layout({
+      name: activeView === "all" ? "circle" : "cose",
+      animate: false,
+      padding: 90,
+      fit: true,
+      nodeDimensionsIncludeLabels: true,
+      nodeRepulsion: 7200,
+      idealEdgeLength: activeView === "all" ? 120 : 82,
+      edgeElasticity: 90,
+      gravity: 0.3,
+      numIter: 900,
+      randomize: true
+    }).run();
+    window.setTimeout(() => fitGraph(), 20);
+  };
+
+  const renderSummary = (value: MapSnapshot): void => {
+    summaryHeading.textContent = value.truncated ? "Bounded snapshot" : "Complete snapshot";
+    snapshotID.textContent = value.id.slice(0, 8);
+    snapshotID.title = `Generated ${new Date(value.generated_at).toLocaleString()}`;
+    repositoryCount.textContent = String(value.repositories.length);
+    fileCount.textContent = value.file_count.toLocaleString();
+    nodeCount.textContent = value.nodes.length.toLocaleString();
+    edgeCount.textContent = value.edges.length.toLocaleString();
+    languages.replaceChildren();
+    for (const language of value.languages.slice(0, 8)) {
+      const item = document.createElement("span");
+      item.textContent = `${language.name} ${language.percentage.toFixed(language.percentage >= 10 ? 0 : 1)}%`;
+      item.title = `${language.files.toLocaleString()} files`;
+      languages.append(item);
+    }
+  };
+
+  const renderGraph = async (value: MapSnapshot): Promise<void> => {
+    const { default: cytoscape } = await import("cytoscape");
+    const nodeByID = new Map(value.nodes.map((node) => [node.id, node]));
+    const dependencyRepositories = new Map<string, Map<number, MapEvidence[]>>();
+    for (const edge of value.edges) {
+      const target = nodeByID.get(edge.target);
+      const source = nodeByID.get(edge.source);
+      if (target?.kind !== "dependency" || !source?.repository_id) {
+        continue;
+      }
+      let repositories = dependencyRepositories.get(target.id);
+      if (!repositories) {
+        repositories = new Map();
+        dependencyRepositories.set(target.id, repositories);
+      }
+      repositories.set(
+        source.repository_id,
+        [...(repositories.get(source.repository_id) ?? []), ...edge.evidence]
+      );
+    }
+    const sharedDependencies = Array.from(dependencyRepositories.entries())
+      .filter(([, repositories]) => repositories.size >= (value.repositories.length === 1 ? 1 : 2))
+      .sort((left, right) => right[1].size - left[1].size || left[0].localeCompare(right[0]))
+      .slice(0, value.repositories.length === 1 ? 18 : 12);
+    sharedDependencyIDs = new Set(sharedDependencies.map(([dependencyID]) => dependencyID));
+    const systemEdges = sharedDependencies.flatMap(([dependencyID, repositories]) =>
+      Array.from(repositories.entries()).map(([repositoryID, evidence]) => ({
+        data: {
+          id: `system:repository:${repositoryID}:${dependencyID}`,
+          source: `repository:${repositoryID}`,
+          target: dependencyID,
+          label: "shares",
+          kind: "dependency",
+          system: true,
+          fact: {
+            id: `system:repository:${repositoryID}:${dependencyID}`,
+            source: `repository:${repositoryID}`,
+            target: dependencyID,
+            kind: "dependency",
+            label: "uses shared dependency",
+            evidence
+          } satisfies MapEdge
+        },
+        classes: "system-edge"
+      }))
+    );
+    graph?.destroy();
+    graph = cytoscape({
+      container: canvas,
+      elements: [
+        ...value.nodes.map((node) => ({
+          data: {
+            id: node.id,
+            label: node.label,
+            subtitle: node.subtitle || "",
+            kind: node.kind,
+            layer: node.layer,
+            fact: node
+          },
+          classes: node.kind
+        })),
+        ...value.edges.map((edge) => ({
+          data: {
+            id: edge.id,
+            source: edge.source,
+            target: edge.target,
+            label: edge.label,
+            kind: edge.kind,
+            fact: edge
+          }
+        })),
+        ...systemEdges
+      ],
+      layout: {
+        name: "preset"
+      },
+      minZoom: 0.12,
+      maxZoom: 2.4,
+      wheelSensitivity: 0.22,
+      style: [
+        {
+          selector: "node",
+          style: {
+            "background-color": "#111827",
+            "border-color": "#64748b",
+            "border-width": 1.25,
+            color: "#cbd5e1",
+            label: "data(label)",
+            "font-family": "Inter, ui-sans-serif, system-ui, sans-serif",
+            "font-size": 10,
+            "font-weight": 600,
+            "text-margin-y": 4,
+            "text-valign": "bottom",
+            "text-wrap": "ellipsis",
+            "text-max-width": "116px",
+            width: 42,
+            height: 42,
+            "overlay-opacity": 0,
+            "transition-property": "opacity, border-width, border-color, background-color",
+            "transition-duration": 120
+          }
+        },
+        {
+          selector: "node.repository",
+          style: {
+            "background-color": "#064e3b",
+            "border-color": "#34d399",
+            "border-width": 2,
+            shape: "round-rectangle",
+            width: 54,
+            height: 54,
+            color: "#d1fae5"
+          }
+        },
+        {
+          selector: "node.package",
+          style: {
+            "background-color": "#312e81",
+            "border-color": "#a78bfa",
+            shape: "round-rectangle",
+            color: "#ede9fe"
+          }
+        },
+        {
+          selector: "node.entrypoint",
+          style: {
+            "background-color": "#172554",
+            "border-color": "#60a5fa",
+            shape: "diamond",
+            color: "#dbeafe"
+          }
+        },
+        {
+          selector: "node.route",
+          style: {
+            "background-color": "#451a03",
+            "border-color": "#fbbf24",
+            shape: "tag",
+            color: "#fef3c7"
+          }
+        },
+        {
+          selector: "node.dependency",
+          style: {
+            "background-color": "#1e293b",
+            "border-color": "#64748b",
+            width: 32,
+            height: 32,
+            "font-size": 8,
+            color: "#94a3b8"
+          }
+        },
+        {
+          selector: "node.manifest",
+          style: {
+            "background-color": "#082f49",
+            "border-color": "#38bdf8",
+            shape: "round-tag",
+            color: "#bae6fd"
+          }
+        },
+        {
+          selector: "edge",
+          style: {
+            width: 1,
+            "line-color": "#475569",
+            "target-arrow-color": "#64748b",
+            "target-arrow-shape": "triangle",
+            "arrow-scale": 0.72,
+            "curve-style": "bezier",
+            opacity: 0.58,
+            "overlay-opacity": 0
+          }
+        },
+        {
+          selector: "edge[kind = 'import']",
+          style: {
+            "line-color": "#8b5cf6",
+            "target-arrow-color": "#a78bfa"
+          }
+        },
+        {
+          selector: "edge[kind = 'route']",
+          style: {
+            "line-color": "#d97706",
+            "target-arrow-color": "#fbbf24"
+          }
+        },
+        {
+          selector: "edge.system-edge",
+          style: {
+            width: 1.4,
+            "line-color": "#10b981",
+            "target-arrow-color": "#34d399",
+            opacity: 0.28
+          }
+        },
+        {
+          selector: ":selected",
+          style: {
+            "border-width": 3,
+            "border-color": "#f8fafc",
+            "line-color": "#34d399",
+            "target-arrow-color": "#34d399",
+            opacity: 1
+          }
+        },
+        {
+          selector: ".map-hidden, .map-focus-hidden",
+          style: { display: "none" }
+        },
+        {
+          selector: ".map-search-muted",
+          style: { opacity: 0.12 }
+        },
+        {
+          selector: ".map-search-match",
+          style: {
+            "border-width": 3,
+            "border-color": "#34d399",
+            opacity: 1
+          }
+        }
+      ]
+    });
+    graph.on("tap", "node, edge", (event: MapEvent) => inspectElement(event.target));
+    graph.on("tap", (event: MapEvent) => {
+      if (event.target === graph) {
+        graph?.elements().unselect();
+        clearInspector();
+      }
+    });
+    applyFilters();
+    layoutGraph();
+  };
+
+  const loadMap = async (force = false): Promise<void> => {
+    const revision = ++loadRevision;
+    loading.hidden = false;
+    loading.querySelector("strong")!.textContent = force ? "Rebuilding structural facts" : "Reading committed structure";
+    status.textContent = "Building the structural snapshot…";
+    refresh.disabled = true;
+    clearInspector();
+    updateExportLink();
+    try {
+      const parameters = new URLSearchParams();
+      if (repository.value) {
+        parameters.set("repository", repository.value);
+      }
+      if (force) {
+        parameters.set("refresh", "true");
+      }
+      const response = await fetch(`/api/maps?${parameters.toString()}`, {
+        cache: "no-store",
+        headers: { Accept: "application/json" }
+      });
+      if (!response.ok) {
+        throw new Error(await response.text() || `Map request failed (${response.status})`);
+      }
+      const result = await response.json() as MapSnapshot;
+      if (revision !== loadRevision) {
+        return;
+      }
+      renderSummary(result);
+      await renderGraph(result);
+      status.textContent = result.truncated
+        ? "Bounded map ready · source limits reached"
+        : `${result.nodes.length} facts · ${result.edges.length} relationships · commit-pinned`;
+      loading.hidden = true;
+      debug?.add("info", "map.loaded", {
+        snapshot_id: result.id,
+        repositories: result.repositories.length,
+        nodes: result.nodes.length,
+        edges: result.edges.length,
+        truncated: result.truncated
+      });
+    } catch (error: unknown) {
+      if (revision !== loadRevision) {
+        return;
+      }
+      loading.querySelector("strong")!.textContent = "Map could not be built";
+      loading.querySelector("p")!.textContent = error instanceof Error ? error.message : String(error);
+      status.textContent = "Structural analysis failed";
+      debug?.add("error", "map.load.failed", describeError(error));
+    } finally {
+      if (revision === loadRevision) {
+        refresh.disabled = false;
+      }
+    }
+  };
+
+  repository.addEventListener("change", () => void loadMap(false));
+  refresh.addEventListener("click", () => void loadMap(true));
+  search.addEventListener("input", applyFilters);
+  for (const button of viewButtons) {
+    button.addEventListener("click", () => {
+      activeView = button.dataset.mapView || "all";
+      for (const candidate of viewButtons) {
+        candidate.setAttribute("aria-pressed", String(candidate === button));
+      }
+      applyFilters();
+      layoutGraph();
+    });
+  }
+  focus.addEventListener("click", () => {
+    if (!graph || !selected) {
+      return;
+    }
+    const neighborhood = selected.closedNeighborhood();
+    graph.elements().toggleClass("map-focus-hidden", true);
+    neighborhood.toggleClass("map-focus-hidden", false);
+    graph.fit(neighborhood, 90);
+  });
+  reset.addEventListener("click", () => {
+    search.value = "";
+    applyFilters();
+    searchResults.hidden = true;
+    layoutGraph();
+    clearInspector();
+  });
+  window.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      clearInspector();
+      graph?.elements().unselect();
+      searchResults.hidden = true;
+    }
+  });
+  window.addEventListener("resize", () => graph?.resize());
+
+  updateExportLink();
+  void loadMap(false);
+}
+
 connectIndexEvents();
 enableRepositoryDrawer();
 enableQueryChips();
@@ -2455,6 +3082,7 @@ highlightSearchResults();
 const debugLogger = enableDebugLogger();
 enableMermaidViewer(debugLogger);
 enableConversations(debugLogger);
+enableRepositoryMaps(debugLogger);
 
 document.body.addEventListener("htmx:afterSwap", (event) => {
   const target = (event as CustomEvent<{ target?: ParentNode }>).detail?.target;

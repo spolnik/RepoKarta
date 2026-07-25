@@ -117,6 +117,7 @@
     </a>
     <nav class="app-nav" aria-label="Primary">
       <a href="/" class="app-nav-link{{if eq .ActivePage "search"}} app-nav-link-active{{end}}" {{if eq .ActivePage "search"}}aria-current="page"{{end}}>Search</a>
+      <a href="/maps" class="app-nav-link{{if eq .ActivePage "maps"}} app-nav-link-active{{end}}" {{if eq .ActivePage "maps"}}aria-current="page"{{end}}>Maps</a>
       {{if .ChatEnabled}}
       <a href="/chat" class="app-nav-link{{if eq .ActivePage "chat"}} app-nav-link-active{{end}}" {{if eq .ActivePage "chat"}}aria-current="page"{{end}}>Chat</a>
       {{end}}

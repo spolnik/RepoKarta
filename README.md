@@ -5,8 +5,8 @@ your laptop. Point it at a ghorg directory (or any repository root), and it
 discovers, incrementally indexes, and searches committed source without
 modifying a worktree.
 
-The current implementation delivers M1 code search and M2 grounded code
-questions:
+The current implementation delivers M1 code search, M2 grounded code
+questions, and M3 evidence-backed repository maps:
 
 - regular, linked-worktree, and bare Git repository discovery;
 - origin, default revision, HEAD, scan, and index metadata in SQLite;
@@ -55,10 +55,15 @@ questions:
 - adversarial coverage that keeps instructions found in repository content
   from expanding the agent's read-only tool permissions;
 - embedded frontend assets in one native Go executable.
+- deterministic language and manifest inventories extracted from committed
+  source without executing repository code;
+- commit-keyed package, dependency, entry-point, and HTTP-route graphs with
+  source evidence on every node and relationship;
+- an interactive layered map with scope and view filters, search, neighbor
+  focus, evidence inspection, and downloadable JSON snapshots.
 
-Architecture maps and generated DeepWiki-style documentation remain later
-milestones. The full product definition and non-goals live in
-[SCOPE.md](./SCOPE.md).
+Generated DeepWiki-style documentation remains the next milestone. The full
+product definition and non-goals live in [SCOPE.md](./SCOPE.md).
 
 ## Run
 

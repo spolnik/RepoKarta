@@ -13,6 +13,7 @@ import (
 	"github.com/spolnik/RepoKarta/internal/agent"
 	"github.com/spolnik/RepoKarta/internal/catalog"
 	"github.com/spolnik/RepoKarta/internal/codeintel"
+	"github.com/spolnik/RepoKarta/internal/graph"
 	"github.com/spolnik/RepoKarta/internal/search"
 )
 
@@ -57,6 +58,87 @@ func (testSearcher) Search(context.Context, search.Query) (search.Result, error)
 			}},
 		}},
 	}, nil
+}
+
+type testMapService struct {
+	snapshot     graph.Snapshot
+	repositoryID int64
+	refresh      bool
+}
+
+func (s *testMapService) Snapshot(_ context.Context, repositoryID int64, refresh bool) (graph.Snapshot, error) {
+	s.repositoryID = repositoryID
+	s.refresh = refresh
+	return s.snapshot, nil
+}
+
+func TestRepositoryMapPageAPIAndExport(t *testing.T) {
+	repository := catalog.Repository{ID: 4, Name: "Mapped Repo", IndexState: "ready"}
+	maps := &testMapService{snapshot: graph.Snapshot{
+		Version: 1,
+		ID:      "snapshot-1",
+		Repositories: []graph.Repository{{
+			ID:       repository.ID,
+			Name:     repository.Name,
+			Revision: strings.Repeat("a", 40),
+		}},
+		Nodes: []graph.Node{{
+			ID:       "repository:4",
+			Kind:     "repository",
+			Label:    repository.Name,
+			Layer:    "Repositories",
+			Evidence: []graph.Evidence{{Path: "README.md", Line: 1}},
+		}},
+	}}
+	server, err := New(
+		Config{Address: "127.0.0.1:7331", Maps: maps},
+		codeintel.New(
+			testStore{repositories: []catalog.Repository{repository}},
+			testSearcher{},
+			"http://127.0.0.1:7331",
+		),
+		testRefresher{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pageRequest := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7331/maps", nil)
+	pageResponse := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(pageResponse, pageRequest)
+	if pageResponse.Code != http.StatusOK {
+		t.Fatalf("map page status = %d, body = %s", pageResponse.Code, pageResponse.Body.String())
+	}
+	for _, expected := range []string{
+		`aria-current="page">Maps`,
+		`data-map-canvas`,
+		`data-map-inspector-content`,
+		`data-map-export`,
+	} {
+		if !strings.Contains(pageResponse.Body.String(), expected) {
+			t.Fatalf("map page does not contain %q", expected)
+		}
+	}
+
+	apiRequest := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7331/api/maps?repository=4&refresh=true", nil)
+	apiResponse := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(apiResponse, apiRequest)
+	if apiResponse.Code != http.StatusOK || maps.repositoryID != 4 || !maps.refresh {
+		t.Fatalf("map API status = %d, repository = %d, refresh = %v", apiResponse.Code, maps.repositoryID, maps.refresh)
+	}
+
+	exportRequest := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7331/api/maps/export?repository=4", nil)
+	exportResponse := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(exportResponse, exportRequest)
+	if exportResponse.Code != http.StatusOK {
+		t.Fatalf("map export status = %d, body = %s", exportResponse.Code, exportResponse.Body.String())
+	}
+	if got := exportResponse.Header().Get("Content-Disposition"); got != `attachment; filename="repokarta-map-mapped-repo.json"` {
+		t.Fatalf("content disposition = %q", got)
+	}
+	if !strings.Contains(exportResponse.Body.String(), `"snapshot-1"`) {
+		t.Fatalf("map export = %s", exportResponse.Body.String())
+	}
 }
 
 func TestAPISearchReturnsCompletenessAndPinnedEvidence(t *testing.T) {

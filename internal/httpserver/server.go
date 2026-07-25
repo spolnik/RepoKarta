@@ -24,6 +24,7 @@ import (
 	"github.com/spolnik/RepoKarta/internal/agent"
 	"github.com/spolnik/RepoKarta/internal/catalog"
 	"github.com/spolnik/RepoKarta/internal/codeintel"
+	"github.com/spolnik/RepoKarta/internal/graph"
 	"github.com/spolnik/RepoKarta/internal/search"
 	"github.com/spolnik/RepoKarta/internal/source"
 	"github.com/spolnik/RepoKarta/web"
@@ -55,6 +56,11 @@ type ConversationHistoryService interface {
 	DeleteConversation(context.Context, string) error
 }
 
+// MapService supplies deterministic, commit-pinned repository maps.
+type MapService interface {
+	Snapshot(context.Context, int64, bool) (graph.Snapshot, error)
+}
+
 // Config controls the local HTTP server.
 type Config struct {
 	Address        string
@@ -63,6 +69,7 @@ type Config struct {
 	OpenBrowser    bool
 	MCPHandler     http.Handler
 	Conversations  ConversationService
+	Maps           MapService
 }
 
 // Server hosts RepoKarta's loopback interface.
@@ -74,6 +81,7 @@ type Server struct {
 	refresher    CatalogueRefresher
 	agents       ConversationService
 	history      ConversationHistoryService
+	maps         MapService
 }
 
 type pageData struct {
@@ -167,6 +175,7 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 		intelligence: intelligence,
 		refresher:    refresher,
 		agents:       config.Conversations,
+		maps:         config.Maps,
 	}
 	server.history, _ = config.Conversations.(ConversationHistoryService)
 
@@ -186,6 +195,11 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 	mux.HandleFunc("GET /api/git/diff/{repository}", server.apiGitDiff)
 	mux.HandleFunc("GET /events", server.events)
 	mux.HandleFunc("GET /healthz", server.health)
+	if server.maps != nil {
+		mux.HandleFunc("GET /maps", server.mapPage)
+		mux.HandleFunc("GET /api/maps", server.apiMap)
+		mux.HandleFunc("GET /api/maps/export", server.exportMap)
+	}
 	if config.MCPHandler != nil {
 		mux.Handle("/mcp", config.MCPHandler)
 	}
@@ -539,6 +553,58 @@ func (s *Server) chatPage(response http.ResponseWriter, request *http.Request) {
 	s.render(response, "chat", data)
 }
 
+func (s *Server) mapPage(response http.ResponseWriter, request *http.Request) {
+	data, err := s.pageData(request.Context())
+	if err != nil {
+		http.Error(response, "Could not load repositories", http.StatusInternalServerError)
+		return
+	}
+	data.ActivePage = "maps"
+	s.render(response, "maps", data)
+}
+
+func (s *Server) apiMap(response http.ResponseWriter, request *http.Request) {
+	repositoryID, err := optionalRepositoryID(request.URL.Query().Get("repository"))
+	if err != nil {
+		writeAPIError(response, http.StatusBadRequest, err)
+		return
+	}
+	snapshot, err := s.maps.Snapshot(request.Context(), repositoryID, request.URL.Query().Get("refresh") == "true")
+	if err != nil {
+		slog.Error("build repository map", "repository_id", repositoryID, "error", err)
+		writeAPIError(response, http.StatusInternalServerError, errors.New("repository map could not be built"))
+		return
+	}
+	writeJSON(response, http.StatusOK, snapshot)
+}
+
+func (s *Server) exportMap(response http.ResponseWriter, request *http.Request) {
+	repositoryID, err := optionalRepositoryID(request.URL.Query().Get("repository"))
+	if err != nil {
+		writeAPIError(response, http.StatusBadRequest, err)
+		return
+	}
+	snapshot, err := s.maps.Snapshot(request.Context(), repositoryID, false)
+	if err != nil {
+		writeAPIError(response, http.StatusInternalServerError, errors.New("repository map could not be exported"))
+		return
+	}
+	content, err := json.MarshalIndent(snapshot, "", "  ")
+	if err != nil {
+		writeAPIError(response, http.StatusInternalServerError, errors.New("repository map could not be encoded"))
+		return
+	}
+	fileName := "repokarta-map-all.json"
+	if repositoryID > 0 && len(snapshot.Repositories) == 1 {
+		fileName = "repokarta-map-" + safeDownloadName(snapshot.Repositories[0].Name) + ".json"
+	}
+	response.Header().Set("Content-Type", "application/json; charset=utf-8")
+	response.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, fileName))
+	response.Header().Set("Cache-Control", "no-store")
+	response.WriteHeader(http.StatusOK)
+	_, _ = response.Write(content)
+}
+
 func (s *Server) repositoryList(response http.ResponseWriter, request *http.Request) {
 	data, err := s.pageData(request.Context())
 	if err != nil {
@@ -762,6 +828,34 @@ func (s *Server) render(response http.ResponseWriter, name string, data any) {
 	if err := s.templates.ExecuteTemplate(response, name, data); err != nil {
 		slog.Error("render template", "template", name, "error", err)
 	}
+}
+
+func optionalRepositoryID(value string) (int64, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, nil
+	}
+	repositoryID, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || repositoryID <= 0 {
+		return 0, errors.New("repository must be a positive integer")
+	}
+	return repositoryID, nil
+}
+
+func safeDownloadName(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	var output strings.Builder
+	lastDash := false
+	for _, character := range value {
+		if (character >= 'a' && character <= 'z') || (character >= '0' && character <= '9') {
+			output.WriteRune(character)
+			lastDash = false
+		} else if !lastDash && output.Len() > 0 {
+			output.WriteByte('-')
+			lastDash = true
+		}
+	}
+	return strings.Trim(output.String(), "-")
 }
 
 func resolveSearchViews(matches []codeintel.SearchMatch, repositories []catalog.Repository) []searchMatchView {

@@ -366,11 +366,11 @@ source, and cannot modify or execute repository content.
 
 ### M3: repository maps
 
-- [ ] Language and manifest inventory.
-- [ ] Package and dependency graph extraction.
-- [ ] Layered interactive graph.
-- [ ] Evidence panel for every generated node and edge.
-- [ ] Graph snapshot and export.
+- [x] Language and manifest inventory.
+- [x] Package and dependency graph extraction.
+- [x] Layered interactive graph.
+- [x] Evidence panel for every generated node and edge.
+- [x] Graph snapshot and export.
 
 Exit condition: the map explains the repository at a useful level rather than
 rendering an unreadable file-level hairball.
@@ -426,7 +426,8 @@ completion criteria include:
 - Default deployment: a local native executable.
 - Primary repository source: existing local Git repositories, including ghorg
   directories.
-- Primary AI provider: Anthropic API with the user's API key.
+- AI providers: local Codex and Claude Code harnesses using the user's existing
+  login, plus an optional Anthropic API adapter using the user's API key.
 - AI retrieval: iterative deterministic search and file tools before embeddings.
 - Default source access: read-only.
 
@@ -447,16 +448,11 @@ completion criteria include:
 
 ## Recommended next session
 
-Start with M1 and keep the first increment narrow:
+Complete M4 on top of the deterministic M3 snapshot:
 
-1. Reproduce and resolve the upstream Zoekt Windows build gaps (`unix.Umask`
-   and the Unix-only memory-mapped `NewIndexFile` implementation).
-2. Introduce the RepoKarta search interface.
-3. Build a minimal Zoekt adapter that indexes one selected
-   repository into RepoKarta's index directory.
-4. Add tests using a temporary Git repository.
-5. Add a basic search form and result fragment.
-6. Verify Windows amd64 and macOS arm64 compilation.
-
-Do not start AI, visualization, or documentation work until deterministic search
-can be demonstrated end to end.
+1. Plan a small set of independent repository pages from structural facts.
+2. Persist page status, revision, evidence, and generated Markdown.
+3. Mark only pages affected by commit changes stale.
+4. Validate citations and Mermaid before publishing a page.
+5. Add reviewed `.repokarta.yml` steering and Markdown export.
+6. Verify generation, resume, staleness, and export end to end.

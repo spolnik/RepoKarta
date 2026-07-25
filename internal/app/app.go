@@ -13,6 +13,7 @@ import (
 	"github.com/spolnik/RepoKarta/internal/agent/claude"
 	"github.com/spolnik/RepoKarta/internal/agent/codex"
 	"github.com/spolnik/RepoKarta/internal/codeintel"
+	"github.com/spolnik/RepoKarta/internal/graph"
 	"github.com/spolnik/RepoKarta/internal/httpserver"
 	"github.com/spolnik/RepoKarta/internal/mcpserver"
 	"github.com/spolnik/RepoKarta/internal/search"
@@ -56,7 +57,7 @@ func Run(ctx context.Context, cfg Config) error {
 	if err := os.MkdirAll(cfg.DataDirectory, 0o755); err != nil {
 		return fmt.Errorf("create data directory: %w", err)
 	}
-	for _, directory := range []string{"indexes", "docs", "logs"} {
+	for _, directory := range []string{"indexes", "maps", "docs", "logs"} {
 		if err := os.MkdirAll(filepath.Join(cfg.DataDirectory, directory), 0o755); err != nil {
 			return fmt.Errorf("create %s directory: %w", directory, err)
 		}
@@ -102,6 +103,10 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	baseURL := "http://" + cfg.ListenAddress
 	intelligence := codeintel.New(database, engine, baseURL)
+	maps, err := graph.New(database, filepath.Join(cfg.DataDirectory, "maps"), baseURL)
+	if err != nil {
+		return err
+	}
 	citations := mcpserver.NewCitationTracker()
 	mcpHandler := mcpserver.NewHandler(mcpserver.Config{
 		Version: cfg.Version,
@@ -126,6 +131,7 @@ func Run(ctx context.Context, cfg Config) error {
 		OpenBrowser:    cfg.OpenBrowser,
 		MCPHandler:     mcpHandler,
 		Conversations:  conversations,
+		Maps:           maps,
 	}, intelligence, coordinator)
 	if err != nil {
 		return err

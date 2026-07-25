@@ -1,0 +1,148 @@
+{{define "maps"}}
+<!doctype html>
+<html lang="en" class="h-full bg-[#090b0f]">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Explore deterministic, evidence-backed architecture maps for local repositories.">
+    <meta name="theme-color" content="#090b0f">
+    <link rel="icon" href="/assets/favicon.ico" sizes="any">
+    <link rel="icon" type="image/png" href="/assets/favicon-32.png" sizes="32x32">
+    <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+    <title>RepoKarta · Repository maps</title>
+    <link rel="stylesheet" href="/assets/app.css">
+    <script type="module" src="/assets/app.js"></script>
+  </head>
+  <body class="h-full overflow-hidden bg-[#090b0f] text-slate-100 antialiased">
+    {{template "app-header" .}}
+
+    <main class="map-workspace" data-map-workspace>
+      <aside class="map-sidebar" aria-label="Map controls">
+        <div class="map-sidebar-heading">
+          <p class="map-kicker">Structural inventory</p>
+          <h1>Repository map</h1>
+          <p>Facts extracted from committed manifests, packages, imports, entry points, and routes.</p>
+        </div>
+
+        <label class="map-field">
+          <span>Repository scope</span>
+          <select data-map-repository>
+            <option value="">All repositories</option>
+            {{range .Repositories}}
+            <option value="{{.ID}}">{{.Name}}</option>
+            {{end}}
+          </select>
+        </label>
+
+        <div class="map-field">
+          <span>View</span>
+          <div class="map-view-switcher" role="group" aria-label="Map view">
+            <button type="button" data-map-view="all" aria-pressed="true">System</button>
+            <button type="button" data-map-view="packages" aria-pressed="false">Packages</button>
+            <button type="button" data-map-view="dependencies" aria-pressed="false">Dependencies</button>
+            <button type="button" data-map-view="routes" aria-pressed="false">Routes</button>
+          </div>
+        </div>
+
+        <div class="map-field map-search">
+          <label for="map-node-search">Find a node</label>
+          <span class="map-search-input">
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <circle cx="8.5" cy="8.5" r="4.75"></circle>
+              <path d="m12 12 4 4"></path>
+            </svg>
+            <input id="map-node-search" type="search" placeholder="Package, route, dependency…" autocomplete="off" data-map-search>
+          </span>
+          <div class="map-search-results" data-map-search-results hidden aria-label="Matching map nodes"></div>
+        </div>
+
+        <section class="map-summary" aria-labelledby="map-summary-heading">
+          <div class="map-section-heading">
+            <div>
+              <p>Snapshot</p>
+              <h2 id="map-summary-heading">Loading facts…</h2>
+            </div>
+            <span data-map-snapshot-id>—</span>
+          </div>
+          <dl class="map-metrics">
+            <div><dt>Repositories</dt><dd data-map-repositories>—</dd></div>
+            <div><dt>Files</dt><dd data-map-files>—</dd></div>
+            <div><dt>Nodes</dt><dd data-map-nodes>—</dd></div>
+            <div><dt>Edges</dt><dd data-map-edges>—</dd></div>
+          </dl>
+          <div class="map-language-list" data-map-languages></div>
+        </section>
+
+        <div class="map-sidebar-actions">
+          <button type="button" class="map-secondary-action" data-map-refresh>
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <path d="M15.5 7A6 6 0 1 0 16 11M15.5 3.5V7H12"></path>
+            </svg>
+            Rebuild facts
+          </button>
+          <a class="map-secondary-action" href="/api/maps/export" data-map-export download>
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <path d="M10 3.5v8M6.75 8.5 10 11.75l3.25-3.25M4 14.5v2h12v-2"></path>
+            </svg>
+            Export JSON
+          </a>
+        </div>
+      </aside>
+
+      <section class="map-stage" aria-label="Interactive repository graph">
+        <div class="map-stage-toolbar">
+          <div>
+            <span class="status-dot" aria-hidden="true"></span>
+            <strong data-map-status>Building the structural snapshot…</strong>
+          </div>
+          <div class="map-stage-actions">
+            <button type="button" data-map-focus disabled>Focus neighbors</button>
+            <button type="button" data-map-reset>Reset view</button>
+          </div>
+        </div>
+        <div class="map-canvas" data-map-canvas aria-label="Repository dependency graph"></div>
+        <div class="map-loading" data-map-loading>
+          <span class="map-loading-mark" aria-hidden="true"></span>
+          <strong>Reading committed structure</strong>
+          <p>Manifests, packages, imports, entry points, and routes are analyzed without executing code.</p>
+        </div>
+        <div class="map-legend" aria-label="Map legend">
+          <span data-kind="repository">Repository</span>
+          <span data-kind="package">Package</span>
+          <span data-kind="entrypoint">Entry point</span>
+          <span data-kind="route">Route</span>
+          <span data-kind="dependency">Dependency</span>
+        </div>
+      </section>
+
+      <aside class="map-inspector" aria-labelledby="map-inspector-heading">
+        <div class="map-inspector-empty" data-map-inspector-empty>
+          <span aria-hidden="true">↗</span>
+          <h2 id="map-inspector-heading">Select a fact</h2>
+          <p>Choose a node or relationship to inspect the exact committed source supporting it.</p>
+        </div>
+        <div class="map-inspector-content" data-map-inspector-content hidden>
+          <div class="map-inspector-kind" data-map-inspector-kind>Package</div>
+          <h2 data-map-inspector-title></h2>
+          <p data-map-inspector-subtitle></p>
+          <dl class="map-inspector-meta">
+            <div><dt>Layer</dt><dd data-map-inspector-layer></dd></div>
+            <div><dt>Repository</dt><dd data-map-inspector-repository></dd></div>
+            <div><dt>Path</dt><dd data-map-inspector-path></dd></div>
+          </dl>
+          <section class="map-evidence" aria-labelledby="map-evidence-heading">
+            <div class="map-section-heading">
+              <div>
+                <p>Grounding</p>
+                <h3 id="map-evidence-heading">Source evidence</h3>
+              </div>
+              <span data-map-evidence-count>0</span>
+            </div>
+            <ol data-map-evidence></ol>
+          </section>
+        </div>
+      </aside>
+    </main>
+  </body>
+</html>
+{{end}}
