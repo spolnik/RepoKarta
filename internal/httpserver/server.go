@@ -99,31 +99,37 @@ type pageData struct {
 	Version        string
 	RepositoryRoot string
 	Repositories   []catalog.Repository
-	ReadyCount     int
-	PendingCount   int
-	ErrorCount     int
-	ActivePage     string
-	ChatEnabled    bool
-	WikiEnabled    bool
-	Search         searchData
+	// RepositoryLabels disambiguates repositories that share a name so every
+	// picker identifies exactly one repository.
+	RepositoryLabels map[int64]string
+	ReadyCount       int
+	PendingCount     int
+	ErrorCount       int
+	ActivePage       string
+	ChatEnabled      bool
+	WikiEnabled      bool
+	Search           searchData
 }
 
 type searchData struct {
-	Query           search.Query
-	Performed       bool
-	Error           string
-	Duration        string
-	MatchCount      int
-	FileCount       int
-	EstimatedFiles  int
-	ReturnedFiles   int
-	Limit           int
-	TotalFilesExact bool
-	FilesSkipped    int
-	ShardsSkipped   int
-	Warnings        []search.Warning
-	Truncated       bool
-	Matches         []searchMatchView
+	Query search.Query
+	// SelectedRepositoryID keeps the repository filter bound to a stable ID so
+	// repositories that share a name stay distinguishable in the picker.
+	SelectedRepositoryID int64
+	Performed            bool
+	Error                string
+	Duration             string
+	MatchCount           int
+	FileCount            int
+	EstimatedFiles       int
+	ReturnedFiles        int
+	Limit                int
+	TotalFilesExact      bool
+	FilesSkipped         int
+	ShardsSkipped        int
+	Warnings             []search.Warning
+	Truncated            bool
+	Matches              []searchMatchView
 }
 
 type searchMatchView struct {
@@ -393,14 +399,16 @@ func (s *Server) apiSearch(response http.ResponseWriter, request *http.Request) 
 		writeAPIError(response, http.StatusBadRequest, err)
 		return
 	}
+	repositoryID, repositoryName := repositorySelector(request.URL.Query().Get("repo"))
 	result, err := s.intelligence.Search(request.Context(), codeintel.SearchRequest{
-		Query:      request.URL.Query().Get("q"),
-		Repository: request.URL.Query().Get("repo"),
-		Language:   request.URL.Query().Get("lang"),
-		Path:       request.URL.Query().Get("path"),
-		File:       request.URL.Query().Get("file"),
-		Mode:       request.URL.Query().Get("mode"),
-		Limit:      limit,
+		Query:        request.URL.Query().Get("q"),
+		RepositoryID: repositoryID,
+		Repository:   repositoryName,
+		Language:     request.URL.Query().Get("lang"),
+		Path:         request.URL.Query().Get("path"),
+		File:         request.URL.Query().Get("file"),
+		Mode:         request.URL.Query().Get("mode"),
+		Limit:        limit,
 	})
 	if err != nil {
 		writeAPIError(response, http.StatusBadRequest, err)
@@ -415,11 +423,13 @@ func (s *Server) apiSymbol(response http.ResponseWriter, request *http.Request) 
 		writeAPIError(response, http.StatusBadRequest, err)
 		return
 	}
+	repositoryID, repositoryName := repositorySelector(request.URL.Query().Get("repo"))
 	result, err := s.intelligence.FindSymbol(request.Context(), codeintel.SymbolRequest{
-		Symbol:     request.URL.Query().Get("symbol"),
-		Repository: request.URL.Query().Get("repo"),
-		Language:   request.URL.Query().Get("lang"),
-		Limit:      limit,
+		Symbol:       request.URL.Query().Get("symbol"),
+		RepositoryID: repositoryID,
+		Repository:   repositoryName,
+		Language:     request.URL.Query().Get("lang"),
+		Limit:        limit,
 	})
 	if err != nil {
 		writeAPIError(response, http.StatusBadRequest, err)
@@ -439,12 +449,14 @@ func (s *Server) apiRepositories(response http.ResponseWriter, request *http.Req
 
 func (s *Server) apiFile(response http.ResponseWriter, request *http.Request) {
 	start, end := parseLineRange(request.URL.Query().Get("lines"))
+	repositoryID, repositoryName := repositorySelector(request.PathValue("repository"))
 	file, err := s.intelligence.GetFile(request.Context(), codeintel.FileRequest{
-		Repository: request.PathValue("repository"),
-		Revision:   request.URL.Query().Get("rev"),
-		Path:       request.URL.Query().Get("path"),
-		StartLine:  start,
-		EndLine:    end,
+		RepositoryID: repositoryID,
+		Repository:   repositoryName,
+		Revision:     request.URL.Query().Get("rev"),
+		Path:         request.URL.Query().Get("path"),
+		StartLine:    start,
+		EndLine:      end,
 	})
 	if err != nil {
 		writeCodeIntelligenceError(response, err)
@@ -454,10 +466,12 @@ func (s *Server) apiFile(response http.ResponseWriter, request *http.Request) {
 }
 
 func (s *Server) apiTree(response http.ResponseWriter, request *http.Request) {
+	repositoryID, repositoryName := repositorySelector(request.PathValue("repository"))
 	tree, err := s.intelligence.ListTree(request.Context(), codeintel.TreeRequest{
-		Repository: request.PathValue("repository"),
-		Revision:   request.URL.Query().Get("rev"),
-		Path:       request.URL.Query().Get("path"),
+		RepositoryID: repositoryID,
+		Repository:   repositoryName,
+		Revision:     request.URL.Query().Get("rev"),
+		Path:         request.URL.Query().Get("path"),
 	})
 	if err != nil {
 		writeCodeIntelligenceError(response, err)
@@ -477,11 +491,13 @@ func (s *Server) apiGitLog(response http.ResponseWriter, request *http.Request) 
 		writeAPIError(response, http.StatusBadRequest, err)
 		return
 	}
+	repositoryID, repositoryName := repositorySelector(request.PathValue("repository"))
 	result, err := s.intelligence.GitLog(request.Context(), codeintel.GitLogRequest{
-		Repository: request.PathValue("repository"),
-		Revision:   request.URL.Query().Get("rev"),
-		Path:       request.URL.Query().Get("path"),
-		Limit:      limit,
+		RepositoryID: repositoryID,
+		Repository:   repositoryName,
+		Revision:     request.URL.Query().Get("rev"),
+		Path:         request.URL.Query().Get("path"),
+		Limit:        limit,
 	})
 	if err != nil {
 		writeCodeIntelligenceError(response, err)
@@ -501,8 +517,10 @@ func (s *Server) apiGitDiff(response http.ResponseWriter, request *http.Request)
 		writeAPIError(response, http.StatusBadRequest, err)
 		return
 	}
+	repositoryID, repositoryName := repositorySelector(request.PathValue("repository"))
 	result, err := s.intelligence.GitDiff(request.Context(), codeintel.GitDiffRequest{
-		Repository:   request.PathValue("repository"),
+		RepositoryID: repositoryID,
+		Repository:   repositoryName,
 		FromRevision: request.URL.Query().Get("from"),
 		ToRevision:   request.URL.Query().Get("to"),
 		Path:         request.URL.Query().Get("path"),
@@ -749,9 +767,16 @@ func (s *Server) search(response http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	repositoryID, repositoryName := repositorySelector(request.URL.Query().Get("repo"))
+	for _, repository := range data.Repositories {
+		if repository.ID == repositoryID {
+			repositoryName = repository.Name
+			break
+		}
+	}
 	query := search.Query{
 		Text:       strings.TrimSpace(request.URL.Query().Get("q")),
-		Repository: strings.TrimSpace(request.URL.Query().Get("repo")),
+		Repository: repositoryName,
 		Language:   strings.TrimSpace(request.URL.Query().Get("lang")),
 		Path:       strings.TrimSpace(request.URL.Query().Get("path")),
 		File:       strings.TrimSpace(request.URL.Query().Get("file")),
@@ -759,16 +784,18 @@ func (s *Server) search(response http.ResponseWriter, request *http.Request) {
 		Limit:      parseSearchLimit(request.URL.Query().Get("limit")),
 	}
 	data.Search.Query = query
+	data.Search.SelectedRepositoryID = repositoryID
 	data.Search.Performed = query.Text != ""
 	if data.Search.Performed {
 		result, searchError := s.intelligence.Search(request.Context(), codeintel.SearchRequest{
-			Query:      query.Text,
-			Repository: query.Repository,
-			Language:   query.Language,
-			Path:       query.Path,
-			File:       query.File,
-			Mode:       query.Mode,
-			Limit:      query.Limit,
+			Query:        query.Text,
+			RepositoryID: repositoryID,
+			Repository:   query.Repository,
+			Language:     query.Language,
+			Path:         query.Path,
+			File:         query.File,
+			Mode:         query.Mode,
+			Limit:        query.Limit,
 		})
 		if searchError != nil {
 			data.Search.Error = searchError.Error()
@@ -920,12 +947,13 @@ func (s *Server) pageData(ctx context.Context) (pageData, error) {
 		return pageData{}, err
 	}
 	data := pageData{
-		Version:        s.config.Version,
-		RepositoryRoot: s.config.RepositoryRoot,
-		Repositories:   repositories,
-		ActivePage:     "search",
-		ChatEnabled:    s.agents != nil,
-		WikiEnabled:    s.docs != nil,
+		Version:          s.config.Version,
+		RepositoryRoot:   s.config.RepositoryRoot,
+		Repositories:     repositories,
+		RepositoryLabels: catalog.DisplayNames(repositories),
+		ActivePage:       "search",
+		ChatEnabled:      s.agents != nil,
+		WikiEnabled:      s.docs != nil,
 		Search: searchData{
 			Query: search.Query{Limit: codeintel.DefaultSearchLimit},
 		},
@@ -960,6 +988,20 @@ func optionalRepositoryID(value string) (int64, error) {
 		return 0, errors.New("repository must be a positive integer")
 	}
 	return repositoryID, nil
+}
+
+// repositorySelector accepts either the stable numeric repository ID returned
+// by /api/repositories or a repository name. Numeric selectors are preferred
+// because repository names are not unique across roots.
+func repositorySelector(value string) (int64, string) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, ""
+	}
+	if repositoryID, err := strconv.ParseInt(value, 10, 64); err == nil && repositoryID > 0 {
+		return repositoryID, ""
+	}
+	return 0, value
 }
 
 func requiredRepositoryID(value string) (int64, error) {

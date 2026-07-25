@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -250,5 +251,93 @@ func TestMCPSearchReturnsPinnedCitation(t *testing.T) {
 	}
 	if pageOutput.Slug != "overview" || pageOutput.Markdown != "# Overview" {
 		t.Fatalf("document output = %+v", pageOutput)
+	}
+}
+
+func TestMCPToolsSelectRepositoriesByIDOnly(t *testing.T) {
+	revision := strings.Repeat("b", 40)
+	store := fakeStore{repositories: []catalog.Repository{{
+		ID:            42,
+		Name:          "RepoKarta",
+		Path:          t.TempDir(),
+		IndexedCommit: revision,
+		IndexState:    "ready",
+	}}}
+	searcher := &fakeSearcher{}
+	handler := NewHandler(Config{
+		Version: "test",
+		BaseURL: "http://ui",
+		Token:   "secret",
+	}, codeintel.New(store, searcher, "http://ui"))
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "test"}, nil)
+	session, err := client.Connect(context.Background(), &mcp.StreamableClientTransport{
+		Endpoint:             server.URL,
+		HTTPClient:           &http.Client{Transport: bearerTransport{token: "secret"}},
+		DisableStandaloneSSE: true,
+		MaxRetries:           -1,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	tools, err := session.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	required := map[string]bool{
+		"get_file":                true,
+		"list_tree":               true,
+		"git_log":                 true,
+		"git_diff":                true,
+		"read_repository_map":     true,
+		"read_generated_document": true,
+	}
+	optional := map[string]bool{"search_code": true, "find_symbol": true}
+	for _, tool := range tools.Tools {
+		encoded, err := json.Marshal(tool.InputSchema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var schema struct {
+			Properties map[string]json.RawMessage `json:"properties"`
+			Required   []string                   `json:"required"`
+		}
+		if err := json.Unmarshal(encoded, &schema); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := schema.Properties["repository"]; ok {
+			t.Fatalf("tool %q still advertises a repository name parameter", tool.Name)
+		}
+		_, hasID := schema.Properties["repository_id"]
+		if (required[tool.Name] || optional[tool.Name]) != hasID {
+			t.Fatalf("tool %q repository_id presence = %v", tool.Name, hasID)
+		}
+		if required[tool.Name] && !slices.Contains(schema.Required, "repository_id") {
+			t.Fatalf("tool %q does not require repository_id: %v", tool.Name, schema.Required)
+		}
+	}
+
+	// A repository-scoped search must reach the engine as the resolved name.
+	if _, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "search_code",
+		Arguments: map[string]any{"query": "OpenFile", "repository_id": 42},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if searcher.query.Repository != "RepoKarta" {
+		t.Fatalf("search repository filter = %q", searcher.query.Repository)
+	}
+
+	// An unknown repository ID must fail instead of silently searching all.
+	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "list_tree",
+		Arguments: map[string]any{"repository_id": 999},
+	})
+	if err == nil && !result.IsError {
+		t.Fatal("unknown repository_id was accepted")
 	}
 }

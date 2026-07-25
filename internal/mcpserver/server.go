@@ -165,7 +165,7 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "list_repositories",
 		Title:       "List indexed repositories",
-		Description: "List the local Git repositories RepoKarta can search. Results include pinned indexed commits.",
+		Description: "List the local Git repositories RepoKarta can search. Every repository-specific tool takes the numeric repository_id returned here. Results include pinned indexed commits.",
 		Annotations: readOnly,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ listRepositoriesInput) (*mcp.CallToolResult, listRepositoriesOutput, error) {
 		repositories, err := intelligence.Repositories(ctx)
@@ -182,13 +182,13 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 		Annotations: readOnly,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input searchCodeInput) (*mcp.CallToolResult, searchCodeOutput, error) {
 		result, err := intelligence.Search(ctx, codeintel.SearchRequest{
-			Query:      input.Query,
-			Repository: input.Repository,
-			Language:   input.Language,
-			Path:       input.Path,
-			File:       input.File,
-			Mode:       input.Mode,
-			Limit:      input.Limit,
+			Query:        input.Query,
+			RepositoryID: input.RepositoryID,
+			Language:     input.Language,
+			Path:         input.Path,
+			File:         input.File,
+			Mode:         input.Mode,
+			Limit:        input.Limit,
 		})
 		if err != nil {
 			return nil, searchCodeOutput{}, err
@@ -206,11 +206,11 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 		Annotations: readOnly,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input openFileInput) (*mcp.CallToolResult, openFileOutput, error) {
 		file, err := intelligence.GetFile(ctx, codeintel.FileRequest{
-			Repository: input.Repository,
-			Revision:   input.Revision,
-			Path:       input.Path,
-			StartLine:  input.StartLine,
-			EndLine:    input.EndLine,
+			RepositoryID: input.RepositoryID,
+			Revision:     input.Revision,
+			Path:         input.Path,
+			StartLine:    input.StartLine,
+			EndLine:      input.EndLine,
 		})
 		if err != nil {
 			return nil, openFileOutput{}, err
@@ -226,10 +226,10 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 		Annotations: readOnly,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input findSymbolInput) (*mcp.CallToolResult, findSymbolOutput, error) {
 		result, err := intelligence.FindSymbol(ctx, codeintel.SymbolRequest{
-			Symbol:     input.Symbol,
-			Repository: input.Repository,
-			Language:   input.Language,
-			Limit:      input.Limit,
+			Symbol:       input.Symbol,
+			RepositoryID: input.RepositoryID,
+			Language:     input.Language,
+			Limit:        input.Limit,
 		})
 		if err != nil {
 			return nil, findSymbolOutput{}, err
@@ -247,9 +247,9 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 		Annotations: readOnly,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input listTreeInput) (*mcp.CallToolResult, listTreeOutput, error) {
 		tree, err := intelligence.ListTree(ctx, codeintel.TreeRequest{
-			Repository: input.Repository,
-			Revision:   input.Revision,
-			Path:       input.Path,
+			RepositoryID: input.RepositoryID,
+			Revision:     input.Revision,
+			Path:         input.Path,
 		})
 		if err != nil {
 			return nil, listTreeOutput{}, err
@@ -264,10 +264,10 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 		Annotations: readOnly,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input gitLogInput) (*mcp.CallToolResult, gitLogOutput, error) {
 		history, err := intelligence.GitLog(ctx, codeintel.GitLogRequest{
-			Repository: input.Repository,
-			Revision:   input.Revision,
-			Path:       input.Path,
-			Limit:      input.Limit,
+			RepositoryID: input.RepositoryID,
+			Revision:     input.Revision,
+			Path:         input.Path,
+			Limit:        input.Limit,
 		})
 		if err != nil {
 			return nil, gitLogOutput{}, err
@@ -282,7 +282,7 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 		Annotations: readOnly,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input gitDiffInput) (*mcp.CallToolResult, gitDiffOutput, error) {
 		diff, err := intelligence.GitDiff(ctx, codeintel.GitDiffRequest{
-			Repository:   input.Repository,
+			RepositoryID: input.RepositoryID,
 			FromRevision: input.FromRevision,
 			ToRevision:   input.ToRevision,
 			Path:         input.Path,
@@ -355,13 +355,13 @@ type listRepositoriesInput struct{}
 type listRepositoriesOutput = codeintel.RepositoryList
 
 type searchCodeInput struct {
-	Query      string `json:"query" jsonschema:"required,The source text symbol or regular expression to find."`
-	Repository string `json:"repository,omitempty" jsonschema:"Optional exact repository name."`
-	Language   string `json:"language,omitempty" jsonschema:"Optional programming language filter."`
-	Path       string `json:"path,omitempty" jsonschema:"Optional substring required in the path."`
-	File       string `json:"file,omitempty" jsonschema:"Optional substring required in the filename."`
-	Mode       string `json:"mode,omitempty" jsonschema:"Search mode: literal regex or zoekt."`
-	Limit      int    `json:"limit,omitempty" jsonschema:"Maximum files to return from 1 to 500. Defaults to 100."`
+	Query        string `json:"query" jsonschema:"required,The source text symbol or regular expression to find."`
+	RepositoryID int64  `json:"repository_id,omitempty" jsonschema:"Optional repository ID returned by list_repositories. Omit to search every indexed repository."`
+	Language     string `json:"language,omitempty" jsonschema:"Optional programming language filter."`
+	Path         string `json:"path,omitempty" jsonschema:"Optional substring required in the path."`
+	File         string `json:"file,omitempty" jsonschema:"Optional substring required in the filename."`
+	Mode         string `json:"mode,omitempty" jsonschema:"Search mode: literal regex or zoekt."`
+	Limit        int    `json:"limit,omitempty" jsonschema:"Maximum files to return from 1 to 500. Defaults to 100."`
 }
 type searchCodeOutput = codeintel.SearchResponse
 
@@ -379,43 +379,43 @@ type readGeneratedDocumentInput struct {
 type readGeneratedDocumentOutput = docs.Page
 
 type findSymbolInput struct {
-	Symbol     string `json:"symbol" jsonschema:"required,Exact symbol name to find."`
-	Repository string `json:"repository,omitempty" jsonschema:"Optional exact repository name."`
-	Language   string `json:"language,omitempty" jsonschema:"Optional programming language filter."`
-	Limit      int    `json:"limit,omitempty" jsonschema:"Maximum files to return from 1 to 500. Defaults to 100."`
+	Symbol       string `json:"symbol" jsonschema:"required,Exact symbol name to find."`
+	RepositoryID int64  `json:"repository_id,omitempty" jsonschema:"Optional repository ID returned by list_repositories. Omit to search every indexed repository."`
+	Language     string `json:"language,omitempty" jsonschema:"Optional programming language filter."`
+	Limit        int    `json:"limit,omitempty" jsonschema:"Maximum files to return from 1 to 500. Defaults to 100."`
 }
 
 type findSymbolOutput = codeintel.SymbolResponse
 
 type openFileInput struct {
-	Repository string `json:"repository" jsonschema:"required,Exact repository name returned by list_repositories."`
-	Path       string `json:"path" jsonschema:"required,Repository-relative source path."`
-	Revision   string `json:"revision,omitempty" jsonschema:"Pinned indexed commit. Omit to use the current indexed commit."`
-	StartLine  int    `json:"start_line,omitempty" jsonschema:"First one-based line to return."`
-	EndLine    int    `json:"end_line,omitempty" jsonschema:"Last one-based line to return. At most 500 lines."`
+	RepositoryID int64  `json:"repository_id" jsonschema:"required,Repository ID returned by list_repositories."`
+	Path         string `json:"path" jsonschema:"required,Repository-relative source path."`
+	Revision     string `json:"revision,omitempty" jsonschema:"Pinned indexed commit. Omit to use the current indexed commit."`
+	StartLine    int    `json:"start_line,omitempty" jsonschema:"First one-based line to return."`
+	EndLine      int    `json:"end_line,omitempty" jsonschema:"Last one-based line to return. At most 500 lines."`
 }
 
 type openFileOutput = codeintel.FileResponse
 
 type listTreeInput struct {
-	Repository string `json:"repository" jsonschema:"required,Exact repository name returned by list_repositories."`
-	Path       string `json:"path,omitempty" jsonschema:"Optional repository-relative directory."`
-	Revision   string `json:"revision,omitempty" jsonschema:"Pinned indexed commit. Omit to use the current indexed commit."`
+	RepositoryID int64  `json:"repository_id" jsonschema:"required,Repository ID returned by list_repositories."`
+	Path         string `json:"path,omitempty" jsonschema:"Optional repository-relative directory."`
+	Revision     string `json:"revision,omitempty" jsonschema:"Pinned indexed commit. Omit to use the current indexed commit."`
 }
 
 type listTreeOutput = codeintel.TreeResponse
 
 type gitLogInput struct {
-	Repository string `json:"repository" jsonschema:"required,Exact repository name returned by list_repositories."`
-	Revision   string `json:"revision,omitempty" jsonschema:"Exact reachable commit SHA to start from. Omit to use the indexed commit."`
-	Path       string `json:"path,omitempty" jsonschema:"Optional repository-relative file or directory whose history should be returned."`
-	Limit      int    `json:"limit,omitempty" jsonschema:"Maximum commits to return from 1 to 200. Defaults to 50."`
+	RepositoryID int64  `json:"repository_id" jsonschema:"required,Repository ID returned by list_repositories."`
+	Revision     string `json:"revision,omitempty" jsonschema:"Exact reachable commit SHA to start from. Omit to use the indexed commit."`
+	Path         string `json:"path,omitempty" jsonschema:"Optional repository-relative file or directory whose history should be returned."`
+	Limit        int    `json:"limit,omitempty" jsonschema:"Maximum commits to return from 1 to 200. Defaults to 50."`
 }
 
 type gitLogOutput = codeintel.GitLogResponse
 
 type gitDiffInput struct {
-	Repository   string `json:"repository" jsonschema:"required,Exact repository name returned by list_repositories."`
+	RepositoryID int64  `json:"repository_id" jsonschema:"required,Repository ID returned by list_repositories."`
 	FromRevision string `json:"from_revision,omitempty" jsonschema:"Exact reachable base commit SHA. Omit to use the first parent of to_revision."`
 	ToRevision   string `json:"to_revision,omitempty" jsonschema:"Exact reachable target commit SHA. Omit to use the indexed commit."`
 	Path         string `json:"path,omitempty" jsonschema:"Optional repository-relative file or directory to diff."`

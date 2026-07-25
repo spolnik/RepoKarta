@@ -64,7 +64,7 @@
                 <select name="repo">
                   <option value="">All repositories</option>
                   {{range .Repositories}}
-                  <option value="{{.Name}}" {{if eq $.Search.Query.Repository .Name}}selected{{end}}>{{.Name}}</option>
+                  <option value="{{.ID}}" {{if eq $.Search.SelectedRepositoryID .ID}}selected{{end}}>{{index $.RepositoryLabels .ID}}</option>
                   {{end}}
                 </select>
               </label>
@@ -326,7 +326,7 @@
     {{range .Repositories}}
     <li class="px-4 py-3">
       <div class="flex items-center justify-between gap-3">
-        <span class="truncate text-sm font-medium text-slate-300" title="{{.Path}}">{{.Name}}</span>
+        <span class="truncate text-sm font-medium text-slate-300" title="{{.Path}}">{{index $.RepositoryLabels .ID}}</span>
         <span class="status-badge status-{{.IndexState}}"><i></i>{{statusLabel .IndexState}}</span>
       </div>
       <div class="mt-1.5 flex items-center gap-2 font-mono text-[10px] text-slate-600">

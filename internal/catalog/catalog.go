@@ -73,6 +73,9 @@ func DiscoverWithOptions(root string, options DiscoverOptions) ([]Repository, er
 		if entry.IsDir() && excluded(path, excludes) {
 			return filepath.SkipDir
 		}
+		if entry.IsDir() && path != root && strings.HasPrefix(entry.Name(), ".") {
+			return filepath.SkipDir
+		}
 		if !entry.IsDir() {
 			return nil
 		}
@@ -264,4 +267,45 @@ func gitOutput(ctx context.Context, path string, bare bool, arguments ...string)
 		return "", fmt.Errorf("git %s: %s", strings.Join(arguments, " "), message)
 	}
 	return strings.TrimSpace(string(output)), nil
+}
+
+// DisplayNames returns a stable, unique label for every repository keyed by
+// repository ID. Repositories whose names collide are disambiguated with the
+// shortest distinguishing parent-directory suffix, so pickers never show two
+// identical entries. When paths cannot separate them the repository ID is
+// appended as a final stable tiebreaker.
+func DisplayNames(repositories []Repository) map[int64]string {
+	counts := make(map[string]int, len(repositories))
+	for _, repository := range repositories {
+		counts[strings.ToLower(repository.Name)]++
+	}
+	labels := make(map[int64]string, len(repositories))
+	used := make(map[string]int64, len(repositories))
+	for _, repository := range repositories {
+		label := repository.Name
+		if counts[strings.ToLower(repository.Name)] > 1 {
+			label = repository.Name + " · " + repositoryQualifier(repository)
+		}
+		if owner, taken := used[strings.ToLower(label)]; taken && owner != repository.ID {
+			label = fmt.Sprintf("%s (#%d)", label, repository.ID)
+		}
+		used[strings.ToLower(label)] = repository.ID
+		labels[repository.ID] = label
+	}
+	return labels
+}
+
+// repositoryQualifier describes where a repository lives well enough to tell it
+// apart from a same-named sibling.
+func repositoryQualifier(repository Repository) string {
+	segments := strings.Split(filepath.ToSlash(repository.Path), "/")
+	for index := len(segments) - 2; index >= 0; index-- {
+		if segment := strings.TrimSpace(segments[index]); segment != "" && segment != "." {
+			return segment
+		}
+	}
+	if branch := strings.TrimSpace(repository.DefaultRevision); branch != "" {
+		return branch
+	}
+	return filepath.ToSlash(repository.Path)
 }

@@ -40,7 +40,7 @@ func (c *Client) Repositories(ctx context.Context) (RepositoryList, error) {
 func (c *Client) Search(ctx context.Context, request SearchRequest) (SearchResponse, error) {
 	values := url.Values{
 		"q":    []string{request.Query},
-		"repo": []string{request.Repository},
+		"repo": []string{repositorySelector(request.RepositoryID, request.Repository)},
 		"lang": []string{request.Language},
 		"path": []string{request.Path},
 		"file": []string{request.File},
@@ -58,7 +58,7 @@ func (c *Client) Search(ctx context.Context, request SearchRequest) (SearchRespo
 func (c *Client) FindSymbol(ctx context.Context, request SymbolRequest) (SymbolResponse, error) {
 	values := url.Values{
 		"symbol": []string{request.Symbol},
-		"repo":   []string{request.Repository},
+		"repo":   []string{repositorySelector(request.RepositoryID, request.Repository)},
 		"lang":   []string{request.Language},
 	}
 	if request.Limit > 0 {
@@ -79,7 +79,7 @@ func (c *Client) GetFile(ctx context.Context, request FileRequest) (FileResponse
 		values.Set("lines", fmt.Sprintf("%d-%d", request.StartLine, request.EndLine))
 	}
 	var output FileResponse
-	err := c.get(ctx, "/api/file/"+url.PathEscape(request.Repository), values, &output)
+	err := c.get(ctx, "/api/file/"+url.PathEscape(repositorySelector(request.RepositoryID, request.Repository)), values, &output)
 	return output, err
 }
 
@@ -90,7 +90,7 @@ func (c *Client) ListTree(ctx context.Context, request TreeRequest) (TreeRespons
 		"path": []string{request.Path},
 	}
 	var output TreeResponse
-	err := c.get(ctx, "/api/tree/"+url.PathEscape(request.Repository), values, &output)
+	err := c.get(ctx, "/api/tree/"+url.PathEscape(repositorySelector(request.RepositoryID, request.Repository)), values, &output)
 	return output, err
 }
 
@@ -104,7 +104,7 @@ func (c *Client) GitLog(ctx context.Context, request GitLogRequest) (GitLogRespo
 		values.Set("limit", strconv.Itoa(request.Limit))
 	}
 	var output GitLogResponse
-	err := c.get(ctx, "/api/git/log/"+url.PathEscape(request.Repository), values, &output)
+	err := c.get(ctx, "/api/git/log/"+url.PathEscape(repositorySelector(request.RepositoryID, request.Repository)), values, &output)
 	return output, err
 }
 
@@ -119,7 +119,7 @@ func (c *Client) GitDiff(ctx context.Context, request GitDiffRequest) (GitDiffRe
 		values.Set("context", strconv.Itoa(request.ContextLines))
 	}
 	var output GitDiffResponse
-	err := c.get(ctx, "/api/git/diff/"+url.PathEscape(request.Repository), values, &output)
+	err := c.get(ctx, "/api/git/diff/"+url.PathEscape(repositorySelector(request.RepositoryID, request.Repository)), values, &output)
 	return output, err
 }
 
@@ -137,6 +137,15 @@ func (c *Client) GeneratedDocument(ctx context.Context, repositoryID int64, slug
 	var output docs.Page
 	err := c.get(ctx, endpoint, nil, &output)
 	return output, err
+}
+
+// repositorySelector renders the stable repository ID when the caller supplied
+// one and falls back to the repository name.
+func repositorySelector(repositoryID int64, name string) string {
+	if repositoryID > 0 {
+		return strconv.FormatInt(repositoryID, 10)
+	}
+	return name
 }
 
 func (c *Client) get(ctx context.Context, endpoint string, values url.Values, output any) error {

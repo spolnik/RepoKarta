@@ -82,13 +82,14 @@ type RepositoryList struct {
 
 // SearchRequest is the shared query contract.
 type SearchRequest struct {
-	Query      string `json:"query"`
-	Repository string `json:"repository,omitempty"`
-	Language   string `json:"language,omitempty"`
-	Path       string `json:"path,omitempty"`
-	File       string `json:"file,omitempty"`
-	Mode       string `json:"mode,omitempty"`
-	Limit      int    `json:"limit,omitempty"`
+	Query        string `json:"query"`
+	RepositoryID int64  `json:"repository_id,omitempty"`
+	Repository   string `json:"repository,omitempty"`
+	Language     string `json:"language,omitempty"`
+	Path         string `json:"path,omitempty"`
+	File         string `json:"file,omitempty"`
+	Mode         string `json:"mode,omitempty"`
+	Limit        int    `json:"limit,omitempty"`
 }
 
 // SearchResponse explicitly reports evidence completeness.
@@ -109,10 +110,11 @@ type SearchResponse struct {
 
 // SymbolRequest selects bounded symbol-index matches.
 type SymbolRequest struct {
-	Symbol     string `json:"symbol"`
-	Repository string `json:"repository,omitempty"`
-	Language   string `json:"language,omitempty"`
-	Limit      int    `json:"limit,omitempty"`
+	Symbol       string `json:"symbol"`
+	RepositoryID int64  `json:"repository_id,omitempty"`
+	Repository   string `json:"repository,omitempty"`
+	Language     string `json:"language,omitempty"`
+	Limit        int    `json:"limit,omitempty"`
 }
 
 // SymbolResponse uses the same explicit completeness and citation contract as
@@ -142,11 +144,12 @@ type SearchLine struct {
 
 // FileRequest selects a bounded, commit-pinned file range.
 type FileRequest struct {
-	Repository string
-	Revision   string
-	Path       string
-	StartLine  int
-	EndLine    int
+	RepositoryID int64
+	Repository   string
+	Revision     string
+	Path         string
+	StartLine    int
+	EndLine      int
 }
 
 // FileResponse is a commit-pinned source range.
@@ -171,9 +174,10 @@ type SourceLine struct {
 
 // TreeRequest selects a directory at a pinned revision.
 type TreeRequest struct {
-	Repository string
-	Revision   string
-	Path       string
+	RepositoryID int64
+	Repository   string
+	Revision     string
+	Path         string
 }
 
 // TreeResponse lists a bounded repository directory.
@@ -194,10 +198,11 @@ type TreeEntry struct {
 
 // GitLogRequest selects a bounded history walk from a reachable commit.
 type GitLogRequest struct {
-	Repository string
-	Revision   string
-	Path       string
-	Limit      int
+	RepositoryID int64
+	Repository   string
+	Revision     string
+	Path         string
+	Limit        int
 }
 
 // GitLogResponse is a newest-first, explicitly bounded commit history.
@@ -226,6 +231,7 @@ type GitCommit struct {
 
 // GitDiffRequest selects an exact commit-to-commit patch.
 type GitDiffRequest struct {
+	RepositoryID int64
 	Repository   string
 	FromRevision string
 	ToRevision   string
@@ -284,9 +290,17 @@ func (s *Service) RepositoryByID(ctx context.Context, id int64) (catalog.Reposit
 // Search performs a bounded search and resolves every match to a citation.
 func (s *Service) Search(ctx context.Context, request SearchRequest) (SearchResponse, error) {
 	limit := normalizeLimit(request.Limit, DefaultSearchLimit, MaximumSearchLimit)
+	repositoryFilter := strings.TrimSpace(request.Repository)
+	if request.RepositoryID > 0 {
+		repository, err := s.store.RepositoryByID(ctx, request.RepositoryID)
+		if err != nil {
+			return SearchResponse{}, err
+		}
+		repositoryFilter = repository.Name
+	}
 	result, err := s.searcher.Search(ctx, search.Query{
 		Text:       strings.TrimSpace(request.Query),
-		Repository: strings.TrimSpace(request.Repository),
+		Repository: repositoryFilter,
 		Language:   strings.TrimSpace(request.Language),
 		Path:       strings.TrimSpace(request.Path),
 		File:       strings.TrimSpace(request.File),
@@ -367,17 +381,18 @@ func (s *Service) FindSymbol(ctx context.Context, request SymbolRequest) (Symbol
 	escaped := strings.ReplaceAll(symbol, `\`, `\\`)
 	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
 	return s.Search(ctx, SearchRequest{
-		Query:      `sym:"` + escaped + `"`,
-		Repository: request.Repository,
-		Language:   request.Language,
-		Mode:       "zoekt",
-		Limit:      request.Limit,
+		Query:        `sym:"` + escaped + `"`,
+		RepositoryID: request.RepositoryID,
+		Repository:   request.Repository,
+		Language:     request.Language,
+		Mode:         "zoekt",
+		Limit:        request.Limit,
 	})
 }
 
 // GetFile reads a commit-pinned source range.
 func (s *Service) GetFile(ctx context.Context, request FileRequest) (FileResponse, error) {
-	repository, err := s.namedRepository(ctx, request.Repository)
+	repository, err := s.selectRepository(ctx, request.RepositoryID, request.Repository)
 	if err != nil {
 		return FileResponse{}, err
 	}
@@ -416,7 +431,7 @@ func (s *Service) GetFile(ctx context.Context, request FileRequest) (FileRespons
 
 // ListTree lists a bounded directory at a pinned revision.
 func (s *Service) ListTree(ctx context.Context, request TreeRequest) (TreeResponse, error) {
-	repository, err := s.namedRepository(ctx, request.Repository)
+	repository, err := s.selectRepository(ctx, request.RepositoryID, request.Repository)
 	if err != nil {
 		return TreeResponse{}, err
 	}
@@ -449,7 +464,7 @@ func (s *Service) ListTree(ctx context.Context, request TreeRequest) (TreeRespon
 // GitLog returns bounded history from the indexed commit or a reachable
 // historical commit, optionally limited to a repository-relative path.
 func (s *Service) GitLog(ctx context.Context, request GitLogRequest) (GitLogResponse, error) {
-	repository, err := s.namedRepository(ctx, request.Repository)
+	repository, err := s.selectRepository(ctx, request.RepositoryID, request.Repository)
 	if err != nil {
 		return GitLogResponse{}, err
 	}
@@ -497,7 +512,7 @@ func (s *Service) GitLog(ctx context.Context, request GitLogRequest) (GitLogResp
 // GitDiff returns a bounded unified patch between reachable commits. The
 // default comparison is the indexed commit against its first parent.
 func (s *Service) GitDiff(ctx context.Context, request GitDiffRequest) (GitDiffResponse, error) {
-	repository, err := s.namedRepository(ctx, request.Repository)
+	repository, err := s.selectRepository(ctx, request.RepositoryID, request.Repository)
 	if err != nil {
 		return GitDiffResponse{}, err
 	}
@@ -568,6 +583,19 @@ func Citation(repository, revision, filePath string, start, end int) string {
 		revision = revision[:8]
 	}
 	return fmt.Sprintf("%s@%s:%s#L%d-L%d", repository, revision, filePath, start, end)
+}
+
+// selectRepository resolves the repository a request targets. The stable
+// numeric ID returned by list_repositories is authoritative; an exact name is
+// accepted only for the HTML and JSON clients that still send one.
+func (s *Service) selectRepository(ctx context.Context, id int64, name string) (catalog.Repository, error) {
+	if id > 0 {
+		return s.store.RepositoryByID(ctx, id)
+	}
+	if strings.TrimSpace(name) == "" {
+		return catalog.Repository{}, errors.New("repository_id is required")
+	}
+	return s.namedRepository(ctx, name)
 }
 
 func (s *Service) namedRepository(ctx context.Context, name string) (catalog.Repository, error) {

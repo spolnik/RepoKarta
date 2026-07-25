@@ -121,6 +121,25 @@ func TestDiscoverContinuesBelowRepositoryRoot(t *testing.T) {
 	}
 }
 
+func TestDiscoverSkipsHiddenWorktreeDirectoriesByDefault(t *testing.T) {
+	root := t.TempDir()
+	visible := filepath.Join(root, "owner", "service")
+	hidden := filepath.Join(root, ".jobguard-wt", "service")
+	runGit(t, root, "init", visible)
+	runGit(t, root, "init", hidden)
+
+	repositories, err := Discover(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repositories) != 1 {
+		t.Fatalf("expected only visible repository, got %#v", repositories)
+	}
+	if repositories[0].Path != mustCanonicalDirectory(t, visible) {
+		t.Fatalf("visible repository path = %q", repositories[0].Path)
+	}
+}
+
 func TestDiscoverIgnoresInvalidGitMarkerAndContinues(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git is not installed")
@@ -164,5 +183,34 @@ func runGit(t *testing.T, directory string, arguments ...string) {
 	command := exec.Command("git", append([]string{"-C", directory}, arguments...)...)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("git %v: %v\n%s", arguments, err, output)
+	}
+}
+
+func TestDisplayNamesDisambiguateDuplicateRepositoryNames(t *testing.T) {
+	repositories := []Repository{
+		{ID: 1, Name: "service", Path: filepath.FromSlash("/roots/ghorg/team-a/service")},
+		{ID: 2, Name: "service", Path: filepath.FromSlash("/roots/ghorg/team-b/service")},
+		{ID: 3, Name: "unique", Path: filepath.FromSlash("/roots/ghorg/team-a/unique")},
+		{ID: 4, Name: "service", Path: filepath.FromSlash("/roots/ghorg/team-a/service")},
+	}
+	labels := DisplayNames(repositories)
+	if labels[3] != "unique" {
+		t.Fatalf("unique repository label = %q", labels[3])
+	}
+	if labels[1] != "service · team-a" || labels[2] != "service · team-b" {
+		t.Fatalf("duplicate labels = %q and %q", labels[1], labels[2])
+	}
+	if labels[4] != "service · team-a (#4)" {
+		t.Fatalf("identical path label = %q", labels[4])
+	}
+	seen := make(map[string]bool, len(labels))
+	for id, label := range labels {
+		if label == "" {
+			t.Fatalf("repository %d has no label", id)
+		}
+		if seen[label] {
+			t.Fatalf("duplicate label %q", label)
+		}
+		seen[label] = true
 	}
 }

@@ -29,7 +29,7 @@
           <select data-map-repository>
             <option value="">All repositories</option>
             {{range .Repositories}}
-            <option value="{{.ID}}">{{.Name}}</option>
+            <option value="{{.ID}}">{{index $.RepositoryLabels .ID}}</option>
             {{end}}
           </select>
         </label>
