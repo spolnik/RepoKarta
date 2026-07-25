@@ -1380,6 +1380,40 @@ function enableConversations(debug?: DebugLogger): void {
     return;
   }
 
+  const runSettingsStorageKey = "repokarta:conversation-run-settings:v1";
+  const restoreRunSettings = (): void => {
+    try {
+      const stored = window.localStorage.getItem(runSettingsStorageKey);
+      if (!stored) {
+        return;
+      }
+      const parsed = JSON.parse(stored) as { timeout?: unknown; token_budget?: unknown };
+      const timeoutValue = typeof parsed.timeout === "string" ? parsed.timeout : "";
+      const tokenBudgetValue = typeof parsed.token_budget === "string" ? parsed.token_budget : "";
+      if (Array.from(timeout.options).some((option) => option.value === timeoutValue)) {
+        timeout.value = timeoutValue;
+      }
+      if (Array.from(tokenBudget.options).some((option) => option.value === tokenBudgetValue)) {
+        tokenBudget.value = tokenBudgetValue;
+      }
+    } catch {
+      // Browsers can deny local storage. Run controls still retain safe defaults.
+    }
+  };
+  const persistRunSettings = (): void => {
+    try {
+      window.localStorage.setItem(runSettingsStorageKey, JSON.stringify({
+        timeout: timeout.value,
+        token_budget: tokenBudget.value
+      }));
+    } catch {
+      // Run controls remain usable when local storage is unavailable.
+    }
+  };
+  restoreRunSettings();
+  timeout.addEventListener("change", persistRunSettings);
+  tokenBudget.addEventListener("change", persistRunSettings);
+
   let conversationID = "";
   let busy = false;
   let attachedImages: ConversationImage[] = [];
@@ -2213,6 +2247,7 @@ function enableConversations(debug?: DebugLogger): void {
       model: model.value,
       effort: effort.value
     });
+    persistRunSettings();
     submit.disabled = true;
     submit.setAttribute("aria-label", "RepoKarta is working");
     setNewConversationDisabled(true);
@@ -2410,18 +2445,21 @@ function enableConversations(debug?: DebugLogger): void {
         }
       }
     } catch (error: unknown) {
-      timelineRenderer?.cancel();
+      renderMetrics = timelineRenderer?.finish();
       debug?.add("error", "chat.request.failed", {
         endpoint: "/api/chat",
         online: navigator.onLine,
         duration_ms: Math.round(performance.now() - requestStarted),
+        rendering: renderMetrics,
         ...describeError(error)
       });
       if (debug && (error instanceof TypeError || (error instanceof Error && /fetch|network/i.test(error.message)))) {
         await probeServerHealth(debug);
       }
-      assistant.remove();
-      messages.append(conversationMessage("error", conversationErrorMessage(error)));
+      const notice = document.createElement("p");
+      notice.className = "conversation-turn-status conversation-turn-status-error";
+      notice.textContent = conversationErrorMessage(error);
+      assistant.append(notice);
     } finally {
       busy = false;
       finishRuntimeTimer(requestStarted);
@@ -2742,6 +2780,7 @@ function enableRepositoryMaps(debug?: DebugLogger): void {
   const renderGraph = async (value: MapSnapshot): Promise<void> => {
     const { default: cytoscape } = await import("cytoscape");
     const nodeByID = new Map(value.nodes.map((node) => [node.id, node]));
+    const initialColumns = Math.max(1, Math.ceil(Math.sqrt(value.nodes.length)));
     const dependencyRepositories = new Map<string, Map<number, MapEvidence[]>>();
     for (const edge of value.edges) {
       const target = nodeByID.get(edge.target);
@@ -2789,7 +2828,7 @@ function enableRepositoryMaps(debug?: DebugLogger): void {
     graph = cytoscape({
       container: canvas,
       elements: [
-        ...value.nodes.map((node) => ({
+        ...value.nodes.map((node, index) => ({
           data: {
             id: node.id,
             label: node.label,
@@ -2797,6 +2836,10 @@ function enableRepositoryMaps(debug?: DebugLogger): void {
             kind: node.kind,
             layer: node.layer,
             fact: node
+          },
+          position: {
+            x: (index % initialColumns) * 96,
+            y: Math.floor(index / initialColumns) * 96
           },
           classes: node.kind
         })),
@@ -2817,7 +2860,6 @@ function enableRepositoryMaps(debug?: DebugLogger): void {
       },
       minZoom: 0.12,
       maxZoom: 2.4,
-      wheelSensitivity: 0.22,
       style: [
         {
           selector: "node",
