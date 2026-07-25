@@ -221,12 +221,17 @@ repositories on managed Windows and Apple Silicon macOS laptops.
 
 - Generate Markdown documentation tied to a repository commit.
 - Use an isolated, read-only provider session to inspect implementation and
-  tests, then plan a repository-specific two-level knowledge hierarchy.
+  tests, then plan a bounded, primarily flat knowledge hierarchy.
 - Require an explicit curated model. Preserve the Codex profile effort floor;
   expose all supported Claude effort levels per model, including provider
   default for models without configurable effort.
 - Checkpoint a bounded repository survey to `survey.md`, then atomically save
   the hierarchy before generating pages one at a time.
+- Reuse that survey and its exact source URLs as the primary evidence pack for
+  every page instead of repeating repository-wide discovery.
+- Keep provider plans to five through twelve focused pages, or three through
+  six for compact repositories. Keep Architecture Overview short and
+  navigational; use child pages only when a focused flow cannot fit its parent.
 - Keep deterministic structural planning as the provider-free fallback.
 - Generate pages independently so individual pages can be retried and refreshed.
 - Require source citations for architectural and behavioral claims.
@@ -456,6 +461,10 @@ rendering an unreadable file-level hairball.
 - [x] Curated top-tier Wiki model presets with high-or-stronger effort.
 - [x] One standard-quality Wiki pipeline for every provider; reduced-depth
   Fast generation is disabled in both the interface and backend.
+- [x] Bounded five-to-twelve-page plans (three to six for compact repositories)
+  with short architecture and glossary pages.
+- [x] Survey-grounded page turns with page-specific writing, tool-call, and
+  output budgets.
 - [x] Filesystem-only Markdown and manifest persistence outside SQLite.
 - [x] Source citations and Mermaid validation.
 - [x] Three-pane Deep Wiki reader with hierarchy, filtering, page outline, and

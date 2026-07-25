@@ -71,6 +71,11 @@ questions, M3 evidence-backed repository maps, and M4 living documentation:
   and Gradle build facts;
 - one standard-quality Wiki pipeline for every provider; no reduced-depth Fast
   mode is exposed or accepted by the generation API;
+- bounded provider plans with five to twelve focused pages (three to six for
+  compact repositories), a short architecture orientation, and a concise
+  glossary;
+- page turns that reuse the saved survey evidence instead of repeating broad
+  discovery, with page-specific writing, tool-call, and output budgets;
 - deterministic three-page documentation plans generated independently from
   commit-pinned structural facts;
 - durable page status, provider/model metadata, source sets, citations, and

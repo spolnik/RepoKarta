@@ -187,11 +187,11 @@ func TestProviderGroundedKnowledgePlanAndPage(t *testing.T) {
 			Text: `<repokarta_wiki_plan>
 {"pages":[
 {"slug":"architecture-overview","title":"Architecture Overview","summary":"Explain the runtime composition, process boundaries, central services, and end-to-end request paths.","number":"1","parent_slug":"","depth":0},
-{"slug":"runtime-lifecycle","title":"Runtime Lifecycle","summary":"Trace startup, dependency construction, request serving, shutdown, and the failure paths around each stage.","number":"1.1","parent_slug":"architecture-overview","depth":1},
-{"slug":"search-and-source-intelligence","title":"Search and Source Intelligence","summary":"Explain indexing, query coordination, source retrieval, symbol lookup, and commit-pinned citation behavior.","number":"2","parent_slug":"","depth":0},
-{"slug":"search-indexing-pipeline","title":"Search Indexing Pipeline","summary":"Trace repository discovery through incremental indexing, query execution, result limits, and recovery behavior.","number":"2.1","parent_slug":"search-and-source-intelligence","depth":1},
-{"slug":"operations-and-testing","title":"Operations and Testing","summary":"Explain configuration, build and packaging paths, runtime diagnostics, test layers, and operational invariants.","number":"3","parent_slug":"","depth":0},
-{"slug":"glossary","title":"Glossary","summary":"Define repository-specific services, storage concepts, provider terms, graph facts, and citation terminology.","number":"4","parent_slug":"","depth":0}
+{"slug":"runtime-lifecycle","title":"Runtime Lifecycle","summary":"Trace startup, dependency construction, request serving, shutdown, and the failure paths around each stage.","number":"2","parent_slug":"","depth":0},
+{"slug":"search-and-source-intelligence","title":"Search and Source Intelligence","summary":"Explain indexing, query coordination, source retrieval, symbol lookup, and commit-pinned citation behavior.","number":"3","parent_slug":"","depth":0},
+{"slug":"search-indexing-pipeline","title":"Search Indexing Pipeline","summary":"Trace repository discovery through incremental indexing, query execution, result limits, and recovery behavior.","number":"3.1","parent_slug":"search-and-source-intelligence","depth":1},
+{"slug":"operations-and-testing","title":"Operations and Testing","summary":"Explain configuration, build and packaging paths, runtime diagnostics, test layers, and operational invariants.","number":"4","parent_slug":"","depth":0},
+{"slug":"glossary","title":"Glossary","summary":"Define repository-specific services, storage concepts, provider terms, graph facts, and citation terminology.","number":"5","parent_slug":"","depth":0}
 ]}
 </repokarta_wiki_plan>`,
 		},
@@ -247,7 +247,7 @@ func TestProviderGroundedKnowledgePlanAndPage(t *testing.T) {
 		t.Fatalf("knowledge plan = %+v", planned)
 	}
 	runtime := pageBySlug(t, planned, "runtime-lifecycle")
-	if runtime.ParentSlug != "architecture-overview" || runtime.Depth != 1 || runtime.Number != "1.1" {
+	if runtime.ParentSlug != "" || runtime.Depth != 0 || runtime.Number != "2" {
 		t.Fatalf("hierarchical page metadata = %+v", runtime)
 	}
 
@@ -287,7 +287,7 @@ func TestProviderGroundedKnowledgePlanAndPage(t *testing.T) {
 	if len(generator.requests) != 3 ||
 		!strings.Contains(generator.requests[0].Message, "repository survey") ||
 		!strings.Contains(generator.requests[1].Message, "saved_repository_survey") ||
-		!strings.Contains(generator.requests[2].Message, "failure and recovery") {
+		!strings.Contains(generator.requests[2].Message, "failure behavior") {
 		t.Fatalf("generation prompts = %#v", generator.requests)
 	}
 }
@@ -772,6 +772,114 @@ func TestProfileScalesToRepositoryShape(t *testing.T) {
 	}
 	if err := validateKnowledgeSurvey(markdown, citations, standardKnowledgeProfile()); err == nil {
 		t.Fatal("the standard profile must still demand deeper evidence")
+	}
+}
+
+func TestOverLargePlanIsBoundedWithoutArchitectureChildren(t *testing.T) {
+	pages := []knowledgePlanPage{
+		{Slug: "architecture-overview", Title: "Architecture Overview", Depth: 0},
+		{Slug: "architecture-details", Title: "Architecture Details", Depth: 1, ParentSlug: "architecture-overview"},
+	}
+	for index := 2; index <= 8; index++ {
+		slug := fmt.Sprintf("concept-%d", index)
+		pages = append(pages,
+			knowledgePlanPage{Slug: slug, Title: fmt.Sprintf("Concept %d", index), Depth: 0},
+			knowledgePlanPage{
+				Slug:       slug + "-details",
+				Title:      fmt.Sprintf("Concept %d Details", index),
+				Depth:      1,
+				ParentSlug: slug,
+			},
+		)
+	}
+	pages = append(pages, knowledgePlanPage{Slug: "glossary", Title: "Glossary", Depth: 0})
+
+	bounded := boundKnowledgePlan(pages, 6)
+	if len(bounded) != 6 {
+		t.Fatalf("bounded plan has %d pages, want 6: %+v", len(bounded), bounded)
+	}
+	if bounded[0].Slug != "architecture-overview" ||
+		bounded[len(bounded)-1].Slug != "glossary" {
+		t.Fatalf("bounded plan lost its required endpoints: %+v", bounded)
+	}
+	if slices.ContainsFunc(bounded, func(page knowledgePlanPage) bool {
+		return page.ParentSlug == "architecture-overview"
+	}) {
+		t.Fatalf("architecture detail page survived bounding: %+v", bounded)
+	}
+	for _, page := range bounded[1 : len(bounded)-1] {
+		if page.Depth != 0 {
+			t.Fatalf("concept coverage was displaced by a child page: %+v", bounded)
+		}
+	}
+}
+
+func TestPagePromptReusesSurveyAndAppliesCompactWritingBudget(t *testing.T) {
+	site := Site{
+		Repository: "fixture",
+		Revision:   strings.Repeat("a", 40),
+		Pages: []Page{
+			{Number: "1", Slug: "architecture-overview", Title: "Architecture Overview"},
+			{Number: "2", Slug: "runtime", Title: "Runtime"},
+		},
+	}
+	page := site.Pages[0]
+	page.Summary = "Orient the reader to subsystem boundaries without repeating their implementation."
+	prompt := knowledgePagePrompt(page, site, "# Repository Survey\n\nSaved evidence.")
+	for _, expected := range []string{
+		"600-900 words",
+		"Use at most 4 tool calls",
+		"exactly one compact Mermaid diagram",
+		"State each important point once",
+		"<saved_repository_survey>",
+		"Saved evidence.",
+	} {
+		if !strings.Contains(prompt, expected) {
+			t.Fatalf("architecture prompt does not contain %q:\n%s", expected, prompt)
+		}
+	}
+	if budget := pageGenerationBudget(page, 32_000); budget != 3_500 {
+		t.Fatalf("architecture output budget = %d, want 3500", budget)
+	}
+
+	glossary := Page{Slug: "glossary"}
+	if budget := pageGenerationBudget(glossary, 32_000); budget != 2_500 {
+		t.Fatalf("glossary output budget = %d, want 2500", budget)
+	}
+	glossaryPrompt := knowledgePagePrompt(glossary, site, "# Repository Survey\n\nSaved evidence.")
+	for _, expected := range []string{"8-12 entries", "Omit general industry vocabulary"} {
+		if !strings.Contains(glossaryPrompt, expected) {
+			t.Fatalf("glossary prompt does not contain %q:\n%s", expected, glossaryPrompt)
+		}
+	}
+}
+
+func TestSavedSurveyCitationsRemainValidPageEvidence(t *testing.T) {
+	revision := strings.Repeat("b", 40)
+	sourceURL := fmt.Sprintf(
+		"http://127.0.0.1:7331/source/7?rev=%s&path=internal/runtime/runtime.go&focus=21-28#L21",
+		revision,
+	)
+	site := Site{
+		RepositoryID: 7,
+		Repository:   "fixture",
+		Revision:     revision,
+	}
+	checkpoint := []graph.Evidence{{
+		Label: "internal/runtime/runtime.go",
+		URL:   sourceURL,
+	}}
+
+	evidence := evidenceFromSources(
+		site,
+		"Runtime construction is centralized. [source]("+sourceURL+")",
+		checkpointCitationSources(checkpoint),
+	)
+	if len(evidence) != 1 {
+		t.Fatalf("saved survey evidence = %+v, want one citation", evidence)
+	}
+	if evidence[0].Path != "internal/runtime/runtime.go" || evidence[0].Line != 21 {
+		t.Fatalf("saved survey evidence was parsed incorrectly: %+v", evidence[0])
 	}
 }
 
