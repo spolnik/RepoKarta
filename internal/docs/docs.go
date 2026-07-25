@@ -175,8 +175,7 @@ type Site struct {
 	UpdatedAt    time.Time `json:"updated_at"`
 	// Profile reports how the pipeline scaled itself to this repository:
 	// "standard" for a service with real runtime composition, "compact" for a
-	// static site, small library, or configuration repository, and "fast" for
-	// the explicitly bounded Haiku exploration mode.
+	// static site, small library, or configuration repository.
 	Profile      string     `json:"profile,omitempty"`
 	ProfilePages string     `json:"profile_pages,omitempty"`
 	Steering     Steering   `json:"steering"`
@@ -516,9 +515,7 @@ func (s *Service) Generate(ctx context.Context, request GenerateRequest) (Site, 
 		if err := validateKnowledgePreset(request, profile); err != nil {
 			return Site{}, err
 		}
-		profileChanged := request.Page == "" && strings.TrimSpace(request.Preset) != "" &&
-			site.SurveyReady && (profile.ID == "fast" && site.Survey.Profile != "fast" ||
-			profile.ID != "fast" && site.Survey.Profile == "fast")
+		profileChanged := request.Page == "" && site.SurveyReady && site.Survey.Profile == "fast"
 		surveyGenerated := false
 		if !site.SurveyReady || request.Page == "" && request.Refresh &&
 			(site.SurveyStale || request.SurveyOnly) || profileChanged {
@@ -864,8 +861,11 @@ type knowledgePlanPage struct {
 
 func validateKnowledgePreset(request GenerateRequest, profile knowledgeProfile) error {
 	preset := strings.ToLower(strings.TrimSpace(request.Preset))
-	if preset != "" && preset != "quality" && preset != "fast" {
-		return fmt.Errorf("%w: preset must be quality or fast", ErrInvalidKnowledgePreset)
+	if preset != "" && preset != "quality" {
+		return fmt.Errorf(
+			"%w: Fast generation is disabled; use the standard quality pipeline",
+			ErrInvalidKnowledgePreset,
+		)
 	}
 	provider := strings.TrimSpace(request.Provider)
 	model := strings.ToLower(strings.TrimSpace(request.Model))
@@ -876,13 +876,6 @@ func validateKnowledgePreset(request GenerateRequest, profile knowledgeProfile) 
 	effortRank := map[string]int{"low": 1, "medium": 2, "high": 3, "xhigh": 4, "max": 5, "ultra": 6}
 	if model == "" {
 		return fmt.Errorf("%w: choose an explicit Wiki-grade model", ErrInvalidKnowledgePreset)
-	}
-	if preset == "fast" && (provider != "claude" && provider != "anthropic-api" ||
-		model != "claude-haiku-4-5" || effort != "") {
-		return fmt.Errorf(
-			"%w: Fast requires Claude Haiku 4.5 with provider-default effort",
-			ErrInvalidKnowledgePreset,
-		)
 	}
 	switch provider {
 	case "codex":
@@ -963,9 +956,6 @@ func (s *Service) generateKnowledgeSurvey(
 		return Site{}, err
 	}
 	timeoutSeconds := generationTimeout(request.Timeout)
-	if profile.MaximumTimeout > 0 {
-		timeoutSeconds = min(timeoutSeconds, profile.MaximumTimeout)
-	}
 	tokenBudget := min(generationBudget(request.TokenBudget), profile.SurveyTokenBudget)
 	result, err := s.generator.RunEphemeral(ctx, agent.TurnRequest{
 		Provider:       request.Provider,
@@ -1066,10 +1056,7 @@ type knowledgeProfile struct {
 	// exhaustive browsing job.
 	MaximumStructuralFacts int
 	MaximumToolCalls       int
-	// MaximumTimeout is zero for quality profiles. Fast mode applies a real
-	// checkpoint ceiling even when the UI retains a longer saved timeout.
-	MaximumTimeout    int
-	SurveyTokenBudget int64
+	SurveyTokenBudget      int64
 }
 
 func standardKnowledgeProfile() knowledgeProfile {
@@ -1129,38 +1116,6 @@ func compactKnowledgeProfile() knowledgeProfile {
 	}
 }
 
-// fastKnowledgeProfile makes exploratory Wiki generation a short interactive
-// task. It deliberately trades breadth for a useful first map that can later
-// be refreshed with the quality profile.
-func fastKnowledgeProfile() knowledgeProfile {
-	return knowledgeProfile{
-		ID: "fast",
-		Sections: []string{
-			"## Product and domain",
-			"## Runtime and boundaries",
-			"## Key flows and state",
-			"## Build, operations, and tests",
-			"## Candidate Wiki hierarchy",
-		},
-		MinimumRunes:     900,
-		MinimumCitations: 4,
-		MinimumFiles:     4,
-		SurveyWords:      "700-1,200 words",
-		EvidenceRule: "Cite at least four distinct implementation or configuration files. " +
-			"Prefer production entry points, composition, clients, state, and representative tests.",
-		Focus: "Use the structural map first, inspect only the 8-12 highest-value files, and stop " +
-			"when the runtime boundary and key flows are supported.",
-		MinimumPages:           4,
-		MaximumPages:           8,
-		MinimumSummary:         20,
-		MinimumEffort:          "",
-		MaximumStructuralFacts: 60,
-		MaximumToolCalls:       12,
-		MaximumTimeout:         600,
-		SurveyTokenBudget:      6_000,
-	}
-}
-
 // profileForRepository classifies deterministically from the structural
 // snapshot that has already been computed, so it costs nothing and cannot
 // disagree with the facts shown on the map. It keys on whether a runtime
@@ -1178,21 +1133,11 @@ func profileForRepository(site Site, snapshot graph.Snapshot) knowledgeProfile {
 }
 
 func profileForCheckpoint(site Site, snapshot graph.Snapshot) knowledgeProfile {
-	if strings.EqualFold(site.Survey.Profile, "fast") {
-		return fastKnowledgeProfile()
-	}
 	return profileForRepository(site, snapshot)
 }
 
 func profileForRequest(request GenerateRequest, site Site, snapshot graph.Snapshot) knowledgeProfile {
-	switch strings.ToLower(strings.TrimSpace(request.Preset)) {
-	case "fast":
-		return fastKnowledgeProfile()
-	case "quality":
-		return profileForRepository(site, snapshot)
-	default:
-		return profileForCheckpoint(site, snapshot)
-	}
+	return profileForCheckpoint(site, snapshot)
 }
 
 func knowledgeSurveyPrompt(site Site, snapshot graph.Snapshot, profile knowledgeProfile) string {

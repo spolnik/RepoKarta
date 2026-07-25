@@ -249,7 +249,7 @@ func TestDocumentationPageAPIGenerationAndExport(t *testing.T) {
 	request = httptest.NewRequest(
 		http.MethodPost,
 		"http://127.0.0.1:7331/api/wiki/generate",
-		bytes.NewBufferString(`{"repository_id":6,"page":"overview","refresh":true,"survey_only":true,"plan_only":true,"preset":"fast","provider":"codex","model":"gpt-test","effort":"high","timeout_seconds":600,"token_budget":32000}`),
+		bytes.NewBufferString(`{"repository_id":6,"page":"overview","refresh":true,"survey_only":true,"plan_only":true,"preset":"quality","provider":"codex","model":"gpt-test","effort":"high","timeout_seconds":600,"token_budget":32000}`),
 	)
 	request.Header.Set("Content-Type", "application/json")
 	response = httptest.NewRecorder()
@@ -260,7 +260,7 @@ func TestDocumentationPageAPIGenerationAndExport(t *testing.T) {
 		!documents.generated.Refresh ||
 		!documents.generated.SurveyOnly ||
 		!documents.generated.PlanOnly ||
-		documents.generated.Preset != "fast" ||
+		documents.generated.Preset != "quality" ||
 		documents.generated.Provider != "codex" ||
 		documents.generated.Model != "gpt-test" ||
 		documents.generated.Effort != "high" ||

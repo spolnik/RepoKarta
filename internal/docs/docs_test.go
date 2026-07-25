@@ -124,20 +124,11 @@ func TestKnowledgePresetRequiresCuratedModelAndHighEffort(t *testing.T) {
 			},
 		},
 		{
-			name: "Fast Haiku provider default",
+			name: "Fast mode rejected",
 			request: GenerateRequest{
 				Preset:   "fast",
 				Provider: "claude",
 				Model:    "claude-haiku-4-5",
-			},
-		},
-		{
-			name: "Fast rejects a quality model",
-			request: GenerateRequest{
-				Preset:   "fast",
-				Provider: "claude",
-				Model:    "claude-opus-5",
-				Effort:   "high",
 			},
 			wantErr: true,
 		},
@@ -784,8 +775,7 @@ func TestProfileScalesToRepositoryShape(t *testing.T) {
 	}
 }
 
-func TestFastProfileBoundsInteractiveSurveyWork(t *testing.T) {
-	site := Site{RepositoryID: 7, Repository: "payments", Revision: "abc123"}
+func TestFastPresetIsDisabledAndLegacyCheckpointUsesStandardProfile(t *testing.T) {
 	snapshot := graph.Snapshot{
 		FileCount: 161,
 		Nodes: []graph.Node{
@@ -793,32 +783,21 @@ func TestFastProfileBoundsInteractiveSurveyWork(t *testing.T) {
 			{Kind: "route", RepositoryID: 7, Path: "src/main/Routes.java"},
 		},
 	}
-	fast := profileForRequest(GenerateRequest{Preset: "fast"}, site, snapshot)
-	quality := profileForRequest(GenerateRequest{Preset: "quality"}, site, snapshot)
-	if fast.ID != "fast" || fast.MaximumTimeout != 600 || fast.MaximumToolCalls != 12 {
-		t.Fatalf("unexpected fast profile: %+v", fast)
+	request := GenerateRequest{
+		Preset:   "fast",
+		Provider: "claude",
+		Model:    "claude-haiku-4-5",
 	}
-	if fast.SurveyTokenBudget >= quality.SurveyTokenBudget ||
-		fast.MaximumStructuralFacts >= quality.MaximumStructuralFacts ||
-		fast.MaximumPages >= quality.MaximumPages {
-		t.Fatalf("fast profile does not reduce survey/page work: fast=%+v quality=%+v", fast, quality)
+	if err := validateKnowledgePreset(request, standardKnowledgeProfile()); err == nil ||
+		!strings.Contains(err.Error(), "Fast generation is disabled") {
+		t.Fatalf("Fast preset error = %v", err)
 	}
-	prompt := knowledgeSurveyPrompt(site, snapshot, fast)
-	for _, expected := range []string{
-		"Use at most 12 RepoKarta tool calls",
-		"inspect only the 8-12 highest-value files",
-		"700-1,200 words",
-	} {
-		if !strings.Contains(prompt, expected) {
-			t.Fatalf("fast survey prompt does not contain %q:\n%s", expected, prompt)
-		}
-	}
-	resumed := profileForRequest(GenerateRequest{}, Site{
+	resumed := profileForRequest(GenerateRequest{Preset: "quality"}, Site{
 		RepositoryID: 7,
 		Survey:       Checkpoint{Profile: "fast"},
 	}, snapshot)
-	if resumed.ID != "fast" {
-		t.Fatalf("saved fast survey resumed as %q", resumed.ID)
+	if resumed.ID != "standard" {
+		t.Fatalf("legacy Fast survey resumed as %q instead of standard", resumed.ID)
 	}
 }
 

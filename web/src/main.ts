@@ -3611,7 +3611,7 @@ type WikiSite = {
   repository: string;
   revision: string;
   updated_at: string;
-  /** How the pipeline scaled itself: "standard", "compact", or "fast". */
+  /** How the standard pipeline scaled itself: "standard" or "compact". */
   profile?: string;
   profile_pages?: string;
   steering: {
@@ -3641,7 +3641,6 @@ type WikiSite = {
 function enableRepositoryWiki(debug?: DebugLogger): void {
   const workspace = document.querySelector<HTMLElement>("[data-wiki-workspace]");
   const repository = document.querySelector<HTMLSelectElement>("[data-wiki-repository]");
-  const preset = document.querySelector<HTMLSelectElement>("[data-wiki-preset]");
   const provider = document.querySelector<HTMLSelectElement>("[data-wiki-provider]");
   const providerState = document.querySelector<HTMLElement>("[data-wiki-provider-state]");
   const providerDetail = document.querySelector<HTMLElement>("[data-wiki-provider-detail]");
@@ -3702,7 +3701,7 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
   const citations = document.querySelector<HTMLOListElement>("[data-wiki-citations]");
   const outline = document.querySelector<HTMLElement>("[data-wiki-outline]");
   if (
-    !workspace || !repository || !preset || !provider || !providerState || !providerDetail || !model ||
+    !workspace || !repository || !provider || !providerState || !providerDetail || !model ||
     !effort || !timeout || !tokenBudget || !tokenBudgetField || !planHeading || !commit || !ready || !stale || !pending || !failed ||
     !generateAll || !exportLink || !steering || !pages || !repositoryName || !pageTitle || !pageStatus ||
     !refreshPage || !content || !empty || !loading || !error || !errorMessage || !pageRevision ||
@@ -3750,16 +3749,10 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
   const providerReady = (): boolean => {
     const selected = selectedProvider();
     const supported = wikiModelEfforts();
-    const presetReady = preset.value !== "fast" || (
-      (selected?.id === "claude" || selected?.id === "anthropic-api") &&
-      model.value === "claude-haiku-4-5" &&
-      effort.value === ""
-    );
     return Boolean(
       selected?.available &&
       selected.authenticated &&
       model.value &&
-      presetReady &&
       (supported.length === 0 ? !effort.value : supported.includes(effort.value))
     );
   };
@@ -3768,7 +3761,6 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
   // between visits. Only non-secret select values are stored.
   const runSettingsStorageKey = "repokarta:wiki-run-settings:v1";
   type WikiRunSettings = {
-    preset?: string;
     provider?: string;
     model?: string;
     effort?: string;
@@ -3796,7 +3788,6 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
   const persistRunSettings = (): void => {
     try {
       window.localStorage.setItem(runSettingsStorageKey, JSON.stringify({
-        preset: preset.value,
         provider: provider.value,
         model: model.value,
         effort: effort.value,
@@ -3855,7 +3846,6 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
       effort.value = "high";
     }
     effort.disabled = !selected?.authenticated || generating || wikiEfforts.length === 0;
-    preset.disabled = generating || providerStatuses.every((status) => !status.authenticated);
     provider.disabled = generating || providerStatuses.every((status) => !status.authenticated);
     timeout.disabled = !selected?.authenticated || generating;
     tokenBudgetField.hidden = !selected?.token_budget;
@@ -3863,45 +3853,12 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
     providerState.textContent = selected?.authenticated ? "Ready" : "Unavailable";
     providerState.dataset.state = selected?.authenticated ? "ready" : "error";
     providerDetail.textContent = selected?.authenticated
-      ? `${preset.value === "fast" ? "Fast · " : ""}${selectedModelLabel()} · ${selectedEffortLabel()} · isolated read-only checkpoints; Wiki work never appears in saved chats.`
+      ? `${selectedModelLabel()} · ${selectedEffortLabel()} · isolated read-only checkpoints; Wiki work never appears in saved chats.`
       : selected?.detail || "Choose an authenticated local provider to build this Wiki.";
     if (site) {
       renderSite(site);
       refreshPage.disabled = generating || !activeSlug || !providerReady();
     }
-  };
-
-  const applyFastPreset = (): boolean => {
-    if (preset.value !== "fast") {
-      return true;
-    }
-    const fastProvider = providerStatuses.find((status) =>
-      status.id === "claude" && status.authenticated &&
-      status.models?.some((candidate) => candidate.id === "claude-haiku-4-5")
-    ) ?? providerStatuses.find((status) =>
-      status.id === "anthropic-api" && status.authenticated &&
-      status.models?.some((candidate) => candidate.id === "claude-haiku-4-5")
-    );
-    if (!fastProvider) {
-      preset.value = "quality";
-      providerDetail.textContent = "Fast mode needs an authenticated Claude provider with Haiku 4.5.";
-      return false;
-    }
-    if (provider.value !== fastProvider.id) {
-      provider.value = fastProvider.id;
-      configuredProvider = "";
-      configureProvider();
-    }
-    model.value = "claude-haiku-4-5";
-    configureProvider();
-    model.value = "claude-haiku-4-5";
-    effort.value = "";
-    timeout.value = "600";
-    if (fastProvider.token_budget) {
-      tokenBudget.value = "12000";
-    }
-    configureProvider();
-    return true;
   };
 
   const loadProviders = async (): Promise<void> => {
@@ -3927,11 +3884,8 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
       if (preferred) {
         provider.value = preferred.id;
       }
-      const stored = readRunSettings();
-      applyStoredValue(preset, stored.preset);
       provider.disabled = !preferred;
       configureProvider();
-      applyFastPreset();
       persistRunSettings();
     } catch (providerError: unknown) {
       providerState.textContent = "Unavailable";
@@ -4120,9 +4074,6 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
       runNote.textContent =
         `Compact repository: no service entry point or routes were found, so this run uses the ` +
         `lighter survey and a ${site.profile_pages || "shorter"} plan.`;
-    } else if (preset.value === "fast") {
-      runNote.textContent =
-        "Fast mode: Haiku 4.5 uses a 12-call discovery budget, a hard 10-minute timeout, and a 4-8 page plan.";
     }
     renderRunTokens();
   };
@@ -4387,10 +4338,7 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
       button.disabled = true;
     });
     setStage("loading");
-    const profileChanged = !slug && (
-      (preset.value === "fast" && site.profile !== "fast") ||
-      (preset.value === "quality" && site.profile === "fast")
-    );
+    const profileChanged = !slug && site.survey?.profile === "fast";
     const refreshAll = !slug && (
       profileChanged ||
       site.survey_stale ||
@@ -4416,7 +4364,7 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
           refresh,
           survey_only: surveyOnly,
           plan_only: planOnly,
-          preset: preset.value,
+          preset: "quality",
           provider: provider.value,
           model: model.value,
           effort: effort.value,
@@ -4763,26 +4711,15 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
   };
 
   const storedRunSettings = readRunSettings();
-  applyStoredValue(preset, storedRunSettings.preset);
   applyStoredValue(timeout, storedRunSettings.timeout);
   applyStoredValue(tokenBudget, storedRunSettings.token_budget);
 
   repository.addEventListener("change", () => void loadSite());
-  preset.addEventListener("change", () => {
-    applyFastPreset();
-    configureProvider();
-    persistRunSettings();
-    if (site) {
-      renderSite(site);
-    }
-  });
   provider.addEventListener("change", () => {
-    preset.value = "quality";
     configureProvider();
     persistRunSettings();
   });
   model.addEventListener("change", () => {
-    preset.value = "quality";
     configureProvider();
     persistRunSettings();
     if (site) {
@@ -4790,7 +4727,6 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
     }
   });
   effort.addEventListener("change", () => {
-    preset.value = "quality";
     const selected = selectedProvider();
     if (selected?.authenticated) {
       providerDetail.textContent =

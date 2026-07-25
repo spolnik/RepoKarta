@@ -454,8 +454,8 @@ rendering an unreadable file-level hairball.
 - [x] Survey, plan, and page checkpoints with resumable page-by-page progress,
   elapsed time, timeout visibility, and cancellation.
 - [x] Curated top-tier Wiki model presets with high-or-stronger effort.
-- [x] Fast/Haiku Wiki mode with a 12-call discovery budget, a hard 10-minute
-  survey timeout, and a focused 4-8 page plan.
+- [x] One standard-quality Wiki pipeline for every provider; reduced-depth
+  Fast generation is disabled in both the interface and backend.
 - [x] Filesystem-only Markdown and manifest persistence outside SQLite.
 - [x] Source citations and Mermaid validation.
 - [x] Three-pane Deep Wiki reader with hierarchy, filtering, page outline, and
@@ -593,7 +593,7 @@ completion criteria include:
 
 ## Current implementation version
 
-`0.25.0-dev`. M0 through M4 are complete. M5 and M6 are in progress.
+`0.26.0-dev`. M0 through M4 are complete. M5 and M6 are in progress.
 
 ## Recommended next session
 

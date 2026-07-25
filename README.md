@@ -69,8 +69,8 @@ questions, M3 evidence-backed repository maps, and M4 living documentation:
   analyzed/omitted repository counts for bounded fleet views;
 - Deep Wiki surveys seeded with a curated subset of parsed types, functions,
   and Gradle build facts;
-- a Fast Wiki mode that uses Claude Haiku 4.5, a 12-call discovery budget, a
-  hard 10-minute timeout, and a focused 4-8 page plan for casual exploration;
+- one standard-quality Wiki pipeline for every provider; no reduced-depth Fast
+  mode is exposed or accepted by the generation API;
 - deterministic three-page documentation plans generated independently from
   commit-pinned structural facts;
 - durable page status, provider/model metadata, source sets, citations, and
