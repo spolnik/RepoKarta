@@ -627,6 +627,7 @@ func (s *Server) generateWiki(response http.ResponseWriter, request *http.Reques
 		RepositoryID int64  `json:"repository_id"`
 		Page         string `json:"page"`
 		Refresh      bool   `json:"refresh"`
+		SurveyOnly   bool   `json:"survey_only"`
 		PlanOnly     bool   `json:"plan_only"`
 		Provider     string `json:"provider"`
 		Model        string `json:"model"`
@@ -648,6 +649,7 @@ func (s *Server) generateWiki(response http.ResponseWriter, request *http.Reques
 		RepositoryID: input.RepositoryID,
 		Page:         strings.TrimSpace(input.Page),
 		Refresh:      input.Refresh,
+		SurveyOnly:   input.SurveyOnly,
 		PlanOnly:     input.PlanOnly,
 		Provider:     strings.TrimSpace(input.Provider),
 		Model:        strings.TrimSpace(input.Model),
@@ -975,6 +977,8 @@ func writeDocumentationError(response http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, docs.ErrPageNotFound), errors.Is(err, sql.ErrNoRows):
 		writeAPIError(response, http.StatusNotFound, errors.New("documentation page was not found"))
+	case errors.Is(err, docs.ErrInvalidKnowledgePreset):
+		writeAPIError(response, http.StatusUnprocessableEntity, err)
 	case strings.Contains(err.Error(), ".repokarta.yml"):
 		writeAPIError(response, http.StatusUnprocessableEntity, err)
 	default:

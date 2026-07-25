@@ -39,6 +39,7 @@ func (a *Adapter) Status(ctx context.Context) agent.Status {
 	status := agent.Status{
 		ID:               a.ID(),
 		Name:             "OpenAI Codex",
+		Models:           []string{"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"},
 		ModelPlaceholder: "Codex model ID or provider default",
 		Efforts:          []string{"minimal", "low", "medium", "high", "xhigh", "max", "ultra"},
 		ImageInput:       true,

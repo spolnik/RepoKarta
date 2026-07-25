@@ -51,8 +51,9 @@
             </label>
             <label class="wiki-field wiki-field-compact">
               <span>Model</span>
-              <input data-wiki-model list="wiki-model-options" maxlength="200" placeholder="Provider default" autocomplete="off" disabled>
-              <datalist id="wiki-model-options"></datalist>
+              <select data-wiki-model disabled>
+                <option value="">Choose a Wiki-grade model</option>
+              </select>
             </label>
             <label class="wiki-field wiki-field-compact">
               <span>Reasoning effort</span>
@@ -136,6 +137,11 @@
             <span class="wiki-loading-mark" aria-hidden="true"></span>
             <strong>Reading structural evidence</strong>
             <p>Planning pages from the commit-pinned repository map.</p>
+            <div class="wiki-generation-live" data-wiki-generation-live hidden>
+              <span class="wiki-generation-pulse" aria-hidden="true"></span>
+              <span data-wiki-generation-elapsed>0:00 elapsed · 10:00 timeout</span>
+              <button type="button" data-wiki-cancel-generation>Cancel</button>
+            </div>
           </div>
           <div class="wiki-error" data-wiki-error hidden>
             <span aria-hidden="true">!</span>

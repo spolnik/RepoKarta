@@ -4903,6 +4903,62 @@ a.brand-mark:hover,
   animation: conversation-spin 700ms linear infinite;
 }
 
+.wiki-generation-live {
+  display: flex;
+  align-items: center;
+  gap: 0.48rem;
+  margin-top: 1rem;
+  border: 1px solid rgb(52 211 153 / 0.12);
+  border-radius: 999px;
+  padding: 0.38rem 0.45rem 0.38rem 0.58rem;
+  background: rgb(16 185 129 / 0.045);
+  color: rgb(100 116 139);
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+}
+
+.wiki-generation-live[hidden] {
+  display: none;
+}
+
+.wiki-generation-pulse {
+  width: 0.38rem;
+  height: 0.38rem;
+  border-radius: 50%;
+  background: rgb(52 211 153);
+  box-shadow: 0 0 0 0 rgb(52 211 153 / 0.35);
+  animation: wiki-generation-pulse 1.6s ease-out infinite;
+}
+
+.wiki-generation-live button {
+  border: 1px solid rgb(251 113 133 / 0.16);
+  border-radius: 999px;
+  padding: 0.22rem 0.48rem;
+  background: rgb(244 63 94 / 0.055);
+  color: rgb(251 113 133 / 0.82);
+  font: inherit;
+}
+
+.wiki-generation-live button:hover:not(:disabled) {
+  border-color: rgb(251 113 133 / 0.3);
+  background: rgb(244 63 94 / 0.1);
+  color: rgb(254 205 211);
+}
+
+.wiki-generation-live button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+@keyframes wiki-generation-pulse {
+  70% {
+    box-shadow: 0 0 0 0.45rem rgb(52 211 153 / 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgb(52 211 153 / 0);
+  }
+}
+
 .wiki-error > span {
   border-color: rgb(251 113 133 / 0.2);
   background: rgb(244 63 94 / 0.05);

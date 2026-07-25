@@ -59,6 +59,74 @@ func (g *fakeKnowledgeGenerator) RunEphemeral(
 	return result, nil
 }
 
+func TestKnowledgePresetRequiresCuratedModelAndHighEffort(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name    string
+		request GenerateRequest
+		wantErr bool
+	}{
+		{
+			name: "codex flagship high",
+			request: GenerateRequest{
+				Provider: "codex",
+				Model:    "gpt-5.6-sol",
+				Effort:   "high",
+			},
+		},
+		{
+			name: "codex terra max",
+			request: GenerateRequest{
+				Provider: "codex",
+				Model:    "gpt-5.6-terra",
+				Effort:   "max",
+			},
+		},
+		{
+			name: "claude opus high",
+			request: GenerateRequest{
+				Provider: "anthropic-api",
+				Model:    "claude-opus-5",
+				Effort:   "high",
+			},
+		},
+		{
+			name: "provider default rejected",
+			request: GenerateRequest{
+				Provider: "codex",
+				Effort:   "high",
+			},
+			wantErr: true,
+		},
+		{
+			name: "medium rejected",
+			request: GenerateRequest{
+				Provider: "codex",
+				Model:    "gpt-5.6-sol",
+				Effort:   "medium",
+			},
+			wantErr: true,
+		},
+		{
+			name: "balanced Claude rejected",
+			request: GenerateRequest{
+				Provider: "anthropic-api",
+				Model:    "claude-sonnet-5",
+				Effort:   "high",
+			},
+			wantErr: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			err := validateKnowledgePreset(test.request)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("validateKnowledgePreset() error = %v, wantErr %v", err, test.wantErr)
+			}
+		})
+	}
+}
+
 func TestProviderGroundedKnowledgePlanAndPage(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -78,10 +146,19 @@ func TestProviderGroundedKnowledgePlanAndPage(t *testing.T) {
 		t.Fatal(err)
 	}
 	markdown, sources := fakeKnowledgeMarkdown(revision)
+	surveyMarkdown, surveySources := fakeKnowledgeSurvey(revision)
 	generator := &fakeKnowledgeGenerator{results: []agent.EphemeralResult{
 		{
+			Provider:     "codex",
+			Model:        "gpt-5.6-sol",
+			Text:         surveyMarkdown,
+			Sources:      surveySources,
+			InputTokens:  1800,
+			OutputTokens: 1400,
+		},
+		{
 			Provider: "codex",
-			Model:    "provider-default",
+			Model:    "gpt-5.6-sol",
 			Text: `<repokarta_wiki_plan>
 {"pages":[
 {"slug":"architecture-overview","title":"Architecture Overview","summary":"Explain the runtime composition, process boundaries, central services, and end-to-end request paths.","number":"1","parent_slug":"","depth":0},
@@ -95,7 +172,7 @@ func TestProviderGroundedKnowledgePlanAndPage(t *testing.T) {
 		},
 		{
 			Provider:     "codex",
-			Model:        "provider-default",
+			Model:        "gpt-5.6-sol",
 			Text:         markdown,
 			Sources:      sources,
 			InputTokens:  1200,
@@ -117,9 +194,24 @@ func TestProviderGroundedKnowledgePlanAndPage(t *testing.T) {
 		t.Fatalf("bootstrap plan = %+v", bootstrap)
 	}
 
+	surveyed, err := service.Generate(ctx, GenerateRequest{
+		RepositoryID: 1,
+		Provider:     "codex",
+		Model:        "gpt-5.6-sol",
+		Effort:       "high",
+		SurveyOnly:   true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !surveyed.SurveyReady || surveyed.PlanReady {
+		t.Fatalf("repository survey checkpoint = %+v", surveyed)
+	}
+
 	planned, err := service.Generate(ctx, GenerateRequest{
 		RepositoryID: 1,
 		Provider:     "codex",
+		Model:        "gpt-5.6-sol",
 		Effort:       "high",
 		PlanOnly:     true,
 	})
@@ -138,6 +230,7 @@ func TestProviderGroundedKnowledgePlanAndPage(t *testing.T) {
 		RepositoryID: 1,
 		Page:         "architecture-overview",
 		Provider:     "codex",
+		Model:        "gpt-5.6-sol",
 		Effort:       "high",
 		Refresh:      true,
 	})
@@ -166,11 +259,77 @@ func TestProviderGroundedKnowledgePlanAndPage(t *testing.T) {
 	if bytes.Contains(manifest, []byte("The runtime is assembled")) {
 		t.Fatal("Wiki Markdown was duplicated into metadata instead of remaining in the .md file")
 	}
-	if len(generator.requests) != 2 ||
-		!strings.Contains(generator.requests[0].Message, "domain concepts") ||
-		!strings.Contains(generator.requests[1].Message, "failure and recovery") {
+	if len(generator.requests) != 3 ||
+		!strings.Contains(generator.requests[0].Message, "repository survey") ||
+		!strings.Contains(generator.requests[1].Message, "saved_repository_survey") ||
+		!strings.Contains(generator.requests[2].Message, "failure and recovery") {
 		t.Fatalf("generation prompts = %#v", generator.requests)
 	}
+}
+
+func fakeKnowledgeSurvey(revision string) (string, []agent.Citation) {
+	source := func(path string, line int) agent.Citation {
+		url := fmt.Sprintf(
+			"http://127.0.0.1:7331/source/1?rev=%s&path=%s&focus=%d-%d#L%d",
+			revision,
+			path,
+			line,
+			line+4,
+			line,
+		)
+		return agent.Citation{Label: path, URL: url}
+	}
+	sources := []agent.Citation{
+		source("README.md", 1),
+		source("cmd/fixture/main.go", 1),
+		source("internal/server/server.go", 1),
+		source("internal/store/store.go", 1),
+		source("internal/server/server_test.go", 1),
+		source("scripts/build.ps1", 1),
+	}
+	paragraph := strings.Repeat(
+		"The repository keeps runtime construction, domain coordination, durable state, evidence, recovery, and tests behind explicit boundaries. ",
+		5,
+	)
+	markdown := fmt.Sprintf(`# Repository Survey
+
+## Product and domain
+
+%s [%s](%s)
+
+## Runtime composition
+
+%s [%s](%s)
+
+## Subsystems and boundaries
+
+%s [%s](%s)
+
+## State, persistence, and data flow
+
+%s [%s](%s)
+
+## Trust, failures, and recovery
+
+%s [%s](%s)
+
+## Build, operations, and tests
+
+%s [%s](%s)
+
+## Candidate Wiki hierarchy
+
+%s The hierarchy should cover architecture, runtime lifecycle, search and source intelligence, persistence, operations, and glossary.
+`,
+		paragraph, sources[0].Label, sources[0].URL,
+		paragraph, sources[1].Label, sources[1].URL,
+		paragraph, sources[2].Label, sources[2].URL,
+		paragraph, sources[3].Label, sources[3].URL,
+		paragraph, sources[4].Label, sources[4].URL,
+		paragraph, sources[5].Label, sources[5].URL,
+		paragraph,
+	)
+	return markdown, sources
 }
 
 func fakeKnowledgeMarkdown(revision string) (string, []agent.Citation) {

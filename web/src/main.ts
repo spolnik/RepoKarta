@@ -3154,6 +3154,10 @@ type WikiSite = {
     notes?: Record<string, string>;
   };
   pages: WikiPage[];
+  survey_ready: boolean;
+  survey_stale: boolean;
+  survey_status?: string;
+  survey_error?: string;
   plan_ready: boolean;
   plan_stale: boolean;
   plan_revision?: string;
@@ -3171,8 +3175,7 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
   const provider = document.querySelector<HTMLSelectElement>("[data-wiki-provider]");
   const providerState = document.querySelector<HTMLElement>("[data-wiki-provider-state]");
   const providerDetail = document.querySelector<HTMLElement>("[data-wiki-provider-detail]");
-  const model = document.querySelector<HTMLInputElement>("[data-wiki-model]");
-  const modelOptions = document.querySelector<HTMLDataListElement>("#wiki-model-options");
+  const model = document.querySelector<HTMLSelectElement>("[data-wiki-model]");
   const effort = document.querySelector<HTMLSelectElement>("[data-wiki-effort]");
   const planHeading = document.querySelector<HTMLElement>("[data-wiki-plan-heading]");
   const commit = document.querySelector<HTMLElement>("[data-wiki-commit]");
@@ -3192,6 +3195,9 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
   const content = document.querySelector<HTMLElement>("[data-wiki-content]");
   const empty = document.querySelector<HTMLElement>("[data-wiki-empty]");
   const loading = document.querySelector<HTMLElement>("[data-wiki-loading]");
+  const generationLive = document.querySelector<HTMLElement>("[data-wiki-generation-live]");
+  const generationElapsed = document.querySelector<HTMLElement>("[data-wiki-generation-elapsed]");
+  const cancelGeneration = document.querySelector<HTMLButtonElement>("[data-wiki-cancel-generation]");
   const error = document.querySelector<HTMLElement>("[data-wiki-error]");
   const errorMessage = document.querySelector<HTMLElement>("[data-wiki-error-message]");
   const pageRevision = document.querySelector<HTMLElement>("[data-wiki-page-revision]");
@@ -3204,12 +3210,13 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
   const citations = document.querySelector<HTMLOListElement>("[data-wiki-citations]");
   const outline = document.querySelector<HTMLElement>("[data-wiki-outline]");
   if (
-    !workspace || !repository || !provider || !providerState || !providerDetail || !model || !modelOptions ||
+    !workspace || !repository || !provider || !providerState || !providerDetail || !model ||
     !effort || !planHeading || !commit || !ready || !stale || !pending || !failed ||
     !generateAll || !exportLink || !steering || !pages || !repositoryName || !pageTitle || !pageStatus ||
     !refreshPage || !content || !empty || !loading || !error || !errorMessage || !pageRevision ||
     !pageGenerator || !pageGenerated || !pageTokens || !supportCount || !supportingFiles ||
-    !citationCount || !citations || !outline || !pageSearch
+    !citationCount || !citations || !outline || !pageSearch || !generationLive ||
+    !generationElapsed || !cancelGeneration
   ) {
     return;
   }
@@ -3219,32 +3226,59 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
   let requestRevision = 0;
   let generating = false;
   let providerStatuses: ProviderStatus[] = [];
+  let configuredProvider = "";
+  let generationTimer: number | undefined;
+  let generationAbort: AbortController | undefined;
 
   const selectedProvider = (): ProviderStatus | undefined =>
     providerStatuses.find((status) => status.id === provider.value);
 
   const providerReady = (): boolean => {
     const selected = selectedProvider();
-    return Boolean(selected?.available && selected.authenticated);
+    return Boolean(
+      selected?.available &&
+      selected.authenticated &&
+      model.value &&
+      ["high", "xhigh", "max", "ultra"].includes(effort.value)
+    );
   };
 
   const configureProvider = (): void => {
     const selected = selectedProvider();
+    const previousModel = model.value;
     const previousEffort = effort.value;
-    model.placeholder = selected?.model_placeholder ?? "Provider default";
     model.disabled = !selected?.authenticated;
-    modelOptions.replaceChildren();
+    model.replaceChildren();
     for (const modelID of selected?.models ?? []) {
       const option = document.createElement("option");
       option.value = modelID;
-      modelOptions.append(option);
+      option.textContent = modelID;
+      model.append(option);
     }
+    const recommendedModels: Record<string, string> = {
+      codex: "gpt-5.6-sol",
+      claude: "opus",
+      "anthropic-api": "claude-opus-5"
+    };
+    const modelIDs = selected?.models ?? [];
+    if (
+      configuredProvider === selected?.id &&
+      previousModel &&
+      modelIDs.includes(previousModel)
+    ) {
+      model.value = previousModel;
+    } else {
+      const recommended = selected ? recommendedModels[selected.id] : "";
+      model.value = recommended && modelIDs.includes(recommended)
+        ? recommended
+        : modelIDs[0] ?? "";
+    }
+    configuredProvider = selected?.id ?? "";
     effort.replaceChildren();
-    const providerDefault = document.createElement("option");
-    providerDefault.value = "";
-    providerDefault.textContent = "Provider default";
-    effort.append(providerDefault);
-    for (const level of selected?.efforts ?? []) {
+    const wikiEfforts = (selected?.efforts ?? []).filter((level) =>
+      ["high", "xhigh", "max", "ultra"].includes(level)
+    );
+    for (const level of wikiEfforts) {
       const option = document.createElement("option");
       option.value = level;
       option.textContent = level[0].toUpperCase() + level.slice(1);
@@ -3252,14 +3286,14 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
     }
     if (previousEffort && Array.from(effort.options).some((option) => option.value === previousEffort)) {
       effort.value = previousEffort;
-    } else if ((selected?.efforts ?? []).includes("high")) {
+    } else if (wikiEfforts.includes("high")) {
       effort.value = "high";
     }
-    effort.disabled = !selected?.authenticated || (selected.efforts ?? []).length === 0;
+    effort.disabled = !selected?.authenticated || wikiEfforts.length === 0;
     providerState.textContent = selected?.authenticated ? "Ready" : "Unavailable";
     providerState.dataset.state = selected?.authenticated ? "ready" : "error";
     providerDetail.textContent = selected?.authenticated
-      ? `${selected.name} runs in an isolated read-only session. Wiki work never appears in saved chats.`
+      ? `${model.value} · ${effort.value || "high"} effort · isolated read-only checkpoints; Wiki work never appears in saved chats.`
       : selected?.detail || "Choose an authenticated local provider to build this Wiki.";
     if (site) {
       renderSite(site);
@@ -3305,6 +3339,48 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
     empty.hidden = state !== "empty";
     loading.hidden = state !== "loading";
     error.hidden = state !== "error";
+    if (state !== "loading" || !generating) {
+      generationLive.hidden = true;
+    }
+  };
+
+  const formatElapsed = (milliseconds: number): string => {
+    const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = String(totalSeconds % 60).padStart(2, "0");
+    return `${minutes}:${seconds}`;
+  };
+
+  const beginGenerationProgress = (heading: string, detail: string): void => {
+    if (generationTimer !== undefined) {
+      window.clearInterval(generationTimer);
+    }
+    const startedAt = Date.now();
+    loading.querySelector("strong")!.textContent = heading;
+    loading.querySelector("p")!.textContent = detail;
+    generationLive.hidden = false;
+    cancelGeneration.disabled = false;
+    cancelGeneration.textContent = "Cancel";
+    const updateElapsed = (): void => {
+      generationElapsed.textContent =
+        `${formatElapsed(Date.now() - startedAt)} elapsed · 10:00 timeout`;
+    };
+    updateElapsed();
+    generationTimer = window.setInterval(updateElapsed, 1000);
+  };
+
+  const updateGenerationProgress = (heading: string, detail: string): void => {
+    loading.querySelector("strong")!.textContent = heading;
+    loading.querySelector("p")!.textContent = detail;
+  };
+
+  const endGenerationProgress = (): void => {
+    if (generationTimer !== undefined) {
+      window.clearInterval(generationTimer);
+      generationTimer = undefined;
+    }
+    generationAbort = undefined;
+    generationLive.hidden = true;
   };
 
   const resetProvenance = (): void => {
@@ -3501,27 +3577,27 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
       return;
     }
     generating = true;
+    generationAbort = new AbortController();
     generateAll.disabled = true;
     refreshPage.disabled = true;
     pages.querySelectorAll<HTMLButtonElement>("[data-wiki-generate-page]").forEach((button) => {
       button.disabled = true;
     });
     setStage("loading");
-    loading.querySelector("strong")!.textContent = !site.plan_ready
-      ? "Discovering the codebase knowledge map"
-      : slug
-        ? "Generating this knowledge page"
-        : "Generating the complete Deep Wiki";
-    loading.querySelector("p")!.textContent = !site.plan_ready
-      ? "Inspecting real subsystems, flows, domain concepts, and implementation boundaries."
-      : "Reading implementation and tests, then validating diagrams and every commit-pinned citation.";
     const refreshAll = !slug && (
+      site.survey_stale ||
       site.plan_stale ||
       site.pages.every((page) => page.status === "ready")
     );
-    const requestGeneration = async (page = "", planOnly = false, refresh = false): Promise<WikiSite> => {
+    const requestGeneration = async (
+      page = "",
+      planOnly = false,
+      surveyOnly = false,
+      refresh = false
+    ): Promise<WikiSite> => {
       const response = await fetch("/api/wiki/generate", {
         method: "POST",
+        signal: generationAbort?.signal,
         headers: {
           Accept: "application/json",
           "Content-Type": "application/json"
@@ -3530,9 +3606,10 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
           repository_id: site!.repository_id,
           page,
           refresh,
+          survey_only: surveyOnly,
           plan_only: planOnly,
           provider: provider.value,
-          model: model.value.trim(),
+          model: model.value,
           effort: effort.value,
           timeout_seconds: 600,
           token_budget: 32000
@@ -3543,15 +3620,32 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
       }
       return await response.json() as WikiSite;
     };
+    let cancelled = false;
     try {
+      if (!site.survey_ready || (site.survey_stale && !slug)) {
+        beginGenerationProgress(
+          "Checkpoint 1 of 3 · surveying the repository",
+          "Bounded code discovery is running. The evidence-backed survey is persisted as survey.md before planning begins."
+        );
+        site = await requestGeneration("", false, true, site.survey_stale);
+        renderSite(site);
+      }
       if (!site.plan_ready || (site.plan_stale && !slug)) {
-        site = await requestGeneration("", true, site.plan_stale);
+        beginGenerationProgress(
+          "Checkpoint 2 of 3 · designing the knowledge map",
+          "The saved survey is being organized into a repository-specific hierarchy without repeating full discovery."
+        );
+        site = await requestGeneration("", true, false, site.plan_stale);
         renderSite(site);
         activeSlug = site.pages.some((page) => page.slug === activeSlug) ? activeSlug : "";
       }
 
       if (slug) {
-        site = await requestGeneration(slug, false, true);
+        beginGenerationProgress(
+          "Checkpoint 3 of 3 · generating this page",
+          "Implementation, tests, diagrams, cross-links, and exact citations are being assembled into one Markdown file."
+        );
+        site = await requestGeneration(slug, false, false, true);
         renderSite(site);
       } else {
         const targets = site.pages.filter((page) =>
@@ -3561,15 +3655,21 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
           page.status === "error"
         );
         for (const [index, target] of targets.entries()) {
-          loading.querySelector("strong")!.textContent =
-            `Generating page ${index + 1} of ${targets.length}`;
-          loading.querySelector("p")!.textContent =
-            `${target.number} ${target.title} · completed pages remain available if this run is interrupted.`;
-          site = await requestGeneration(target.slug, false, refreshAll || target.status !== "planned");
+          beginGenerationProgress(
+            `Checkpoint 3 of 3 · page ${index + 1} of ${targets.length}`,
+            `${target.number} ${target.title} · every completed page is already saved as Markdown and survives cancellation.`
+          );
+          site = await requestGeneration(
+            target.slug,
+            false,
+            false,
+            refreshAll || target.status !== "planned"
+          );
           renderSite(site);
         }
       }
 
+      endGenerationProgress();
       const selected = site.pages.some((page) => page.slug === (slug || activeSlug))
         ? slug || activeSlug
         : site.pages.find((page) => page.status === "ready" || page.status === "stale")?.slug
@@ -3585,12 +3685,20 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
         failed: site.failed
       });
     } catch (generationError: unknown) {
-      errorMessage.textContent = generationError instanceof Error ? generationError.message : String(generationError);
-      setStage("error");
-      debug?.add("error", "wiki.generation.failed", describeError(generationError));
+      cancelled = generationError instanceof DOMException && generationError.name === "AbortError";
+      if (!cancelled) {
+        errorMessage.textContent = generationError instanceof Error ? generationError.message : String(generationError);
+        setStage("error");
+        debug?.add("error", "wiki.generation.failed", describeError(generationError));
+      } else {
+        debug?.add("info", "wiki.generation.cancelled", { repository_id: site.repository_id });
+      }
     } finally {
       generating = false;
-      if (site) {
+      endGenerationProgress();
+      if (cancelled) {
+        await loadSite();
+      } else if (site) {
         renderSite(site);
         refreshPage.disabled = !activeSlug || !providerReady();
       }
@@ -3601,7 +3709,11 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
     site = value;
     planHeading.textContent = value.plan_ready
       ? `${value.pages.length} code knowledge pages`
-      : "Knowledge map not built";
+      : value.survey_ready
+        ? "Repository survey saved"
+        : value.survey_status === "error"
+          ? "Survey interrupted · ready to resume"
+          : "Knowledge map not built";
     commit.textContent = value.revision.slice(0, 8);
     commit.title = value.revision;
     ready.textContent = String(value.ready);
@@ -3616,7 +3728,9 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
     const generateLabel = generateAll.querySelector<HTMLElement>("span");
     if (generateLabel) {
       generateLabel.textContent = !value.plan_ready
-        ? "Build Deep Wiki"
+        ? value.survey_ready
+          ? "Resume · build knowledge map"
+          : "Build Deep Wiki"
         : value.plan_stale
           ? "Refresh knowledge map"
         : value.stale > 0
@@ -3636,11 +3750,15 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
       ? "Plan steered by .repokarta.yml"
       : value.plan_ready
         ? "Repository-specific knowledge map"
+        : value.survey_ready
+          ? "Repository survey checkpoint saved"
         : "Knowledge map will be discovered from code";
     steering.querySelector("p")!.textContent = configured
       ? "Reviewed repository guidance is active and revision-pinned."
       : value.plan_ready
         ? `${value.plan_provider || "Provider"} identified the real subsystem hierarchy at this revision.`
+        : value.survey_ready
+          ? "survey.md is safely on disk; the next step turns it into the Wiki hierarchy."
         : "The selected provider will inspect architecture, flows, tests, and domain concepts before planning pages.";
 
     pages.replaceChildren();
@@ -3737,6 +3855,38 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
 
   repository.addEventListener("change", () => void loadSite());
   provider.addEventListener("change", configureProvider);
+  model.addEventListener("change", () => {
+    const selected = selectedProvider();
+    if (selected?.authenticated) {
+      providerDetail.textContent =
+        `${model.value} · ${effort.value || "high"} effort · isolated read-only checkpoints; Wiki work never appears in saved chats.`;
+    }
+    if (site) {
+      renderSite(site);
+    }
+  });
+  effort.addEventListener("change", () => {
+    const selected = selectedProvider();
+    if (selected?.authenticated) {
+      providerDetail.textContent =
+        `${model.value} · ${effort.value || "high"} effort · isolated read-only checkpoints; Wiki work never appears in saved chats.`;
+    }
+    if (site) {
+      renderSite(site);
+    }
+  });
+  cancelGeneration.addEventListener("click", () => {
+    if (!generationAbort || generationAbort.signal.aborted) {
+      return;
+    }
+    cancelGeneration.disabled = true;
+    cancelGeneration.textContent = "Cancelling…";
+    updateGenerationProgress(
+      "Cancelling provider work",
+      "RepoKarta is interrupting the isolated read-only session. Completed checkpoints and pages remain on disk."
+    );
+    generationAbort.abort();
+  });
   pageSearch.addEventListener("input", () => {
     const query = pageSearch.value.trim().toLowerCase();
     pages.querySelectorAll<HTMLElement>(".wiki-page-row").forEach((row) => {

@@ -168,6 +168,9 @@ repositories on managed Windows and Apple Silicon macOS laptops.
 - Generate Markdown documentation tied to a repository commit.
 - Use an isolated, read-only provider session to inspect implementation and
   tests, then plan a repository-specific two-level knowledge hierarchy.
+- Require an explicit Wiki-grade model and high-or-stronger reasoning effort.
+- Checkpoint a bounded repository survey to `survey.md`, then atomically save
+  the hierarchy before generating pages one at a time.
 - Keep deterministic structural planning as the provider-free fallback.
 - Generate pages independently so individual pages can be retried and refreshed.
 - Require source citations for architectural and behavioral claims.
@@ -383,7 +386,9 @@ rendering an unreadable file-level hairball.
 ### M4: living documentation
 
 - [x] Repository-specific, provider-grounded hierarchical knowledge planning.
-- [x] Independent, resumable, page-by-page generation progress.
+- [x] Survey, plan, and page checkpoints with resumable page-by-page progress,
+  elapsed time, timeout visibility, and cancellation.
+- [x] Curated top-tier Wiki model presets with high-or-stronger effort.
 - [x] Filesystem-only Markdown and manifest persistence outside SQLite.
 - [x] Source citations and Mermaid validation.
 - [x] Three-pane Deep Wiki reader with hierarchy, filtering, page outline, and
