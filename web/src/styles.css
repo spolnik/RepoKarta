@@ -606,12 +606,13 @@ a.brand-mark:hover,
 .mermaid-diagram-toolbar {
   display: flex;
   justify-content: flex-end;
+  gap: 0.35rem;
   border-bottom: 1px solid rgb(255 255 255 / 0.055);
   padding: 0.4rem 0.5rem;
   background: rgb(2 6 23 / 0.46);
 }
 
-.mermaid-diagram-expand {
+.mermaid-diagram-action {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
@@ -629,7 +630,7 @@ a.brand-mark:hover,
     color 150ms ease;
 }
 
-.mermaid-diagram-expand svg {
+.mermaid-diagram-action svg {
   width: 0.88rem;
   height: 0.88rem;
   fill: none;
@@ -639,13 +640,13 @@ a.brand-mark:hover,
   stroke-width: 1.45;
 }
 
-.mermaid-diagram-expand:hover:not(:disabled) {
+.mermaid-diagram-action:hover:not(:disabled) {
   border-color: rgb(52 211 153 / 0.34);
   background: rgb(16 185 129 / 0.09);
   color: rgb(167 243 208);
 }
 
-.mermaid-diagram-expand:disabled {
+.mermaid-diagram-action:disabled {
   cursor: wait;
   opacity: 0.42;
 }
@@ -1207,6 +1208,22 @@ a.brand-mark:hover,
 
 .conversation-image-card figcaption a:hover {
   text-decoration: underline;
+}
+
+.conversation-image-download {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.28rem;
+}
+
+.conversation-image-download svg {
+  width: 0.78rem;
+  height: 0.78rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.45;
 }
 
 .conversation-input {

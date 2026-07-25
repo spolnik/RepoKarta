@@ -550,6 +550,10 @@ async function renderMermaidDiagram(
     if (expand) {
       expand.disabled = false;
     }
+    const download = canvas.parentElement?.querySelector<HTMLButtonElement>("[data-mermaid-download]");
+    if (download) {
+      download.disabled = false;
+    }
     debug?.add("info", "chat.diagram.rendered", {
       index,
       type: result.diagramType,
@@ -615,9 +619,21 @@ function renderAssistantMarkdown(
       mermaidDiagramSources.set(figure, source);
       const toolbar = document.createElement("div");
       toolbar.className = "mermaid-diagram-toolbar";
+      const download = document.createElement("button");
+      download.type = "button";
+      download.className = "mermaid-diagram-action";
+      download.disabled = true;
+      download.setAttribute("data-mermaid-download", "");
+      download.setAttribute("aria-label", "Download diagram as SVG");
+      download.innerHTML = `
+        <svg viewBox="0 0 20 20" aria-hidden="true">
+          <path d="M10 3.5v8M6.75 8.5 10 11.75l3.25-3.25M4 14.5v2h12v-2"></path>
+        </svg>
+        <span>SVG</span>
+      `;
       const expand = document.createElement("button");
       expand.type = "button";
-      expand.className = "mermaid-diagram-expand";
+      expand.className = "mermaid-diagram-action";
       expand.disabled = true;
       expand.setAttribute("data-mermaid-expand", "");
       expand.setAttribute("aria-label", "Expand diagram");
@@ -627,7 +643,7 @@ function renderAssistantMarkdown(
         </svg>
         <span>Expand</span>
       `;
-      toolbar.append(expand);
+      toolbar.append(download, expand);
       const canvas = document.createElement("div");
       canvas.className = "mermaid-diagram-canvas mermaid-diagram-loading";
       canvas.setAttribute("role", "img");
@@ -662,6 +678,43 @@ function renderAssistantMarkdown(
   return duration;
 }
 
+function mermaidDownloadName(label: string): string {
+  const diagramType = label
+    .toLowerCase()
+    .replace(/\bdiagram\b/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "") || "diagram";
+  const timestamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
+  return `repokarta-${diagramType}-${timestamp}.svg`;
+}
+
+function downloadMermaidSVG(svg: SVGSVGElement, label: string, debug?: DebugLogger): void {
+  const clone = svg.cloneNode(true) as SVGSVGElement;
+  clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+  const viewBox = clone.viewBox.baseVal;
+  if (viewBox.width > 0 && viewBox.height > 0) {
+    clone.setAttribute("width", String(Math.ceil(viewBox.width)));
+    clone.setAttribute("height", String(Math.ceil(viewBox.height)));
+  }
+  clone.style.removeProperty("max-width");
+  const serialized = new XMLSerializer().serializeToString(clone);
+  const url = URL.createObjectURL(new Blob(
+    [`<?xml version="1.0" encoding="UTF-8"?>\n${serialized}`],
+    { type: "image/svg+xml;charset=utf-8" }
+  ));
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = mermaidDownloadName(label);
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  debug?.add("info", "chat.diagram.downloaded", {
+    format: "svg",
+    file_name: anchor.download
+  });
+}
+
 function enableMermaidViewer(debug?: DebugLogger): void {
   const dialog = document.querySelector<HTMLDialogElement>("#mermaid-viewer");
   const canvas = dialog?.querySelector<HTMLElement>("[data-mermaid-viewer-canvas]");
@@ -671,8 +724,9 @@ function enableMermaidViewer(debug?: DebugLogger): void {
   const zoomSelect = dialog?.querySelector<HTMLSelectElement>("[data-mermaid-zoom]");
   const zoomOut = dialog?.querySelector<HTMLButtonElement>("[data-mermaid-zoom-out]");
   const zoomIn = dialog?.querySelector<HTMLButtonElement>("[data-mermaid-zoom-in]");
+  const download = dialog?.querySelector<HTMLButtonElement>("[data-mermaid-viewer-download]");
   const close = dialog?.querySelector<HTMLButtonElement>("[data-mermaid-viewer-close]");
-  if (!dialog || !canvas || !stage || !title || !status || !zoomSelect || !zoomOut || !zoomIn || !close) {
+  if (!dialog || !canvas || !stage || !title || !status || !zoomSelect || !zoomOut || !zoomIn || !download || !close) {
     return;
   }
 
@@ -737,6 +791,7 @@ function enableMermaidViewer(debug?: DebugLogger): void {
     zoomSelect.disabled = true;
     zoomOut.disabled = true;
     zoomIn.disabled = true;
+    download.disabled = true;
     if (!dialog.open) {
       dialog.showModal();
     }
@@ -774,6 +829,7 @@ function enableMermaidViewer(debug?: DebugLogger): void {
     const declaredWidth = Number.parseFloat(svg?.getAttribute("width") ?? "");
     intrinsicWidth = viewBox?.width || declaredWidth || Math.max(svg?.getBoundingClientRect().width ?? 0, 1200);
     zoomSelect.disabled = false;
+    download.disabled = false;
     applyZoom("fit", false);
     debug?.add("info", "chat.diagram.viewer.opened", {
       type: result.diagramType,
@@ -783,6 +839,15 @@ function enableMermaidViewer(debug?: DebugLogger): void {
   };
 
   document.addEventListener("click", (event) => {
+    const downloadButton = (event.target as Element | null)?.closest<HTMLButtonElement>("[data-mermaid-download]");
+    if (downloadButton && !downloadButton.disabled) {
+      const figure = downloadButton.closest<HTMLElement>(".mermaid-diagram");
+      const svg = figure?.querySelector<SVGSVGElement>(".mermaid-diagram-canvas svg");
+      if (svg) {
+        downloadMermaidSVG(svg, figure?.querySelector(".mermaid-diagram-canvas")?.getAttribute("aria-label") ?? "Mermaid diagram", debug);
+      }
+      return;
+    }
     const button = (event.target as Element | null)?.closest<HTMLButtonElement>("[data-mermaid-expand]");
     if (!button || button.disabled) {
       return;
@@ -795,6 +860,12 @@ function enableMermaidViewer(debug?: DebugLogger): void {
   zoomSelect.addEventListener("change", () => applyZoom(zoomSelect.value));
   zoomOut.addEventListener("click", () => stepZoom(-1));
   zoomIn.addEventListener("click", () => stepZoom(1));
+  download.addEventListener("click", () => {
+    const svg = canvas.querySelector<SVGSVGElement>("svg");
+    if (svg) {
+      downloadMermaidSVG(svg, title.textContent ?? "Mermaid diagram", debug);
+    }
+  });
   close.addEventListener("click", () => dialog.close());
   dialog.addEventListener("click", (event) => {
     if (event.target === dialog) {
@@ -805,6 +876,7 @@ function enableMermaidViewer(debug?: DebugLogger): void {
     viewerRequest += 1;
     canvas.replaceChildren();
     canvas.style.removeProperty("width");
+    download.disabled = true;
   });
 }
 
@@ -1095,6 +1167,25 @@ function imageDataURL(image: ConversationImage): string | undefined {
   return `data:${mediaType};base64,${image.data}`;
 }
 
+function conversationImageDownloadName(
+  image: ConversationImage,
+  kind: "input" | "output",
+  index: number
+): string {
+  const suppliedName = image.name.trim().replaceAll("\\", "/").split("/").pop();
+  if (suppliedName) {
+    return suppliedName;
+  }
+  const extension = image.media_type.toLowerCase() === "image/jpeg"
+    ? ".jpg"
+    : image.media_type.toLowerCase() === "image/gif"
+      ? ".gif"
+      : image.media_type.toLowerCase() === "image/webp"
+        ? ".webp"
+        : ".png";
+  return `repokarta-${kind === "input" ? "attachment" : "generated-image"}-${index + 1}${extension}`;
+}
+
 function readConversationImage(file: File): Promise<ConversationImage> {
   return new Promise((resolve, reject) => {
     const mediaType = file.type.toLowerCase();
@@ -1138,7 +1229,7 @@ function appendConversationImages(
     message.append(gallery);
   }
   let appended = 0;
-  for (const image of images) {
+  for (const [index, image] of images.entries()) {
     const source = imageDataURL(image);
     if (!source) {
       continue;
@@ -1160,13 +1251,19 @@ function appendConversationImages(
     const name = document.createElement("span");
     name.textContent = image.name || (kind === "input" ? "Attached image" : "Generated image");
     caption.append(name);
-    if (kind === "output") {
-      const download = document.createElement("a");
-      download.href = source;
-      download.download = image.name || "repokarta-image";
-      download.textContent = "Download";
-      caption.append(download);
-    }
+    const download = document.createElement("a");
+    download.className = "conversation-image-download";
+    download.href = source;
+    download.download = conversationImageDownloadName(image, kind, index);
+    download.title = `Download ${download.download}`;
+    download.setAttribute("aria-label", `Download ${download.download}`);
+    download.innerHTML = `
+      <svg viewBox="0 0 20 20" aria-hidden="true">
+        <path d="M10 3.5v8M6.75 8.5 10 11.75l3.25-3.25M4 14.5v2h12v-2"></path>
+      </svg>
+      <span>Download</span>
+    `;
+    caption.append(download);
     card.append(preview, caption);
     gallery.append(card);
     appended++;

@@ -34,7 +34,8 @@ questions:
   or a Go-native Anthropic Messages API loop;
 - animation-frame-batched response streaming with one final Markdown,
   sanitization, syntax-highlighting, and Mermaid pass per answer, including a
-  full-window vector diagram viewer with fit and percentage zoom controls;
+  full-window vector diagram viewer with fit, percentage zoom, and SVG
+  download controls;
 - reuse of the provider's existing ChatGPT/Codex or Claude login without
   collecting subscription credentials, plus `ANTHROPIC_API_KEY` configuration
   that is read only from the launch environment;

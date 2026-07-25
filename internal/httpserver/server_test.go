@@ -384,6 +384,7 @@ func TestSearchAndChatRenderAsSeparatePages(t *testing.T) {
 		`id="conversation-inspector"`,
 		`id="conversation-evidence-list"`,
 		`data-conversation-filter`,
+		`data-mermaid-viewer-download`,
 		`aria-label="Ask RepoKarta"`,
 	} {
 		if !strings.Contains(chatBody, expected) {
