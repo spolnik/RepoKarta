@@ -376,7 +376,13 @@ SELECT
     discovered_at, scanned_at, indexed_at
 FROM repositories
 WHERE id = ?`, id)
-	return scanRepository(row)
+	repository, err := scanRepository(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		// Agents and API clients see this message, so it names the missing
+		// selector instead of leaking a driver-level error.
+		return catalog.Repository{}, fmt.Errorf("repository %d is not indexed", id)
+	}
+	return repository, err
 }
 
 // UpdateIndexState records an indexing transition.

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -331,5 +332,21 @@ WHERE type = 'table' AND name IN ('document_pages', 'document_citations')`).Scan
 	}
 	if count != 0 {
 		t.Fatalf("upgrade left %d Wiki tables in SQLite; Wiki persistence must remain filesystem-only", count)
+	}
+}
+
+func TestRepositoryByIDReportsAMissingRepositoryClearly(t *testing.T) {
+	storage, err := Open(filepath.Join(t.TempDir(), "missing.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer storage.Close()
+
+	_, err = storage.RepositoryByID(context.Background(), 4242)
+	if err == nil || !strings.Contains(err.Error(), "repository 4242 is not indexed") {
+		t.Fatalf("missing repository error = %v", err)
+	}
+	if strings.Contains(err.Error(), "sql:") {
+		t.Fatalf("missing repository error leaks a driver error: %v", err)
 	}
 }
