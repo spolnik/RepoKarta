@@ -920,6 +920,28 @@ func TestSavedSurveyCitationsRemainValidPageEvidence(t *testing.T) {
 	}
 }
 
+func TestMarkdownSourceURLsAreEvidenceWithoutProviderEvents(t *testing.T) {
+	revision := strings.Repeat("c", 40)
+	firstURL := fmt.Sprintf(
+		"http://127.0.0.1:7331/source/9?rev=%s&path=src/main.ts&focus=11-18#L11",
+		revision,
+	)
+	secondURL := fmt.Sprintf(
+		"http://127.0.0.1:7331/source/9?rev=%s&path=src/store.ts&focus=31-38#L31",
+		revision,
+	)
+	site := Site{RepositoryID: 9, Repository: "fixture", Revision: revision}
+	markdown := "Runtime [entry](" + firstURL + ") and durable [state](" + secondURL + ")."
+
+	evidence := evidenceFromSources(site, markdown, nil)
+	if len(evidence) != 2 {
+		t.Fatalf("Markdown-only evidence = %+v, want two citations", evidence)
+	}
+	if evidence[0].Label == "" || evidence[1].Label == "" {
+		t.Fatalf("Markdown-only evidence lost source labels: %+v", evidence)
+	}
+}
+
 func TestFastPresetIsDisabledAndLegacyCheckpointUsesStandardProfile(t *testing.T) {
 	snapshot := graph.Snapshot{
 		FileCount: 161,

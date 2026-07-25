@@ -68,6 +68,7 @@ var (
 	mermaidFence              = regexp.MustCompile("(?m)^```mermaid[ \t]*$")
 	knowledgeSlug             = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 	planEnvelope              = regexp.MustCompile(`(?s)<repokarta_wiki_plan>\s*(\{.*\})\s*</repokarta_wiki_plan>`)
+	markdownSourceURL         = regexp.MustCompile(`https?://[^\s<>()]+`)
 )
 
 // ErrPageNotFound is returned for an unknown or excluded page.
@@ -1786,6 +1787,7 @@ func cleanKnowledgeMarkdown(value string) string {
 }
 
 func evidenceFromSources(site Site, markdown string, sources []agent.Citation) []graph.Evidence {
+	sources = append(append([]agent.Citation(nil), sources...), markdownCitationSources(markdown)...)
 	evidence := make([]graph.Evidence, 0, len(sources))
 	for _, source := range sources {
 		if !strings.Contains(markdown, source.URL) {
@@ -1819,6 +1821,20 @@ func evidenceFromSources(site Site, markdown string, sources []agent.Citation) [
 		})
 	}
 	return uniqueEvidence(evidence, maximumCitations)
+}
+
+func markdownCitationSources(markdown string) []agent.Citation {
+	matches := markdownSourceURL.FindAllString(markdown, -1)
+	sources := make([]agent.Citation, 0, len(matches))
+	for _, match := range matches {
+		parsed, err := url.Parse(match)
+		if err != nil {
+			continue
+		}
+		label := parsed.Query().Get("path")
+		sources = append(sources, agent.Citation{Label: label, URL: match})
+	}
+	return sources
 }
 
 func sourceRepositoryID(path string) (int64, bool) {
