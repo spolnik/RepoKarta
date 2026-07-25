@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	currentSchemaVersion = 6
+	currentSchemaVersion = 7
 
 	schemaV1 = `
 CREATE TABLE IF NOT EXISTS repositories (
@@ -95,10 +95,17 @@ CREATE TABLE IF NOT EXISTS conversation_message_citations (
 );`
 
 	// Wiki pages and their manifest are intentionally file-backed. Schema
-	// version 5 is retained so existing pre-release databases remain readable,
-	// but fresh databases never create Wiki tables.
+	// versions 5 and 6 are retained so existing pre-release databases remain
+	// readable, but fresh databases never create Wiki tables.
 	schemaV5 = `SELECT 1;`
 	schemaV6 = `SELECT 1;`
+
+	// Version 7 removes the Wiki tables an upgraded pre-release database may
+	// still carry. Wiki content and page metadata live only on the filesystem,
+	// so leaving them behind would keep a second, stale copy in SQLite.
+	schemaV7 = `
+DROP TABLE IF EXISTS document_citations;
+DROP TABLE IF EXISTS document_pages;`
 )
 
 // Store persists RepoKarta-owned metadata. Repository source remains read-only.
@@ -157,6 +164,8 @@ func migrate(db *sql.DB) error {
 			migration = schemaV5
 		case 6:
 			migration = schemaV6
+		case 7:
+			migration = schemaV7
 		default:
 			return fmt.Errorf("missing migration for schema version %d", next)
 		}

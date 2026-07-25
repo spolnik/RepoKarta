@@ -297,3 +297,39 @@ WHERE type = 'table' AND name IN ('document_pages', 'document_citations')`).Scan
 		t.Fatalf("fresh database created %d Wiki tables; Wiki persistence must remain filesystem-only", count)
 	}
 }
+
+func TestMigrationRemovesWikiTablesFromUpgradedDatabases(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "upgraded.db")
+	legacy, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := legacy.Exec(`
+CREATE TABLE document_pages (repository_id INTEGER, slug TEXT, markdown TEXT);
+CREATE TABLE document_citations (id INTEGER PRIMARY KEY, page_slug TEXT, url TEXT);
+INSERT INTO document_pages VALUES (1, 'overview', '# Overview');
+INSERT INTO document_citations VALUES (1, 'overview', 'http://127.0.0.1:7331/source/1');
+PRAGMA user_version = 6;`); err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	storage, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer storage.Close()
+
+	var count int
+	if err := storage.db.QueryRow(`
+SELECT COUNT(*)
+FROM sqlite_master
+WHERE type = 'table' AND name IN ('document_pages', 'document_citations')`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("upgrade left %d Wiki tables in SQLite; Wiki persistence must remain filesystem-only", count)
+	}
+}

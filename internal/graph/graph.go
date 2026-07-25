@@ -695,8 +695,11 @@ var (
 		`(?m)^[^/*\n]*\b(?:class|interface|object)\s+([A-Za-z_$][A-Za-z0-9_$]*)`,
 	)
 	springMappingPattern = regexp.MustCompile(
-		`(?s)@(?:[A-Za-z0-9_$.]+\.)?(GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping|RequestMapping|HttpExchange|GetExchange|PostExchange|PutExchange|DeleteExchange|PatchExchange)\s*(?:\((.*?)\))?`,
+		`(?s)@(?:[A-Za-z0-9_$.]+\.)?(GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping|RequestMapping)\s*(?:\((.*?)\))?`,
 	)
+	// A type annotated with @FeignClient or @HttpExchange declares endpoints it
+	// calls, not endpoints it serves, so its mappings never become routes.
+	declarativeClientType = regexp.MustCompile(`@(?:FeignClient|HttpExchange)\b`)
 	quotedJavaString      = regexp.MustCompile(`["']([^"']*)["']`)
 	springFunctionalRoute = regexp.MustCompile(
 		`(?m)\b(?:RequestPredicates\.)?(GET|POST|PUT|DELETE|PATCH)\s*\(\s*["']([^"']+)["']`,
@@ -1236,6 +1239,9 @@ type springRoute struct {
 }
 
 func springRoutes(content []byte) []springRoute {
+	if declarativeClientType.Match(content) {
+		return nil
+	}
 	classOffset := len(content)
 	if match := javaClassPattern.FindIndex(content); match != nil {
 		classOffset = match[0]
@@ -1243,9 +1249,7 @@ func springRoutes(content []byte) []springRoute {
 	classPrefix := ""
 	mappings := springMappingPattern.FindAllSubmatchIndex(content, -1)
 	for _, match := range mappings {
-		annotation := string(content[match[2]:match[3]])
-		if match[0] >= classOffset ||
-			(annotation != "RequestMapping" && annotation != "HttpExchange") {
+		if match[0] >= classOffset || string(content[match[2]:match[3]]) != "RequestMapping" {
 			continue
 		}
 		paths := annotationPaths(mappingArguments(content, match))
@@ -1265,10 +1269,8 @@ func springRoutes(content []byte) []springRoute {
 		if len(paths) == 0 {
 			paths = []string{""}
 		}
-		method := strings.ToUpper(
-			strings.TrimSuffix(strings.TrimSuffix(annotation, "Mapping"), "Exchange"),
-		)
-		if annotation == "RequestMapping" || annotation == "HttpExchange" {
+		method := strings.ToUpper(strings.TrimSuffix(annotation, "Mapping"))
+		if annotation == "RequestMapping" {
 			method = requestMappingMethod(arguments)
 		}
 		for _, routePath := range paths {

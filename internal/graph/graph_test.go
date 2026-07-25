@@ -267,6 +267,14 @@ spring:
 	assertGraphNode(t, snapshot, "route", "GET /payments/{id}")
 	assertGraphNode(t, snapshot, "route", "POST /payments")
 	assertGraphNode(t, snapshot, "route", "GET /inventory/{sku}")
+	// The Feign interface in payment-service declares a consumed endpoint, so
+	// only inventory-service may serve it.
+	for _, node := range snapshot.Nodes {
+		if node.Kind == "route" && node.Label == "GET /inventory/{sku}" &&
+			node.RepositoryID != 12 {
+			t.Fatalf("consumed endpoint became a served route: %#v", node)
+		}
+	}
 	assertGraphEdge(t, snapshot, "service_call", "calls over HTTP")
 
 	gradleManifest := manifestByPath(t, snapshot, "build.gradle")
@@ -549,24 +557,50 @@ class Clients {
 	}
 }
 
-func TestSpringRoutesReadHTTPInterfaceExchanges(t *testing.T) {
-	content := []byte(`package com.acme.payment;
+func TestSpringRoutesIgnoreDeclarativeClientInterfaces(t *testing.T) {
+	// @HttpExchange and @FeignClient types declare endpoints a service calls,
+	// not endpoints it serves, so the Routes layer must leave them out.
+	for name, content := range map[string][]byte{
+		"HTTP interface": []byte(`package com.acme.payment;
 
 @HttpExchange("/payments")
 public interface PaymentApi {
     @GetExchange("/{id}")
     Payment get(String id);
+}
+`),
+		"Feign client": []byte(`package com.acme.payment;
 
-    @PostExchange
-    void create(Payment payment);
+@FeignClient(name = "inventory-api")
+public interface InventoryClient {
+    @GetMapping("/inventory/{sku}")
+    String stock(String sku);
+}
+`),
+	} {
+		if routes := springRoutes(content); len(routes) != 0 {
+			t.Fatalf("%s produced served routes %#v", name, routes)
+		}
+	}
+
+	served := []byte(`package com.acme.payment;
+
+@RestController
+@RequestMapping("/payments")
+public class PaymentController {
+    @GetMapping("/{id}")
+    public String get() { return "ok"; }
+
+    @RequestMapping(value = "/{id}/refunds", method = RequestMethod.PUT)
+    public void refund() {}
 }
 `)
 	labels := make([]string, 0)
-	for _, route := range springRoutes(content) {
+	for _, route := range springRoutes(served) {
 		labels = append(labels, route.label)
 	}
-	if !slices.Equal(labels, []string{"GET /payments/{id}", "POST /payments"}) {
-		t.Fatalf("HTTP interface routes = %v", labels)
+	if !slices.Equal(labels, []string{"GET /payments/{id}", "PUT /payments/{id}/refunds"}) {
+		t.Fatalf("controller routes = %v", labels)
 	}
 }
 
