@@ -140,7 +140,7 @@ func TestAdapterIndexesAndSearchesRepositoryOnNativePlatform(t *testing.T) {
 	}
 	match := result.Matches[0]
 	if match.RepositoryID != repository.ID ||
-		match.Repository != filepath.ToSlash(repositoryPath) ||
+		match.Repository != filepath.ToSlash(repository.Path) ||
 		match.Path != "internal/hello.go" ||
 		match.Revision != repository.HeadCommit {
 		t.Fatalf("unexpected search match: %#v", match)
