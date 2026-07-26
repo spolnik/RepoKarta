@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spolnik/RepoKarta/internal/agent"
@@ -43,9 +44,10 @@ type Intelligence interface {
 	GitDiff(context.Context, codeintel.GitDiffRequest) (codeintel.GitDiffResponse, error)
 }
 
-// ArtifactReader exposes the two higher-level, evidence-backed M3/M4 artifacts.
+// ArtifactReader exposes the higher-level, evidence-backed M3/M4 artifacts.
 type ArtifactReader interface {
 	RepositoryMap(context.Context, int64) (graph.Snapshot, error)
+	GeneratedDocuments(context.Context, int64) (docs.Site, error)
 	GeneratedDocument(context.Context, int64, string) (docs.Page, error)
 }
 
@@ -56,6 +58,7 @@ type MapReader interface {
 
 // DocumentReader supplies generated repository pages.
 type DocumentReader interface {
+	Plan(context.Context, int64) (docs.Site, error)
 	Page(context.Context, int64, string) (docs.Page, error)
 }
 
@@ -68,6 +71,11 @@ type Artifacts struct {
 // RepositoryMap reads one cached or deterministically generated repository map.
 func (a Artifacts) RepositoryMap(ctx context.Context, repositoryID int64) (graph.Snapshot, error) {
 	return a.Maps.Snapshot(ctx, repositoryID, false)
+}
+
+// GeneratedDocuments reads the persisted documentation plan and page metadata.
+func (a Artifacts) GeneratedDocuments(ctx context.Context, repositoryID int64) (docs.Site, error) {
+	return a.Documents.Plan(ctx, repositoryID)
 }
 
 // GeneratedDocument reads one persisted generated page.
@@ -298,7 +306,7 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 		mcp.AddTool(server, &mcp.Tool{
 			Name:        "read_repository_map",
 			Title:       "Read repository map",
-			Description: "Read the deterministic, commit-pinned structural map for one repository. Every node and edge includes exact source evidence.",
+			Description: "Read the complete deterministic, commit-pinned repository snapshot: languages, manifests and resolved dependency coordinates, parsed structure, packages, entry points, routes, architecture edges, and HTTP service calls. Scope and truncation are explicit, every graph fact has exact source evidence, and no AI is invoked.",
 			Annotations: readOnly,
 		}, func(ctx context.Context, _ *mcp.CallToolRequest, input readRepositoryMapInput) (*mcp.CallToolResult, readRepositoryMapOutput, error) {
 			snapshot, err := config.Artifacts.RepositoryMap(ctx, input.RepositoryID)
@@ -317,9 +325,44 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 		})
 
 		mcp.AddTool(server, &mcp.Tool{
+			Name:        "read_dependency_inventory",
+			Title:       "Read dependency inventory",
+			Description: "Read a compact, deterministic dependency inventory for one repository. Returns manifests, flattened declared coordinates with versions when statically available, outbound HTTP service calls, exact evidence, and explicit scope/truncation metadata. No AI is invoked.",
+			Annotations: readOnly,
+		}, func(ctx context.Context, _ *mcp.CallToolRequest, input readDependencyInventoryInput) (*mcp.CallToolResult, readDependencyInventoryOutput, error) {
+			snapshot, err := config.Artifacts.RepositoryMap(ctx, input.RepositoryID)
+			if err != nil {
+				return nil, readDependencyInventoryOutput{}, err
+			}
+			output := dependencyInventory(snapshot, input.RepositoryID)
+			for _, manifest := range output.Manifests {
+				recordEvidence(tracker, conversationID, manifest.Evidence)
+			}
+			for _, call := range output.ServiceCalls {
+				for _, evidence := range call.Evidence {
+					recordEvidence(tracker, conversationID, evidence)
+				}
+			}
+			return nil, output, nil
+		})
+
+		mcp.AddTool(server, &mcp.Tool{
+			Name:        "list_deep_wiki_pages",
+			Title:       "List Deep Wiki pages",
+			Description: "List the persisted Deep Wiki plan and page metadata for one repository, including slugs, hierarchy, generation status, revisions, models, supporting files, and evidence counts. Use a returned slug with read_generated_document. This never starts AI generation and omits page Markdown.",
+			Annotations: readOnly,
+		}, func(ctx context.Context, _ *mcp.CallToolRequest, input listDeepWikiPagesInput) (*mcp.CallToolResult, listDeepWikiPagesOutput, error) {
+			site, err := config.Artifacts.GeneratedDocuments(ctx, input.RepositoryID)
+			if err != nil {
+				return nil, listDeepWikiPagesOutput{}, err
+			}
+			return nil, deepWikiIndex(site), nil
+		})
+
+		mcp.AddTool(server, &mcp.Tool{
 			Name:        "read_generated_document",
 			Title:       "Read generated documentation",
-			Description: "Read one persisted repository wiki page with its source revision, generation status, supporting files, citations, and Markdown.",
+			Description: "Read one persisted Deep Wiki page by slug with its source revision, generation status, supporting files, exact citations, and Markdown. This never starts AI generation.",
 			Annotations: readOnly,
 		}, func(ctx context.Context, _ *mcp.CallToolRequest, input readGeneratedDocumentInput) (*mcp.CallToolResult, readGeneratedDocumentOutput, error) {
 			page, err := config.Artifacts.GeneratedDocument(ctx, input.RepositoryID, input.Page)
@@ -370,6 +413,73 @@ type readRepositoryMapInput struct {
 }
 
 type readRepositoryMapOutput = graph.Snapshot
+
+type readDependencyInventoryInput struct {
+	RepositoryID int64 `json:"repository_id" jsonschema:"required,Repository ID returned by list_repositories."`
+}
+
+type declaredDependency struct {
+	Coordinate string           `json:"coordinate"`
+	DeclaredIn []string         `json:"declared_in"`
+	Evidence   []graph.Evidence `json:"evidence"`
+}
+
+type readDependencyInventoryOutput struct {
+	RepositoryID     int64                `json:"repository_id"`
+	Repository       string               `json:"repository"`
+	Revision         string               `json:"revision"`
+	ManifestCount    int                  `json:"manifest_count"`
+	DependencyCount  int                  `json:"dependency_count"`
+	ServiceCallCount int                  `json:"service_call_count"`
+	Manifests        []graph.Manifest     `json:"manifests"`
+	Dependencies     []declaredDependency `json:"dependencies"`
+	ServiceCalls     []graph.Edge         `json:"service_calls"`
+	Truncated        bool                 `json:"truncated"`
+	Scope            graph.Scope          `json:"scope"`
+}
+
+type listDeepWikiPagesInput struct {
+	RepositoryID int64 `json:"repository_id" jsonschema:"required,Repository ID returned by list_repositories."`
+}
+
+type deepWikiPage struct {
+	Slug            string    `json:"slug"`
+	Title           string    `json:"title"`
+	Summary         string    `json:"summary"`
+	Order           int       `json:"order"`
+	Number          string    `json:"number"`
+	ParentSlug      string    `json:"parent_slug,omitempty"`
+	Depth           int       `json:"depth"`
+	Status          string    `json:"status"`
+	Revision        string    `json:"revision,omitempty"`
+	Provider        string    `json:"provider,omitempty"`
+	Model           string    `json:"model,omitempty"`
+	SupportingFiles []string  `json:"supporting_files"`
+	CitationCount   int       `json:"citation_count"`
+	UpdatedAt       time.Time `json:"updated_at,omitempty"`
+}
+
+type listDeepWikiPagesOutput struct {
+	Version      int            `json:"version"`
+	RepositoryID int64          `json:"repository_id"`
+	Repository   string         `json:"repository"`
+	Revision     string         `json:"revision"`
+	Profile      string         `json:"profile,omitempty"`
+	ProfilePages string         `json:"profile_pages,omitempty"`
+	SurveyReady  bool           `json:"survey_ready"`
+	SurveyStale  bool           `json:"survey_stale"`
+	SurveyStatus string         `json:"survey_status,omitempty"`
+	PlanReady    bool           `json:"plan_ready"`
+	PlanStale    bool           `json:"plan_stale"`
+	PlanRevision string         `json:"plan_revision,omitempty"`
+	PlanProvider string         `json:"plan_provider,omitempty"`
+	PlanModel    string         `json:"plan_model,omitempty"`
+	Ready        int            `json:"ready"`
+	Stale        int            `json:"stale"`
+	Pending      int            `json:"pending"`
+	Failed       int            `json:"failed"`
+	Pages        []deepWikiPage `json:"pages"`
+}
 
 type readGeneratedDocumentInput struct {
 	RepositoryID int64  `json:"repository_id" jsonschema:"required,Repository ID returned by list_repositories."`
@@ -423,6 +533,125 @@ type gitDiffInput struct {
 }
 
 type gitDiffOutput = codeintel.GitDiffResponse
+
+func dependencyInventory(snapshot graph.Snapshot, repositoryID int64) readDependencyInventoryOutput {
+	output := readDependencyInventoryOutput{
+		RepositoryID: repositoryID,
+		Manifests:    append([]graph.Manifest(nil), snapshot.Manifests...),
+		Dependencies: []declaredDependency{},
+		ServiceCalls: []graph.Edge{},
+		Truncated:    snapshot.Truncated || snapshot.StructureTruncated,
+		Scope:        snapshot.Scope,
+	}
+	if len(snapshot.Repositories) > 0 {
+		output.Repository = snapshot.Repositories[0].Name
+		output.Revision = snapshot.Repositories[0].Revision
+	}
+
+	evidenceByDeclaration := make(map[string]graph.Evidence)
+	for _, edge := range snapshot.Edges {
+		if edge.Kind == "service_call" {
+			output.ServiceCalls = append(output.ServiceCalls, edge)
+		}
+		if edge.Kind != "dependency" {
+			continue
+		}
+		for _, evidence := range edge.Evidence {
+			evidenceByDeclaration[evidence.Path+"\x00"+evidence.Label] = evidence
+		}
+	}
+
+	byCoordinate := make(map[string]*declaredDependency)
+	for _, manifest := range output.Manifests {
+		for _, coordinate := range manifest.Dependencies {
+			dependency := byCoordinate[coordinate]
+			if dependency == nil {
+				dependency = &declaredDependency{
+					Coordinate: coordinate,
+					DeclaredIn: []string{},
+					Evidence:   []graph.Evidence{},
+				}
+				byCoordinate[coordinate] = dependency
+			}
+			dependency.DeclaredIn = append(dependency.DeclaredIn, manifest.Path)
+			if evidence, ok := evidenceByDeclaration[manifest.Path+"\x00"+coordinate]; ok {
+				dependency.Evidence = append(dependency.Evidence, evidence)
+			} else {
+				dependency.Evidence = append(dependency.Evidence, manifest.Evidence)
+			}
+		}
+	}
+	coordinates := make([]string, 0, len(byCoordinate))
+	for coordinate := range byCoordinate {
+		coordinates = append(coordinates, coordinate)
+	}
+	sort.Strings(coordinates)
+	for _, coordinate := range coordinates {
+		dependency := byCoordinate[coordinate]
+		sort.Strings(dependency.DeclaredIn)
+		output.Dependencies = append(output.Dependencies, *dependency)
+	}
+	sort.Slice(output.ServiceCalls, func(left, right int) bool {
+		if output.ServiceCalls[left].Source != output.ServiceCalls[right].Source {
+			return output.ServiceCalls[left].Source < output.ServiceCalls[right].Source
+		}
+		return output.ServiceCalls[left].Target < output.ServiceCalls[right].Target
+	})
+	output.ManifestCount = len(output.Manifests)
+	output.DependencyCount = len(output.Dependencies)
+	output.ServiceCallCount = len(output.ServiceCalls)
+	return output
+}
+
+func deepWikiIndex(site docs.Site) listDeepWikiPagesOutput {
+	output := listDeepWikiPagesOutput{
+		Version:      site.Version,
+		RepositoryID: site.RepositoryID,
+		Repository:   site.Repository,
+		Revision:     site.Revision,
+		Profile:      site.Profile,
+		ProfilePages: site.ProfilePages,
+		SurveyReady:  site.SurveyReady,
+		SurveyStale:  site.SurveyStale,
+		SurveyStatus: site.SurveyStatus,
+		PlanReady:    site.PlanReady,
+		PlanStale:    site.PlanStale,
+		PlanRevision: site.PlanRevision,
+		PlanProvider: site.PlanProvider,
+		PlanModel:    site.PlanModel,
+		Ready:        site.Ready,
+		Stale:        site.Stale,
+		Pending:      site.Pending,
+		Failed:       site.Failed,
+		Pages:        make([]deepWikiPage, 0, len(site.Pages)),
+	}
+	for _, page := range site.Pages {
+		output.Pages = append(output.Pages, deepWikiPage{
+			Slug:            page.Slug,
+			Title:           page.Title,
+			Summary:         page.Summary,
+			Order:           page.Order,
+			Number:          page.Number,
+			ParentSlug:      page.ParentSlug,
+			Depth:           page.Depth,
+			Status:          page.Status,
+			Revision:        page.Revision,
+			Provider:        page.Provider,
+			Model:           page.Model,
+			SupportingFiles: append([]string(nil), page.SupportingFiles...),
+			CitationCount:   len(page.Citations),
+			UpdatedAt:       page.UpdatedAt,
+		})
+	}
+	return output
+}
+
+func recordEvidence(tracker *CitationTracker, conversationID string, evidence graph.Evidence) {
+	tracker.Record(conversationID, agent.Citation{
+		Label: evidence.Repository + "@" + shortRevision(evidence.Revision) + ":" + evidence.Path,
+		URL:   evidence.URL,
+	})
+}
 
 func bearerAuth(token string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {

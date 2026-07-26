@@ -133,6 +133,8 @@ repositories on managed Windows and Apple Silicon macOS laptops.
   - `git_log`
   - `git_diff`
   - `read_repository_map`
+  - `read_dependency_inventory`
+  - `list_deep_wiki_pages`
   - `read_generated_document`
 - Stream answer progress and citations to the browser.
 - Make repository scope and estimated/actual usage visible.
@@ -602,7 +604,7 @@ completion criteria include:
 
 ## Current implementation version
 
-`0.34.0-dev`. M0 through M4 are complete. M5 and M6 are in progress.
+`0.35.0-dev`. M0 through M4 are complete. M5 and M6 are in progress.
 
 ## Recommended next session
 

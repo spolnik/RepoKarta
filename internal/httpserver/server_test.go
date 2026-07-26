@@ -232,8 +232,10 @@ func TestMCPSetupPageProvidesCopyableReadOnlyConfiguration(t *testing.T) {
 		`Bearer ` + token,
 		`C:\\Tools\\RepoKarta\\repokarta.exe`,
 		`read_repository_map`,
+		`read_dependency_inventory`,
+		`list_deep_wiki_pages`,
 		`read_generated_document`,
-		`9 tools · no writes`,
+		`11 tools · no writes`,
 	} {
 		if !strings.Contains(response.Body.String(), expected) {
 			t.Fatalf("MCP setup page does not contain %q", expected)

@@ -43,8 +43,8 @@ questions, M3 evidence-backed repository maps, and M4 living documentation:
 - a JSON code-intelligence API used by the UI and protocol adapters;
 - authenticated loopback HTTP MCP plus a stdio MCP adapter with read-only
   `list_repositories`, `search_code`, `find_symbol`, `get_file`, `list_tree`,
-  `git_log`, `git_diff`, `read_repository_map`, and
-  `read_generated_document` tools;
+  `git_log`, `git_diff`, `read_repository_map`, `read_dependency_inventory`,
+  `list_deep_wiki_pages`, and `read_generated_document` tools;
 - read-only Codex sandboxes, Claude plan mode, and disabled mutation/shell
   tools;
 - authoritative citation chips recorded from the exact MCP tool results rather
@@ -250,8 +250,10 @@ Open the **MCP** tab or `/mcp/setup` for the current Streamable HTTP endpoint,
 masked bearer token, copyable client configuration, and the exact read-only
 tool catalog. The page is never cached. Its process-scoped token rotates when
 RepoKarta restarts, so refresh the configuration after a restart. Streamable
-HTTP exposes all nine tools, including repository maps and generated Deep Wiki
-pages.
+HTTP exposes all eleven tools. The artifact tools return deterministic
+repository maps, a focused dependency/version and HTTP-call inventory, the
+persisted Deep Wiki page index, and generated page content without starting an
+AI run.
 
 For MCP clients that launch a stdio process, keep RepoKarta running and add:
 

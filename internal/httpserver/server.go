@@ -1115,7 +1115,9 @@ func buildMCPPageData(endpoint, token, command, stdioBaseURL string) mcpPageData
 			{Name: "list_tree", Description: "Bounded repository trees at an exact indexed commit."},
 			{Name: "git_log", Description: "Newest-first commit history with truncation metadata."},
 			{Name: "git_diff", Description: "Resolved revisions and bounded unified patches."},
-			{Name: "read_repository_map", Description: "Saved structural facts, dependencies, and architecture edges."},
+			{Name: "read_repository_map", Description: "Complete static snapshot: structure, routes, entry points, dependencies, and edges."},
+			{Name: "read_dependency_inventory", Description: "Focused manifests, versioned coordinates, and outbound HTTP calls."},
+			{Name: "list_deep_wiki_pages", Description: "Persisted Wiki plan, page slugs, hierarchy, status, and provenance."},
 			{Name: "read_generated_document", Description: "Generated Deep Wiki pages and their grounded evidence."},
 		},
 	}
