@@ -14,6 +14,12 @@ dependency-inventory foundation:
 - origin, default revision, HEAD, scan, and index metadata in SQLite;
 - canonical path reconciliation that removes stale and duplicate catalogue rows
   on every discovery;
+- administrator-reviewed repository acquisition for local Git roots, GitHub
+  organizations/teams/repositories, and GitLab groups/projects, with explicit
+  archived, fork, visibility, topic, allow, deny, and already-managed states;
+- RepoKarta-owned hosted checkouts with manual or scheduled synchronization,
+  stable provider identity, bounded backoff, source-free audit events, and
+  recoverable removal;
 - native Zoekt indexing on Windows amd64, macOS arm64, and Linux;
 - incremental reindexing when a repository HEAD changes;
 - literal, regular-expression, and native Zoekt query modes;
@@ -291,6 +297,42 @@ Release archives include service templates and the complete
 proxy, backup, restore, upgrade, rollback, authorization verification, and
 deprovisioning guidance.
 
+## Repository acquisition
+
+The protected `/admin` page can preview and approve three repository sources:
+
+- a local directory, including a ghorg-managed root, whose repositories remain
+  user-owned and are only inspected with read-only Git commands;
+- a GitHub organization, team, user, or exact `https://github.com/...`
+  repository URL;
+- a GitLab group, subgroup, or exact `https://gitlab.com/...` project URL.
+
+Provider previews are bounded and show forks, archives, visibility, topic and
+allow/deny policy exclusions, and repositories already managed under either
+their canonical URL or stable provider ID. For private provider discovery,
+enter only an environment-variable name such as `GITHUB_TOKEN` or
+`GITLAB_TOKEN`. RepoKarta reads the value from its launch environment for the
+API request and persists only the reference name. Hosted Git cloning continues
+to use the configured Git credential helper; credentials are never embedded in
+the stored remote URL.
+
+Approved GitHub and GitLab repositories are cloned under RepoKarta's own data
+directory with executable hooks and recursive submodules disabled. A successful
+clone or fetch is verified at an exact Git revision before the normal catalogue
+refresh queues commit-pinned indexing. Failed synchronization records an
+actionable error and backoff without replacing the last usable index.
+
+Manual **Sync** and explicit-confirmation removal are available per repository.
+User-owned local repositories are only unregistered. RepoKarta-owned hosted
+checkouts move to recoverable `repository-trash` storage. Enable the single
+bounded background synchronization worker with, for example:
+
+```powershell
+go run ./cmd/repokarta serve `
+  -repository-sync-interval 30m `
+  C:\Work\ghorg
+```
+
 ## Documentation steering
 
 RepoKarta uses a small default plan: `overview`, `architecture`, and
@@ -466,8 +508,11 @@ stale.
 ## Storage and safety
 
 RepoKarta binds to loopback by default and treats repositories as read-only.
-It does not fetch, pull, checkout, reset, clean, build, or execute repository
-code.
+It never fetches, checks out, resets, cleans, builds, executes, or removes a
+user-owned local repository. The administrator acquisition workflow may clone,
+fetch, and fast-forward only a checkout whose exact canonical path is proven to
+be under RepoKarta-owned storage. It never pushes upstream, runs repository
+hooks, or recursively initializes submodules.
 
 Provider harnesses receive a narrow local MCP surface. Codex is started with a
 read-only sandbox and approvals disabled. Claude is started in plan mode with
@@ -480,7 +525,8 @@ RepoKarta-owned state is kept outside source repositories:
 - macOS: `~/Library/Caches/RepoKarta/`
 - Linux: the operating system user cache directory
 
-SQLite stores catalogue, job, and conversation metadata and transcripts.
+SQLite stores catalogue, acquisition provenance and source-free events, job,
+and conversation metadata and transcripts.
 Conversation images, Zoekt shards, and future generated documentation are
 filesystem-backed under RepoKarta's own data directory. Deleting a chat removes
 its transcript and its exact owned image files.
@@ -533,11 +579,11 @@ Windows amd64 and Apple Silicon macOS. The workflow:
 Run the same packagers locally:
 
 ```powershell
-.\scripts\package-release.ps1 -Version 0.44.0-dev
+.\scripts\package-release.ps1 -Version 0.45.0-dev
 ```
 
 ```sh
-./scripts/package-release.sh 0.44.0-dev
+./scripts/package-release.sh 0.45.0-dev
 ```
 
 macOS packages are signed with the hardened runtime when

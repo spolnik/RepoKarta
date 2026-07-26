@@ -785,31 +785,31 @@ redacted, queryable audit evidence.
 Add a separate administrator-managed intake pipeline for bringing repositories
 into RepoKarta-owned storage and keeping them current.
 
-- [ ] Support existing local roots, explicit Git remote URLs, ghorg-managed
+- [x] Support existing local roots, explicit Git remote URLs, ghorg-managed
   directories, and organization discovery adapters for configured Git hosts.
-- [ ] Maintain a repository-source registry containing canonical remote
+- [x] Maintain a repository-source registry containing canonical remote
   identity, provider, RepoKarta-owned checkout path, default branch, inclusion
   policy, credential reference, sync state, timestamps, and actionable errors.
-- [ ] Preview discoveries before acquisition, deduplicate aliases and renamed
+- [x] Preview discoveries before acquisition, deduplicate aliases and renamed
   remotes, and expose archived, forked, private, excluded, and already-managed
   states explicitly.
-- [ ] Clone and fetch without pushing or modifying upstream repositories;
+- [x] Clone and fetch without pushing or modifying upstream repositories;
   disable executable hooks and avoid submodule recursion unless an
   administrator deliberately enables a bounded policy.
-- [ ] Use configured credential helpers or secret references without storing
+- [x] Use configured credential helpers or secret references without storing
   raw Git credentials in repository metadata, logs, diagnostics, or audit
   payloads.
-- [ ] Provide manual and scheduled synchronization with cancellation, bounded
+- [x] Provide manual and scheduled synchronization with cancellation, bounded
   concurrency, backoff, rate-limit handling, and honest partial-fleet status.
-- [ ] Allow organization, team, topic, visibility, archive, fork, and repository
+- [x] Allow organization, team, topic, visibility, archive, fork, and repository
   allow/deny policies before data is cloned.
-- [ ] Trigger catalogue refresh and commit-pinned indexing only after a checkout
+- [x] Trigger catalogue refresh and commit-pinned indexing only after a checkout
   reaches a verified Git revision; preserve the last usable index when a later
   synchronization fails.
-- [ ] Audit discovery, acquisition, synchronization, policy skips, credential
+- [x] Audit discovery, acquisition, synchronization, policy skips, credential
   failures, and removal using repository identity and revision metadata rather
   than source content.
-- [ ] Remove only checkouts proven to be RepoKarta-owned, require an explicit
+- [x] Remove only checkouts proven to be RepoKarta-owned, require an explicit
   confirmation for deletion, and never delete or rewrite user-owned local
   repositories.
 
@@ -868,10 +868,10 @@ completion criteria include:
 
 ## Current implementation version
 
-`0.44.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
+`0.45.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
 The M9 dependency inventory foundation, linked-worktree discovery
 deduplication, and M10 enterprise identity and administration milestone are
-complete. The remaining M9 work and M11 are planned.
+complete. The remaining M9 work is planned; M11 is complete.
 
 ## Recommended next session
 

@@ -23,6 +23,7 @@ import (
 	"time"
 	"unicode/utf16"
 
+	"github.com/spolnik/RepoKarta/internal/acquisition"
 	"github.com/spolnik/RepoKarta/internal/agent"
 	"github.com/spolnik/RepoKarta/internal/audit"
 	"github.com/spolnik/RepoKarta/internal/catalog"
@@ -109,43 +110,54 @@ type InsightService interface {
 	SyncSonar(context.Context, int64) (insights.Run, error)
 }
 
+// RepositoryAcquisitionService owns administrator-managed repository intake.
+type RepositoryAcquisitionService interface {
+	List(context.Context) ([]acquisition.Repository, error)
+	Discover(context.Context, acquisition.DiscoverRequest) ([]acquisition.Candidate, error)
+	Acquire(context.Context, acquisition.Candidate, string) (acquisition.Repository, error)
+	Sync(context.Context, int64) (acquisition.Repository, error)
+	Remove(context.Context, int64) (string, error)
+}
+
 // Config controls the local HTTP server.
 type Config struct {
-	Address          string
-	RepositoryRoot   string
-	Version          string
-	OpenBrowser      bool
-	MCPHandler       http.Handler
-	MCPToken         string
-	MCPBaseURL       string
-	MCPCommand       string
-	Conversations    ConversationService
-	Maps             MapService
-	Docs             DocumentationService
-	Security         *security.Manager
-	Maintenance      *maintenance.Service
-	RepositoryAccess RepositoryAccessService
-	Enterprise       EnterpriseStore
-	SCIMHandler      http.Handler
-	Insights         InsightService
+	Address               string
+	RepositoryRoot        string
+	Version               string
+	OpenBrowser           bool
+	MCPHandler            http.Handler
+	MCPToken              string
+	MCPBaseURL            string
+	MCPCommand            string
+	Conversations         ConversationService
+	Maps                  MapService
+	Docs                  DocumentationService
+	Security              *security.Manager
+	Maintenance           *maintenance.Service
+	RepositoryAccess      RepositoryAccessService
+	RepositoryAcquisition RepositoryAcquisitionService
+	Enterprise            EnterpriseStore
+	SCIMHandler           http.Handler
+	Insights              InsightService
 }
 
 // Server hosts RepoKarta's loopback interface.
 type Server struct {
-	config           Config
-	server           *http.Server
-	templates        *template.Template
-	intelligence     *codeintel.Service
-	refresher        CatalogueRefresher
-	agents           ConversationService
-	history          ConversationHistoryService
-	maps             MapService
-	docs             DocumentationService
-	security         *security.Manager
-	maintenance      *maintenance.Service
-	repositoryAccess RepositoryAccessService
-	enterprise       EnterpriseStore
-	insights         InsightService
+	config                Config
+	server                *http.Server
+	templates             *template.Template
+	intelligence          *codeintel.Service
+	refresher             CatalogueRefresher
+	agents                ConversationService
+	history               ConversationHistoryService
+	maps                  MapService
+	docs                  DocumentationService
+	security              *security.Manager
+	maintenance           *maintenance.Service
+	repositoryAccess      RepositoryAccessService
+	repositoryAcquisition RepositoryAcquisitionService
+	enterprise            EnterpriseStore
+	insights              InsightService
 }
 
 type pageData struct {
@@ -279,18 +291,19 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 	}
 
 	server := &Server{
-		config:           config,
-		templates:        templates,
-		intelligence:     intelligence,
-		refresher:        refresher,
-		agents:           config.Conversations,
-		maps:             config.Maps,
-		docs:             config.Docs,
-		security:         config.Security,
-		maintenance:      config.Maintenance,
-		repositoryAccess: config.RepositoryAccess,
-		enterprise:       config.Enterprise,
-		insights:         config.Insights,
+		config:                config,
+		templates:             templates,
+		intelligence:          intelligence,
+		refresher:             refresher,
+		agents:                config.Conversations,
+		maps:                  config.Maps,
+		docs:                  config.Docs,
+		security:              config.Security,
+		maintenance:           config.Maintenance,
+		repositoryAccess:      config.RepositoryAccess,
+		repositoryAcquisition: config.RepositoryAcquisition,
+		enterprise:            config.Enterprise,
+		insights:              config.Insights,
 	}
 	server.history, _ = config.Conversations.(ConversationHistoryService)
 
@@ -366,6 +379,12 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 			mux.HandleFunc("PUT /api/admin/audit/retention", server.controlled(
 				identity.PermissionManageAuditRetention, "audit.retention.update", "audit-log", server.apiAuditRetention,
 			))
+		}
+		if server.repositoryAcquisition != nil {
+			mux.HandleFunc("POST /admin/repositories/discover", server.discoverRepositories)
+			mux.HandleFunc("POST /admin/repositories/acquire", server.acquireRepository)
+			mux.HandleFunc("POST /admin/repositories/sync", server.syncAcquiredRepository)
+			mux.HandleFunc("POST /admin/repositories/remove", server.removeAcquiredRepository)
 		}
 		if server.maintenance != nil {
 			mux.HandleFunc("POST /admin/storage/preview", server.previewCleanup)

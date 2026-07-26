@@ -110,3 +110,41 @@ func TestDerivedStructuralIndexQueueDoesNotDropLargeFleets(t *testing.T) {
 		}
 	}
 }
+
+type providerStore struct {
+	repositories []catalog.Repository
+}
+
+func (s *providerStore) SyncRepositories(_ context.Context, repositories []catalog.Repository) error {
+	s.repositories = append([]catalog.Repository(nil), repositories...)
+	return nil
+}
+
+func (s *providerStore) ListRepositories(context.Context) ([]catalog.Repository, error) {
+	return append([]catalog.Repository(nil), s.repositories...), nil
+}
+
+func (*providerStore) UpdateIndexState(context.Context, int64, string, string, string) error {
+	return nil
+}
+
+func TestRefreshMergesAdministratorManagedRepositories(t *testing.T) {
+	store := &providerStore{}
+	managed := catalog.Repository{
+		Name:       "managed",
+		Path:       "C:/repokarta-owned/github/acme/managed",
+		HeadCommit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		ScanState:  "ready",
+		IndexState: "pending",
+	}
+	coordinator := NewCoordinator(t.TempDir(), nil, store, observerEngine{}).
+		UseRepositoryProvider(func(context.Context) ([]catalog.Repository, error) {
+			return []catalog.Repository{managed}, nil
+		})
+	if err := coordinator.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.repositories) != 1 || store.repositories[0].Path != managed.Path {
+		t.Fatalf("refreshed repositories = %#v", store.repositories)
+	}
+}

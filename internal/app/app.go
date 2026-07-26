@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/spolnik/RepoKarta/internal/access"
+	"github.com/spolnik/RepoKarta/internal/acquisition"
 	"github.com/spolnik/RepoKarta/internal/agent"
 	anthropicprovider "github.com/spolnik/RepoKarta/internal/agent/anthropic"
 	"github.com/spolnik/RepoKarta/internal/agent/claude"
@@ -31,19 +32,20 @@ import (
 )
 
 type Config struct {
-	ListenAddress  string
-	DataDirectory  string
-	RepositoryRoot string
-	Excludes       []string
-	Version        string
-	OpenBrowser    bool
-	CodexCommand   string
-	ClaudeCommand  string
-	AllowOpen      bool
-	AdminUser      string
-	AdminPassword  string
-	SCIMToken      string
-	Security       security.Settings
+	ListenAddress          string
+	DataDirectory          string
+	RepositoryRoot         string
+	Excludes               []string
+	Version                string
+	OpenBrowser            bool
+	CodexCommand           string
+	ClaudeCommand          string
+	AllowOpen              bool
+	AdminUser              string
+	AdminPassword          string
+	SCIMToken              string
+	Security               security.Settings
+	RepositorySyncInterval time.Duration
 }
 
 func DefaultConfig() (Config, error) {
@@ -134,13 +136,23 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	intelligence.UseStructure(maps)
 
+	acquisitions, err := acquisition.New(acquisition.Config{
+		DataDirectory: cfg.DataDirectory,
+		Version:       cfg.Version,
+	}, database)
+	if err != nil {
+		return fmt.Errorf("initialize repository acquisition: %w", err)
+	}
 	coordinator := search.NewCoordinator(cfg.RepositoryRoot, cfg.Excludes, database, engine).
+		UseRepositoryProvider(acquisitions.CatalogueRepositories).
 		UseIndexedObserver(func(observerContext context.Context, repositoryID int64) error {
 			return maps.PrepareStructure(observerContext, repositoryID)
 		})
+	acquisitions.UseRefresher(coordinator.Refresh)
 	if err := coordinator.Start(ctx); err != nil {
 		return err
 	}
+	acquisitions.StartScheduledSync(ctx, cfg.RepositorySyncInterval)
 	repositories, err := database.ListRepositories(ctx)
 	if err != nil {
 		return fmt.Errorf("load repositories: %w", err)
@@ -229,21 +241,22 @@ func Run(ctx context.Context, cfg Config) error {
 	defer conversations.Close()
 
 	server, err := httpserver.New(httpserver.Config{
-		Address:          cfg.ListenAddress,
-		RepositoryRoot:   cfg.RepositoryRoot,
-		Version:          cfg.Version,
-		OpenBrowser:      cfg.OpenBrowser,
-		MCPHandler:       mcpHandler,
-		MCPToken:         mcpToken,
-		MCPBaseURL:       internalBaseURL,
-		MCPCommand:       mcpCommand,
-		Conversations:    conversations,
-		Maps:             maps,
-		Docs:             documents,
-		Security:         securityManager,
-		Maintenance:      operations,
-		RepositoryAccess: database,
-		Enterprise:       database,
+		Address:               cfg.ListenAddress,
+		RepositoryRoot:        cfg.RepositoryRoot,
+		Version:               cfg.Version,
+		OpenBrowser:           cfg.OpenBrowser,
+		MCPHandler:            mcpHandler,
+		MCPToken:              mcpToken,
+		MCPBaseURL:            internalBaseURL,
+		MCPCommand:            mcpCommand,
+		Conversations:         conversations,
+		Maps:                  maps,
+		Docs:                  documents,
+		Security:              securityManager,
+		Maintenance:           operations,
+		RepositoryAccess:      database,
+		RepositoryAcquisition: acquisitions,
+		Enterprise:            database,
 		SCIMHandler: func() http.Handler {
 			if scimService == nil {
 				return nil

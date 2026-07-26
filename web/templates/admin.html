@@ -206,6 +206,132 @@
         {{end}}
       </section>
       {{end}}
+      <section class="mt-8 rounded-2xl border border-white/[0.08] bg-white/[0.025] p-6" aria-labelledby="repository-acquisition-title">
+        <div>
+          <p class="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-emerald-400">M11 intake</p>
+          <h2 id="repository-acquisition-title" class="text-lg font-semibold text-white">Repository acquisition</h2>
+          <p class="mt-2 text-sm leading-6 text-ink-soft">Preview local Git repositories, GitHub organizations or repositories, and GitLab groups or projects. Hosted repositories are cloned into RepoKarta-owned storage without submodules or executable hooks. Local repositories remain user-owned and read-only.</p>
+        </div>
+        {{if .AcquisitionError}}
+        <p class="mt-4 rounded-lg border border-red-400/30 bg-red-400/10 px-4 py-3 text-sm text-red-200">{{.AcquisitionError}}</p>
+        {{end}}
+
+        <form action="/admin/repositories/discover" method="post" class="mt-5 grid gap-4 rounded-xl border border-white/[0.08] bg-black/10 p-4">
+          <input type="hidden" name="csrf" value="{{.CSRFToken}}">
+          <div class="grid gap-4 md:grid-cols-3">
+            <label class="filter-field">
+              <span>Provider</span>
+              <select name="provider">
+                <option value="local" {{if eq .DiscoverProvider "local"}}selected{{end}}>Local Git root</option>
+                <option value="github" {{if eq .DiscoverProvider "github"}}selected{{end}}>GitHub</option>
+                <option value="gitlab" {{if eq .DiscoverProvider "gitlab"}}selected{{end}}>GitLab</option>
+              </select>
+            </label>
+            <label class="filter-field md:col-span-2"><span>Root, namespace, or repository URL</span><input name="location" value="{{.DiscoverLocation}}" placeholder="C:\code · my-org · https://github.com/my-org/repo" required></label>
+            <label class="filter-field md:col-span-2"><span>Credential environment reference · optional</span><input name="credential_ref" value="{{.DiscoverCredentialRef}}" placeholder="GITHUB_TOKEN or GITLAB_TOKEN" autocomplete="off"></label>
+            <label class="filter-field"><span>GitHub team slug · optional</span><input name="team" value="{{.DiscoverTeam}}" placeholder="platform-engineering"></label>
+            <label class="filter-field"><span>Required topics · comma separated</span><input name="topics" value="{{.DiscoverTopics}}" placeholder="go, developer-tools"></label>
+            <label class="filter-field"><span>Allow patterns · optional</span><input name="allow" value="{{.DiscoverAllow}}" placeholder="platform/*, repokarta"></label>
+            <label class="filter-field"><span>Deny patterns · optional</span><input name="deny" value="{{.DiscoverDeny}}" placeholder="archive-*, experiments/*"></label>
+          </div>
+          <div class="flex flex-wrap gap-5 text-sm text-ink-soft">
+            <label class="flex items-center gap-2"><input type="checkbox" name="include_private" value="true" {{if .IncludePrivate}}checked{{end}}>Include private/internal</label>
+            <label class="flex items-center gap-2"><input type="checkbox" name="include_forks" value="true" {{if .IncludeForks}}checked{{end}}>Include forks</label>
+            <label class="flex items-center gap-2"><input type="checkbox" name="include_archived" value="true" {{if .IncludeArchived}}checked{{end}}>Include archived</label>
+          </div>
+          <p class="text-xs leading-5 text-ink-faint">The reference names an environment variable available to RepoKarta; its token value is used only for provider API requests and is never written to SQLite, logs, diagnostics, forms, or Git remotes. Git cloning uses the configured credential helper.</p>
+          <div class="flex justify-end"><button class="secondary-button" type="submit">Preview discovery</button></div>
+        </form>
+
+        {{if .DiscoveryCandidates}}
+        <div class="mt-5 overflow-hidden rounded-xl border border-white/[0.08]">
+          <table class="w-full text-left text-sm">
+            <thead class="border-b border-white/[0.08] bg-white/[0.035] text-xs uppercase tracking-[0.14em] text-ink-faint">
+              <tr><th class="px-4 py-3 font-medium">Repository</th><th class="px-4 py-3 font-medium">State</th><th class="px-4 py-3 text-right font-medium">Approval</th></tr>
+            </thead>
+            <tbody class="divide-y divide-white/[0.06]">
+              {{range .DiscoveryCandidates}}
+              <tr>
+                <td class="px-4 py-3">
+                  <div class="font-semibold text-white">{{.Name}}</div>
+                  <div class="mt-1 break-all font-mono text-xs text-ink-faint">{{.CanonicalID}}</div>
+                  {{if .LocalPath}}<div class="mt-1 break-all font-mono text-xs text-ink-faint">{{.LocalPath}}</div>{{end}}
+                </td>
+                <td class="px-4 py-3 text-xs">
+                  {{if .AlreadyManaged}}<span class="text-emerald-300">Already managed</span>
+                  {{else if .Excluded}}<span class="text-amber-200">{{.Exclusion}}</span>
+                  {{else}}<span class="text-ink-soft">{{.Visibility}}{{if .Forked}} · fork{{end}}{{if .Archived}} · archived{{end}}</span>{{end}}
+                </td>
+                <td class="px-4 py-3 text-right">
+                  {{if not (or .AlreadyManaged .Excluded)}}
+                  <form action="/admin/repositories/acquire" method="post">
+                    <input type="hidden" name="csrf" value="{{$.CSRFToken}}">
+                    <input type="hidden" name="credential_ref" value="{{$.DiscoverCredentialRef}}">
+                    <input type="hidden" name="provider" value="{{.Provider}}">
+                    <input type="hidden" name="provider_repository_id" value="{{.ProviderRepositoryID}}">
+                    <input type="hidden" name="canonical_id" value="{{.CanonicalID}}">
+                    <input type="hidden" name="name" value="{{.Name}}">
+                    <input type="hidden" name="namespace" value="{{.Namespace}}">
+                    <input type="hidden" name="remote_url" value="{{.RemoteURL}}">
+                    <input type="hidden" name="web_url" value="{{.WebURL}}">
+                    <input type="hidden" name="local_path" value="{{.LocalPath}}">
+                    <input type="hidden" name="default_branch" value="{{.DefaultBranch}}">
+                    <input type="hidden" name="visibility" value="{{.Visibility}}">
+                    <input type="hidden" name="archived" value="{{.Archived}}">
+                    <input type="hidden" name="forked" value="{{.Forked}}">
+                    <input type="hidden" name="inclusion_policy" value="{{.InclusionPolicy}}">
+                    <button class="secondary-button" type="submit">Acquire</button>
+                  </form>
+                  {{else}}<span class="text-xs text-ink-faint">No action</span>{{end}}
+                </td>
+              </tr>
+              {{end}}
+            </tbody>
+          </table>
+        </div>
+        {{end}}
+
+        <div class="mt-6">
+          <h3 class="text-sm font-semibold text-white">Managed sources</h3>
+          {{if not .Acquisitions}}
+          <p class="mt-3 text-sm text-ink-faint">No local or hosted repository sources have been approved yet.</p>
+          {{else}}
+          <div class="mt-3 grid gap-3">
+            {{range .Acquisitions}}
+            <article class="rounded-xl border border-white/[0.08] bg-black/10 p-4">
+              <div class="flex flex-wrap items-start justify-between gap-3">
+                <div class="min-w-0">
+                  <div class="flex flex-wrap items-center gap-2">
+                    <h4 class="font-semibold text-white">{{.Name}}</h4>
+                    <span class="rounded-full border border-white/10 px-2 py-0.5 font-mono text-[11px] text-ink-soft">{{.Provider}}</span>
+                    <span class="rounded-full border border-white/10 px-2 py-0.5 font-mono text-[11px] {{if eq .State "error"}}text-red-200{{else if eq .State "ready"}}text-emerald-300{{else}}text-amber-200{{end}}">{{.State}}</span>
+                  </div>
+                  <div class="mt-2 break-all font-mono text-xs text-ink-faint">{{.CanonicalID}}</div>
+                  <div class="mt-1 break-all font-mono text-xs text-ink-faint">{{.CheckoutPath}}</div>
+                  <div class="mt-1 text-xs text-ink-faint">{{.InclusionPolicy}}</div>
+                  {{if .HeadCommit}}<div class="mt-1 text-xs text-ink-soft">Revision <span class="font-mono">{{shortCommit .HeadCommit}}</span>{{if .SyncedAt}} · synced {{formatTime .SyncedAt}}{{end}}</div>{{end}}
+                  {{if .LastError}}<p class="mt-3 rounded-lg border border-red-400/25 bg-red-400/[0.07] px-3 py-2 text-xs text-red-100">{{.LastError}}{{if .NextSyncAt}} · next eligible retry {{formatTime .NextSyncAt}}{{end}}</p>{{end}}
+                </div>
+                <div class="flex flex-wrap gap-2">
+                  <form action="/admin/repositories/sync" method="post">
+                    <input type="hidden" name="csrf" value="{{$.CSRFToken}}">
+                    <input type="hidden" name="repository_id" value="{{.ID}}">
+                    <button class="secondary-button" type="submit">Sync</button>
+                  </form>
+                  <form action="/admin/repositories/remove" method="post" class="flex items-center gap-2">
+                    <input type="hidden" name="csrf" value="{{$.CSRFToken}}">
+                    <input type="hidden" name="repository_id" value="{{.ID}}">
+                    <label class="text-xs text-ink-faint"><input type="checkbox" name="confirm" value="remove" required> Confirm</label>
+                    <button class="rounded-lg border border-red-400/30 bg-red-400/10 px-3 py-2 text-sm font-semibold text-red-100 hover:bg-red-400/15" type="submit">{{if .Owned}}Move to trash{{else}}Unregister{{end}}</button>
+                  </form>
+                </div>
+              </div>
+            </article>
+            {{end}}
+          </div>
+          {{end}}
+        </div>
+      </section>
 
       <section class="mt-8 rounded-2xl border border-white/[0.08] bg-white/[0.025] p-6">
         <h2 class="text-lg font-semibold text-white">Repository and artifact access</h2>

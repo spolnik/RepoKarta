@@ -19,6 +19,7 @@ const gitCommandTimeout = 10 * time.Second
 // Repository is a read-only description of a local Git repository.
 type Repository struct {
 	ID              int64
+	AcquisitionID   int64
 	Name            string
 	Path            string
 	OriginURL       string
@@ -48,6 +49,27 @@ type DiscoverOptions struct {
 // symlinks.
 func Discover(root string) ([]Repository, error) {
 	return DiscoverWithOptions(root, DiscoverOptions{})
+}
+
+// Inspect returns the read-only Git metadata for exactly one repository path.
+// It does not search nested directories and never mutates the worktree.
+func Inspect(path string) (Repository, error) {
+	path, err := canonicalDirectory(path)
+	if err != nil {
+		return Repository{}, err
+	}
+	repositoryPath, bare, found, err := repositoryAt(path)
+	if err != nil {
+		return Repository{}, fmt.Errorf("inspect Git repository %q: %w", path, err)
+	}
+	if !found || !samePath(repositoryPath, path) {
+		return Repository{}, fmt.Errorf("%q is not a Git repository", path)
+	}
+	repository := inspectRepository(repositoryPath, bare)
+	if repository.ScanState != "ready" {
+		return Repository{}, errors.New(repository.ScanError)
+	}
+	return repository, nil
 }
 
 // DiscoverWithOptions finds repositories while pruning excluded directories.

@@ -17,7 +17,7 @@ import (
 	"github.com/spolnik/RepoKarta/internal/security"
 )
 
-var version = "0.44.0-dev"
+var version = "0.45.0-dev"
 
 type stringList []string
 
@@ -100,6 +100,7 @@ func serve(args []string) error {
 	cloudflareAudience := flags.String("cloudflare-audience", defaults.Security.CloudflareAudience, "Cloudflare Access application audience tag")
 	samlMetadataURL := flags.String("saml-metadata-url", defaults.Security.SAMLMetadataURL, "SAML identity-provider metadata URL")
 	samlEntityID := flags.String("saml-entity-id", defaults.Security.SAMLEntityID, "optional SAML service-provider entity ID")
+	repositorySyncInterval := flags.Duration("repository-sync-interval", defaults.RepositorySyncInterval, "automatic managed-repository sync interval; zero disables scheduling")
 	var excludes stringList
 	flags.Var(&excludes, "exclude", "directory to exclude; repeat for multiple directories")
 	if err := flags.Parse(args); err != nil {
@@ -142,18 +143,19 @@ func serve(args []string) error {
 	}
 
 	cfg := app.Config{
-		ListenAddress:  *listenAddress,
-		DataDirectory:  *dataDirectory,
-		RepositoryRoot: repositoryRoot,
-		Excludes:       excludes,
-		Version:        version,
-		OpenBrowser:    *openBrowser,
-		CodexCommand:   *codexCommand,
-		ClaudeCommand:  *claudeCommand,
-		AllowOpen:      *allowOpen,
-		AdminUser:      *adminUser,
-		AdminPassword:  adminPassword,
-		SCIMToken:      scimToken,
+		ListenAddress:          *listenAddress,
+		DataDirectory:          *dataDirectory,
+		RepositoryRoot:         repositoryRoot,
+		Excludes:               excludes,
+		Version:                version,
+		OpenBrowser:            *openBrowser,
+		CodexCommand:           *codexCommand,
+		ClaudeCommand:          *claudeCommand,
+		AllowOpen:              *allowOpen,
+		AdminUser:              *adminUser,
+		AdminPassword:          adminPassword,
+		SCIMToken:              scimToken,
+		RepositorySyncInterval: *repositorySyncInterval,
 		Security: security.Settings{
 			Mode:                 security.Mode(*authMode),
 			PublicURL:            *publicURL,
@@ -195,6 +197,7 @@ Serve options:
   -cloudflare-audience Cloudflare Access application audience tag
   -saml-metadata-url SAML identity-provider metadata URL
   -saml-entity-id    optional SAML service-provider entity ID
+  -repository-sync-interval automatic managed-repository sync interval (default 0)
 
 MCP options:
   -url string        running RepoKarta URL (default http://127.0.0.1:7331)`)

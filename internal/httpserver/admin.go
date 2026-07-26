@@ -2,12 +2,14 @@ package httpserver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
 
+	"github.com/spolnik/RepoKarta/internal/acquisition"
 	"github.com/spolnik/RepoKarta/internal/agent"
 	"github.com/spolnik/RepoKarta/internal/audit"
 	"github.com/spolnik/RepoKarta/internal/identity"
@@ -44,6 +46,173 @@ type adminPageData struct {
 	RoleMappings          []identity.RoleMapping
 	AuditRetention        audit.Retention
 	RecentAudit           []audit.Event
+	Acquisitions          []acquisition.Repository
+	AcquisitionError      string
+	DiscoveryCandidates   []acquisition.Candidate
+	DiscoverProvider      string
+	DiscoverLocation      string
+	DiscoverCredentialRef string
+	IncludeArchived       bool
+	IncludeForks          bool
+	IncludePrivate        bool
+	DiscoverTeam          string
+	DiscoverTopics        string
+	DiscoverAllow         string
+	DiscoverDeny          string
+}
+
+func (s *Server) discoverRepositories(response http.ResponseWriter, request *http.Request) {
+	csrf, ok := s.validAdminForm(response, request, 64<<10)
+	if !ok {
+		return
+	}
+	discovery := acquisition.DiscoverRequest{
+		Provider:        request.FormValue("provider"),
+		Location:        request.FormValue("location"),
+		CredentialRef:   request.FormValue("credential_ref"),
+		IncludeArchived: request.FormValue("include_archived") == "true",
+		IncludeForks:    request.FormValue("include_forks") == "true",
+		IncludePrivate:  request.FormValue("include_private") == "true",
+		Team:            request.FormValue("team"),
+		Topics:          splitAccessSubjects(request.FormValue("topics")),
+		Allow:           splitAccessSubjects(request.FormValue("allow")),
+		Deny:            splitAccessSubjects(request.FormValue("deny")),
+	}
+	data := s.adminData(request.Context(), csrf)
+	data.DiscoverProvider = discovery.Provider
+	data.DiscoverLocation = discovery.Location
+	data.DiscoverCredentialRef = discovery.CredentialRef
+	data.IncludeArchived = discovery.IncludeArchived
+	data.IncludeForks = discovery.IncludeForks
+	data.IncludePrivate = discovery.IncludePrivate
+	data.DiscoverTeam = discovery.Team
+	data.DiscoverTopics = strings.Join(discovery.Topics, ", ")
+	data.DiscoverAllow = strings.Join(discovery.Allow, ", ")
+	data.DiscoverDeny = strings.Join(discovery.Deny, ", ")
+	candidates, err := s.repositoryAcquisition.Discover(request.Context(), discovery)
+	if err != nil {
+		data.Error = err.Error()
+		response.WriteHeader(http.StatusBadRequest)
+		s.renderAdmin(response, data)
+		return
+	}
+	data.DiscoveryCandidates = candidates
+	data.Notice = fmt.Sprintf("Discovery preview contains %d repositories. Review exclusions and approve repositories individually.", len(candidates))
+	s.renderAdmin(response, data)
+}
+
+func (s *Server) acquireRepository(response http.ResponseWriter, request *http.Request) {
+	csrf, ok := s.validAdminForm(response, request, 64<<10)
+	if !ok {
+		return
+	}
+	candidate := acquisition.Candidate{
+		Provider:             request.FormValue("provider"),
+		ProviderRepositoryID: request.FormValue("provider_repository_id"),
+		CanonicalID:          request.FormValue("canonical_id"),
+		Name:                 request.FormValue("name"),
+		Namespace:            request.FormValue("namespace"),
+		RemoteURL:            request.FormValue("remote_url"),
+		WebURL:               request.FormValue("web_url"),
+		LocalPath:            request.FormValue("local_path"),
+		DefaultBranch:        request.FormValue("default_branch"),
+		Visibility:           request.FormValue("visibility"),
+		Archived:             request.FormValue("archived") == "true",
+		Forked:               request.FormValue("forked") == "true",
+		InclusionPolicy:      request.FormValue("inclusion_policy"),
+	}
+	repository, err := s.repositoryAcquisition.Acquire(
+		request.Context(),
+		candidate,
+		request.FormValue("credential_ref"),
+	)
+	data := s.adminData(request.Context(), csrf)
+	if err != nil {
+		data.Error = err.Error()
+		response.WriteHeader(http.StatusBadRequest)
+		s.renderAdmin(response, data)
+		return
+	}
+	data.Notice = repository.CanonicalID + " was acquired and queued for commit-pinned indexing."
+	s.renderAdmin(response, data)
+}
+
+func (s *Server) syncAcquiredRepository(response http.ResponseWriter, request *http.Request) {
+	csrf, ok := s.validAdminForm(response, request, 32<<10)
+	if !ok {
+		return
+	}
+	id, err := parseAcquisitionID(request.FormValue("repository_id"))
+	if err != nil {
+		http.Error(response, err.Error(), http.StatusBadRequest)
+		return
+	}
+	repository, err := s.repositoryAcquisition.Sync(request.Context(), id)
+	data := s.adminData(request.Context(), csrf)
+	if err != nil {
+		data.Error = err.Error()
+		response.WriteHeader(http.StatusConflict)
+		s.renderAdmin(response, data)
+		return
+	}
+	data.Notice = repository.CanonicalID + " synchronized at " + shortCommit(repository.HeadCommit) + "."
+	s.renderAdmin(response, data)
+}
+
+func (s *Server) removeAcquiredRepository(response http.ResponseWriter, request *http.Request) {
+	csrf, ok := s.validAdminForm(response, request, 32<<10)
+	if !ok {
+		return
+	}
+	if request.FormValue("confirm") != "remove" {
+		http.Error(response, "Confirm repository removal", http.StatusBadRequest)
+		return
+	}
+	id, err := parseAcquisitionID(request.FormValue("repository_id"))
+	if err != nil {
+		http.Error(response, err.Error(), http.StatusBadRequest)
+		return
+	}
+	removedPath, err := s.repositoryAcquisition.Remove(request.Context(), id)
+	data := s.adminData(request.Context(), csrf)
+	if err != nil {
+		data.Error = err.Error()
+		response.WriteHeader(http.StatusConflict)
+		s.renderAdmin(response, data)
+		return
+	}
+	if removedPath == "" {
+		data.Notice = "Local repository registration removed. No user-owned source files were changed."
+	} else {
+		data.Notice = "RepoKarta-owned checkout moved to recoverable trash: " + removedPath
+	}
+	s.renderAdmin(response, data)
+}
+
+func (s *Server) validAdminForm(response http.ResponseWriter, request *http.Request, maximumBytes int64) (string, bool) {
+	request.Body = http.MaxBytesReader(response, request.Body, maximumBytes)
+	if err := request.ParseForm(); err != nil {
+		http.Error(response, "Invalid administrator request", http.StatusBadRequest)
+		return "", false
+	}
+	csrf, ok := s.security.AdminSession(request)
+	if !ok {
+		http.Redirect(response, request, "/admin/login", http.StatusSeeOther)
+		return "", false
+	}
+	if !s.security.ValidAdminCSRF(request, request.FormValue("csrf")) {
+		http.Error(response, "Invalid administrator CSRF token", http.StatusForbidden)
+		return "", false
+	}
+	return csrf, true
+}
+
+func parseAcquisitionID(value string) (int64, error) {
+	id, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+	if err != nil || id <= 0 {
+		return 0, errors.New("invalid repository acquisition")
+	}
+	return id, nil
 }
 
 func (s *Server) updateRepositoryAccess(response http.ResponseWriter, request *http.Request) {
@@ -308,18 +477,20 @@ func (s *Server) authLogout(response http.ResponseWriter, request *http.Request)
 func (s *Server) adminData(ctx context.Context, csrf string) adminPageData {
 	settings := s.security.Settings()
 	data := adminPageData{
-		Version:       s.config.Version,
-		Authenticated: true,
-		CSRFToken:     csrf,
-		ProviderError: s.security.ProviderError(),
-		AllowOpen:     s.security.AllowOpen(),
-		AdminEnabled:  s.security.AdminEnabled(),
-		Mode:          string(settings.Mode),
-		PublicURL:     settings.PublicURL,
-		TeamDomain:    settings.CloudflareTeamDomain,
-		Audience:      settings.CloudflareAudience,
-		MetadataURL:   settings.SAMLMetadataURL,
-		EntityID:      settings.SAMLEntityID,
+		Version:          s.config.Version,
+		Authenticated:    true,
+		CSRFToken:        csrf,
+		ProviderError:    s.security.ProviderError(),
+		AllowOpen:        s.security.AllowOpen(),
+		AdminEnabled:     s.security.AdminEnabled(),
+		Mode:             string(settings.Mode),
+		PublicURL:        settings.PublicURL,
+		TeamDomain:       settings.CloudflareTeamDomain,
+		Audience:         settings.CloudflareAudience,
+		MetadataURL:      settings.SAMLMetadataURL,
+		EntityID:         settings.SAMLEntityID,
+		DiscoverProvider: "local",
+		IncludePrivate:   true,
 	}
 	if s.maintenance != nil {
 		data.MaintenanceAvailable = true
@@ -357,6 +528,14 @@ func (s *Server) adminData(ctx context.Context, csrf string) adminPageData {
 			data.RoleMappings = mappings
 			data.AuditRetention = retention
 			data.RecentAudit = recent.Events
+		}
+	}
+	if s.repositoryAcquisition != nil {
+		repositories, err := s.repositoryAcquisition.List(ctx)
+		if err != nil {
+			data.AcquisitionError = err.Error()
+		} else {
+			data.Acquisitions = repositories
 		}
 	}
 	return data
