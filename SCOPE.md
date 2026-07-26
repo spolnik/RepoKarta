@@ -538,76 +538,7 @@ another's repositories or derived artifacts unless an explicit user, group, or
 shared scope allows it, and the release bundle contains the operational
 material needed to deploy and recover the service.
 
-### Future: enterprise identity and administration
-
-Add an auditable organization-control layer without weakening RepoKarta's
-read-only source boundary.
-
-- [ ] Record append-only audit events for authentication, authorization
-  failures, administration changes, role assignments, cross-author access,
-  repository acquisition and removal, exports, generation, and destructive
-  RepoKarta-owned data operations.
-- [ ] Include actor, action, target, outcome, authentication provider, request
-  correlation ID, and timestamp while redacting credentials, tokens, prompts,
-  and repository source content by default.
-- [ ] Provide bounded audit-log search, filters, retention controls, and
-  administrator export with explicit completeness and retention metadata.
-- [ ] Support SCIM 2.0 user and group provisioning, updates, suspension, and
-  deprovisioning with stable external IDs and idempotent operations.
-- [ ] Map configured identity-provider or SCIM groups to RepoKarta roles;
-  unknown or removed identities receive no implicit elevated access.
-- [ ] Define an explicit permission matrix for reader, knowledge maintainer,
-  and administrator roles, including AI generation, shared artifacts,
-  cross-author conversations, repository acquisition, security settings,
-  role management, and audit-log access.
-- [ ] Make role changes auditable and immediately effective for new requests;
-  deprovisioning must revoke active application sessions without erasing
-  historical authorship.
-- [ ] Keep loopback-local mode simple by treating its single local identity as
-  administrator without requiring SCIM or external role configuration.
-
-Exit condition: an administrator can provision and deprovision identities,
-assign least-privilege roles, and reconstruct security-relevant activity from
-redacted, queryable audit evidence.
-
-### Future: repository acquisition
-
-Add a separate administrator-managed intake pipeline for bringing repositories
-into RepoKarta-owned storage and keeping them current.
-
-- [ ] Support existing local roots, explicit Git remote URLs, ghorg-managed
-  directories, and organization discovery adapters for configured Git hosts.
-- [ ] Maintain a repository-source registry containing canonical remote
-  identity, provider, RepoKarta-owned checkout path, default branch, inclusion
-  policy, credential reference, sync state, timestamps, and actionable errors.
-- [ ] Preview discoveries before acquisition, deduplicate aliases and renamed
-  remotes, and expose archived, forked, private, excluded, and already-managed
-  states explicitly.
-- [ ] Clone and fetch without pushing or modifying upstream repositories;
-  disable executable hooks and avoid submodule recursion unless an
-  administrator deliberately enables a bounded policy.
-- [ ] Use configured credential helpers or secret references without storing
-  raw Git credentials in repository metadata, logs, diagnostics, or audit
-  payloads.
-- [ ] Provide manual and scheduled synchronization with cancellation, bounded
-  concurrency, backoff, rate-limit handling, and honest partial-fleet status.
-- [ ] Allow organization, team, topic, visibility, archive, fork, and repository
-  allow/deny policies before data is cloned.
-- [ ] Trigger catalogue refresh and commit-pinned indexing only after a checkout
-  reaches a verified Git revision; preserve the last usable index when a later
-  synchronization fails.
-- [ ] Audit discovery, acquisition, synchronization, policy skips, credential
-  failures, and removal using repository identity and revision metadata rather
-  than source content.
-- [ ] Remove only checkouts proven to be RepoKarta-owned, require an explicit
-  confirmation for deletion, and never delete or rewrite user-owned local
-  repositories.
-
-Exit condition: an administrator can discover, approve, acquire, synchronize,
-and safely remove a bounded repository fleet while every indexed revision has
-clear acquisition provenance and failures never silently shrink coverage.
-
-### Future: advanced search and deep exploration
+### M7: advanced search and deep exploration
 
 Extend deterministic code search with structured context, reusable scopes,
 graph-aware navigation, and an optional agentic Deep Search experience. Normal
@@ -707,7 +638,7 @@ deterministic searches, then optionally ask a deeper natural-language question
 whose complete exploration path, sources, limits, and permissions remain
 visible and enforceable.
 
-### Future: code insights and monitoring
+### M8: code insights and monitoring
 
 Add a commit-aware Code Insights workspace for test coverage, static-analysis
 findings, maintainability signals, and quality trends without silently running
@@ -771,7 +702,7 @@ and revisions, distinguish measured facts from derived indicators, open exact
 source evidence, and see incomplete or stale monitoring without RepoKarta
 executing untrusted project code by default.
 
-### Future: dependency management
+### M9: dependency management
 
 Add a read-only Dependency Management workspace over the dependencies already
 captured from committed manifests and build files.
@@ -805,6 +736,75 @@ Exit condition: a user can see which captured dependencies are behind the
 latest public stable release, understand unresolved and private-package gaps,
 and trace every declared version back to exact committed source without
 RepoKarta modifying a repository.
+
+### M10: enterprise identity and administration
+
+Add an auditable organization-control layer without weakening RepoKarta's
+read-only source boundary.
+
+- [ ] Record append-only audit events for authentication, authorization
+  failures, administration changes, role assignments, cross-author access,
+  repository acquisition and removal, exports, generation, and destructive
+  RepoKarta-owned data operations.
+- [ ] Include actor, action, target, outcome, authentication provider, request
+  correlation ID, and timestamp while redacting credentials, tokens, prompts,
+  and repository source content by default.
+- [ ] Provide bounded audit-log search, filters, retention controls, and
+  administrator export with explicit completeness and retention metadata.
+- [ ] Support SCIM 2.0 user and group provisioning, updates, suspension, and
+  deprovisioning with stable external IDs and idempotent operations.
+- [ ] Map configured identity-provider or SCIM groups to RepoKarta roles;
+  unknown or removed identities receive no implicit elevated access.
+- [ ] Define an explicit permission matrix for reader, knowledge maintainer,
+  and administrator roles, including AI generation, shared artifacts,
+  cross-author conversations, repository acquisition, security settings,
+  role management, and audit-log access.
+- [ ] Make role changes auditable and immediately effective for new requests;
+  deprovisioning must revoke active application sessions without erasing
+  historical authorship.
+- [ ] Keep loopback-local mode simple by treating its single local identity as
+  administrator without requiring SCIM or external role configuration.
+
+Exit condition: an administrator can provision and deprovision identities,
+assign least-privilege roles, and reconstruct security-relevant activity from
+redacted, queryable audit evidence.
+
+### M11: repository acquisition
+
+Add a separate administrator-managed intake pipeline for bringing repositories
+into RepoKarta-owned storage and keeping them current.
+
+- [ ] Support existing local roots, explicit Git remote URLs, ghorg-managed
+  directories, and organization discovery adapters for configured Git hosts.
+- [ ] Maintain a repository-source registry containing canonical remote
+  identity, provider, RepoKarta-owned checkout path, default branch, inclusion
+  policy, credential reference, sync state, timestamps, and actionable errors.
+- [ ] Preview discoveries before acquisition, deduplicate aliases and renamed
+  remotes, and expose archived, forked, private, excluded, and already-managed
+  states explicitly.
+- [ ] Clone and fetch without pushing or modifying upstream repositories;
+  disable executable hooks and avoid submodule recursion unless an
+  administrator deliberately enables a bounded policy.
+- [ ] Use configured credential helpers or secret references without storing
+  raw Git credentials in repository metadata, logs, diagnostics, or audit
+  payloads.
+- [ ] Provide manual and scheduled synchronization with cancellation, bounded
+  concurrency, backoff, rate-limit handling, and honest partial-fleet status.
+- [ ] Allow organization, team, topic, visibility, archive, fork, and repository
+  allow/deny policies before data is cloned.
+- [ ] Trigger catalogue refresh and commit-pinned indexing only after a checkout
+  reaches a verified Git revision; preserve the last usable index when a later
+  synchronization fails.
+- [ ] Audit discovery, acquisition, synchronization, policy skips, credential
+  failures, and removal using repository identity and revision metadata rather
+  than source content.
+- [ ] Remove only checkouts proven to be RepoKarta-owned, require an explicit
+  confirmation for deletion, and never delete or rewrite user-owned local
+  repositories.
+
+Exit condition: an administrator can discover, approve, acquire, synchronize,
+and safely remove a bounded repository fleet while every indexed revision has
+clear acquisition provenance and failures never silently shrink coverage.
 
 ## Definition of quality
 
@@ -857,12 +857,17 @@ completion criteria include:
 
 ## Current implementation version
 
-`0.39.0-dev`. M0 through M6 are complete.
+`0.39.0-dev`. M0 through M6 are complete; M7 through M11 are planned.
 
 ## Recommended next session
 
-Implement structured `@repository` and `@file` search contexts with
-permission-aware chips and typed deterministic results. Follow with the
-Dependency Management MVP; defer the full agentic Deep Search loop until
-structured contexts, completeness metadata, and artifact permissions are all
-implemented and tested.
+Start M7 with structured `@repository` and `@file` contexts, permission-aware
+chips, and a typed context payload shared by Chat, search, the JSON API, and
+MCP. Complete the stale, missing, ambiguous, unauthorized, and unindexed error
+states before adding named contexts, result facets, SCIP, saved searches, or
+agentic Deep Search.
+
+This is the best next slice because it creates one deterministic context
+contract for every later M7 feature, reuses the M6 repository permission
+boundary, and improves daily search and Chat workflows without requiring a new
+index format or an agent loop.
