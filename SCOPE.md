@@ -707,10 +707,10 @@ executing untrusted project code by default.
 Add a read-only Dependency Management workspace over the dependencies already
 captured from committed manifests and build files.
 
-- [ ] Maintain a normalized dependency inventory with repository, manifest,
+- [x] Maintain a normalized dependency inventory with repository, manifest,
   ecosystem, package coordinate, declared version or constraint, resolution
   confidence, revision, path, and line evidence.
-- [ ] Resolve versions from supported build indirection where source proves the
+- [x] Resolve versions from supported build indirection where source proves the
   value; show unresolved variables and constraints honestly instead of treating
   them as concrete versions.
 - [ ] Query the appropriate public package registry for the latest available
@@ -857,17 +857,12 @@ completion criteria include:
 
 ## Current implementation version
 
-`0.40.0-dev`. M0 through M6 are complete; M7 through M11 are planned.
+`0.41.0-dev`. M0 through M6 are complete. The M9 dependency inventory
+foundation is in progress.
 
 ## Recommended next session
 
-Start M7 with structured `@repository` and `@file` contexts, permission-aware
-chips, and a typed context payload shared by Chat, search, the JSON API, and
-MCP. Complete the stale, missing, ambiguous, unauthorized, and unindexed error
-states before adding named contexts, result facets, SCIP, saved searches, or
-agentic Deep Search.
-
-This is the best next slice because it creates one deterministic context
-contract for every later M7 feature, reuses the M6 repository permission
-boundary, and improves daily search and Chat workflows without requiring a new
-index format or an agent loop.
+Continue M9 with bounded, cached npm, Go module, and Maven Central registry
+observations. Keep observation timestamps and registry errors separate from the
+commit-pinned declarations, and require explicit configuration before checking
+private or internal package coordinates.

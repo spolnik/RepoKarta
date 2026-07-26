@@ -1,0 +1,123 @@
+{{define "dependencies"}}
+<!doctype html>
+<html lang="en" class="h-full bg-surface-base">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Review commit-pinned dependency declarations without modifying repositories.">
+    <meta name="theme-color" content="#090b0f">
+    <link rel="icon" href="/assets/favicon.ico" sizes="any">
+    <link rel="icon" type="image/png" href="/assets/favicon-32.png" sizes="32x32">
+    <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+    <title>RepoKarta · Dependency management</title>
+    <link rel="stylesheet" href="/assets/app.css">
+    <script type="module" src="/assets/app.js"></script>
+  </head>
+  <body class="min-h-full bg-surface-base text-ink antialiased">
+    <a class="skip-link" href="#dependency-inventory">Skip to dependency inventory</a>
+    {{template "app-header" .}}
+
+    <main id="dependency-inventory" class="mx-auto max-w-[1500px] px-5 py-8 lg:px-8 lg:py-10">
+      <section aria-labelledby="dependency-heading">
+        <div class="flex flex-col justify-between gap-5 lg:flex-row lg:items-end">
+          <div>
+            <p class="mb-2 text-xs font-semibold uppercase tracking-[0.24em] text-emerald-400">Read-only workspace</p>
+            <h1 id="dependency-heading" class="text-3xl font-semibold tracking-[-0.04em] text-white sm:text-4xl">Dependency management</h1>
+            <p class="mt-3 max-w-3xl text-sm leading-6 text-ink-soft sm:text-base">
+              Declared packages are extracted from committed manifests. Registry freshness is kept separate and remains visibly unchecked until observed.
+            </p>
+          </div>
+          <form action="/dependencies" method="get" class="flex min-w-72 items-end gap-3">
+            <label class="filter-field min-w-64 flex-1">
+              <span>Repository scope</span>
+              <select name="repository">
+                <option value="">All visible repositories</option>
+                {{range .Repositories}}
+                <option value="{{.ID}}" {{if eq $.SelectedRepositoryID .ID}}selected{{end}}>{{index $.RepositoryLabels .ID}}</option>
+                {{end}}
+              </select>
+            </label>
+            <button class="search-button px-5 py-3" type="submit">Apply</button>
+          </form>
+        </div>
+
+        <dl class="mt-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div class="rounded-xl border border-white/[0.08] bg-surface-raised p-4">
+            <dt class="text-xs uppercase tracking-[0.16em] text-ink-faint">Repositories</dt>
+            <dd class="mt-2 text-2xl font-semibold text-white">{{.Inventory.RepositoryCount}}</dd>
+          </div>
+          <div class="rounded-xl border border-white/[0.08] bg-surface-raised p-4">
+            <dt class="text-xs uppercase tracking-[0.16em] text-ink-faint">Manifests</dt>
+            <dd class="mt-2 text-2xl font-semibold text-white">{{.Inventory.ManifestCount}}</dd>
+          </div>
+          <div class="rounded-xl border border-white/[0.08] bg-surface-raised p-4">
+            <dt class="text-xs uppercase tracking-[0.16em] text-ink-faint">Declarations</dt>
+            <dd class="mt-2 text-2xl font-semibold text-white">{{.Inventory.DependencyCount}}</dd>
+          </div>
+          <div class="rounded-xl border border-amber-300/20 bg-amber-400/[0.06] p-4">
+            <dt class="text-xs uppercase tracking-[0.16em] text-amber-200">Registry unchecked</dt>
+            <dd class="mt-2 text-2xl font-semibold text-amber-100">{{.Inventory.UncheckedCount}}</dd>
+          </div>
+        </dl>
+
+        {{if .Inventory.Truncated}}
+        <p class="mt-5 rounded-lg border border-amber-300/20 bg-amber-400/[0.06] px-4 py-3 text-sm text-amber-100">
+          This inventory is partial because the underlying repository-map scope was truncated.
+        </p>
+        {{end}}
+
+        <div class="mt-6 overflow-hidden rounded-xl border border-white/[0.08] bg-surface-raised">
+          <div class="flex items-center justify-between border-b border-white/[0.08] px-5 py-4">
+            <div>
+              <h2 class="font-semibold text-white">Declared dependencies</h2>
+              <p class="mt-1 text-xs text-ink-faint">Freshness checks do not alter manifests or lockfiles.</p>
+            </div>
+            <a class="app-nav-link" href="/api/dependencies{{if .SelectedRepositoryID}}?repository={{.SelectedRepositoryID}}{{end}}">JSON API</a>
+          </div>
+          {{if .Inventory.Declarations}}
+          <div class="overflow-x-auto">
+            <table class="w-full min-w-[980px] border-collapse text-left text-sm">
+              <thead class="bg-white/[0.025] text-xs uppercase tracking-[0.12em] text-ink-faint">
+                <tr>
+                  <th class="px-5 py-3 font-medium">Package</th>
+                  <th class="px-4 py-3 font-medium">Declared</th>
+                  <th class="px-4 py-3 font-medium">Resolution</th>
+                  <th class="px-4 py-3 font-medium">Freshness</th>
+                  <th class="px-4 py-3 font-medium">Repository</th>
+                  <th class="px-4 py-3 font-medium">Evidence</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-white/[0.06]">
+                {{range .Inventory.Declarations}}
+                <tr class="align-top hover:bg-white/[0.025]">
+                  <td class="px-5 py-4">
+                    <strong class="font-mono text-ink-strong">{{.Package}}</strong>
+                    <span class="mt-1 block text-xs uppercase tracking-[0.12em] text-emerald-300">{{.Ecosystem}}</span>
+                  </td>
+                  <td class="px-4 py-4 font-mono text-ink">{{if .Declared}}{{.Declared}}{{else}}—{{end}}</td>
+                  <td class="px-4 py-4"><span class="rounded-full border border-white/10 px-2 py-1 text-xs text-ink-soft">{{.Resolution}}</span></td>
+                  <td class="px-4 py-4"><span class="rounded-full border border-amber-300/20 bg-amber-400/[0.06] px-2 py-1 text-xs text-amber-100">Not checked</span></td>
+                  <td class="px-4 py-4">
+                    <span class="block text-ink-strong">{{.Repository}}</span>
+                    <span class="mt-1 block font-mono text-xs text-ink-faint">{{shortCommit .Revision}}</span>
+                  </td>
+                  <td class="px-4 py-4">
+                    <a class="text-emerald-300 hover:text-emerald-200" href="{{.Evidence.URL}}">
+                      {{.ManifestPath}}:{{.Evidence.Line}}
+                    </a>
+                    <span class="mt-1 block text-xs text-ink-faint">{{.ManifestKind}}</span>
+                  </td>
+                </tr>
+                {{end}}
+              </tbody>
+            </table>
+          </div>
+          {{else}}
+          <p class="px-5 py-10 text-center text-sm text-ink-soft">No normalized dependency declarations were captured for this scope.</p>
+          {{end}}
+        </div>
+      </section>
+    </main>
+  </body>
+</html>
+{{end}}
