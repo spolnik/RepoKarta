@@ -101,6 +101,22 @@ func TestAnthropicProviderReadsKeyOnlyFromLaunchEnvironment(t *testing.T) {
 	if !status.Authenticated || !status.TokenUsage || !status.TokenBudget {
 		t.Fatalf("provider status = %#v", status)
 	}
+	if len(status.Models) == 0 || status.Models[0].ID != defaultModel {
+		t.Fatalf("default model is not first in the catalog: %#v", status.Models)
+	}
+}
+
+func TestAnthropicSessionUsesOpusMediumByDefault(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "test-secret")
+	adapter := &Adapter{Intelligence: adversarialIntelligence{}}
+	started, err := adapter.Start(t.Context(), agent.SessionConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := started.(*session)
+	if session.model != "claude-opus-5" || session.effort != "medium" {
+		t.Fatalf("default session = model %q, effort %q", session.model, session.effort)
+	}
 }
 
 func TestGoAgentLoopStreamsToolResultAndUsage(t *testing.T) {

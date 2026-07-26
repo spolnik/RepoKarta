@@ -37,6 +37,16 @@ func TestCommandArgumentsIncludeProviderModelAndEffort(t *testing.T) {
 	}
 }
 
+func TestCommandArgumentsUseOpusMediumByDefault(t *testing.T) {
+	arguments := commandArguments(agent.SessionConfig{}, `{"mcpServers":{}}`, "")
+	if !containsPair(arguments, "--model", "claude-opus-5") {
+		t.Fatalf("default arguments do not select Opus 5: %#v", arguments)
+	}
+	if !containsPair(arguments, "--effort", "medium") {
+		t.Fatalf("default arguments do not select medium effort: %#v", arguments)
+	}
+}
+
 func TestCommandInheritsParentEnvironmentFromNeutralDirectory(t *testing.T) {
 	directory := t.TempDir()
 	command := newCommand(t.Context(), "claude", []string{"--version"}, directory)
@@ -136,6 +146,9 @@ func TestUserSettingsEnvAndStopHookApplyWithoutRepositorySettings(t *testing.T) 
 
 func TestStatusUsesExplicitModelNamesAndPerModelEfforts(t *testing.T) {
 	status := (&Adapter{Command: "definitely-not-a-claude-command"}).Status(t.Context())
+	if len(status.Models) == 0 || status.Models[0].ID != defaultModel {
+		t.Fatalf("default model is not first in the catalog: %#v", status.Models)
+	}
 	for _, expected := range []struct {
 		id          string
 		label       string
@@ -173,10 +186,13 @@ func TestContextUsageFromResponse(t *testing.T) {
 	}
 }
 
-func TestCommandArgumentsLeaveProviderDefaultsUnchanged(t *testing.T) {
-	arguments := commandArguments(agent.SessionConfig{}, `{"mcpServers":{}}`, "")
-	if slices.Contains(arguments, "--model") || slices.Contains(arguments, "--effort") {
-		t.Fatalf("default arguments unexpectedly override provider settings: %#v", arguments)
+func TestCommandArgumentsLeaveHaikuEffortOnProviderDefault(t *testing.T) {
+	arguments := commandArguments(agent.SessionConfig{Model: "claude-haiku-4-5"}, `{"mcpServers":{}}`, "")
+	if !containsPair(arguments, "--model", "claude-haiku-4-5") {
+		t.Fatalf("arguments do not select Haiku: %#v", arguments)
+	}
+	if slices.Contains(arguments, "--effort") {
+		t.Fatalf("Haiku arguments unexpectedly override provider effort: %#v", arguments)
 	}
 }
 

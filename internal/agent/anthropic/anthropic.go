@@ -19,7 +19,8 @@ import (
 )
 
 const (
-	defaultModel      = "claude-sonnet-5"
+	defaultModel      = "claude-opus-5"
+	defaultEffort     = "medium"
 	maximumToolRounds = 16
 )
 
@@ -67,8 +68,8 @@ func (a *Adapter) Status(context.Context) agent.Status {
 		Available:     true,
 		Authenticated: keyPresent,
 		Models: []agent.ModelOption{
-			{ID: "claude-fable-5", Label: "Fable 5", Efforts: efforts},
 			{ID: "claude-opus-5", Label: "Opus 5", Efforts: efforts},
+			{ID: "claude-fable-5", Label: "Fable 5", Efforts: efforts},
 			{ID: "claude-opus-4-8", Label: "Opus 4.8", Efforts: efforts},
 			{ID: "claude-sonnet-5", Label: "Sonnet 5", Efforts: efforts},
 			{ID: "claude-haiku-4-5", Label: "Haiku 4.5", Efforts: []string{}},
@@ -100,11 +101,15 @@ func (a *Adapter) Start(_ context.Context, config agent.SessionConfig) (agent.Se
 	if model == "" {
 		model = defaultModel
 	}
+	effort := strings.TrimSpace(config.Effort)
+	if effort == "" && model == defaultModel {
+		effort = defaultEffort
+	}
 	client := anthropicapi.NewClient(option.WithMaxRetries(2))
 	return &session{
 		client:         &client,
 		model:          model,
-		effort:         strings.TrimSpace(config.Effort),
+		effort:         effort,
 		conversationID: config.ConversationID,
 		intelligence:   a.Intelligence,
 		citations:      a.Citations,

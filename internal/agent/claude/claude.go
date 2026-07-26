@@ -28,6 +28,11 @@ Every material code claim must cite the source_url returned by a RepoKarta tool.
 Never use shell commands, direct filesystem access beyond exact supplied image attachment paths, network search, or code mutation.
 If the indexed evidence is insufficient, say so plainly.`
 
+const (
+	defaultModel  = "claude-opus-5"
+	defaultEffort = "medium"
+)
+
 // Adapter starts local Claude Code stream-json sessions.
 type Adapter struct {
 	Command string
@@ -41,8 +46,8 @@ func (a *Adapter) Status(ctx context.Context) agent.Status {
 		ID:   a.ID(),
 		Name: "Anthropic Claude",
 		Models: []agent.ModelOption{
-			{ID: "claude-fable-5", Label: "Fable 5", Efforts: efforts},
 			{ID: "claude-opus-5", Label: "Opus 5", Efforts: efforts},
+			{ID: "claude-fable-5", Label: "Fable 5", Efforts: efforts},
 			{ID: "claude-opus-4-8", Label: "Opus 4.8", Efforts: efforts},
 			{ID: "claude-sonnet-5", Label: "Sonnet 5", Efforts: efforts},
 			{ID: "claude-haiku-4-5", Label: "Haiku 4.5", Efforts: []string{}},
@@ -168,11 +173,17 @@ func commandArguments(config agent.SessionConfig, mcpConfig, attachmentDirectory
 	if attachmentDirectory != "" {
 		arguments = append(arguments, "--add-dir", attachmentDirectory)
 	}
-	if config.Model != "" {
-		arguments = append(arguments, "--model", config.Model)
+	model := strings.TrimSpace(config.Model)
+	if model == "" {
+		model = defaultModel
 	}
-	if config.Effort != "" {
-		arguments = append(arguments, "--effort", config.Effort)
+	effort := strings.TrimSpace(config.Effort)
+	if effort == "" && model == defaultModel {
+		effort = defaultEffort
+	}
+	arguments = append(arguments, "--model", model)
+	if effort != "" {
+		arguments = append(arguments, "--effort", effort)
 	}
 	if strings.TrimSpace(config.ResumeCursor) != "" {
 		arguments = append(arguments, "--resume", strings.TrimSpace(config.ResumeCursor))

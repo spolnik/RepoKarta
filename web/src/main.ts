@@ -3,6 +3,10 @@ import hljs from "highlight.js/lib/common";
 import DOMPurify from "dompurify";
 import { marked } from "marked";
 import { createFrameBatcher } from "./frame-batcher.mjs";
+import {
+  recommendedProviderEffort,
+  recommendedProviderModel
+} from "./provider-defaults.mjs";
 import { wikiPrimaryAction } from "./wiki-run-state.mjs";
 import "./styles.css";
 
@@ -1928,8 +1932,11 @@ function enableConversations(debug?: DebugLogger): void {
       model.append(option);
     }
     const modelIDs = (status?.models ?? []).map((candidate) => candidate.id);
-    model.value = modelIDs.includes(preferences?.model ?? "")
-      ? preferences?.model ?? ""
+    const preferredModel = preferences
+      ? preferences.model
+      : recommendedProviderModel(status?.id);
+    model.value = modelIDs.includes(preferredModel)
+      ? preferredModel
       : modelIDs[0] ?? "";
 
     const supportedEfforts = providerModelEfforts(status, model.value);
@@ -1944,8 +1951,11 @@ function enableConversations(debug?: DebugLogger): void {
       option.textContent = effortID.charAt(0).toUpperCase() + effortID.slice(1);
       effort.append(option);
     }
-    effort.value = supportedEfforts.includes(preferences?.effort ?? "")
-      ? preferences?.effort ?? ""
+    const preferredEffort = preferences
+      ? preferences.effort
+      : recommendedProviderEffort(status?.id);
+    effort.value = supportedEfforts.includes(preferredEffort)
+      ? preferredEffort
       : "";
 
     const ready = Boolean(status?.available && status.authenticated);
@@ -3890,7 +3900,7 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
 
   // Wiki runs are long, so the chosen engine and checkpoint limits are kept
   // between visits. Only non-secret select values are stored.
-  const runSettingsStorageKey = "repokarta:wiki-run-settings:v1";
+  const runSettingsStorageKey = "repokarta:wiki-run-settings:v2";
   type WikiRunSettings = {
     provider?: string;
     model?: string;
@@ -3934,6 +3944,7 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
     const selected = selectedProvider();
     const previousModel = model.value;
     const previousEffort = effort.value;
+    const sameProvider = configuredProvider === selected?.id;
     model.disabled = !selected?.authenticated || generating;
     model.replaceChildren();
     for (const modelOption of selected?.models ?? []) {
@@ -3942,21 +3953,16 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
       option.textContent = modelOption.label;
       model.append(option);
     }
-    const recommendedModels: Record<string, string> = {
-      codex: "gpt-5.6-sol",
-      claude: "claude-fable-5",
-      "anthropic-api": "claude-opus-5"
-    };
     const modelIDs = (selected?.models ?? []).map((candidate) => candidate.id);
     const stored = readRunSettings();
     if (
-      configuredProvider === selected?.id &&
+      sameProvider &&
       previousModel &&
       modelIDs.includes(previousModel)
     ) {
       model.value = previousModel;
     } else if (!(stored.provider === selected?.id && applyStoredValue(model, stored.model))) {
-      const recommended = selected ? recommendedModels[selected.id] : "";
+      const recommended = recommendedProviderModel(selected?.id);
       model.value = recommended && modelIDs.includes(recommended)
         ? recommended
         : modelIDs[0] ?? "";
@@ -3970,11 +3976,13 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
       option.textContent = level[0].toUpperCase() + level.slice(1);
       effort.append(option);
     }
-    if (previousEffort && Array.from(effort.options).some((option) => option.value === previousEffort)) {
+    if (sameProvider && previousEffort && Array.from(effort.options).some((option) => option.value === previousEffort)) {
       effort.value = previousEffort;
-    } else if (!(stored.provider === selected?.id && applyStoredValue(effort, stored.effort))
-      && wikiEfforts.includes("high")) {
-      effort.value = "high";
+    } else if (!(stored.provider === selected?.id && applyStoredValue(effort, stored.effort))) {
+      const recommended = recommendedProviderEffort(selected?.id);
+      effort.value = wikiEfforts.includes(recommended)
+        ? recommended
+        : wikiEfforts.includes("high") ? "high" : "";
     }
     effort.disabled = !selected?.authenticated || generating || wikiEfforts.length === 0;
     provider.disabled = generating || providerStatuses.every((status) => !status.authenticated);

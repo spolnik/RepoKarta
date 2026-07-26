@@ -321,8 +321,10 @@ The Claude catalog includes Fable 5, Opus 5, Opus 4.8, Sonnet 5, and Haiku 4.5;
 supported effort levels are selected per model. Leaving effort on its default
 lets the selected harness choose. RepoKarta passes Codex effort through
 app-server turn configuration, Claude Code effort through `--effort`, and
-Anthropic API effort through `output_config.effort`. Each turn also has a
-bounded timeout and, for the direct API loop, an output-token budget.
+Anthropic API effort through `output_config.effort`. Claude Code and Anthropic
+API start on Opus 5 with Medium effort unless you choose another model or
+effort. Each turn also has a bounded timeout and, for the direct API loop, an
+output-token budget.
 
 Conversation titles, messages, citations, status, and usage are stored locally.
 Uploaded conversation images are stored as exact RepoKarta-owned files outside

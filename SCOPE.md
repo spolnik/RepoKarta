@@ -602,7 +602,7 @@ completion criteria include:
 
 ## Current implementation version
 
-`0.29.0-dev`. M0 through M4 are complete. M5 and M6 are in progress.
+`0.30.0-dev`. M0 through M4 are complete. M5 and M6 are in progress.
 
 ## Recommended next session
 
