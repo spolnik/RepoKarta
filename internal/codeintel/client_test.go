@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/spolnik/RepoKarta/internal/contextscope"
 )
 
 func TestClientUsesJSONSearchContractAndOmitsUnsetLimit(t *testing.T) {
@@ -36,6 +38,36 @@ func TestClientUsesJSONSearchContractAndOmitsUnsetLimit(t *testing.T) {
 	}
 	if result.ReturnedFiles != 2 || result.MatchingFiles != 9 || !result.Truncated {
 		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestClientPostsStructuredSearchContexts(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodPost || request.URL.Path != "/api/search" {
+			t.Fatalf("request = %s %s", request.Method, request.URL.Path)
+		}
+		var input SearchRequest
+		if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+			t.Fatal(err)
+		}
+		if len(input.Contexts) != 1 ||
+			input.Contexts[0].RepositoryID != 42 ||
+			input.Contexts[0].Path != "internal/app/app.go" {
+			t.Fatalf("contexts = %#v", input.Contexts)
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(response).Encode(SearchResponse{Limit: DefaultSearchLimit})
+	}))
+	defer server.Close()
+
+	_, err := NewClient(server.URL).Search(context.Background(), SearchRequest{
+		Query: "New",
+		Contexts: []contextscope.Selector{{
+			Kind: contextscope.KindFile, RepositoryID: 42, Path: "internal/app/app.go",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -18,6 +19,7 @@ import (
 	"github.com/spolnik/RepoKarta/internal/audit"
 	"github.com/spolnik/RepoKarta/internal/catalog"
 	"github.com/spolnik/RepoKarta/internal/codeintel"
+	"github.com/spolnik/RepoKarta/internal/contextscope"
 	"github.com/spolnik/RepoKarta/internal/docs"
 	"github.com/spolnik/RepoKarta/internal/graph"
 	"github.com/spolnik/RepoKarta/internal/maintenance"
@@ -861,6 +863,83 @@ func TestAPIReferenceSearchReturnsAcceptedWithIndexProgress(t *testing.T) {
 	}
 }
 
+func TestStructuredContextsFlowThroughJSONSearchAndChat(t *testing.T) {
+	directory := t.TempDir()
+	if err := os.WriteFile(filepath.Join(directory, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runHTTPGit(t, directory, "init", "-q")
+	runHTTPGit(t, directory, "add", ".")
+	runHTTPGit(t, directory, "-c", "user.name=RepoKarta Test", "-c", "user.email=test@repokarta.local", "commit", "-qm", "fixture")
+	revision := strings.TrimSpace(runHTTPGit(t, directory, "rev-parse", "HEAD"))
+	repository := catalog.Repository{
+		ID: 42, Name: "fixture", Path: directory, HeadCommit: revision,
+		IndexedCommit: revision, IndexState: "ready",
+	}
+	conversations := &testConversations{}
+	server, err := New(
+		Config{Address: "127.0.0.1:7331", Conversations: conversations},
+		codeintel.New(testStore{repositories: []catalog.Repository{repository}}, testSearcher{}, "http://127.0.0.1:7331"),
+		testRefresher{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selector := contextscope.Selector{
+		Kind: contextscope.KindFile, RepositoryID: repository.ID,
+		Revision: revision, Path: "main.go",
+	}
+	searchBody, err := json.Marshal(codeintel.SearchRequest{
+		Query: "package", Contexts: []contextscope.Selector{selector},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	searchRequest := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:7331/api/search", bytes.NewReader(searchBody))
+	searchResponse := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(searchResponse, searchRequest)
+	if searchResponse.Code != http.StatusOK {
+		t.Fatalf("structured search status = %d, body = %s", searchResponse.Code, searchResponse.Body.String())
+	}
+	var searchResult codeintel.SearchResponse
+	if err := json.Unmarshal(searchResponse.Body.Bytes(), &searchResult); err != nil {
+		t.Fatal(err)
+	}
+	if len(searchResult.Contexts) != 1 || searchResult.Contexts[0].Path != "main.go" {
+		t.Fatalf("structured search contexts = %#v", searchResult.Contexts)
+	}
+	staleSelector := selector
+	staleSelector.Revision = strings.Repeat("b", 40)
+	staleBody, _ := json.Marshal(codeintel.SearchRequest{
+		Query: "package", Contexts: []contextscope.Selector{staleSelector},
+	})
+	staleRequest := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:7331/api/search", bytes.NewReader(staleBody))
+	staleResponse := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(staleResponse, staleRequest)
+	if staleResponse.Code != http.StatusUnprocessableEntity ||
+		!strings.Contains(staleResponse.Body.String(), `"code":"stale"`) {
+		t.Fatalf("stale context response = %d, body = %s", staleResponse.Code, staleResponse.Body.String())
+	}
+
+	chatBody, err := json.Marshal(map[string]any{
+		"provider": "test", "message": "inspect startup", "contexts": []contextscope.Selector{selector},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	chatRequest := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:7331/api/chat", bytes.NewReader(chatBody))
+	chatResponse := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(chatResponse, chatRequest)
+	if chatResponse.Code != http.StatusOK {
+		t.Fatalf("structured chat status = %d, body = %s", chatResponse.Code, chatResponse.Body.String())
+	}
+	if len(conversations.lastRequest.Contexts) != 1 ||
+		conversations.lastRequest.Contexts[0].Revision != revision ||
+		conversations.lastRequest.Contexts[0].Label != "@fixture:main.go" {
+		t.Fatalf("chat contexts = %#v", conversations.lastRequest.Contexts)
+	}
+}
+
 func TestGitAPIRejectsInvalidBoundsBeforeRepositoryAccess(t *testing.T) {
 	server, err := New(
 		Config{Address: "127.0.0.1:7331"},
@@ -886,6 +965,16 @@ func TestGitAPIRejectsInvalidBoundsBeforeRepositoryAccess(t *testing.T) {
 type testRefresher struct{}
 
 func (testRefresher) Refresh(context.Context) error { return nil }
+
+func runHTTPGit(t *testing.T, directory string, arguments ...string) string {
+	t.Helper()
+	command := exec.Command("git", append([]string{"-C", directory}, arguments...)...)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v\n%s", arguments, err, output)
+	}
+	return string(output)
+}
 
 type testConversations struct {
 	interrupted string
@@ -1216,6 +1305,9 @@ func TestSearchAndChatRenderAsSeparatePages(t *testing.T) {
 		`data-debug-copy`,
 		`id="conversation-image-input"`,
 		`data-image-attach`,
+		`id="conversation-contexts"`,
+		`id="conversation-context-suggestions"`,
+		`data-context-add`,
 		`id="conversation-runtime"`,
 		`id="conversation-context-value"`,
 		`id="conversation-usage-value"`,

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/spolnik/RepoKarta/internal/contextscope"
 )
 
 const (
@@ -51,17 +53,18 @@ type ConversationFilter struct {
 // Message is one durable user or assistant turn. Images are persisted as
 // RepoKarta-owned files by the storage implementation, not inline in SQLite.
 type Message struct {
-	ID             int64      `json:"id"`
-	ConversationID string     `json:"conversation_id"`
-	Role           string     `json:"role"`
-	Text           string     `json:"text,omitempty"`
-	Images         []Image    `json:"images,omitempty"`
-	Sources        []Citation `json:"sources,omitempty"`
-	Status         string     `json:"status,omitempty"`
-	Error          string     `json:"error,omitempty"`
-	InputTokens    int64      `json:"input_tokens,omitempty"`
-	OutputTokens   int64      `json:"output_tokens,omitempty"`
-	CreatedAt      time.Time  `json:"created_at"`
+	ID             int64                  `json:"id"`
+	ConversationID string                 `json:"conversation_id"`
+	Role           string                 `json:"role"`
+	Text           string                 `json:"text,omitempty"`
+	Images         []Image                `json:"images,omitempty"`
+	Sources        []Citation             `json:"sources,omitempty"`
+	Contexts       []contextscope.Context `json:"contexts,omitempty"`
+	Status         string                 `json:"status,omitempty"`
+	Error          string                 `json:"error,omitempty"`
+	InputTokens    int64                  `json:"input_tokens,omitempty"`
+	OutputTokens   int64                  `json:"output_tokens,omitempty"`
+	CreatedAt      time.Time              `json:"created_at"`
 }
 
 // ConversationStore is the durable chat surface used by the manager.
@@ -99,8 +102,9 @@ func DefaultConversationTitle(message string, images []Image) string {
 // cursor. The replay is bounded so a corrupt or very old transcript cannot
 // create unbounded provider input.
 func PromptWithHistory(turn Turn) string {
+	message := PromptWithContexts(turn.Message, turn.Contexts)
 	if len(turn.History) == 0 {
-		return turn.Message
+		return message
 	}
 	const maximumCharacters = 64 << 10
 	var history strings.Builder
@@ -110,10 +114,10 @@ func PromptWithHistory(turn Turn) string {
 			"Continue from it and use fresh RepoKarta tools for code claims.\n\n",
 	)
 	start := 0
-	estimatedLength := history.Len() + len(turn.Message)
+	estimatedLength := history.Len() + len(message)
 	for index := len(turn.History) - 1; index >= 0; index-- {
-		message := turn.History[index]
-		entryLength := len(message.Text) + len(message.Role) + 16
+		stored := turn.History[index]
+		entryLength := len(storedMessagePrompt(stored)) + len(stored.Role) + 16
 		if estimatedLength+entryLength > maximumCharacters {
 			start = index + 1
 			break
@@ -124,14 +128,33 @@ func PromptWithHistory(turn Turn) string {
 	if start > 0 {
 		fmt.Fprintf(&history, "[%d older messages omitted from replay]\n\n", start)
 	}
-	for _, message := range turn.History[start:] {
+	for _, stored := range turn.History[start:] {
 		role := "User"
-		if message.Role == RoleAssistant {
+		if stored.Role == RoleAssistant {
 			role = "Assistant"
 		}
-		fmt.Fprintf(&history, "%s:\n%s\n\n", role, message.Text)
+		fmt.Fprintf(&history, "%s:\n%s\n\n", role, storedMessagePrompt(stored))
 	}
 	history.WriteString("Current user message:\n")
-	history.WriteString(turn.Message)
+	history.WriteString(message)
 	return history.String()
+}
+
+func storedMessagePrompt(message Message) string {
+	if message.Role == RoleUser {
+		return PromptWithContexts(message.Text, message.Contexts)
+	}
+	return message.Text
+}
+
+// PromptWithContexts prepends only server-resolved structured identities.
+func PromptWithContexts(message string, contexts []contextscope.Context) string {
+	contextPrompt := contextscope.Prompt(contexts)
+	if contextPrompt == "" {
+		return message
+	}
+	if strings.TrimSpace(message) == "" {
+		return contextPrompt
+	}
+	return contextPrompt + "\n\nUser question:\n" + message
 }

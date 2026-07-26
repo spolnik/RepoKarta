@@ -487,11 +487,11 @@ Windows amd64 and Apple Silicon macOS. The workflow:
 Run the same packagers locally:
 
 ```powershell
-.\scripts\package-release.ps1 -Version 0.43.0-dev
+.\scripts\package-release.ps1 -Version 0.44.0-dev
 ```
 
 ```sh
-./scripts/package-release.sh 0.43.0-dev
+./scripts/package-release.sh 0.44.0-dev
 ```
 
 macOS packages are signed with the hardened runtime when

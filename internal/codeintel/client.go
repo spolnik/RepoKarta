@@ -1,6 +1,7 @@
 package codeintel
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -38,6 +39,11 @@ func (c *Client) Repositories(ctx context.Context) (RepositoryList, error) {
 
 // Search calls GET /api/search.
 func (c *Client) Search(ctx context.Context, request SearchRequest) (SearchResponse, error) {
+	if len(request.Contexts) > 0 {
+		var output SearchResponse
+		err := c.post(ctx, "/api/search", request, &output)
+		return output, err
+	}
 	values := url.Values{
 		"q":    []string{request.Query},
 		"repo": []string{repositorySelector(request.RepositoryID, request.Repository)},
@@ -52,6 +58,24 @@ func (c *Client) Search(ctx context.Context, request SearchRequest) (SearchRespo
 	var output SearchResponse
 	err := c.get(ctx, "/api/search", values, &output)
 	return output, err
+}
+
+func (c *Client) post(ctx context.Context, endpoint string, input, output any) error {
+	content, err := json.Marshal(input)
+	if err != nil {
+		return fmt.Errorf("encode RepoKarta API request: %w", err)
+	}
+	request, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		c.baseURL+endpoint,
+		bytes.NewReader(content),
+	)
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	return c.do(request, output)
 }
 
 // FindSymbol calls GET /api/symbol.
@@ -172,8 +196,17 @@ func (c *Client) get(ctx context.Context, endpoint string, values url.Values, ou
 		return err
 	}
 	response, err := c.client.Do(request)
-	if err != nil {
-		return err
+	return c.decode(response, err, output)
+}
+
+func (c *Client) do(request *http.Request, output any) error {
+	response, err := c.client.Do(request)
+	return c.decode(response, err, output)
+}
+
+func (c *Client) decode(response *http.Response, requestErr error, output any) error {
+	if requestErr != nil {
+		return requestErr
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {

@@ -13,6 +13,7 @@ import (
 	"github.com/spolnik/RepoKarta/internal/access"
 	"github.com/spolnik/RepoKarta/internal/agent"
 	"github.com/spolnik/RepoKarta/internal/catalog"
+	"github.com/spolnik/RepoKarta/internal/contextscope"
 	_ "modernc.org/sqlite"
 )
 
@@ -53,7 +54,15 @@ func TestConversationTranscriptPersistsAcrossDatabaseReopen(t *testing.T) {
 		Role:           agent.RoleUser,
 		Text:           "Where is authentication configured?",
 		Images:         []agent.Image{image},
-		CreatedAt:      now.Add(time.Second),
+		Contexts: []contextscope.Context{{
+			Kind:         contextscope.KindFile,
+			RepositoryID: 42,
+			Repository:   "RepoKarta",
+			Revision:     strings.Repeat("a", 40),
+			Path:         "internal/app/app.go",
+			Label:        "@RepoKarta:internal/app/app.go",
+		}},
+		CreatedAt: now.Add(time.Second),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -97,6 +106,11 @@ func TestConversationTranscriptPersistsAcrossDatabaseReopen(t *testing.T) {
 	if len(got.Messages) != 2 || len(got.Messages[0].Images) != 1 || len(got.Messages[1].Sources) != 1 {
 		t.Fatalf("conversation transcript = %#v", got.Messages)
 	}
+	if len(got.Messages[0].Contexts) != 1 ||
+		got.Messages[0].Contexts[0].Path != "internal/app/app.go" ||
+		got.Messages[0].Contexts[0].Revision != strings.Repeat("a", 40) {
+		t.Fatalf("persisted contexts = %#v", got.Messages[0].Contexts)
+	}
 	if got.Messages[0].Images[0].Name != "diagram.png" || got.Messages[0].Images[0].Data != image.Data {
 		t.Fatalf("persisted image = %#v", got.Messages[0].Images[0])
 	}
@@ -132,6 +146,57 @@ func TestConversationTranscriptPersistsAcrossDatabaseReopen(t *testing.T) {
 	if _, err := os.Stat(imagePath); !os.IsNotExist(err) {
 		t.Fatalf("conversation image still exists after delete: %v", err)
 	}
+}
+
+func TestMigrationFromEnterpriseSchemaAddsStructuredContexts(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "schema-12.db")
+	legacy, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, migration := range []string{
+		schemaV1,
+		schemaV2,
+		schemaV3,
+		schemaV4,
+		schemaV5,
+		schemaV6,
+		schemaV7,
+		schemaV8,
+		schemaV9,
+		schemaV10,
+		schemaV11,
+		schemaV12,
+	} {
+		if _, err := legacy.Exec(migration); err != nil {
+			t.Fatalf("apply legacy migration %d: %v", index+1, err)
+		}
+	}
+	if _, err := legacy.Exec("PRAGMA user_version = 12;"); err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	storage, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer storage.Close()
+
+	var version int
+	if err := storage.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != currentSchemaVersion {
+		t.Fatalf("schema version = %d, want %d", version, currentSchemaVersion)
+	}
+	rows, err := storage.db.Query("SELECT contexts_json FROM conversation_messages LIMIT 0")
+	if err != nil {
+		t.Fatalf("structured context column was not added after schema 12: %v", err)
+	}
+	rows.Close()
 }
 
 func TestRepositoryAccessDefaultsPrivateAndSupportsUserGroupAndSharedScopes(t *testing.T) {

@@ -512,8 +512,26 @@ func TestMCPToolsSelectRepositoriesByIDOnly(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if searcher.query.Repository != filepath.ToSlash(store.repositories[0].Path) {
-		t.Fatalf("search repository filter = %q", searcher.query.Repository)
+	if len(searcher.query.RepositoryIDs) != 1 || searcher.query.RepositoryIDs[0] != 42 {
+		t.Fatalf("search repository IDs = %#v", searcher.query.RepositoryIDs)
+	}
+	if _, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "search_code",
+		Arguments: map[string]any{
+			"query": "OpenFile",
+			"contexts": []any{map[string]any{
+				"kind":          "repository",
+				"repository_id": 42,
+				"revision":      revision,
+			}},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(searcher.query.Scopes) != 1 ||
+		searcher.query.Scopes[0].RepositoryID != 42 ||
+		searcher.query.Scopes[0].Repository != filepath.ToSlash(store.repositories[0].Path) {
+		t.Fatalf("structured MCP scopes = %#v", searcher.query.Scopes)
 	}
 
 	// An unknown repository ID must fail instead of silently searching all.

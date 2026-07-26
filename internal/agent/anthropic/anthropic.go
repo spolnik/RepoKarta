@@ -156,7 +156,7 @@ func (s *session) Send(ctx context.Context, turn agent.Turn, emit func(agent.Eve
 		s.messages = durableHistory(turn.History)
 	}
 	s.messages = append(s.messages, anthropicapi.NewUserMessage(
-		anthropicapi.NewTextBlock(turn.Message),
+		anthropicapi.NewTextBlock(agent.PromptWithContexts(turn.Message, turn.Contexts)),
 	))
 
 	budget := turn.TokenBudget
@@ -287,6 +287,9 @@ func durableHistory(messages []agent.Message) []anthropicapi.MessageParam {
 	history := make([]anthropicapi.MessageParam, 0, len(messages))
 	for _, message := range messages {
 		text := strings.TrimSpace(message.Text)
+		if message.Role == agent.RoleUser {
+			text = strings.TrimSpace(agent.PromptWithContexts(message.Text, message.Contexts))
+		}
 		if text == "" {
 			continue
 		}

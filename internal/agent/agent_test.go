@@ -9,7 +9,32 @@ import (
 	"time"
 
 	"github.com/spolnik/RepoKarta/internal/access"
+	"github.com/spolnik/RepoKarta/internal/contextscope"
 )
+
+func TestPromptWithContextsUsesResolvedIdentities(t *testing.T) {
+	prompt := PromptWithContexts("Where is startup wired?", []contextscope.Context{{
+		Kind:         contextscope.KindFile,
+		RepositoryID: 7,
+		Repository:   "RepoKarta",
+		Revision:     strings.Repeat("a", 40),
+		Path:         "internal/app/app.go",
+		Label:        "@RepoKarta:internal/app/app.go",
+	}})
+	for _, expected := range []string{
+		"repository_id=7",
+		"revision=" + strings.Repeat("a", 40),
+		`path="internal/app/app.go"`,
+		"User question:\nWhere is startup wired?",
+	} {
+		if !strings.Contains(prompt, expected) {
+			t.Fatalf("prompt does not contain %q: %s", expected, prompt)
+		}
+	}
+	if strings.Contains(prompt, "@RepoKarta") {
+		t.Fatalf("prompt parsed or reused display label: %s", prompt)
+	}
+}
 
 type fakeAdapter struct {
 	id       string

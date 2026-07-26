@@ -4574,6 +4574,123 @@ a.brand-mark:hover,
     inset 0 1px rgb(255 255 255 / 0.04);
 }
 
+.conversation-context-tray,
+.conversation-message-contexts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.conversation-context-tray {
+  margin: 0.72rem 0.8rem 0;
+}
+
+.conversation-context-tray[hidden],
+.conversation-context-error[hidden],
+.conversation-context-suggestions[hidden] {
+  display: none;
+}
+
+.conversation-context-chip {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.35rem;
+  border: 1px solid rgb(167 139 250 / 0.24);
+  border-radius: 99px;
+  padding: 0.25rem 0.42rem 0.25rem 0.55rem;
+  background: rgb(139 92 246 / 0.1);
+  color: var(--color-ai-soft);
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+}
+
+.conversation-context-chip > span {
+  overflow: hidden;
+  max-width: min(30rem, 58vw);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-context-chip button {
+  display: grid;
+  width: 1rem;
+  height: 1rem;
+  place-items: center;
+  border-radius: 50%;
+  color: currentColor;
+}
+
+.conversation-context-chip button:hover {
+  background: rgb(167 139 250 / 0.18);
+}
+
+.conversation-context-chip-readonly {
+  padding-right: 0.55rem;
+}
+
+.conversation-message-contexts {
+  margin-top: 0.6rem;
+}
+
+.conversation-context-error {
+  margin: 0.45rem 0.9rem 0;
+  color: #fca5a5;
+  font-size: var(--fs-meta);
+}
+
+.conversation-context-suggestions {
+  position: absolute;
+  z-index: 8;
+  right: 0.7rem;
+  bottom: 3.15rem;
+  left: 0.7rem;
+  display: grid;
+  max-height: 15rem;
+  overflow-y: auto;
+  border: 1px solid rgb(167 139 250 / 0.22);
+  border-radius: var(--r-md);
+  background: rgb(13 16 22 / 0.98);
+  box-shadow: 0 18px 45px rgb(0 0 0 / 0.42);
+}
+
+.conversation-context-suggestion {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.75rem;
+  border-bottom: 1px solid rgb(255 255 255 / 0.055);
+  padding: 0.62rem 0.72rem;
+  color: var(--color-ink);
+  text-align: left;
+}
+
+.conversation-context-suggestion:last-child {
+  border-bottom: 0;
+}
+
+.conversation-context-suggestion:hover,
+.conversation-context-suggestion[aria-selected="true"] {
+  background: rgb(139 92 246 / 0.12);
+}
+
+.conversation-context-suggestion strong,
+.conversation-context-suggestion span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-context-suggestion strong {
+  font-size: var(--fs-caption);
+  font-weight: 650;
+}
+
+.conversation-context-suggestion span {
+  color: var(--color-ink-faint);
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+}
+
 .conversation-input {
   display: block;
   width: 100%;

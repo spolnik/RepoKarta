@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"os/exec"
@@ -22,6 +23,7 @@ import (
 
 	"github.com/spolnik/RepoKarta/internal/access"
 	"github.com/spolnik/RepoKarta/internal/catalog"
+	"github.com/spolnik/RepoKarta/internal/contextscope"
 	"github.com/spolnik/RepoKarta/internal/graph"
 	"github.com/spolnik/RepoKarta/internal/search"
 	"github.com/spolnik/RepoKarta/internal/source"
@@ -38,6 +40,9 @@ const (
 	MaximumDiffBytes         = 1 << 20
 	DefaultDiffContext       = 3
 	MaximumDiffContext       = 20
+	DefaultContextLimit      = 12
+	MaximumContextLimit      = 50
+	maximumContextTreeBytes  = 4 << 20
 	sourceWindowLines        = 200
 	sourceContextBefore      = 80
 	maxReferenceLinesPerFile = 50
@@ -108,35 +113,59 @@ type RepositoryList struct {
 	Repositories []Repository `json:"repositories"`
 }
 
+// ContextSuggestionRequest selects permission-aware repository or file
+// autocomplete results.
+type ContextSuggestionRequest struct {
+	Kind         string
+	Query        string
+	RepositoryID int64
+	Limit        int
+}
+
+// ContextSuggestion is one stable selector clients can turn into a chip.
+type ContextSuggestion struct {
+	Context contextscope.Selector `json:"context"`
+	Label   string                `json:"label"`
+	Detail  string                `json:"detail,omitempty"`
+}
+
+// ContextSuggestionList is a bounded autocomplete response.
+type ContextSuggestionList struct {
+	Suggestions []ContextSuggestion `json:"suggestions"`
+	Truncated   bool                `json:"truncated"`
+}
+
 // SearchRequest is the shared query contract.
 type SearchRequest struct {
-	Query        string `json:"query"`
-	RepositoryID int64  `json:"repository_id,omitempty"`
-	Repository   string `json:"repository,omitempty"`
-	Language     string `json:"language,omitempty"`
-	Path         string `json:"path,omitempty"`
-	File         string `json:"file,omitempty"`
-	Mode         string `json:"mode,omitempty"`
-	Limit        int    `json:"limit,omitempty"`
+	Query        string                  `json:"query"`
+	RepositoryID int64                   `json:"repository_id,omitempty"`
+	Repository   string                  `json:"repository,omitempty"`
+	Language     string                  `json:"language,omitempty"`
+	Path         string                  `json:"path,omitempty"`
+	File         string                  `json:"file,omitempty"`
+	Mode         string                  `json:"mode,omitempty"`
+	Limit        int                     `json:"limit,omitempty"`
+	Contexts     []contextscope.Selector `json:"contexts,omitempty"`
 }
 
 // SearchResponse explicitly reports evidence completeness.
 type SearchResponse struct {
-	MatchCount          int              `json:"match_count"`
-	MatchingFiles       int              `json:"matching_files"`
-	EstimatedTotalFiles int              `json:"estimated_total_files"`
-	ReturnedFiles       int              `json:"returned_files"`
-	Limit               int              `json:"limit"`
-	Truncated           bool             `json:"truncated"`
-	TotalFilesExact     bool             `json:"total_files_exact"`
-	FilesSkipped        int              `json:"files_skipped"`
-	ShardsSkipped       int              `json:"shards_skipped"`
-	DurationMS          float64          `json:"duration_ms"`
-	Warnings            []search.Warning `json:"warnings,omitempty"`
-	Matches             []SearchMatch    `json:"matches"`
-	SearchKind          string           `json:"search_kind,omitempty"`
-	ReferenceResolution string           `json:"reference_resolution,omitempty"`
-	ReferenceIndex      *ReferenceIndex  `json:"reference_index,omitempty"`
+	MatchCount          int                    `json:"match_count"`
+	MatchingFiles       int                    `json:"matching_files"`
+	EstimatedTotalFiles int                    `json:"estimated_total_files"`
+	ReturnedFiles       int                    `json:"returned_files"`
+	Limit               int                    `json:"limit"`
+	Truncated           bool                   `json:"truncated"`
+	TotalFilesExact     bool                   `json:"total_files_exact"`
+	FilesSkipped        int                    `json:"files_skipped"`
+	ShardsSkipped       int                    `json:"shards_skipped"`
+	DurationMS          float64                `json:"duration_ms"`
+	Warnings            []search.Warning       `json:"warnings,omitempty"`
+	Matches             []SearchMatch          `json:"matches"`
+	SearchKind          string                 `json:"search_kind,omitempty"`
+	ReferenceResolution string                 `json:"reference_resolution,omitempty"`
+	ReferenceIndex      *ReferenceIndex        `json:"reference_index,omitempty"`
+	Contexts            []contextscope.Context `json:"contexts,omitempty"`
 }
 
 // ReferenceIndex reports whether every requested repository has a persisted
@@ -150,11 +179,12 @@ type ReferenceIndex struct {
 
 // SymbolRequest selects bounded symbol-index matches.
 type SymbolRequest struct {
-	Symbol       string `json:"symbol"`
-	RepositoryID int64  `json:"repository_id,omitempty"`
-	Repository   string `json:"repository,omitempty"`
-	Language     string `json:"language,omitempty"`
-	Limit        int    `json:"limit,omitempty"`
+	Symbol       string                  `json:"symbol"`
+	RepositoryID int64                   `json:"repository_id,omitempty"`
+	Repository   string                  `json:"repository,omitempty"`
+	Language     string                  `json:"language,omitempty"`
+	Limit        int                     `json:"limit,omitempty"`
+	Contexts     []contextscope.Selector `json:"contexts,omitempty"`
 }
 
 // SymbolResponse uses the same explicit completeness and citation contract as
@@ -163,13 +193,14 @@ type SymbolResponse = SearchResponse
 
 // ReferenceRequest selects bounded syntax-backed target-name matches.
 type ReferenceRequest struct {
-	Symbol       string `json:"symbol"`
-	RepositoryID int64  `json:"repository_id,omitempty"`
-	Repository   string `json:"repository,omitempty"`
-	Language     string `json:"language,omitempty"`
-	Path         string `json:"path,omitempty"`
-	File         string `json:"file,omitempty"`
-	Limit        int    `json:"limit,omitempty"`
+	Symbol       string                  `json:"symbol"`
+	RepositoryID int64                   `json:"repository_id,omitempty"`
+	Repository   string                  `json:"repository,omitempty"`
+	Language     string                  `json:"language,omitempty"`
+	Path         string                  `json:"path,omitempty"`
+	File         string                  `json:"file,omitempty"`
+	Limit        int                     `json:"limit,omitempty"`
+	Contexts     []contextscope.Selector `json:"contexts,omitempty"`
 }
 
 // ReferenceResponse uses the normal search evidence and completeness contract.
@@ -335,6 +366,198 @@ func (s *Service) Repositories(ctx context.Context) (RepositoryList, error) {
 	return output, nil
 }
 
+// ResolveContexts validates stable selectors against the viewer's current
+// catalogue and exact indexed commits. Any issue fails the whole set so a
+// caller can never broaden a request by silently dropping a chip.
+func (s *Service) ResolveContexts(ctx context.Context, selectors []contextscope.Selector) ([]contextscope.Context, error) {
+	if len(selectors) == 0 {
+		return []contextscope.Context{}, nil
+	}
+	if len(selectors) > contextscope.MaximumContexts {
+		return nil, &contextscope.ResolutionError{Issues: []contextscope.Issue{{
+			Index:   contextscope.MaximumContexts,
+			Code:    "too_many",
+			Message: fmt.Sprintf("at most %d structured contexts are allowed", contextscope.MaximumContexts),
+		}}}
+	}
+	visibleRepositories, err := s.store.ListRepositories(ctx)
+	if err != nil {
+		return nil, err
+	}
+	repositoriesByID := make(map[int64]catalog.Repository, len(visibleRepositories))
+	for _, repository := range visibleRepositories {
+		repositoriesByID[repository.ID] = repository
+	}
+	resolved := make([]contextscope.Context, 0, len(selectors))
+	issues := make([]contextscope.Issue, 0)
+	seen := make(map[string]struct{}, len(selectors))
+	for index, selector := range selectors {
+		selector.Kind = strings.ToLower(strings.TrimSpace(selector.Kind))
+		selector.Revision = strings.TrimSpace(selector.Revision)
+		selector.Path = strings.TrimSpace(strings.ReplaceAll(selector.Path, "\\", "/"))
+		issue := func(code, message string) {
+			issues = append(issues, contextscope.Issue{
+				Index: index, Code: code, Message: message, Selector: selector,
+			})
+		}
+		if selector.Kind != contextscope.KindRepository && selector.Kind != contextscope.KindFile {
+			issue("invalid_kind", "context kind must be repository or file")
+			continue
+		}
+		if selector.RepositoryID <= 0 {
+			issue("invalid_repository", "context repository_id must be a positive integer")
+			continue
+		}
+		repository, available := repositoriesByID[selector.RepositoryID]
+		if !available {
+			// ListRepositories is permission filtered. Keep the message useful
+			// without revealing whether an inaccessible numeric ID exists.
+			issue("unavailable", fmt.Sprintf(
+				"repository context %d is missing or unavailable to the current viewer",
+				selector.RepositoryID,
+			))
+			continue
+		}
+		if repository.IndexState != "ready" || strings.TrimSpace(repository.IndexedCommit) == "" {
+			issue("unindexed", fmt.Sprintf("repository %q does not have a ready indexed revision", repository.Name))
+			continue
+		}
+		if selector.Revision != "" && selector.Revision != repository.IndexedCommit {
+			issue("stale", fmt.Sprintf(
+				"repository %q context is pinned to %s but the current indexed revision is %s",
+				repository.Name,
+				shortRevision(selector.Revision),
+				shortRevision(repository.IndexedCommit),
+			))
+			continue
+		}
+		if selector.Kind == contextscope.KindRepository && selector.Path != "" {
+			issue("invalid_path", "repository contexts cannot include a file path")
+			continue
+		}
+		if selector.Kind == contextscope.KindFile {
+			filePath, pathErr := safeTreePath(selector.Path)
+			if pathErr != nil || filePath == "" {
+				issue("invalid_path", "file context path must be a safe repository-relative path")
+				continue
+			}
+			objectType, objectErr := gitObjectType(ctx, repository, repository.IndexedCommit, filePath)
+			if objectErr != nil || objectType != "blob" {
+				issue("missing_file", fmt.Sprintf(
+					"file %q is missing from repository %q at indexed revision %s",
+					filePath,
+					repository.Name,
+					shortRevision(repository.IndexedCommit),
+				))
+				continue
+			}
+			selector.Path = filePath
+		}
+		key := fmt.Sprintf("%s\x00%d\x00%s\x00%s", selector.Kind, selector.RepositoryID, repository.IndexedCommit, selector.Path)
+		if _, duplicate := seen[key]; duplicate {
+			continue
+		}
+		seen[key] = struct{}{}
+		label := repositoryContextLabel(repository, visibleRepositories)
+		if selector.Kind == contextscope.KindFile {
+			label += ":" + selector.Path
+		}
+		resolved = append(resolved, contextscope.Context{
+			Kind:         selector.Kind,
+			RepositoryID: repository.ID,
+			Repository:   repository.Name,
+			Revision:     repository.IndexedCommit,
+			Path:         selector.Path,
+			Label:        label,
+		})
+	}
+	if len(issues) > 0 {
+		return nil, &contextscope.ResolutionError{Issues: issues}
+	}
+	return resolved, nil
+}
+
+// SuggestContexts returns only selectors visible to the current viewer.
+func (s *Service) SuggestContexts(ctx context.Context, request ContextSuggestionRequest) (ContextSuggestionList, error) {
+	kind := strings.ToLower(strings.TrimSpace(request.Kind))
+	queryText := strings.ToLower(strings.TrimSpace(request.Query))
+	limit := normalizeLimit(request.Limit, DefaultContextLimit, MaximumContextLimit)
+	output := ContextSuggestionList{Suggestions: []ContextSuggestion{}}
+	switch kind {
+	case contextscope.KindRepository:
+		repositories, err := s.store.ListRepositories(ctx)
+		if err != nil {
+			return output, err
+		}
+		for _, repository := range repositories {
+			haystack := strings.ToLower(repository.Name + "\n" + repository.OriginURL)
+			if queryText != "" && !strings.Contains(haystack, queryText) {
+				continue
+			}
+			if len(output.Suggestions) == limit {
+				output.Truncated = true
+				break
+			}
+			detail := shortRevision(repository.IndexedCommit)
+			if repository.IndexState != "ready" || repository.IndexedCommit == "" {
+				detail = "not indexed"
+			}
+			output.Suggestions = append(output.Suggestions, ContextSuggestion{
+				Context: contextscope.Selector{
+					Kind:         contextscope.KindRepository,
+					RepositoryID: repository.ID,
+					Revision:     repository.IndexedCommit,
+				},
+				Label:  repositoryContextLabel(repository, repositories),
+				Detail: detail,
+			})
+		}
+	case contextscope.KindFile:
+		if request.RepositoryID <= 0 {
+			return output, errors.New("repository_id is required for file context suggestions")
+		}
+		repository, err := s.store.RepositoryByID(ctx, request.RepositoryID)
+		if err != nil {
+			return output, err
+		}
+		repositories, err := s.store.ListRepositories(ctx)
+		if err != nil {
+			return output, err
+		}
+		repositoryLabel := repositoryContextLabel(repository, repositories)
+		if repository.IndexState != "ready" || repository.IndexedCommit == "" {
+			return output, fmt.Errorf("repository %q does not have a ready indexed revision", repository.Name)
+		}
+		paths, truncated, err := gitFiles(ctx, repository, repository.IndexedCommit)
+		if err != nil {
+			return output, err
+		}
+		for _, filePath := range paths {
+			if queryText != "" && !strings.Contains(strings.ToLower(filePath), queryText) {
+				continue
+			}
+			if len(output.Suggestions) == limit {
+				output.Truncated = true
+				break
+			}
+			output.Suggestions = append(output.Suggestions, ContextSuggestion{
+				Context: contextscope.Selector{
+					Kind:         contextscope.KindFile,
+					RepositoryID: repository.ID,
+					Revision:     repository.IndexedCommit,
+					Path:         filePath,
+				},
+				Label:  repositoryLabel + ":" + filePath,
+				Detail: shortRevision(repository.IndexedCommit),
+			})
+		}
+		output.Truncated = output.Truncated || truncated
+	default:
+		return output, errors.New("context kind must be repository or file")
+	}
+	return output, nil
+}
+
 // CatalogRepositories returns the underlying metadata for HTML presentation.
 func (s *Service) CatalogRepositories(ctx context.Context) ([]catalog.Repository, error) {
 	return s.store.ListRepositories(ctx)
@@ -356,54 +579,94 @@ func (s *Service) Search(ctx context.Context, request SearchRequest) (SearchResp
 			Path:         request.Path,
 			File:         request.File,
 			Limit:        request.Limit,
+			Contexts:     request.Contexts,
 		})
 	}
 	limit := normalizeLimit(request.Limit, DefaultSearchLimit, MaximumSearchLimit)
+	resolvedContexts, err := s.ResolveContexts(ctx, request.Contexts)
+	if err != nil {
+		return SearchResponse{}, err
+	}
+	if len(resolvedContexts) > 0 &&
+		(request.RepositoryID > 0 || strings.TrimSpace(request.Repository) != "") {
+		return SearchResponse{}, errors.New("structured contexts cannot be combined with the legacy repository selector")
+	}
 	repositoryFilter := strings.TrimSpace(request.Repository)
-	var repositoryAllowList []string
+	var repositoryIDAllowList []uint32
+	var structuredScopes []search.Scope
+	if len(resolvedContexts) > 0 {
+		repositoriesByID := make(map[int64]catalog.Repository, len(resolvedContexts))
+		for _, resolved := range resolvedContexts {
+			repository, ok := repositoriesByID[resolved.RepositoryID]
+			if !ok {
+				repository, err = s.store.RepositoryByID(ctx, resolved.RepositoryID)
+				if err != nil {
+					return SearchResponse{}, err
+				}
+				repositoriesByID[resolved.RepositoryID] = repository
+			}
+			structuredScopes = append(structuredScopes, search.Scope{
+				RepositoryID: uint32(repository.ID),
+				Repository:   filepath.ToSlash(repository.Path),
+				Path:         resolved.Path,
+			})
+		}
+		structuredScopes = compactSearchScopes(structuredScopes)
+	}
 	if request.RepositoryID > 0 {
 		repository, err := s.store.RepositoryByID(ctx, request.RepositoryID)
 		if err != nil {
 			return SearchResponse{}, err
 		}
-		repositoryFilter = filepath.ToSlash(repository.Path)
+		repositoryFilter = ""
+		repositoryIDAllowList = []uint32{uint32(repository.ID)}
 	} else if repositoryFilter != "" {
 		repository, err := s.namedRepository(ctx, repositoryFilter)
 		if err != nil {
 			return SearchResponse{}, err
 		}
-		repositoryFilter = filepath.ToSlash(repository.Path)
-	} else if _, restricted := access.ViewerFromContext(ctx); restricted {
-		repositories, err := s.store.ListRepositories(ctx)
-		if err != nil {
-			return SearchResponse{}, err
-		}
-		for _, repository := range repositories {
-			repositoryAllowList = append(repositoryAllowList, filepath.ToSlash(repository.Path))
-		}
-		if len(repositoryAllowList) == 0 {
-			return SearchResponse{
-				Limit:           limit,
-				Matches:         []SearchMatch{},
-				TotalFilesExact: true,
-				Warnings:        []search.Warning{},
-			}, nil
+		repositoryFilter = ""
+		repositoryIDAllowList = []uint32{uint32(repository.ID)}
+	} else if len(resolvedContexts) == 0 {
+		_, restricted := access.ViewerFromContext(ctx)
+		if restricted {
+			repositories, err := s.store.ListRepositories(ctx)
+			if err != nil {
+				return SearchResponse{}, err
+			}
+			for _, repository := range repositories {
+				repositoryIDAllowList = append(repositoryIDAllowList, uint32(repository.ID))
+			}
+			if len(repositoryIDAllowList) == 0 {
+				return SearchResponse{
+					Limit:           limit,
+					Matches:         []SearchMatch{},
+					TotalFilesExact: true,
+					Warnings:        []search.Warning{},
+				}, nil
+			}
 		}
 	}
 	result, err := s.searcher.Search(ctx, search.Query{
-		Text:         strings.TrimSpace(request.Query),
-		Repository:   repositoryFilter,
-		Repositories: repositoryAllowList,
-		Language:     strings.TrimSpace(request.Language),
-		Path:         strings.TrimSpace(request.Path),
-		File:         strings.TrimSpace(request.File),
-		Mode:         strings.TrimSpace(request.Mode),
-		Limit:        limit,
+		Text:          strings.TrimSpace(request.Query),
+		Repository:    repositoryFilter,
+		RepositoryIDs: repositoryIDAllowList,
+		Scopes:        structuredScopes,
+		Language:      strings.TrimSpace(request.Language),
+		Path:          strings.TrimSpace(request.Path),
+		File:          strings.TrimSpace(request.File),
+		Mode:          strings.TrimSpace(request.Mode),
+		Limit:         limit,
 	})
 	if err != nil {
 		return SearchResponse{}, err
 	}
-	return s.searchResponse(ctx, result, limit)
+	response, err := s.searchResponse(ctx, result, limit)
+	if err != nil {
+		return SearchResponse{}, err
+	}
+	response.Contexts = resolvedContexts
+	return response, nil
 }
 
 func (s *Service) searchResponse(ctx context.Context, result search.Result, limit int) (SearchResponse, error) {
@@ -465,7 +728,7 @@ func (s *Service) searchResponse(ctx context.Context, result search.Result, limi
 				ReferenceConfidence: line.ReferenceConfidence,
 			})
 		}
-		repository, visible := resolveRepository(repositories, match.Repository, match.Revision, restricted)
+		repository, visible := resolveRepository(repositories, match.RepositoryID, match.Repository, match.Revision, restricted)
 		if restricted && !visible {
 			droppedMatches = true
 			continue
@@ -511,6 +774,7 @@ func (s *Service) FindSymbol(ctx context.Context, request SymbolRequest) (Symbol
 		Language:     request.Language,
 		Mode:         "zoekt",
 		Limit:        request.Limit,
+		Contexts:     request.Contexts,
 	})
 }
 
@@ -527,6 +791,39 @@ func (s *Service) FindReferences(ctx context.Context, request ReferenceRequest) 
 		return ReferenceResponse{}, errors.New("AST reference search is not configured")
 	}
 	repositoryID := request.RepositoryID
+	resolvedContexts, err := s.ResolveContexts(ctx, request.Contexts)
+	if err != nil {
+		return ReferenceResponse{}, err
+	}
+	if len(resolvedContexts) > 0 &&
+		(repositoryID > 0 || strings.TrimSpace(request.Repository) != "") {
+		return ReferenceResponse{}, errors.New("structured contexts cannot be combined with the legacy repository selector")
+	}
+	if len(resolvedContexts) > 0 {
+		repositoryIDs := make(map[int64]struct{})
+		filePaths := make(map[string]struct{})
+		repositoryWide := false
+		for _, resolved := range resolvedContexts {
+			repositoryIDs[resolved.RepositoryID] = struct{}{}
+			if resolved.Kind == contextscope.KindRepository {
+				repositoryWide = true
+			} else if resolved.Path != "" {
+				filePaths[resolved.Path] = struct{}{}
+			}
+		}
+		if len(repositoryIDs) != 1 {
+			return ReferenceResponse{}, errors.New("reference search currently accepts structured contexts from one repository")
+		}
+		if !repositoryWide {
+			if len(filePaths) > 1 {
+				return ReferenceResponse{}, errors.New("reference search currently accepts one structured file context")
+			}
+			for request.Path = range filePaths {
+			}
+		}
+		for repositoryID = range repositoryIDs {
+		}
+	}
 	if repositoryID <= 0 && strings.TrimSpace(request.Repository) != "" {
 		repository, resolveErr := s.namedRepository(ctx, request.Repository)
 		if resolveErr != nil {
@@ -558,6 +855,7 @@ func (s *Service) FindReferences(ctx context.Context, request ReferenceRequest) 
 	if !index.Scope.Complete {
 		output.ReferenceIndex.State = "building"
 	}
+	output.Contexts = resolvedContexts
 	return output, nil
 }
 
@@ -739,12 +1037,13 @@ func (s *Service) referenceResult(
 			sourceLines[line.Number] = line.Text
 		}
 		match := search.FileMatch{
-			Repository: indexedFile.repository,
-			Revision:   indexedFile.revision,
-			Path:       indexedFile.path,
-			Language:   indexedFile.language,
-			Score:      1,
-			Lines:      make([]search.LineMatch, 0, len(references)),
+			RepositoryID: indexedFile.repositoryID,
+			Repository:   indexedFile.repository,
+			Revision:     indexedFile.revision,
+			Path:         indexedFile.path,
+			Language:     indexedFile.language,
+			Score:        1,
+			Lines:        make([]search.LineMatch, 0, len(references)),
 		}
 		for _, reference := range references {
 			text := sourceLines[reference.line]
@@ -1069,7 +1368,7 @@ func (s *Service) namedRepository(ctx context.Context, name string) (catalog.Rep
 	return catalog.Repository{}, fmt.Errorf("repository %q is not indexed", name)
 }
 
-func resolveRepository(repositories []catalog.Repository, searchName, revision string, requireExactIdentity bool) (catalog.Repository, bool) {
+func resolveRepository(repositories []catalog.Repository, repositoryID int64, searchName, revision string, requireExactIdentity bool) (catalog.Repository, bool) {
 	normalized := strings.ReplaceAll(searchName, "\\", "/")
 	for _, repository := range repositories {
 		if repository.IndexedCommit != revision && repository.HeadCommit != revision {
@@ -1080,7 +1379,8 @@ func resolveRepository(repositories []catalog.Repository, searchName, revision s
 		if runtime.GOOS == "windows" {
 			pathMatches = strings.EqualFold(normalized, repositoryPath)
 		}
-		if pathMatches || (!requireExactIdentity &&
+		idMatches := repositoryID > 0 && repository.ID == repositoryID
+		if idMatches || pathMatches || (!requireExactIdentity &&
 			(normalized == repository.Name ||
 				strings.HasSuffix(strings.ToLower(normalized), "/"+strings.ToLower(repository.Name)))) {
 			return repository, true
@@ -1106,6 +1406,54 @@ func normalizeLimit(value, fallback, maximum int) int {
 		return fallback
 	}
 	return min(value, maximum)
+}
+
+func shortRevision(revision string) string {
+	revision = strings.TrimSpace(revision)
+	if len(revision) > 8 {
+		return revision[:8]
+	}
+	if revision == "" {
+		return "unavailable"
+	}
+	return revision
+}
+
+func repositoryContextLabel(repository catalog.Repository, repositories []catalog.Repository) string {
+	label := "@" + repository.Name
+	collisions := 0
+	for _, candidate := range repositories {
+		if strings.EqualFold(strings.TrimSpace(candidate.Name), strings.TrimSpace(repository.Name)) {
+			collisions++
+		}
+	}
+	if collisions > 1 {
+		label += fmt.Sprintf(" · repository %d", repository.ID)
+	}
+	return label
+}
+
+func compactSearchScopes(scopes []search.Scope) []search.Scope {
+	repositoryWide := make(map[string]bool)
+	for _, scope := range scopes {
+		if scope.Path == "" {
+			repositoryWide[scope.Repository] = true
+		}
+	}
+	output := make([]search.Scope, 0, len(scopes))
+	seen := make(map[string]struct{}, len(scopes))
+	for _, scope := range scopes {
+		if scope.Path != "" && repositoryWide[scope.Repository] {
+			continue
+		}
+		key := scope.Repository + "\x00" + scope.Path
+		if _, duplicate := seen[key]; duplicate {
+			continue
+		}
+		seen[key] = struct{}{}
+		output = append(output, scope)
+	}
+	return output
 }
 
 func safeTreePath(value string) (string, error) {
@@ -1175,4 +1523,85 @@ func gitTree(ctx context.Context, repository catalog.Repository, revision, treeP
 		return entries[left].Path < entries[right].Path
 	})
 	return entries, truncated, nil
+}
+
+func gitObjectType(ctx context.Context, repository catalog.Repository, revision, filePath string) (string, error) {
+	bounded, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	arguments := make([]string, 0, 6)
+	if repository.Bare {
+		arguments = append(arguments, "--git-dir", repository.Path)
+	} else {
+		arguments = append(arguments, "-C", repository.Path)
+	}
+	arguments = append(arguments, "cat-file", "-t", revision+":"+filePath)
+	command := exec.CommandContext(bounded, "git", arguments...)
+	command.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0", "LC_ALL=C")
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
+	output, err := command.Output()
+	if err != nil {
+		message := strings.TrimSpace(stderr.String())
+		if message == "" {
+			message = err.Error()
+		}
+		return "", errors.New(message)
+	}
+	return strings.TrimSpace(string(output)), nil
+}
+
+func gitFiles(ctx context.Context, repository catalog.Repository, revision string) ([]string, bool, error) {
+	bounded, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	arguments := make([]string, 0, 8)
+	if repository.Bare {
+		arguments = append(arguments, "--git-dir", repository.Path)
+	} else {
+		arguments = append(arguments, "-C", repository.Path)
+	}
+	arguments = append(arguments, "ls-tree", "-r", "--name-only", "-z", revision)
+	command := exec.CommandContext(bounded, "git", arguments...)
+	command.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0", "LC_ALL=C")
+	stdout, err := command.StdoutPipe()
+	if err != nil {
+		return nil, false, fmt.Errorf("open Git tree output: %w", err)
+	}
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
+	if err := command.Start(); err != nil {
+		return nil, false, fmt.Errorf("list Git files: %w", err)
+	}
+	output, readErr := io.ReadAll(io.LimitReader(stdout, maximumContextTreeBytes+1))
+	truncated := len(output) > maximumContextTreeBytes
+	if truncated && command.Process != nil {
+		_ = command.Process.Kill()
+	}
+	waitErr := command.Wait()
+	if readErr != nil {
+		return nil, false, fmt.Errorf("read Git file list: %w", readErr)
+	}
+	if waitErr != nil && !truncated {
+		message := strings.TrimSpace(stderr.String())
+		if message == "" {
+			message = waitErr.Error()
+		}
+		return nil, false, fmt.Errorf("list Git files: %s", message)
+	}
+	if truncated {
+		output = output[:maximumContextTreeBytes]
+		if last := bytes.LastIndexByte(output, 0); last >= 0 {
+			output = output[:last+1]
+		} else {
+			output = nil
+		}
+	}
+	records := strings.Split(strings.TrimSuffix(string(output), "\x00"), "\x00")
+	files := make([]string, 0, len(records))
+	for _, filePath := range records {
+		filePath = strings.TrimSpace(filepath.ToSlash(filePath))
+		if filePath != "" {
+			files = append(files, filePath)
+		}
+	}
+	return files, truncated, nil
 }

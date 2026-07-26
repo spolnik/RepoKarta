@@ -19,11 +19,25 @@ type Query struct {
 	// Repositories is an internal exact allow-list of canonical repository
 	// identities. External query syntax never populates it.
 	Repositories []string
-	Language     string
+	// RepositoryIDs is the collision-safe internal allow-list stored in Zoekt
+	// shard metadata.
+	RepositoryIDs []uint32
+	// Scopes is an internal union of exact repository and optional file
+	// identities resolved from structured contexts. External query syntax never
+	// populates it.
+	Scopes   []Scope
+	Language string
+	Path     string
+	File     string
+	Mode     string
+	Limit    int
+}
+
+// Scope is one exact repository identity and an optional exact file path.
+type Scope struct {
+	RepositoryID uint32
+	Repository   string
 	Path         string
-	File         string
-	Mode         string
-	Limit        int
 }
 
 // Result contains source matches tied to exact repository revisions.
@@ -50,12 +64,13 @@ type Warning struct {
 
 // FileMatch is one matched source file.
 type FileMatch struct {
-	Repository string
-	Revision   string
-	Path       string
-	Language   string
-	Score      float64
-	Lines      []LineMatch
+	RepositoryID int64
+	Repository   string
+	Revision     string
+	Path         string
+	Language     string
+	Score        float64
+	Lines        []LineMatch
 }
 
 // LineMatch is one cited line and its exact matching byte ranges.

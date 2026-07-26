@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/spolnik/RepoKarta/internal/access"
+	"github.com/spolnik/RepoKarta/internal/contextscope"
 )
 
 // EventType identifies one streamed conversation event.
@@ -160,17 +161,19 @@ type Adapter interface {
 
 // TurnRequest starts or continues a conversation.
 type TurnRequest struct {
-	ConversationID   string             `json:"conversation_id"`
-	Provider         string             `json:"provider"`
-	Model            string             `json:"model"`
-	Effort           string             `json:"effort"`
-	Message          string             `json:"message"`
-	Images           []Image            `json:"images,omitempty"`
-	TimeoutSeconds   int                `json:"timeout_seconds,omitempty"`
-	TokenBudget      int64              `json:"token_budget,omitempty"`
-	ResumeCursor     string             `json:"-"`
-	Author           ConversationAuthor `json:"-"`
-	AuthorCanViewAll bool               `json:"-"`
+	ConversationID   string                  `json:"conversation_id"`
+	Provider         string                  `json:"provider"`
+	Model            string                  `json:"model"`
+	Effort           string                  `json:"effort"`
+	Message          string                  `json:"message"`
+	Images           []Image                 `json:"images,omitempty"`
+	ContextSelectors []contextscope.Selector `json:"contexts,omitempty"`
+	TimeoutSeconds   int                     `json:"timeout_seconds,omitempty"`
+	TokenBudget      int64                   `json:"token_budget,omitempty"`
+	ResumeCursor     string                  `json:"-"`
+	Author           ConversationAuthor      `json:"-"`
+	AuthorCanViewAll bool                    `json:"-"`
+	Contexts         []contextscope.Context  `json:"-"`
 }
 
 // Turn is the provider-neutral content sent to one local harness.
@@ -178,6 +181,7 @@ type Turn struct {
 	Message     string
 	Images      []Image
 	History     []Message
+	Contexts    []contextscope.Context
 	TokenBudget int64
 }
 
@@ -407,6 +411,7 @@ func (m *Manager) Send(ctx context.Context, request TurnRequest, emit func(Event
 		Role:           RoleUser,
 		Text:           request.Message,
 		Images:         append([]Image(nil), request.Images...),
+		Contexts:       append([]contextscope.Context(nil), request.Contexts...),
 		Status:         "complete",
 		CreatedAt:      time.Now().UTC(),
 	}
@@ -467,6 +472,7 @@ func (m *Manager) Send(ctx context.Context, request TurnRequest, emit func(Event
 		Message:     request.Message,
 		Images:      request.Images,
 		History:     history,
+		Contexts:    request.Contexts,
 		TokenBudget: tokenBudget,
 	}, forward)
 	if sendError != nil && !providerOutputObserved {
@@ -495,6 +501,7 @@ func (m *Manager) Send(ctx context.Context, request TurnRequest, emit func(Event
 					Message:     request.Message,
 					Images:      request.Images,
 					History:     history,
+					Contexts:    request.Contexts,
 					TokenBudget: tokenBudget,
 				}, forward)
 			} else {
@@ -661,6 +668,7 @@ func (m *Manager) RunEphemeral(
 	sendError := session.Send(turnContext, Turn{
 		Message:     request.Message,
 		Images:      request.Images,
+		Contexts:    request.Contexts,
 		TokenBudget: tokenBudget,
 	}, forward)
 	if sendError == nil && m.citations != nil {

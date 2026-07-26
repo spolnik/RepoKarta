@@ -27,6 +27,7 @@ import (
 	"github.com/spolnik/RepoKarta/internal/audit"
 	"github.com/spolnik/RepoKarta/internal/catalog"
 	"github.com/spolnik/RepoKarta/internal/codeintel"
+	"github.com/spolnik/RepoKarta/internal/contextscope"
 	"github.com/spolnik/RepoKarta/internal/dependencies"
 	"github.com/spolnik/RepoKarta/internal/docs"
 	"github.com/spolnik/RepoKarta/internal/graph"
@@ -278,6 +279,8 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 	mux.HandleFunc("GET /search", server.search)
 	mux.HandleFunc("GET /source/{repositoryID}", server.source)
 	mux.HandleFunc("GET /api/search", server.apiSearch)
+	mux.HandleFunc("POST /api/search", server.apiSearchJSON)
+	mux.HandleFunc("GET /api/contexts/suggest", server.apiContextSuggestions)
 	mux.HandleFunc("GET /api/symbol", server.apiSymbol)
 	mux.HandleFunc("GET /api/repositories", server.apiRepositories)
 	mux.HandleFunc("GET /api/whoami", server.apiWhoAmI)
@@ -549,6 +552,12 @@ func (s *Server) chat(response http.ResponseWriter, request *http.Request) {
 	turn.Model = strings.TrimSpace(turn.Model)
 	turn.Effort = strings.TrimSpace(turn.Effort)
 	turn.ConversationID = strings.TrimSpace(turn.ConversationID)
+	contexts, err := s.intelligence.ResolveContexts(request.Context(), turn.ContextSelectors)
+	if err != nil {
+		writeContextError(response, err)
+		return
+	}
+	turn.Contexts = contexts
 	viewer := s.conversationViewer(request.Context())
 	turn.Author = viewer.Author
 	turn.AuthorCanViewAll = viewer.Admin
@@ -694,9 +703,54 @@ func (s *Server) apiSearch(response http.ResponseWriter, request *http.Request) 
 		Limit:        limit,
 	})
 	if err != nil {
+		writeContextOrAPIError(response, err)
+		return
+	}
+	writeSearchJSON(response, result)
+}
+
+func (s *Server) apiSearchJSON(response http.ResponseWriter, request *http.Request) {
+	request.Body = http.MaxBytesReader(response, request.Body, 1<<20)
+	var input codeintel.SearchRequest
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
+		writeAPIError(response, http.StatusBadRequest, errors.New("invalid structured search request"))
+		return
+	}
+	result, err := s.intelligence.Search(request.Context(), input)
+	if err != nil {
+		writeContextOrAPIError(response, err)
+		return
+	}
+	writeSearchJSON(response, result)
+}
+
+func (s *Server) apiContextSuggestions(response http.ResponseWriter, request *http.Request) {
+	repositoryID, err := optionalRepositoryID(request.URL.Query().Get("repository_id"))
+	if err != nil {
 		writeAPIError(response, http.StatusBadRequest, err)
 		return
 	}
+	limit, err := apiSearchLimit(request.URL.Query().Get("limit"))
+	if err != nil {
+		writeAPIError(response, http.StatusBadRequest, err)
+		return
+	}
+	result, err := s.intelligence.SuggestContexts(request.Context(), codeintel.ContextSuggestionRequest{
+		Kind:         request.URL.Query().Get("kind"),
+		Query:        request.URL.Query().Get("q"),
+		RepositoryID: repositoryID,
+		Limit:        limit,
+	})
+	if err != nil {
+		writeAPIError(response, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
+func writeSearchJSON(response http.ResponseWriter, result codeintel.SearchResponse) {
 	status := http.StatusOK
 	if result.ReferenceIndex != nil && result.ReferenceIndex.State == "building" {
 		status = http.StatusAccepted
@@ -1617,6 +1671,30 @@ func writeAPIError(response http.ResponseWriter, status int, err error) {
 	writeJSON(response, status, map[string]any{
 		"error": map[string]string{
 			"message": err.Error(),
+		},
+	})
+}
+
+func writeContextOrAPIError(response http.ResponseWriter, err error) {
+	var resolutionError *contextscope.ResolutionError
+	if errors.As(err, &resolutionError) {
+		writeContextError(response, resolutionError)
+		return
+	}
+	writeAPIError(response, http.StatusBadRequest, err)
+}
+
+func writeContextError(response http.ResponseWriter, err error) {
+	var resolutionError *contextscope.ResolutionError
+	if !errors.As(err, &resolutionError) {
+		writeAPIError(response, http.StatusUnprocessableEntity, err)
+		return
+	}
+	writeJSON(response, http.StatusUnprocessableEntity, map[string]any{
+		"error": map[string]any{
+			"message": resolutionError.Error(),
+			"code":    "context_resolution_failed",
+			"issues":  resolutionError.Issues,
 		},
 	})
 }
