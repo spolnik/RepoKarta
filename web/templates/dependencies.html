@@ -38,7 +38,7 @@
               </select>
             </label>
             <label class="filter-field lg:col-span-2"><span>Package, manifest, or repository</span><input name="query" value="{{.Inventory.Query}}" placeholder="Search declarations"></label>
-            <label class="filter-field"><span>Ecosystem</span><select name="ecosystem"><option value="">All ecosystems</option><option value="go" {{if eq .Inventory.Ecosystem "go"}}selected{{end}}>Go</option><option value="npm" {{if eq .Inventory.Ecosystem "npm"}}selected{{end}}>npm</option><option value="maven" {{if eq .Inventory.Ecosystem "maven"}}selected{{end}}>Maven</option><option value="cargo" {{if eq .Inventory.Ecosystem "cargo"}}selected{{end}}>Cargo</option><option value="pypi" {{if eq .Inventory.Ecosystem "pypi"}}selected{{end}}>PyPI</option></select></label>
+            <label class="filter-field"><span>Ecosystem</span><select name="ecosystem"><option value="">All ecosystems</option><option value="go" {{if eq .Inventory.Ecosystem "go"}}selected{{end}}>Go</option><option value="npm" {{if eq .Inventory.Ecosystem "npm"}}selected{{end}}>npm</option><option value="maven" {{if eq .Inventory.Ecosystem "maven"}}selected{{end}}>Maven</option><option value="cargo" {{if eq .Inventory.Ecosystem "cargo"}}selected{{end}}>Cargo</option><option value="pypi" {{if eq .Inventory.Ecosystem "pypi"}}selected{{end}}>PyPI</option><option value="nuget" {{if eq .Inventory.Ecosystem "nuget"}}selected{{end}}>NuGet</option></select></label>
             <label class="filter-field"><span>Usage</span><select name="usage"><option value="">All usage</option><option value="production" {{if eq .Inventory.Usage "production"}}selected{{end}}>Production</option><option value="test" {{if eq .Inventory.Usage "test"}}selected{{end}}>Test</option><option value="development" {{if eq .Inventory.Usage "development"}}selected{{end}}>Development</option><option value="build" {{if eq .Inventory.Usage "build"}}selected{{end}}>Build</option><option value="unknown" {{if eq .Inventory.Usage "unknown"}}selected{{end}}>Unknown</option></select></label>
             <label class="filter-field"><span>Relationship</span><select name="relationship"><option value="">All relationships</option><option value="required" {{if eq .Inventory.Relationship "required"}}selected{{end}}>Required</option><option value="optional" {{if eq .Inventory.Relationship "optional"}}selected{{end}}>Optional</option><option value="peer" {{if eq .Inventory.Relationship "peer"}}selected{{end}}>Peer</option><option value="unknown" {{if eq .Inventory.Relationship "unknown"}}selected{{end}}>Unknown</option></select></label>
             <label class="filter-field"><span>Resolution</span><select name="resolution"><option value="">All resolutions</option><option value="exact" {{if eq .Inventory.Resolution "exact"}}selected{{end}}>Exact</option><option value="constraint" {{if eq .Inventory.Resolution "constraint"}}selected{{end}}>Constraint</option><option value="variable" {{if eq .Inventory.Resolution "variable"}}selected{{end}}>Variable</option><option value="unresolved" {{if eq .Inventory.Resolution "unresolved"}}selected{{end}}>Unresolved</option></select></label>
@@ -81,11 +81,11 @@
             type="button"
             data-dependency-refresh
             data-dependency-refresh-url="{{.RefreshURL}}"
-          >Refresh stale npm and Maven versions</button>
+          >Refresh stale package versions</button>
           <span class="text-sm text-ink-soft" role="status" data-dependency-refresh-status>
             {{if eq .RefreshProgress.State "running"}}Checking {{.RefreshProgress.Completed}} of {{.RefreshProgress.Total}} unique packages.{{else}}Registry results are cached for 24 hours.{{end}}
           </span>
-          <span class="w-full text-xs text-ink-faint">Starting a refresh sends matching package names and Maven coordinates to the public npm Registry and Maven Central.</span>
+          <span class="w-full text-xs text-ink-faint">Starting a refresh sends matching package identifiers to their displayed public or explicitly configured private registries.</span>
         </div>
         {{end}}
 
@@ -117,11 +117,12 @@
           </div>
           {{if .Inventory.Declarations}}
           <div class="overflow-x-auto">
-            <table class="w-full min-w-[1180px] border-collapse text-left text-sm">
+            <table class="w-full min-w-[1320px] border-collapse text-left text-sm">
               <thead class="bg-white/[0.025] text-xs uppercase tracking-[0.12em] text-ink-faint">
                 <tr>
                   <th class="px-5 py-3 font-medium">Package</th>
                   <th class="px-4 py-3 font-medium">Declared</th>
+                  <th class="px-4 py-3 font-medium">Resolved</th>
                   <th class="px-4 py-3 font-medium">Resolution</th>
                   <th class="px-4 py-3 font-medium">Usage</th>
                   <th class="px-4 py-3 font-medium">Freshness</th>
@@ -137,6 +138,10 @@
                     <span class="mt-1 block text-xs uppercase tracking-[0.12em] text-emerald-300">{{.Ecosystem}}</span>
                   </td>
                   <td class="px-4 py-4 font-mono text-ink">{{if .Declared}}{{.Declared}}{{else}}—{{end}}</td>
+                  <td class="px-4 py-4 font-mono text-ink">
+                    {{if .Resolved}}{{.Resolved}}{{else}}—{{end}}
+                    {{if .ResolutionSource}}<span class="mt-2 block max-w-48 truncate text-xs text-ink-faint" title="{{.ResolutionSource}}">{{.ResolutionSource}}</span>{{end}}
+                  </td>
                   <td class="px-4 py-4"><span class="rounded-full border border-white/10 px-2 py-1 text-xs text-ink-soft">{{.Resolution}}</span></td>
                   <td class="px-4 py-4">
                     <span class="rounded-full border border-sky-300/20 bg-sky-400/[0.06] px-2 py-1 text-xs text-sky-100">{{.Usage}}</span>
@@ -145,6 +150,8 @@
                   <td class="px-4 py-4">
                     {{if eq .CheckStatus "current"}}<span class="rounded-full border border-emerald-300/20 bg-emerald-400/[0.06] px-2 py-1 text-xs text-emerald-100">Current · {{.LatestStable}}</span>
                     {{else if eq .CheckStatus "update_available"}}<span class="rounded-full border border-rose-300/20 bg-rose-400/[0.06] px-2 py-1 text-xs text-rose-100">Update · {{.LatestStable}}</span>
+                    {{else if eq .CheckStatus "ahead"}}<span class="rounded-full border border-sky-300/20 bg-sky-400/[0.06] px-2 py-1 text-xs text-sky-100">Ahead · latest {{.LatestStable}}</span>
+                    {{else if eq .CheckStatus "prerelease"}}<span class="rounded-full border border-violet-300/20 bg-violet-400/[0.06] px-2 py-1 text-xs text-violet-100">Prerelease · stable {{.LatestStable}}</span>
                     {{else if eq .CheckStatus "latest_known"}}<span class="rounded-full border border-sky-300/20 bg-sky-400/[0.06] px-2 py-1 text-xs text-sky-100">Latest · {{.LatestStable}}</span>
                     {{else if eq .CheckStatus "stale"}}<span class="rounded-full border border-amber-300/20 bg-amber-400/[0.06] px-2 py-1 text-xs text-amber-100">Cached result stale</span>
                     {{else if eq .CheckStatus "error"}}<span class="rounded-full border border-rose-300/20 bg-rose-400/[0.06] px-2 py-1 text-xs text-rose-100">Check failed</span>

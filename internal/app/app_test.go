@@ -15,6 +15,13 @@ func TestDefaultConfigReadsBoundedEnvironment(t *testing.T) {
 	t.Setenv("REPOKARTA_ADMIN_USER", " admin ")
 	t.Setenv("REPOKARTA_PUBLIC_URL", " https://repo.example.com ")
 	t.Setenv("REPOKARTA_GITHUB_API", " https://api.github.test ")
+	t.Setenv("REPOKARTA_DEPENDENCY_REGISTRIES", `[{
+		"ecosystem":"npm",
+		"base_url":"https://npm.example.com",
+		"metadata_url_template":"https://npm.example.com/{package}",
+		"package_prefixes":["@acme/"],
+		"token_env":"ACME_NPM_TOKEN"
+	}]`)
 	config, err := DefaultConfig()
 	if err != nil {
 		t.Fatal(err)
@@ -24,6 +31,8 @@ func TestDefaultConfigReadsBoundedEnvironment(t *testing.T) {
 		config.Security.PublicURL != "https://repo.example.com" ||
 		!config.AllowOpen || config.AdminUser != "admin" ||
 		config.AcquisitionGitHubAPI != "https://api.github.test" ||
+		len(config.DependencyRegistries) != 1 ||
+		config.DependencyRegistries[0].TokenEnv != "ACME_NPM_TOKEN" ||
 		filepath.Base(config.DataDirectory) != "RepoKarta" {
 		t.Fatalf("default config = %#v", config)
 	}

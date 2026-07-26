@@ -8,7 +8,7 @@ modifying a worktree.
 The current implementation delivers M1 code search, M2 grounded code
 questions, M3 evidence-backed repository maps, M4 living documentation, M5
 native distribution, M6 shared deployment, M8 code insights, and the M9
-dependency-inventory foundation:
+dependency-management workspace:
 
 - regular, linked-worktree, and bare Git repository discovery;
 - origin, default revision, HEAD, scan, and index metadata in SQLite;
@@ -212,26 +212,64 @@ RepoKarta does not include a local test or scanner execution endpoint.
 Open `/dependencies` for the commit-pinned declaration inventory. Package,
 manifest, repository, ecosystem, production/test/development/build usage,
 relationship, and resolution filters are evaluated before returning a bounded
-page. npm manifest sections, Gradle configurations, and Maven scopes remain
-visible instead of being flattened away. Both the HTML workspace and
-`/api/dependencies`
-default to 100 declarations per page and reject limits above 500. Cold reads
-compose only already-prepared per-repository artifacts: the API returns
+page. npm manifest sections, Gradle configurations, Maven scopes, Cargo
+dependency tables, Python dependency groups, and NuGet project references
+remain visible instead of being flattened away. Go module usage is classified
+from committed production and test imports. Both the HTML workspace and
+`/api/dependencies` default to 100 declarations per page and reject limits
+above 500. Cold reads compose only already-prepared per-repository artifacts:
+the API returns
 `202 Accepted` with ready and pending repository counts while the eight-worker
 background pool completes the fleet, and the HTML workspace shows the same
 progress instead of blocking on source analysis.
 
-Knowledge maintainers and administrators can start a token-free public npm and
-Maven Central version refresh with `POST /api/dependencies/refresh`. RepoKarta
-deduplicates package coordinates, checks them through an eight-worker pool, and
-caches observations in SQLite for 24 hours. `/dependencies` never waits for a
-registry: it joins the cached version and observation time onto commit-pinned
-declarations. `GET /api/dependencies/progress` reports the current refresh.
-Conditional request validators, registry throttling responses, and short-lived
-error caching avoid unnecessary repeat traffic. Registry checks never modify
-manifests or lockfiles. Starting a public refresh sends the matching npm package
-names and Maven coordinates to those public services; private-registry support
-is intentionally not inferred from repository files.
+When a supported lockfile is committed, the inventory keeps the manifest's
+declared constraint and the installed resolution as separate facts. It reads
+`package-lock.json`, `npm-shrinkwrap.json`, `pnpm-lock.yaml`,
+`gradle.lockfile`, `Cargo.lock`, `uv.lock`, `poetry.lock`,
+`packages.lock.json`, and exact `go.mod` requirements. Ambiguous transitive
+matches remain unresolved instead of guessing. The table therefore distinguishes
+**Declared**, **Resolved**, and registry-observed **Latest stable** versions,
+including current, update available, ahead, prerelease, unresolved-constraint,
+stale-cache, and registry-error states.
+
+Knowledge maintainers and administrators can start a token-free public refresh
+with `POST /api/dependencies/refresh`. Supported public services are the npm
+registry, Maven Central, PyPI, crates.io, the public Go module proxy, and NuGet.
+RepoKarta deduplicates package coordinates, checks them through an eight-worker
+pool, and caches observations in SQLite for 24 hours. `/dependencies` never
+waits for a registry: it joins cached version and observation time onto
+commit-pinned declarations. `GET /api/dependencies/progress` reports the
+current refresh. Conditional request validators, registry throttling responses,
+and short-lived error caching avoid unnecessary repeat traffic. Registry checks
+never modify manifests or lockfiles.
+
+Private packages can be routed explicitly by ecosystem and longest package
+prefix. Configuration is read from `REPOKARTA_DEPENDENCY_REGISTRIES`; it stores
+only an environment-variable name and reads the bearer token at request time.
+The metadata endpoint must return that ecosystem's normal registry response
+shape. HTTPS is required except for a loopback development registry:
+
+```powershell
+$env:ACME_NPM_TOKEN = Read-Host -MaskInput "Private registry token"
+$env:REPOKARTA_DEPENDENCY_REGISTRIES = @'
+[
+  {
+    "ecosystem": "npm",
+    "base_url": "https://npm.example.com",
+    "metadata_url_template": "https://npm.example.com/{package}",
+    "package_prefixes": ["@acme/"],
+    "token_env": "ACME_NPM_TOKEN"
+  }
+]
+'@
+```
+
+Templates may use `{package}` for npm, PyPI, or NuGet; `{group_path}` and
+`{artifact}` for Maven; `{module}` for Go; or `{cargo_path}` for a Cargo sparse
+index. A package that does not match an explicit private route uses its public
+ecosystem service, so configure every internal prefix before starting a
+refresh.
 
 ## Deployment authentication
 
@@ -617,11 +655,11 @@ Windows amd64 and Apple Silicon macOS. The workflow:
 Run the same packagers locally:
 
 ```powershell
-.\scripts\package-release.ps1 -Version 0.48.0-dev
+.\scripts\package-release.ps1 -Version 0.49.0-dev
 ```
 
 ```sh
-./scripts/package-release.sh 0.48.0-dev
+./scripts/package-release.sh 0.49.0-dev
 ```
 
 macOS packages are signed with the hardened runtime when

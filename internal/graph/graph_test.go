@@ -198,6 +198,15 @@ func Run() {}
   }
 }
 `)
+	writeGraphFixture(t, root, "package-lock.json", `{
+  "lockfileVersion": 3,
+  "packages": {
+    "": {},
+    "node_modules/htmx.org": {"version": "2.0.10"},
+    "node_modules/vitest": {"version": "4.0.1"}
+  }
+}
+`)
 	writeGraphFixture(t, root, "README.md", "# Acme\n")
 	runGraphGit(t, root, "init")
 	runGraphGit(t, root, "config", "user.email", "graph@example.com")
@@ -226,7 +235,7 @@ func Run() {}
 	if len(snapshot.Repositories) != 1 || snapshot.Repositories[0].Name != "acme" {
 		t.Fatalf("repositories = %#v", snapshot.Repositories)
 	}
-	if snapshot.FileCount != 5 || len(snapshot.Languages) == 0 {
+	if snapshot.FileCount != 6 || len(snapshot.Languages) == 0 {
 		t.Fatalf("inventory = files %d, languages %#v", snapshot.FileCount, snapshot.Languages)
 	}
 	if len(snapshot.Manifests) != 2 {
@@ -239,6 +248,8 @@ func Run() {}
 					declaration.Package == "github.com/google/uuid" &&
 					declaration.Declared == "v1.6.0" &&
 					declaration.Resolution == "exact" &&
+					declaration.Resolved == "v1.6.0" &&
+					declaration.ResolutionSource == "go.mod" &&
 					declaration.Evidence.Line == 5
 			})
 	}) || !slices.ContainsFunc(snapshot.Manifests, func(manifest Manifest) bool {
@@ -248,6 +259,8 @@ func Run() {}
 					declaration.Package == "htmx.org" &&
 					declaration.Declared == "2.0.10" &&
 					declaration.Resolution == "exact" &&
+					declaration.Resolved == "2.0.10" &&
+					declaration.ResolutionSource == "package-lock.json" &&
 					declaration.Usage == "production" &&
 					declaration.Relationship == "required" &&
 					declaration.DeclaredScope == "dependencies" &&
@@ -380,7 +393,7 @@ func TestSnapshotRegeneratesUnsupportedCachedArtifact(t *testing.T) {
 	}
 	content := mustReadGraphFile(t, files[0])
 	if bytes.Contains(content, []byte("unsupported-marker")) ||
-		!bytes.Contains(content, []byte(`"version": 8`)) {
+		!bytes.Contains(content, []byte(`"version": 9`)) {
 		t.Fatalf("unsupported cache was not regenerated: %s", content)
 	}
 }
@@ -824,6 +837,159 @@ func TestParseMavenDeclarationsPreservesUsageAndProperties(t *testing.T) {
 			declaration.Relationship == "optional"
 	}) {
 		t.Fatalf("Maven optional declaration missing from %#v", declarations)
+	}
+}
+
+func TestCargoPythonAndNuGetDeclarationsPreserveResolvedVersions(t *testing.T) {
+	cargoLock := map[string][]string{
+		"serde":    {"1.0.219"},
+		"tempfile": {"3.20.0"},
+	}
+	cargo := parseCargoDeclarations([]byte(`[dependencies]
+serde = { version = "1", optional = true }
+
+[dev-dependencies]
+tempfile = "3"
+
+[build-dependencies]
+cc = { git = "https://example.com/cc.git" }
+`), cargoLock, "Cargo.lock")
+	for _, wanted := range []struct {
+		name, usage, resolved, relationship string
+	}{
+		{"serde", "production", "1.0.219", "optional"},
+		{"tempfile", "test", "3.20.0", "required"},
+		{"cc", "build", "", "required"},
+	} {
+		if !slices.ContainsFunc(cargo, func(declaration DependencyDeclaration) bool {
+			return declaration.Package == wanted.name &&
+				declaration.Usage == wanted.usage &&
+				declaration.Resolved == wanted.resolved &&
+				declaration.Relationship == wanted.relationship
+		}) {
+			t.Fatalf("Cargo declaration %q missing from %#v", wanted.name, cargo)
+		}
+	}
+
+	pythonLock := map[string][]string{
+		"fastapi": {"0.116.1"},
+		"pytest":  {"8.4.1"},
+	}
+	python := parsePyprojectDeclarations([]byte(`[project]
+dependencies = [
+  "fastapi>=0.115",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+`), pythonLock, "uv.lock")
+	if !slices.ContainsFunc(python, func(declaration DependencyDeclaration) bool {
+		return declaration.Package == "fastapi" && declaration.Usage == "production" &&
+			declaration.Resolved == "0.116.1"
+	}) || !slices.ContainsFunc(python, func(declaration DependencyDeclaration) bool {
+		return declaration.Package == "pytest" && declaration.Usage == "test" &&
+			declaration.Resolved == "8.4.1"
+	}) {
+		t.Fatalf("Python declarations = %#v", python)
+	}
+
+	nuget := parseNuGetDeclarations(
+		"tests/Service.Tests.csproj",
+		[]byte(`<Project><ItemGroup>
+  <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.13.0" />
+  <PackageReference Include="xunit"><Version>2.9.3</Version></PackageReference>
+</ItemGroup></Project>`),
+		map[string][]string{"Microsoft.NET.Test.Sdk": {"17.13.0"}, "xunit": {"2.9.3"}},
+		"tests/packages.lock.json",
+	)
+	if len(nuget) != 2 || !slices.ContainsFunc(nuget, func(declaration DependencyDeclaration) bool {
+		return declaration.Package == "xunit" && declaration.Usage == "test" &&
+			declaration.Resolved == "2.9.3" && declaration.Ecosystem == "nuget"
+	}) {
+		t.Fatalf("NuGet declarations = %#v", nuget)
+	}
+}
+
+func TestLockfileReadersSelectUnambiguousDirectVersions(t *testing.T) {
+	versions := tomlPackageLockVersions([]byte(`version = 4
+
+[[package]]
+name = "serde"
+version = "1.0.219"
+
+[[package]]
+name = "shared"
+version = "1.0.0"
+
+[[package]]
+name = "shared"
+version = "2.0.0"
+`))
+	if got := selectLockedVersion(versions["serde"], "^1"); got != "1.0.219" {
+		t.Fatalf("serde resolved = %q", got)
+	}
+	if got := selectLockedVersion(versions["shared"], "2.0.0"); got != "2.0.0" {
+		t.Fatalf("shared resolved = %q", got)
+	}
+	if got := selectLockedVersion(versions["shared"], "^1"); got != "" {
+		t.Fatalf("ambiguous shared resolved = %q", got)
+	}
+
+	pnpm := pnpmLockVersions([]byte(`lockfileVersion: '9.0'
+importers:
+  .:
+    dependencies:
+      react:
+        specifier: ^19.0.0
+        version: 19.1.1
+    devDependencies:
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.4(@types/node@22.15.0)
+  apps/admin:
+    dependencies:
+      '@acme/ui':
+        specifier: workspace:*
+        version: link:../../packages/ui
+      zod:
+        specifier: ^3.0.0
+        version: 3.25.67
+`), "apps/admin/package.json", "pnpm-lock.yaml")
+	if pnpm["zod"] != "3.25.67" || pnpm["@acme/ui"] != "" {
+		t.Fatalf("pnpm resolved versions = %#v", pnpm)
+	}
+
+	requirements := parsePythonDeclarations(
+		"requirements-dev.txt",
+		[]byte("zope_interface==7.2\n"),
+		map[string][]string{"zope-interface": {"7.2"}},
+		"uv.lock",
+	)
+	if len(requirements) != 1 ||
+		requirements[0].Usage != "development" ||
+		requirements[0].Resolved != "7.2" {
+		t.Fatalf("development requirements = %#v", requirements)
+	}
+}
+
+func TestGoDependencyUsageDistinguishesProductionAndTests(t *testing.T) {
+	declarations := []DependencyDeclaration{
+		{Package: "github.com/acme/runtime", Usage: "unknown"},
+		{Package: "github.com/acme/testkit", Usage: "unknown"},
+		{Package: "github.com/acme/unused", Usage: "unknown"},
+	}
+	classifyGoDependencyUsage(declarations, map[string][]byte{
+		"main.go": []byte(`package main
+import "github.com/acme/runtime/client"
+`),
+		"main_test.go": []byte(`package main
+import "github.com/acme/testkit/assert"
+`),
+	})
+	if declarations[0].Usage != "production" ||
+		declarations[1].Usage != "test" ||
+		declarations[2].Usage != "unknown" {
+		t.Fatalf("Go dependency usage = %#v", declarations)
 	}
 }
 

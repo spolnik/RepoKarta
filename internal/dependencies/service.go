@@ -3,11 +3,14 @@ package dependencies
 import (
 	"context"
 	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -20,6 +23,10 @@ import (
 const (
 	PublicNPMRegistry     = "https://registry.npmjs.org"
 	PublicMavenRepository = "https://search.maven.org"
+	PublicPyPIRegistry    = "https://pypi.org"
+	PublicCargoRegistry   = "https://crates.io"
+	PublicGoProxy         = "https://proxy.golang.org"
+	PublicNuGetRegistry   = "https://api.nuget.org"
 
 	defaultObservationTTL = 24 * time.Hour
 	defaultErrorTTL       = 15 * time.Minute
@@ -34,6 +41,16 @@ type RegistryKey struct {
 	Ecosystem string `json:"ecosystem"`
 	Registry  string `json:"registry"`
 	Package   string `json:"package"`
+}
+
+// RegistryConfig explicitly routes package prefixes to a private registry.
+// TokenEnv names an environment variable; its secret value is never persisted.
+type RegistryConfig struct {
+	Ecosystem           string   `json:"ecosystem"`
+	BaseURL             string   `json:"base_url"`
+	MetadataURLTemplate string   `json:"metadata_url_template"`
+	PackagePrefixes     []string `json:"package_prefixes"`
+	TokenEnv            string   `json:"token_env,omitempty"`
 }
 
 // Observation is one durable, cacheable registry result.
@@ -79,10 +96,75 @@ type Service struct {
 	ttl         time.Duration
 	workerCount int
 	now         func() time.Time
+	registries  []RegistryConfig
 
 	startMu  sync.Mutex
 	mu       sync.RWMutex
 	progress RefreshProgress
+}
+
+// ParseRegistryConfigs validates the optional JSON environment configuration.
+func ParseRegistryConfigs(value string) ([]RegistryConfig, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, nil
+	}
+	if len(value) > 64<<10 {
+		return nil, errors.New("dependency registry configuration exceeds 64 KiB")
+	}
+	var configs []RegistryConfig
+	if err := json.Unmarshal([]byte(value), &configs); err != nil {
+		return nil, fmt.Errorf("decode dependency registry configuration: %w", err)
+	}
+	for index := range configs {
+		configs[index].Ecosystem = strings.ToLower(strings.TrimSpace(configs[index].Ecosystem))
+		configs[index].BaseURL = strings.TrimRight(strings.TrimSpace(configs[index].BaseURL), "/")
+		configs[index].MetadataURLTemplate = strings.TrimSpace(configs[index].MetadataURLTemplate)
+		configs[index].TokenEnv = strings.TrimSpace(configs[index].TokenEnv)
+		if !slices.Contains([]string{"npm", "maven", "pypi", "cargo", "go", "nuget"}, configs[index].Ecosystem) {
+			return nil, fmt.Errorf("dependency registry %d has unsupported ecosystem", index+1)
+		}
+		if err := validateRegistryURL(configs[index].BaseURL); err != nil {
+			return nil, fmt.Errorf("dependency registry %d base URL: %w", index+1, err)
+		}
+		if err := validateRegistryURL(configs[index].MetadataURLTemplate); err != nil {
+			return nil, fmt.Errorf("dependency registry %d metadata template: %w", index+1, err)
+		}
+		baseURL, _ := url.Parse(configs[index].BaseURL)
+		metadataURL, _ := url.Parse(configs[index].MetadataURLTemplate)
+		if !strings.EqualFold(baseURL.Scheme, metadataURL.Scheme) ||
+			!strings.EqualFold(baseURL.Host, metadataURL.Host) {
+			return nil, fmt.Errorf(
+				"dependency registry %d metadata template must use the base URL origin",
+				index+1,
+			)
+		}
+		if !strings.Contains(configs[index].MetadataURLTemplate, "{package}") &&
+			!strings.Contains(configs[index].MetadataURLTemplate, "{module}") &&
+			!strings.Contains(configs[index].MetadataURLTemplate, "{group_path}") &&
+			!strings.Contains(configs[index].MetadataURLTemplate, "{cargo_path}") {
+			return nil, fmt.Errorf("dependency registry %d metadata template lacks a package placeholder", index+1)
+		}
+		if len(configs[index].PackagePrefixes) == 0 {
+			return nil, fmt.Errorf("dependency registry %d needs at least one package prefix", index+1)
+		}
+		for prefixIndex := range configs[index].PackagePrefixes {
+			configs[index].PackagePrefixes[prefixIndex] = strings.TrimSpace(configs[index].PackagePrefixes[prefixIndex])
+			if configs[index].PackagePrefixes[prefixIndex] == "" {
+				return nil, fmt.Errorf("dependency registry %d has an empty package prefix", index+1)
+			}
+		}
+		if configs[index].TokenEnv != "" &&
+			!regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`).MatchString(configs[index].TokenEnv) {
+			return nil, fmt.Errorf("dependency registry %d has an invalid token environment variable", index+1)
+		}
+	}
+	return configs, nil
+}
+
+// UseRegistries installs validated explicit private-registry routing.
+func (s *Service) UseRegistries(configs []RegistryConfig) {
+	s.registries = append([]RegistryConfig(nil), configs...)
 }
 
 // NewService creates a cache-first dependency service. Registry calls are made
@@ -122,7 +204,7 @@ func (s *Service) Inventory(
 	}
 	now := s.now()
 	return buildPage(snapshot, options, func(declaration *Declaration) {
-		key, ok := registryKeyFor(*declaration)
+		key, ok := s.registryKeyFor(*declaration)
 		if !ok {
 			declaration.CheckStatus = "not_comparable"
 			return
@@ -173,7 +255,7 @@ func (s *Service) StartRefresh(
 	targets := make(map[string]RegistryKey)
 	skipped := 0
 	for _, declaration := range declarations {
-		key, ok := registryKeyFor(declaration)
+		key, ok := s.registryKeyFor(declaration)
 		if !ok {
 			skipped++
 			continue
@@ -276,7 +358,7 @@ func (s *Service) lookup(ctx context.Context, key RegistryKey, previous Observat
 		ObservedAt:   now,
 		ExpiresAt:    now.Add(defaultErrorTTL),
 	}
-	requestURL, headers, err := registryRequest(key)
+	requestURL, headers, tokenEnv, err := s.registryRequest(key)
 	if err != nil {
 		observation.Error = err.Error()
 		return observation
@@ -287,7 +369,15 @@ func (s *Service) lookup(ctx context.Context, key RegistryKey, previous Observat
 		return observation
 	}
 	request.Header.Set("Accept", headers)
-	request.Header.Set("User-Agent", "RepoKarta dependency-checker")
+	request.Header.Set("User-Agent", "RepoKarta dependency-checker (+https://github.com/spolnik/RepoKarta)")
+	if tokenEnv != "" {
+		token := strings.TrimSpace(os.Getenv(tokenEnv))
+		if token == "" {
+			observation.Error = "registry credential environment variable is not set"
+			return observation
+		}
+		request.Header.Set("Authorization", "Bearer "+token)
+	}
 	if previous.ETag != "" {
 		request.Header.Set("If-None-Match", previous.ETag)
 	}
@@ -329,6 +419,14 @@ func (s *Service) lookup(ctx context.Context, key RegistryKey, previous Observat
 		observation.LatestStable, err = npmLatestStable(content)
 	case "maven":
 		observation.LatestStable, err = mavenLatestStable(content)
+	case "pypi":
+		observation.LatestStable, err = pypiLatestStable(content)
+	case "cargo":
+		observation.LatestStable, err = cargoLatestStable(content)
+	case "go":
+		observation.LatestStable, err = goLatestStable(content)
+	case "nuget":
+		observation.LatestStable, err = nugetLatestStable(content)
 	default:
 		err = errors.New("unsupported dependency registry")
 	}
@@ -361,9 +459,38 @@ func registryRequest(key RegistryKey) (string, string, error) {
 		}
 		return PublicMavenRepository + "/solrsearch/select?" + query.Encode(),
 			"application/json", nil
+	case "pypi":
+		return PublicPyPIRegistry + "/pypi/" + url.PathEscape(key.Package) + "/json",
+			"application/json", nil
+	case "cargo":
+		return PublicCargoRegistry + "/api/v1/crates/" + url.PathEscape(key.Package),
+			"application/json", nil
+	case "go":
+		return PublicGoProxy + "/" + escapeGoModulePath(key.Package) + "/@v/list",
+			"text/plain", nil
+	case "nuget":
+		return PublicNuGetRegistry + "/v3-flatcontainer/" +
+				url.PathEscape(strings.ToLower(key.Package)) + "/index.json",
+			"application/json", nil
 	default:
 		return "", "", errors.New("unsupported dependency ecosystem")
 	}
+}
+
+func (s *Service) registryRequest(key RegistryKey) (string, string, string, error) {
+	if isPublicRegistry(key.Registry) {
+		requestURL, accept, err := registryRequest(key)
+		return requestURL, accept, "", err
+	}
+	for _, config := range s.registries {
+		if config.Ecosystem != key.Ecosystem ||
+			!strings.EqualFold(strings.TrimRight(config.BaseURL, "/"), strings.TrimRight(key.Registry, "/")) {
+			continue
+		}
+		requestURL := expandRegistryTemplate(config.MetadataURLTemplate, key)
+		return requestURL, registryAccept(key.Ecosystem), config.TokenEnv, nil
+	}
+	return "", "", "", errors.New("dependency registry configuration is unavailable")
 }
 
 func npmLatestStable(content []byte) (string, error) {
@@ -399,22 +526,159 @@ func mavenLatestStable(content []byte) (string, error) {
 			} `json:"docs"`
 		} `json:"response"`
 	}
-	if err := json.Unmarshal(content, &document); err != nil {
-		return "", fmt.Errorf("decode Maven metadata: %w", err)
+	if err := json.Unmarshal(content, &document); err == nil {
+		for _, document := range document.Response.Docs {
+			version := firstNonEmpty(document.Version, document.LatestVersion)
+			if mavenStableVersion(version) {
+				return strings.TrimSpace(version), nil
+			}
+		}
 	}
-	for _, document := range document.Response.Docs {
-		version := firstNonEmpty(document.Version, document.LatestVersion)
-		if mavenStableVersion(version) {
-			return strings.TrimSpace(version), nil
+	var metadata struct {
+		Versioning struct {
+			Release  string   `xml:"release"`
+			Versions []string `xml:"versions>version"`
+		} `xml:"versioning"`
+	}
+	if err := xml.Unmarshal(content, &metadata); err == nil {
+		if mavenStableVersion(metadata.Versioning.Release) {
+			return strings.TrimSpace(metadata.Versioning.Release), nil
+		}
+		for index := len(metadata.Versioning.Versions) - 1; index >= 0; index-- {
+			if mavenStableVersion(metadata.Versioning.Versions[index]) {
+				return strings.TrimSpace(metadata.Versioning.Versions[index]), nil
+			}
 		}
 	}
 	return "", errors.New("Maven artifact has no stable version")
 }
 
-func registryKeyFor(declaration Declaration) (RegistryKey, bool) {
+func pypiLatestStable(content []byte) (string, error) {
+	var document struct {
+		Info struct {
+			Version string `json:"version"`
+		} `json:"info"`
+		Releases map[string]json.RawMessage `json:"releases"`
+	}
+	if err := json.Unmarshal(content, &document); err != nil {
+		return "", fmt.Errorf("decode PyPI metadata: %w", err)
+	}
+	// PyPI's info.version is the index-selected latest release. Prefer it over
+	// locally reimplementing the full PEP 440 ordering rules.
+	if genericStableVersion(document.Info.Version) {
+		return document.Info.Version, nil
+	}
+	latest := ""
+	for version := range document.Releases {
+		if genericStableVersion(version) &&
+			(latest == "" || compareLooseVersions(version, latest) > 0) {
+			latest = version
+		}
+	}
+	if latest == "" {
+		return "", errors.New("PyPI project has no stable version")
+	}
+	return latest, nil
+}
+
+func cargoLatestStable(content []byte) (string, error) {
+	var document struct {
+		Crate struct {
+			MaxStableVersion string `json:"max_stable_version"`
+			MaxVersion       string `json:"max_version"`
+			NewestVersion    string `json:"newest_version"`
+		} `json:"crate"`
+	}
+	if err := json.Unmarshal(content, &document); err == nil {
+		version := firstNonEmpty(
+			document.Crate.MaxStableVersion,
+			document.Crate.MaxVersion,
+			document.Crate.NewestVersion,
+		)
+		if genericStableVersion(version) {
+			return version, nil
+		}
+	}
+	latest := ""
+	for _, line := range strings.Split(string(content), "\n") {
+		var entry struct {
+			Version string `json:"vers"`
+			Yanked  bool   `json:"yanked"`
+		}
+		if json.Unmarshal([]byte(line), &entry) == nil && !entry.Yanked &&
+			genericStableVersion(entry.Version) &&
+			(latest == "" || compareLooseVersions(entry.Version, latest) > 0) {
+			latest = entry.Version
+		}
+	}
+	if latest == "" {
+		return "", errors.New("crate has no stable version")
+	}
+	return latest, nil
+}
+
+func goLatestStable(content []byte) (string, error) {
+	latest := ""
+	for _, version := range strings.Fields(string(content)) {
+		if stableVersion(strings.TrimPrefix(version, "v")) &&
+			(latest == "" || compareLooseVersions(version, latest) > 0) {
+			latest = version
+		}
+	}
+	if latest == "" {
+		return "", errors.New("Go module has no stable version")
+	}
+	return latest, nil
+}
+
+func nugetLatestStable(content []byte) (string, error) {
+	var document struct {
+		Versions []string `json:"versions"`
+	}
+	if err := json.Unmarshal(content, &document); err != nil {
+		return "", fmt.Errorf("decode NuGet metadata: %w", err)
+	}
+	latest := ""
+	for _, version := range document.Versions {
+		if genericStableVersion(version) &&
+			(latest == "" || compareLooseVersions(version, latest) > 0) {
+			latest = version
+		}
+	}
+	if latest == "" {
+		return "", errors.New("NuGet package has no stable version")
+	}
+	return latest, nil
+}
+
+func (s *Service) registryKeyFor(declaration Declaration) (RegistryKey, bool) {
 	key := RegistryKey{
 		Ecosystem: strings.ToLower(strings.TrimSpace(declaration.Ecosystem)),
 		Package:   strings.TrimSpace(declaration.Package),
+	}
+	for _, prefix := range []string{"workspace:", "file:", "link:", "git+", "http:", "https:"} {
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(declaration.Declared)), prefix) {
+			return RegistryKey{}, false
+		}
+	}
+	if strings.HasPrefix(strings.TrimSpace(declaration.Declared), "@ ") {
+		return RegistryKey{}, false
+	}
+	longestPrefix := -1
+	for _, config := range s.registries {
+		if config.Ecosystem != key.Ecosystem {
+			continue
+		}
+		for _, prefix := range config.PackagePrefixes {
+			if strings.HasPrefix(strings.ToLower(key.Package), strings.ToLower(prefix)) &&
+				len(prefix) > longestPrefix {
+				key.Registry = config.BaseURL
+				longestPrefix = len(prefix)
+			}
+		}
+	}
+	if key.Registry != "" {
+		return key, key.Package != ""
 	}
 	switch key.Ecosystem {
 	case "npm":
@@ -424,10 +688,91 @@ func registryKeyFor(declaration Declaration) (RegistryKey, bool) {
 			return RegistryKey{}, false
 		}
 		key.Registry = PublicMavenRepository
+	case "pypi":
+		key.Registry = PublicPyPIRegistry
+	case "cargo":
+		key.Registry = PublicCargoRegistry
+	case "go":
+		key.Registry = PublicGoProxy
+	case "nuget":
+		key.Registry = PublicNuGetRegistry
 	default:
 		return RegistryKey{}, false
 	}
 	return key, key.Package != ""
+}
+
+func validateRegistryURL(value string) error {
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Scheme == "" || parsed.Hostname() == "" {
+		return errors.New("must be an absolute HTTP URL")
+	}
+	if parsed.Scheme == "https" {
+		return nil
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if parsed.Scheme == "http" && (host == "localhost" || host == "127.0.0.1" || host == "::1") {
+		return nil
+	}
+	return errors.New("must use HTTPS unless it targets loopback")
+}
+
+func isPublicRegistry(registry string) bool {
+	for _, public := range []string{
+		PublicNPMRegistry,
+		PublicMavenRepository,
+		PublicPyPIRegistry,
+		PublicCargoRegistry,
+		PublicGoProxy,
+		PublicNuGetRegistry,
+	} {
+		if strings.EqualFold(strings.TrimRight(registry, "/"), public) {
+			return true
+		}
+	}
+	return false
+}
+
+func expandRegistryTemplate(template string, key RegistryKey) string {
+	group, artifact, _ := strings.Cut(key.Package, ":")
+	replacements := map[string]string{
+		"{package}":    url.PathEscape(key.Package),
+		"{module}":     escapeGoModulePath(key.Package),
+		"{group}":      url.PathEscape(group),
+		"{artifact}":   url.PathEscape(artifact),
+		"{group_path}": strings.ReplaceAll(url.PathEscape(strings.ReplaceAll(group, ".", "/")), "%2F", "/"),
+		"{cargo_path}": cargoSparsePath(key.Package),
+	}
+	output := template
+	for placeholder, value := range replacements {
+		output = strings.ReplaceAll(output, placeholder, value)
+	}
+	return output
+}
+
+func cargoSparsePath(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	switch len(name) {
+	case 0:
+		return ""
+	case 1:
+		return "1/" + name
+	case 2:
+		return "2/" + name
+	case 3:
+		return "3/" + name[:1] + "/" + name
+	default:
+		return name[:2] + "/" + name[2:4] + "/" + name
+	}
+}
+
+func registryAccept(ecosystem string) string {
+	switch ecosystem {
+	case "go":
+		return "text/plain"
+	default:
+		return "application/json, application/xml, text/plain"
+	}
 }
 
 func registryKeyString(key RegistryKey) string {
@@ -437,22 +782,30 @@ func registryKeyString(key RegistryKey) string {
 }
 
 func declarationStatus(declaration Declaration, latest string) string {
-	declared := strings.TrimSpace(strings.TrimPrefix(declaration.Declared, "v"))
+	current := firstNonEmpty(declaration.Resolved, declaration.Declared)
+	declared := strings.TrimSpace(strings.TrimPrefix(current, "v"))
 	latest = strings.TrimSpace(strings.TrimPrefix(latest, "v"))
 	if latest == "" {
 		return "unchecked"
 	}
-	if declaration.Resolution != "exact" {
+	if declaration.Resolved == "" && declaration.Resolution != "exact" {
 		return "latest_known"
 	}
 	if strings.EqualFold(declared, latest) {
 		return "current"
+	}
+	if !genericStableVersion(declared) {
+		return "prerelease"
+	}
+	if compareLooseVersions(declared, latest) > 0 {
+		return "ahead"
 	}
 	return "update_available"
 }
 
 func stableVersion(version string) bool {
 	version = strings.TrimSpace(strings.TrimPrefix(version, "v"))
+	version, _, _ = strings.Cut(version, "+")
 	if version == "" || strings.Contains(version, "-") {
 		return false
 	}
@@ -468,15 +821,15 @@ func stableVersion(version string) bool {
 }
 
 func compareLooseVersions(left, right string) int {
-	leftParts := strings.Split(strings.TrimPrefix(left, "v"), ".")
-	rightParts := strings.Split(strings.TrimPrefix(right, "v"), ".")
+	leftParts := numericVersionParts(left)
+	rightParts := numericVersionParts(right)
 	for index := range max(len(leftParts), len(rightParts)) {
 		leftValue, rightValue := 0, 0
 		if index < len(leftParts) {
-			leftValue, _ = strconv.Atoi(leftParts[index])
+			leftValue = leftParts[index]
 		}
 		if index < len(rightParts) {
-			rightValue, _ = strconv.Atoi(rightParts[index])
+			rightValue = rightParts[index]
 		}
 		if leftValue < rightValue {
 			return -1
@@ -486,6 +839,58 @@ func compareLooseVersions(left, right string) int {
 		}
 	}
 	return 0
+}
+
+func numericVersionParts(version string) []int {
+	version = strings.TrimPrefix(strings.TrimSpace(version), "v")
+	parts := make([]int, 0, 4)
+	current := -1
+	for _, character := range version {
+		if character >= '0' && character <= '9' {
+			if current < 0 {
+				current = 0
+			}
+			current = current*10 + int(character-'0')
+			continue
+		}
+		if current >= 0 {
+			parts = append(parts, current)
+			current = -1
+		}
+	}
+	if current >= 0 {
+		parts = append(parts, current)
+	}
+	return parts
+}
+
+func genericStableVersion(version string) bool {
+	lower := strings.ToLower(strings.TrimSpace(version))
+	if lower == "" {
+		return false
+	}
+	for _, marker := range []string{
+		"snapshot", "alpha", "beta", "-rc", ".rc", "rc", "dev", "pre",
+		"preview", "milestone", "-m", ".m",
+	} {
+		if strings.Contains(lower, marker) {
+			return false
+		}
+	}
+	return len(numericVersionParts(version)) > 0
+}
+
+func escapeGoModulePath(module string) string {
+	var escaped strings.Builder
+	for _, character := range module {
+		if character >= 'A' && character <= 'Z' {
+			escaped.WriteByte('!')
+			escaped.WriteRune(character - 'A' + 'a')
+			continue
+		}
+		escaped.WriteRune(character)
+	}
+	return escaped.String()
 }
 
 func mavenStableVersion(version string) bool {

@@ -55,23 +55,25 @@ type Inventory struct {
 
 // Declaration is one package declaration in one manifest at one revision.
 type Declaration struct {
-	RepositoryID  int64          `json:"repository_id"`
-	Repository    string         `json:"repository"`
-	Revision      string         `json:"revision"`
-	ManifestKind  string         `json:"manifest_kind"`
-	ManifestPath  string         `json:"manifest_path"`
-	Ecosystem     string         `json:"ecosystem"`
-	Package       string         `json:"package"`
-	Declared      string         `json:"declared,omitempty"`
-	Resolution    string         `json:"resolution"`
-	Usage         string         `json:"usage"`
-	Relationship  string         `json:"relationship"`
-	DeclaredScope string         `json:"declared_scope,omitempty"`
-	CheckStatus   string         `json:"check_status"`
-	LatestStable  string         `json:"latest_stable,omitempty"`
-	Registry      string         `json:"registry,omitempty"`
-	ObservedAt    string         `json:"observed_at,omitempty"`
-	Evidence      graph.Evidence `json:"evidence"`
+	RepositoryID     int64          `json:"repository_id"`
+	Repository       string         `json:"repository"`
+	Revision         string         `json:"revision"`
+	ManifestKind     string         `json:"manifest_kind"`
+	ManifestPath     string         `json:"manifest_path"`
+	Ecosystem        string         `json:"ecosystem"`
+	Package          string         `json:"package"`
+	Declared         string         `json:"declared,omitempty"`
+	Resolution       string         `json:"resolution"`
+	Resolved         string         `json:"resolved,omitempty"`
+	ResolutionSource string         `json:"resolution_source,omitempty"`
+	Usage            string         `json:"usage"`
+	Relationship     string         `json:"relationship"`
+	DeclaredScope    string         `json:"declared_scope,omitempty"`
+	CheckStatus      string         `json:"check_status"`
+	LatestStable     string         `json:"latest_stable,omitempty"`
+	Registry         string         `json:"registry,omitempty"`
+	ObservedAt       string         `json:"observed_at,omitempty"`
+	Evidence         graph.Evidence `json:"evidence"`
 }
 
 // Build normalizes declarations already captured in a repository map. It does
@@ -190,20 +192,22 @@ func normalizedDeclarations(snapshot graph.Snapshot) []Declaration {
 				evidence = manifest.Evidence
 			}
 			declarations = append(declarations, Declaration{
-				RepositoryID:  manifest.RepositoryID,
-				Repository:    manifest.Repository,
-				Revision:      firstNonEmpty(evidence.Revision, revisions[manifest.RepositoryID]),
-				ManifestKind:  manifest.Kind,
-				ManifestPath:  manifest.Path,
-				Ecosystem:     firstNonEmpty(dependency.Ecosystem, ecosystemForManifest(manifest.Kind)),
-				Package:       dependency.Package,
-				Declared:      dependency.Declared,
-				Resolution:    firstNonEmpty(dependency.Resolution, "unresolved"),
-				Usage:         firstNonEmpty(dependency.Usage, "unknown"),
-				Relationship:  firstNonEmpty(dependency.Relationship, "unknown"),
-				DeclaredScope: dependency.DeclaredScope,
-				CheckStatus:   "unchecked",
-				Evidence:      evidence,
+				RepositoryID:     manifest.RepositoryID,
+				Repository:       manifest.Repository,
+				Revision:         firstNonEmpty(evidence.Revision, revisions[manifest.RepositoryID]),
+				ManifestKind:     manifest.Kind,
+				ManifestPath:     manifest.Path,
+				Ecosystem:        firstNonEmpty(dependency.Ecosystem, ecosystemForManifest(manifest.Kind)),
+				Package:          dependency.Package,
+				Declared:         dependency.Declared,
+				Resolution:       firstNonEmpty(dependency.Resolution, "unresolved"),
+				Resolved:         dependency.Resolved,
+				ResolutionSource: dependency.ResolutionSource,
+				Usage:            firstNonEmpty(dependency.Usage, "unknown"),
+				Relationship:     firstNonEmpty(dependency.Relationship, "unknown"),
+				DeclaredScope:    dependency.DeclaredScope,
+				CheckStatus:      "unchecked",
+				Evidence:         evidence,
 			})
 		}
 	}
@@ -232,6 +236,7 @@ func filterDeclarations(declarations []Declaration, options Options) []Declarati
 				declaration.Repository,
 				declaration.ManifestPath,
 				declaration.Declared,
+				declaration.Resolved,
 				declaration.Usage,
 				declaration.DeclaredScope,
 			}, "\n"))
@@ -270,6 +275,8 @@ func ecosystemForManifest(kind string) string {
 		return "cargo"
 	case strings.Contains(lower, "python"):
 		return "pypi"
+	case strings.Contains(lower, ".net"), strings.Contains(lower, "nuget"):
+		return "nuget"
 	default:
 		return "unknown"
 	}

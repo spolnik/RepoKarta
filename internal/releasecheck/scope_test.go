@@ -53,9 +53,9 @@ func TestRoadmapKeepsM7ScopeAndCompletedMilestones(t *testing.T) {
 	for _, required := range []string{
 		"M0 through M6 are complete",
 		"M7 is in progress",
-		"M9 dependency inventory foundation",
-		"linked-worktree discovery deduplication",
-		"M10 enterprise identity and administration milestone are complete",
+		"M9 dependency inventory, public registry refresh, lockfile resolution",
+		"Linked-worktree discovery deduplication",
+		"M10 enterprise identity and administration are complete",
 	} {
 		if !strings.Contains(status, required) {
 			t.Errorf("implementation status is missing %q", required)

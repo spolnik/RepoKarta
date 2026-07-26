@@ -145,6 +145,150 @@ func TestRegistryMetadataParsing(t *testing.T) {
 	}
 }
 
+func TestAdditionalRegistryMetadataParsing(t *testing.T) {
+	latest, err := pypiLatestStable([]byte(
+		`{"info":{"version":"3.0.0rc1"},"releases":{"2.10.0":[],"3.0.0rc1":[]}}`,
+	))
+	if err != nil || latest != "2.10.0" {
+		t.Fatalf("PyPI latest = %q, %v", latest, err)
+	}
+	latest, err = pypiLatestStable([]byte(
+		`{"info":{"version":"2.9.0"},"releases":{"2.9.0":[],"10.0.0":[]}}`,
+	))
+	if err != nil || latest != "2.9.0" {
+		t.Fatalf("PyPI selected latest = %q, %v", latest, err)
+	}
+	latest, err = cargoLatestStable([]byte(
+		`{"crate":{"max_stable_version":"1.82.0","max_version":"2.0.0-beta.1"}}`,
+	))
+	if err != nil || latest != "1.82.0" {
+		t.Fatalf("Cargo latest = %q, %v", latest, err)
+	}
+	latest, err = goLatestStable([]byte("v1.9.0\nv1.10.2\nv1.11.0-rc.1\n"))
+	if err != nil || latest != "v1.10.2" {
+		t.Fatalf("Go latest = %q, %v", latest, err)
+	}
+	latest, err = nugetLatestStable([]byte(
+		`{"versions":["8.0.1","9.0.0-preview.1","8.1.0"]}`,
+	))
+	if err != nil || latest != "8.1.0" {
+		t.Fatalf("NuGet latest = %q, %v", latest, err)
+	}
+	if escaped := escapeGoModulePath("github.com/Azure/azure-sdk-for-go"); escaped !=
+		"github.com/!azure/azure-sdk-for-go" {
+		t.Fatalf("escaped Go module = %q", escaped)
+	}
+}
+
+func TestDeclarationStatusUsesResolvedVersionAndDistinguishesAhead(t *testing.T) {
+	for _, testCase := range []struct {
+		name        string
+		declaration Declaration
+		latest      string
+		want        string
+	}{
+		{
+			name:        "lockfile current",
+			declaration: Declaration{Declared: "^2", Resolved: "2.3.0", Resolution: "constraint"},
+			latest:      "2.3.0",
+			want:        "current",
+		},
+		{
+			name:        "unresolved constraint",
+			declaration: Declaration{Declared: "^2", Resolution: "constraint"},
+			latest:      "2.3.0",
+			want:        "latest_known",
+		},
+		{
+			name:        "ahead",
+			declaration: Declaration{Declared: "3.0.0", Resolution: "exact"},
+			latest:      "2.3.0",
+			want:        "ahead",
+		},
+		{
+			name:        "prerelease",
+			declaration: Declaration{Declared: "3.0.0-rc.1", Resolution: "exact"},
+			latest:      "2.3.0",
+			want:        "prerelease",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := declarationStatus(testCase.declaration, testCase.latest); got != testCase.want {
+				t.Fatalf("status = %q, want %q", got, testCase.want)
+			}
+		})
+	}
+}
+
+func TestPrivateRegistryConfigurationRoutesPrefixAndReadsTokenAtRequestTime(t *testing.T) {
+	configs, err := ParseRegistryConfigs(`[{
+  "ecosystem": "npm",
+  "base_url": "https://npm.example.com",
+  "metadata_url_template": "https://npm.example.com/{package}",
+  "package_prefixes": ["@acme/"],
+  "token_env": "REPOKARTA_TEST_NPM_TOKEN"
+}]`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("REPOKARTA_TEST_NPM_TOKEN", "secret-token")
+	storage := &observationMemoryStore{}
+	requests := 0
+	client := &http.Client{Transport: dependencyRoundTripper(func(request *http.Request) (*http.Response, error) {
+		requests++
+		if request.URL.Host != "npm.example.com" ||
+			request.Header.Get("Authorization") != "Bearer secret-token" {
+			t.Fatalf("private registry request = %s, auth = %q",
+				request.URL, request.Header.Get("Authorization"))
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     make(http.Header),
+			Body: io.NopCloser(strings.NewReader(
+				`{"dist-tags":{"latest":"2.0.0"},"versions":{"2.0.0":{}}}`,
+			)),
+			Request: request,
+		}, nil
+	})}
+	service := NewService(context.Background(), storage, client)
+	service.UseRegistries(configs)
+	progress, err := service.StartRefresh(dependencySnapshot(graph.DependencyDeclaration{
+		Ecosystem: "npm", Package: "@acme/widget", Declared: "1.0.0",
+		Resolution: "exact", Usage: "production",
+	}), Options{}, false)
+	if err != nil || progress.Total != 1 {
+		t.Fatalf("private refresh = %#v, %v", progress, err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for service.Progress().State == "running" && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if requests != 1 || service.Progress().Failed != 0 {
+		t.Fatalf("private requests = %d, progress = %#v", requests, service.Progress())
+	}
+	observations, err := storage.ListDependencyObservations(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(observations) != 1 || observations[0].Registry != "https://npm.example.com" {
+		t.Fatalf("private observations = %#v", observations)
+	}
+}
+
+func TestPrivateRegistryConfigurationRejectsUnsafeOrSecretValues(t *testing.T) {
+	for _, input := range []string{
+		`[{"ecosystem":"npm","base_url":"http://registry.example.com","metadata_url_template":"http://registry.example.com/{package}","package_prefixes":["@acme/"]}]`,
+		`[{"ecosystem":"npm","base_url":"https://registry.example.com","metadata_url_template":"https://registry.example.com/{package}","package_prefixes":["@acme/"],"token_env":"literal secret"}]`,
+		`[{"ecosystem":"npm","base_url":"https://registry.example.com","metadata_url_template":"https://registry.example.com/static","package_prefixes":["@acme/"]}]`,
+		`[{"ecosystem":"npm","base_url":"https://registry.example.com","metadata_url_template":"https://tokens.example.com/{package}","package_prefixes":["@acme/"],"token_env":"ACME_TOKEN"}]`,
+	} {
+		if _, err := ParseRegistryConfigs(input); err == nil {
+			t.Fatalf("unsafe registry config accepted: %s", input)
+		}
+	}
+}
+
 func dependencySnapshot(declarations ...graph.DependencyDeclaration) graph.Snapshot {
 	return graph.Snapshot{
 		Repositories: []graph.Repository{{ID: 1, Name: "service", Revision: "abc"}},

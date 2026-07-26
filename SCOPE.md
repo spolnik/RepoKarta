@@ -724,7 +724,7 @@ captured from committed manifests and build files.
 - [x] Resolve versions from supported build indirection where source proves the
   value; show unresolved variables and constraints honestly instead of treating
   them as concrete versions.
-- [ ] Query the appropriate public package registry for the latest available
+- [x] Query the appropriate public package registry for the latest available
   stable version, including at least Maven Central/Gradle, npm, Go modules,
   Cargo, and PyPI as their manifest extractors mature.
 - [ ] Compare declared and latest stable versions and expose clear states such
@@ -733,14 +733,14 @@ captured from committed manifests and build files.
 - [ ] Display version discrepancies fleet-wide and per repository, with filters
   by ecosystem, package, repository, severity of version distance, and check
   status.
-- [ ] Record the registry source and observation timestamp separately from the
+- [x] Record the registry source and observation timestamp separately from the
   commit-pinned declaration evidence so a freshness result never appears to be
   a historical source fact.
-- [ ] Cache registry responses, honor rate limits and offline operation, bound
+- [x] Cache registry responses, honor rate limits and offline operation, bound
   refresh concurrency, and surface partial or stale results explicitly.
 - [ ] Do not send private/internal package names to public registries unless an
   administrator explicitly configures that ecosystem and registry as safe.
-- [ ] Keep the feature advisory and read-only: RepoKarta may explain an upgrade
+- [x] Keep the feature advisory and read-only: RepoKarta may explain an upgrade
   discrepancy, but it must not rewrite manifests, lockfiles, or repositories.
 
 Exit condition: a user can see which captured dependencies are behind the
@@ -868,15 +868,17 @@ completion criteria include:
 
 ## Current implementation version
 
-`0.46.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
-The M9 dependency inventory foundation, linked-worktree discovery
-deduplication, and M10 enterprise identity and administration milestone are
-complete. The remaining M9 registry work is planned; M11 is complete. The
-implemented M7-M11 slices now enforce insight mutation permissions and
-revision staleness, paginate dependency declarations, cache immutable file
-context trees, open the administrator console directly in loopback-local mode,
-and support credential-backed acquisition from explicitly configured GitHub
-and GitLab HTTPS hosts with canonical checkout validation.
+`0.49.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
+The M9 dependency inventory, public registry refresh, lockfile resolution, and
+explicit private-registry routing are implemented; discrepancy filtering and
+fail-closed classification of unconfigured internal package prefixes remain.
+Linked-worktree discovery deduplication and M10 enterprise identity and
+administration are complete; M11 is complete. The implemented M7-M11 slices
+now enforce insight mutation permissions and revision staleness, paginate
+dependency declarations, cache immutable file context trees, open the
+administrator console directly in loopback-local mode, and support
+credential-backed acquisition from explicitly configured GitHub and GitLab
+HTTPS hosts with canonical checkout validation.
 
 ## Recommended next session
 
@@ -886,7 +888,7 @@ contract. Preserve the current fail-closed permission, revision, and
 completeness behavior before adding named contexts, facets, or agentic Deep
 Search.
 
-Continue M9 afterward with bounded, cached npm, Go module, and Maven Central
-registry observations. Keep observation timestamps and registry errors separate
-from commit-pinned declarations, and require explicit configuration before
-checking private or internal package coordinates.
+Continue M9 afterward with discrepancy/status filters and a fail-closed way to
+classify internal package prefixes before public refresh. Preserve the current
+bounded cache, separate observation timestamps and errors, and explicit
+private-registry routing.

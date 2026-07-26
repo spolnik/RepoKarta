@@ -30,10 +30,11 @@ import (
 
 	"github.com/spolnik/RepoKarta/internal/analysis"
 	"github.com/spolnik/RepoKarta/internal/catalog"
+	"go.yaml.in/yaml/v4"
 )
 
 const (
-	snapshotVersion       = 8
+	snapshotVersion       = 9
 	maximumFiles          = 20_000
 	maximumSourceFiles    = 5_000
 	maximumSourceFileSize = 1 << 20
@@ -100,14 +101,16 @@ type Manifest struct {
 // Resolution reports whether the declared value is exact, a constraint, or
 // unresolved; it never implies that a registry or lockfile was consulted.
 type DependencyDeclaration struct {
-	Ecosystem     string   `json:"ecosystem"`
-	Package       string   `json:"package"`
-	Declared      string   `json:"declared,omitempty"`
-	Resolution    string   `json:"resolution"`
-	Usage         string   `json:"usage,omitempty"`
-	Relationship  string   `json:"relationship,omitempty"`
-	DeclaredScope string   `json:"declared_scope,omitempty"`
-	Evidence      Evidence `json:"evidence"`
+	Ecosystem        string   `json:"ecosystem"`
+	Package          string   `json:"package"`
+	Declared         string   `json:"declared,omitempty"`
+	Resolution       string   `json:"resolution"`
+	Resolved         string   `json:"resolved,omitempty"`
+	ResolutionSource string   `json:"resolution_source,omitempty"`
+	Usage            string   `json:"usage,omitempty"`
+	Relationship     string   `json:"relationship,omitempty"`
+	DeclaredScope    string   `json:"declared_scope,omitempty"`
+	Evidence         Evidence `json:"evidence"`
 }
 
 // Repository describes one mapped commit.
@@ -840,7 +843,7 @@ func (b *builder) analyzeRepository(ctx context.Context, repository catalog.Repo
 
 	goModule := ""
 	if content, ok := contents["go.mod"]; ok {
-		goModule = b.addGoManifest(repository, revision, repositoryNodeID, "go.mod", content)
+		goModule = b.addGoManifest(repository, revision, repositoryNodeID, "go.mod", content, contents)
 	}
 	packageIDs := b.addPackages(repository, revision, repositoryNodeID, files, contents)
 	b.addStructuralAnalysis(repository, revision, files, contents)
@@ -943,6 +946,7 @@ func (b *builder) addGoManifest(
 	repository catalog.Repository,
 	revision, repositoryNodeID, filePath string,
 	content []byte,
+	contents map[string][]byte,
 ) string {
 	module, dependencies := parseGoMod(content)
 	if module == "" {
@@ -950,6 +954,7 @@ func (b *builder) addGoManifest(
 	}
 	evidence := b.evidence(repository, revision, filePath, lineContaining(content, "module "), module)
 	declarations := parseGoModDeclarations(content)
+	classifyGoDependencyUsage(declarations, contents)
 	for index := range declarations {
 		declarations[index].Evidence = b.evidence(
 			repository,
@@ -996,6 +1001,50 @@ func (b *builder) addGoManifest(
 		})
 	}
 	return module
+}
+
+func classifyGoDependencyUsage(
+	declarations []DependencyDeclaration,
+	contents map[string][]byte,
+) {
+	production := make(map[string]bool)
+	tests := make(map[string]bool)
+	for filePath, content := range contents {
+		if path.Ext(filePath) != ".go" {
+			continue
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), filePath, content, parser.ImportsOnly)
+		if err != nil {
+			continue
+		}
+		for _, importSpec := range file.Imports {
+			importPath, err := strconv.Unquote(importSpec.Path.Value)
+			if err != nil {
+				continue
+			}
+			for _, declaration := range declarations {
+				if importPath != declaration.Package &&
+					!strings.HasPrefix(importPath, declaration.Package+"/") {
+					continue
+				}
+				if strings.HasSuffix(filePath, "_test.go") {
+					tests[declaration.Package] = true
+				} else {
+					production[declaration.Package] = true
+				}
+			}
+		}
+	}
+	for index := range declarations {
+		switch {
+		case production[declarations[index].Package]:
+			declarations[index].Usage = "production"
+		case tests[declarations[index].Package]:
+			declarations[index].Usage = "test"
+		default:
+			declarations[index].Usage = "unknown"
+		}
+	}
 }
 
 func (b *builder) addPackages(
@@ -1093,6 +1142,7 @@ func (b *builder) addPackages(
 		if json.Unmarshal(content, &manifest) != nil {
 			continue
 		}
+		lockVersions, lockPath := npmLockVersions(contents, manifestPath)
 		directory := path.Dir(manifestPath)
 		if directory == "." {
 			directory = ""
@@ -1146,14 +1196,21 @@ func (b *builder) addPackages(
 					manifest.DevDependencies, dependency, "devDependencies",
 				)
 			}
+			resolved := lockVersions[dependency]
+			resolutionSource := ""
+			if resolved != "" {
+				resolutionSource = lockPath
+			}
 			declarations = append(declarations, DependencyDeclaration{
-				Ecosystem:     "npm",
-				Package:       dependency,
-				Declared:      declared,
-				Resolution:    versionResolution(declared),
-				Usage:         usage,
-				Relationship:  relationship,
-				DeclaredScope: declaredScope,
+				Ecosystem:        "npm",
+				Package:          dependency,
+				Declared:         declared,
+				Resolution:       versionResolution(declared),
+				Resolved:         resolved,
+				ResolutionSource: resolutionSource,
+				Usage:            usage,
+				Relationship:     relationship,
+				DeclaredScope:    declaredScope,
 				Evidence: b.evidence(
 					repository,
 					revision,
@@ -1217,6 +1274,110 @@ func npmDependencyMetadata(
 		relationship = "peer"
 	}
 	return declared, usage, relationship, scope
+}
+
+func npmLockVersions(contents map[string][]byte, manifestPath string) (map[string]string, string) {
+	lockPath := nearestDependencyFile(contents, path.Dir(manifestPath), "npm-shrinkwrap.json", "package-lock.json")
+	if lockPath == "" {
+		lockPath = nearestDependencyFile(contents, path.Dir(manifestPath), "pnpm-lock.yaml")
+		if lockPath == "" {
+			return nil, ""
+		}
+		return pnpmLockVersions(contents[lockPath], manifestPath, lockPath), lockPath
+	}
+	var lock struct {
+		Packages map[string]struct {
+			Version string `json:"version"`
+		} `json:"packages"`
+		Dependencies map[string]struct {
+			Version string `json:"version"`
+		} `json:"dependencies"`
+	}
+	if json.Unmarshal(contents[lockPath], &lock) != nil {
+		return nil, ""
+	}
+	versions := make(map[string]string)
+	for packagePath, dependency := range lock.Packages {
+		if !strings.HasPrefix(packagePath, "node_modules/") || dependency.Version == "" {
+			continue
+		}
+		name := strings.TrimPrefix(packagePath, "node_modules/")
+		if strings.Contains(name, "/node_modules/") {
+			continue
+		}
+		versions[name] = dependency.Version
+	}
+	for name, dependency := range lock.Dependencies {
+		if versions[name] == "" {
+			versions[name] = dependency.Version
+		}
+	}
+	return versions, lockPath
+}
+
+func pnpmLockVersions(content []byte, manifestPath, lockPath string) map[string]string {
+	var document struct {
+		Importers map[string]map[string]map[string]any `yaml:"importers"`
+	}
+	if yaml.Unmarshal(content, &document) != nil {
+		return nil
+	}
+	lockDirectory := path.Dir(lockPath)
+	if lockDirectory == "." {
+		lockDirectory = ""
+	}
+	manifestDirectory := path.Dir(manifestPath)
+	if manifestDirectory == "." {
+		manifestDirectory = ""
+	}
+	importer := strings.TrimPrefix(strings.TrimPrefix(manifestDirectory, lockDirectory), "/")
+	if importer == "" {
+		importer = "."
+	}
+	versions := make(map[string]string)
+	for _, section := range []string{"dependencies", "devDependencies", "optionalDependencies"} {
+		for name, raw := range document.Importers[importer][section] {
+			var version string
+			switch value := raw.(type) {
+			case string:
+				version = value
+			case map[string]any:
+				version, _ = value["version"].(string)
+			}
+			version = strings.TrimSpace(strings.SplitN(version, "(", 2)[0])
+			if version != "" && !strings.HasPrefix(version, "link:") &&
+				!strings.HasPrefix(version, "workspace:") {
+				versions[name] = version
+			}
+		}
+	}
+	return versions
+}
+
+func nearestDependencyFile(contents map[string][]byte, directory string, names ...string) string {
+	if directory == "." {
+		directory = ""
+	}
+	for {
+		for _, name := range names {
+			candidate := path.Join(directory, name)
+			if directory == "" {
+				candidate = name
+			}
+			if _, ok := contents[candidate]; ok {
+				return candidate
+			}
+		}
+		if directory == "" {
+			return ""
+		}
+		parent := path.Dir(directory)
+		if parent == "." || parent == directory {
+			directory = ""
+		} else {
+			directory = parent
+		}
+	}
 }
 
 func (b *builder) addGoImportsAndRoutes(
@@ -1451,19 +1612,27 @@ func (b *builder) addGradleManifests(
 		if path.Base(filePath) == "libs.versions.toml" {
 			dependencies = catalogDependencies(content)
 		}
+		lockVersions, lockPath := gradleLockVersions(contents, filePath)
 		labels := make([]string, 0, len(dependencies))
 		declarations := make([]DependencyDeclaration, 0, len(dependencies))
 		for _, dependency := range dependencies {
 			labels = append(labels, dependency.coordinate)
 			label, version := gradleCoordinateParts(dependency.coordinate)
+			resolved := lockVersions[label]
+			resolutionSource := ""
+			if resolved != "" {
+				resolutionSource = lockPath
+			}
 			declarations = append(declarations, DependencyDeclaration{
-				Ecosystem:     "maven",
-				Package:       label,
-				Declared:      version,
-				Resolution:    versionResolution(version),
-				Usage:         gradleDependencyUsage(dependency.configuration),
-				Relationship:  "required",
-				DeclaredScope: dependency.configuration,
+				Ecosystem:        "maven",
+				Package:          label,
+				Declared:         version,
+				Resolution:       versionResolution(version),
+				Resolved:         resolved,
+				ResolutionSource: resolutionSource,
+				Usage:            gradleDependencyUsage(dependency.configuration),
+				Relationship:     "required",
+				DeclaredScope:    dependency.configuration,
 				Evidence: b.evidence(
 					repository,
 					revision,
@@ -1642,6 +1811,27 @@ func gradleDependencyUsage(configuration string) string {
 	default:
 		return "production"
 	}
+}
+
+func gradleLockVersions(contents map[string][]byte, manifestPath string) (map[string]string, string) {
+	lockPath := nearestDependencyFile(contents, path.Dir(manifestPath), "gradle.lockfile")
+	if lockPath == "" {
+		return nil, ""
+	}
+	versions := make(map[string]string)
+	scanner := bufio.NewScanner(bytes.NewReader(contents[lockPath]))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") || !strings.Contains(line, "=") {
+			continue
+		}
+		coordinate, _, _ := strings.Cut(line, "=")
+		parts := strings.Split(strings.TrimSpace(coordinate), ":")
+		if len(parts) >= 3 {
+			versions[parts[0]+":"+parts[1]] = parts[2]
+		}
+	}
+	return versions, lockPath
 }
 
 // parseGradleVersionVariables resolves the common repository-local sources
@@ -2553,18 +2743,28 @@ func (b *builder) addOtherManifests(
 		evidence := b.evidence(repository, revision, filePath, 1, kind)
 		declarations := make([]DependencyDeclaration, 0)
 		dependencyLabels := make([]string, 0)
-		if kind == "Maven project" {
+		switch kind {
+		case "Maven project":
 			declarations = parseMavenDeclarations(contents[filePath])
-			for index := range declarations {
-				declarations[index].Evidence = b.evidence(
-					repository,
-					revision,
-					filePath,
-					lineContaining(contents[filePath], "<artifactId>"+strings.Split(declarations[index].Package, ":")[1]),
-					declarations[index].Package,
-				)
-				dependencyLabels = append(dependencyLabels, declarations[index].Package)
-			}
+		case "Cargo package":
+			lock, lockPath := cargoLockVersions(contents, filePath)
+			declarations = parseCargoDeclarations(contents[filePath], lock, lockPath)
+		case "Python requirements", "Python project":
+			lock, lockPath := pythonLockVersions(contents, filePath)
+			declarations = parsePythonDeclarations(filePath, contents[filePath], lock, lockPath)
+		case ".NET project":
+			lock, lockPath := nugetLockVersions(contents, filePath)
+			declarations = parseNuGetDeclarations(filePath, contents[filePath], lock, lockPath)
+		}
+		for index := range declarations {
+			declarations[index].Evidence = b.evidence(
+				repository,
+				revision,
+				filePath,
+				dependencyDeclarationLine(contents[filePath], declarations[index]),
+				declarations[index].Package,
+			)
+			dependencyLabels = append(dependencyLabels, declarations[index].Package)
 		}
 		manifestID := fmt.Sprintf("manifest:%d:%s", repository.ID, normalizeID(filePath))
 		b.addNode(Node{
@@ -2597,12 +2797,16 @@ func (b *builder) addOtherManifests(
 			Evidence:     evidence,
 		})
 		for _, declaration := range declarations {
-			dependencyNodeID := "dependency:maven:" + normalizeID(declaration.Package)
+			dependencyNodeID := "dependency:" + declaration.Ecosystem + ":" + normalizeID(declaration.Package)
+			subtitle := declaration.Ecosystem
+			if declaration.Declared != "" {
+				subtitle += " · " + declaration.Declared
+			}
 			b.addNode(Node{
 				ID:       dependencyNodeID,
 				Kind:     "dependency",
 				Label:    declaration.Package,
-				Subtitle: "Maven · " + declaration.Declared,
+				Subtitle: subtitle,
 				Layer:    "Dependencies",
 				Evidence: []Evidence{declaration.Evidence},
 			})
@@ -2702,6 +2906,517 @@ func resolveMavenProperty(value string, properties map[string]string) string {
 		}
 	}
 	return value
+}
+
+func dependencyDeclarationLine(content []byte, declaration DependencyDeclaration) int {
+	needle := declaration.Package
+	if declaration.Ecosystem == "maven" {
+		if _, artifact, ok := strings.Cut(declaration.Package, ":"); ok {
+			needle = artifact
+		}
+	}
+	return lineContaining(content, needle)
+}
+
+func cargoLockVersions(
+	contents map[string][]byte,
+	manifestPath string,
+) (map[string][]string, string) {
+	lockPath := nearestDependencyFile(contents, path.Dir(manifestPath), "Cargo.lock")
+	if lockPath == "" {
+		return nil, ""
+	}
+	return tomlPackageLockVersions(contents[lockPath]), lockPath
+}
+
+func parseCargoDeclarations(
+	content []byte,
+	lockVersions map[string][]string,
+	lockPath string,
+) []DependencyDeclaration {
+	declarations := make([]DependencyDeclaration, 0)
+	section := ""
+	scanner := bufio.NewScanner(bytes.NewReader(content))
+	for scanner.Scan() {
+		line := strings.TrimSpace(stripTOMLComment(scanner.Text()))
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			section = strings.ToLower(strings.Trim(line, "[] "))
+			continue
+		}
+		usage := cargoSectionUsage(section)
+		if usage == "" || line == "" {
+			continue
+		}
+		name, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		name = strings.Trim(strings.TrimSpace(name), `"'`)
+		value = strings.TrimSpace(value)
+		if name == "" || value == "" {
+			continue
+		}
+		packageName := name
+		declared := ""
+		relationship := "required"
+		switch {
+		case strings.HasPrefix(value, "{"):
+			fields := make(map[string]string)
+			for _, match := range catalogInlineField.FindAllStringSubmatch(value, -1) {
+				fields[strings.ToLower(match[1])] = strings.TrimSpace(match[2])
+			}
+			if fields["package"] != "" {
+				packageName = fields["package"]
+			}
+			declared = fields["version"]
+			if fields["git"] != "" {
+				declared = "git+" + fields["git"]
+			} else if fields["path"] != "" {
+				declared = "file:" + fields["path"]
+			}
+			if regexp.MustCompile(`(?i)\boptional\s*=\s*true\b`).MatchString(value) {
+				relationship = "optional"
+			}
+		case strings.HasPrefix(value, `"`), strings.HasPrefix(value, `'`):
+			declared = strings.Trim(value, `"'`)
+		default:
+			continue
+		}
+		resolved := selectLockedVersion(lockVersions[packageName], declared)
+		source := ""
+		if resolved != "" {
+			source = lockPath
+		}
+		declarations = append(declarations, DependencyDeclaration{
+			Ecosystem:        "cargo",
+			Package:          packageName,
+			Declared:         declared,
+			Resolution:       versionResolution(declared),
+			Resolved:         resolved,
+			ResolutionSource: source,
+			Usage:            usage,
+			Relationship:     relationship,
+			DeclaredScope:    section,
+		})
+	}
+	slices.SortFunc(declarations, func(left, right DependencyDeclaration) int {
+		return strings.Compare(left.Package+"\x00"+left.DeclaredScope, right.Package+"\x00"+right.DeclaredScope)
+	})
+	return declarations
+}
+
+func cargoSectionUsage(section string) string {
+	switch {
+	case section == "dev-dependencies", strings.HasSuffix(section, ".dev-dependencies"):
+		return "test"
+	case section == "build-dependencies", strings.HasSuffix(section, ".build-dependencies"):
+		return "build"
+	case section == "dependencies", section == "workspace.dependencies",
+		strings.HasSuffix(section, ".dependencies"):
+		return "production"
+	default:
+		return ""
+	}
+}
+
+func pythonLockVersions(
+	contents map[string][]byte,
+	manifestPath string,
+) (map[string][]string, string) {
+	lockPath := nearestDependencyFile(contents, path.Dir(manifestPath), "uv.lock", "poetry.lock")
+	if lockPath == "" {
+		return nil, ""
+	}
+	return tomlPackageLockVersions(contents[lockPath]), lockPath
+}
+
+func parsePythonDeclarations(
+	filePath string,
+	content []byte,
+	lockVersions map[string][]string,
+	lockPath string,
+) []DependencyDeclaration {
+	base := strings.ToLower(path.Base(filePath))
+	if strings.HasPrefix(base, "requirements") && strings.HasSuffix(base, ".txt") {
+		return parseRequirementsDeclarations(filePath, content, lockVersions, lockPath)
+	}
+	return parsePyprojectDeclarations(content, lockVersions, lockPath)
+}
+
+func parseRequirementsDeclarations(
+	filePath string,
+	content []byte,
+	lockVersions map[string][]string,
+	lockPath string,
+) []DependencyDeclaration {
+	usage := "production"
+	lowerPath := strings.ToLower(filePath)
+	if strings.Contains(lowerPath, "test") {
+		usage = "test"
+	} else if strings.Contains(lowerPath, "dev") {
+		usage = "development"
+	}
+	declarations := make([]DependencyDeclaration, 0)
+	scanner := bufio.NewScanner(bytes.NewReader(content))
+	for scanner.Scan() {
+		name, declared, ok := parsePythonRequirement(scanner.Text())
+		if !ok {
+			continue
+		}
+		resolved := selectLockedVersion(lockedVersionsFor(lockVersions, name, true), declared)
+		source := ""
+		if resolved != "" {
+			source = lockPath
+		} else if exact, ok := pythonExactVersion(declared); ok {
+			resolved = exact
+			source = filePath
+		}
+		declarations = append(declarations, DependencyDeclaration{
+			Ecosystem:        "pypi",
+			Package:          name,
+			Declared:         declared,
+			Resolution:       pythonVersionResolution(declared),
+			Resolved:         resolved,
+			ResolutionSource: source,
+			Usage:            usage,
+			Relationship:     "required",
+			DeclaredScope:    path.Base(filePath),
+		})
+	}
+	return declarations
+}
+
+func parsePyprojectDeclarations(
+	content []byte,
+	lockVersions map[string][]string,
+	lockPath string,
+) []DependencyDeclaration {
+	declarations := make([]DependencyDeclaration, 0)
+	section := ""
+	arrayUsage := ""
+	arrayScope := ""
+	scanner := bufio.NewScanner(bytes.NewReader(content))
+	for scanner.Scan() {
+		line := strings.TrimSpace(stripTOMLComment(scanner.Text()))
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			section = strings.ToLower(strings.Trim(line, "[] "))
+			arrayUsage = ""
+			continue
+		}
+		if arrayUsage != "" {
+			declarations = appendPythonArrayRequirements(
+				declarations, line, arrayUsage, arrayScope, lockVersions, lockPath,
+			)
+			if strings.Contains(line, "]") {
+				arrayUsage = ""
+			}
+			continue
+		}
+		if section == "project" && strings.HasPrefix(strings.ToLower(line), "dependencies") {
+			_, value, ok := strings.Cut(line, "=")
+			if ok {
+				arrayUsage, arrayScope = "production", "project.dependencies"
+				declarations = appendPythonArrayRequirements(
+					declarations, value, arrayUsage, arrayScope, lockVersions, lockPath,
+				)
+				if strings.Contains(value, "]") {
+					arrayUsage = ""
+				}
+			}
+			continue
+		}
+		if section == "project.optional-dependencies" && strings.Contains(line, "=") {
+			group, value, _ := strings.Cut(line, "=")
+			group = strings.Trim(strings.TrimSpace(group), `"'`)
+			arrayUsage = pythonGroupUsage(group)
+			arrayScope = "project.optional-dependencies." + group
+			declarations = appendPythonArrayRequirements(
+				declarations, value, arrayUsage, arrayScope, lockVersions, lockPath,
+			)
+			if strings.Contains(value, "]") {
+				arrayUsage = ""
+			}
+			continue
+		}
+		if strings.HasPrefix(section, "tool.poetry") && strings.HasSuffix(section, ".dependencies") {
+			name, value, ok := strings.Cut(line, "=")
+			if !ok {
+				continue
+			}
+			name = strings.Trim(strings.TrimSpace(name), `"'`)
+			if strings.EqualFold(name, "python") {
+				continue
+			}
+			declared := strings.Trim(strings.TrimSpace(value), `"'`)
+			if strings.HasPrefix(strings.TrimSpace(value), "{") {
+				fields := make(map[string]string)
+				for _, match := range catalogInlineField.FindAllStringSubmatch(value, -1) {
+					fields[strings.ToLower(match[1])] = strings.TrimSpace(match[2])
+				}
+				declared = fields["version"]
+			}
+			usage := "production"
+			if strings.Contains(section, ".group.") {
+				group := strings.Split(section, ".group.")[1]
+				group = strings.TrimSuffix(group, ".dependencies")
+				usage = pythonGroupUsage(group)
+			}
+			declarations = appendPythonDeclaration(
+				declarations, name, declared, usage, section, lockVersions, lockPath,
+			)
+		}
+	}
+	slices.SortFunc(declarations, func(left, right DependencyDeclaration) int {
+		return strings.Compare(strings.ToLower(left.Package+"\x00"+left.DeclaredScope),
+			strings.ToLower(right.Package+"\x00"+right.DeclaredScope))
+	})
+	return declarations
+}
+
+var pythonRequirementPattern = regexp.MustCompile(
+	`^([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^]]+])?\s*(.*)$`,
+)
+
+func parsePythonRequirement(value string) (string, string, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" || strings.HasPrefix(value, "#") || strings.HasPrefix(value, "-") {
+		return "", "", false
+	}
+	if before, _, ok := strings.Cut(value, " ;"); ok {
+		value = strings.TrimSpace(before)
+	}
+	if index := strings.Index(value, " #"); index >= 0 {
+		value = strings.TrimSpace(value[:index])
+	}
+	match := pythonRequirementPattern.FindStringSubmatch(value)
+	if len(match) != 3 {
+		return "", "", false
+	}
+	return match[1], strings.TrimSpace(match[2]), true
+}
+
+func appendPythonArrayRequirements(
+	declarations []DependencyDeclaration,
+	line, usage, scope string,
+	lockVersions map[string][]string,
+	lockPath string,
+) []DependencyDeclaration {
+	quoted := regexp.MustCompile(`["']([^"']+)["']`)
+	for _, match := range quoted.FindAllStringSubmatch(line, -1) {
+		name, declared, ok := parsePythonRequirement(match[1])
+		if ok {
+			declarations = appendPythonDeclaration(
+				declarations, name, declared, usage, scope, lockVersions, lockPath,
+			)
+		}
+	}
+	return declarations
+}
+
+func appendPythonDeclaration(
+	declarations []DependencyDeclaration,
+	name, declared, usage, scope string,
+	lockVersions map[string][]string,
+	lockPath string,
+) []DependencyDeclaration {
+	resolved := selectLockedVersion(lockedVersionsFor(lockVersions, name, true), declared)
+	source := ""
+	if resolved != "" {
+		source = lockPath
+	}
+	relationship := "required"
+	if strings.HasPrefix(scope, "project.optional-dependencies.") {
+		relationship = "optional"
+	}
+	return append(declarations, DependencyDeclaration{
+		Ecosystem:        "pypi",
+		Package:          name,
+		Declared:         declared,
+		Resolution:       pythonVersionResolution(declared),
+		Resolved:         resolved,
+		ResolutionSource: source,
+		Usage:            usage,
+		Relationship:     relationship,
+		DeclaredScope:    scope,
+	})
+}
+
+func pythonGroupUsage(group string) string {
+	lower := strings.ToLower(group)
+	if strings.Contains(lower, "test") {
+		return "test"
+	}
+	return "development"
+}
+
+func pythonExactVersion(declared string) (string, bool) {
+	declared = strings.TrimSpace(declared)
+	for _, prefix := range []string{"===", "=="} {
+		if strings.HasPrefix(declared, prefix) {
+			version := strings.TrimSpace(strings.TrimPrefix(declared, prefix))
+			return version, version != "" && !strings.Contains(version, "*")
+		}
+	}
+	return "", false
+}
+
+func pythonVersionResolution(declared string) string {
+	if _, ok := pythonExactVersion(declared); ok {
+		return "exact"
+	}
+	return versionResolution(declared)
+}
+
+func nugetLockVersions(
+	contents map[string][]byte,
+	manifestPath string,
+) (map[string][]string, string) {
+	lockPath := nearestDependencyFile(contents, path.Dir(manifestPath), "packages.lock.json")
+	if lockPath == "" {
+		return nil, ""
+	}
+	var document struct {
+		Dependencies map[string]map[string]struct {
+			Resolved string `json:"resolved"`
+		} `json:"dependencies"`
+	}
+	if json.Unmarshal(contents[lockPath], &document) != nil {
+		return nil, ""
+	}
+	versions := make(map[string][]string)
+	for _, framework := range document.Dependencies {
+		for name, dependency := range framework {
+			if dependency.Resolved != "" && !slices.Contains(versions[name], dependency.Resolved) {
+				versions[name] = append(versions[name], dependency.Resolved)
+			}
+		}
+	}
+	return versions, lockPath
+}
+
+func parseNuGetDeclarations(
+	filePath string,
+	content []byte,
+	lockVersions map[string][]string,
+	lockPath string,
+) []DependencyDeclaration {
+	var project struct {
+		References []struct {
+			Include       string `xml:"Include,attr"`
+			Update        string `xml:"Update,attr"`
+			VersionAttr   string `xml:"Version,attr"`
+			Version       string `xml:"Version"`
+			PrivateAssets string `xml:"PrivateAssets"`
+		} `xml:"ItemGroup>PackageReference"`
+	}
+	if xml.Unmarshal(content, &project) != nil {
+		return nil
+	}
+	usage := "production"
+	lowerPath := strings.ToLower(filePath)
+	if strings.Contains(lowerPath, "test") {
+		usage = "test"
+	}
+	declarations := make([]DependencyDeclaration, 0, len(project.References))
+	for _, reference := range project.References {
+		name := firstNonEmpty(reference.Include, reference.Update)
+		if name == "" {
+			continue
+		}
+		declared := firstNonEmpty(reference.VersionAttr, reference.Version)
+		resolved := selectLockedVersion(lockedVersionsFor(lockVersions, name, false), declared)
+		source := ""
+		if resolved != "" {
+			source = lockPath
+		}
+		declarations = append(declarations, DependencyDeclaration{
+			Ecosystem:        "nuget",
+			Package:          name,
+			Declared:         declared,
+			Resolution:       versionResolution(declared),
+			Resolved:         resolved,
+			ResolutionSource: source,
+			Usage:            usage,
+			Relationship:     "required",
+			DeclaredScope:    "PackageReference",
+		})
+	}
+	slices.SortFunc(declarations, func(left, right DependencyDeclaration) int {
+		return strings.Compare(strings.ToLower(left.Package), strings.ToLower(right.Package))
+	})
+	return declarations
+}
+
+func tomlPackageLockVersions(content []byte) map[string][]string {
+	versions := make(map[string][]string)
+	name := ""
+	version := ""
+	flush := func() {
+		if name != "" && version != "" && !slices.Contains(versions[name], version) {
+			versions[name] = append(versions[name], version)
+		}
+		name, version = "", ""
+	}
+	scanner := bufio.NewScanner(bytes.NewReader(content))
+	for scanner.Scan() {
+		line := strings.TrimSpace(stripTOMLComment(scanner.Text()))
+		if line == "[[package]]" {
+			flush()
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		switch strings.TrimSpace(key) {
+		case "name":
+			name = strings.Trim(strings.TrimSpace(value), `"'`)
+		case "version":
+			version = strings.Trim(strings.TrimSpace(value), `"'`)
+		}
+	}
+	flush()
+	return versions
+}
+
+func selectLockedVersion(versions []string, declared string) string {
+	if len(versions) == 1 {
+		return versions[0]
+	}
+	exact := strings.TrimSpace(strings.TrimPrefix(declared, "v"))
+	for _, prefix := range []string{"===", "==", "="} {
+		exact = strings.TrimSpace(strings.TrimPrefix(exact, prefix))
+	}
+	for _, version := range versions {
+		if strings.EqualFold(strings.TrimPrefix(version, "v"), exact) {
+			return version
+		}
+	}
+	return ""
+}
+
+func lockedVersionsFor(
+	versions map[string][]string,
+	name string,
+	pythonNormalization bool,
+) []string {
+	if matched := versions[name]; len(matched) > 0 {
+		return matched
+	}
+	normalizedName := strings.ToLower(name)
+	if pythonNormalization {
+		normalizedName = strings.NewReplacer("_", "-", ".", "-").Replace(normalizedName)
+	}
+	for candidate, matched := range versions {
+		normalizedCandidate := strings.ToLower(candidate)
+		if pythonNormalization {
+			normalizedCandidate = strings.NewReplacer("_", "-", ".", "-").Replace(normalizedCandidate)
+		}
+		if normalizedCandidate == normalizedName {
+			return matched
+		}
+	}
+	return nil
 }
 
 func (b *builder) evidence(
@@ -2997,13 +3712,15 @@ func parseGoModDeclarations(content []byte) []DependencyDeclaration {
 			declared = fields[1]
 		}
 		declarations = append(declarations, DependencyDeclaration{
-			Ecosystem:     "go",
-			Package:       fields[0],
-			Declared:      declared,
-			Resolution:    versionResolution(declared),
-			Usage:         "unknown",
-			Relationship:  "required",
-			DeclaredScope: "require",
+			Ecosystem:        "go",
+			Package:          fields[0],
+			Declared:         declared,
+			Resolution:       versionResolution(declared),
+			Resolved:         declared,
+			ResolutionSource: "go.mod",
+			Usage:            "unknown",
+			Relationship:     "required",
+			DeclaredScope:    "require",
 		})
 	}
 	slices.SortFunc(declarations, func(left, right DependencyDeclaration) int {
@@ -3120,10 +3837,14 @@ func isManifest(filePath string) bool {
 	case "go.mod", "package.json", "pnpm-workspace.yaml", "Cargo.toml", "pyproject.toml",
 		"requirements.txt", "pom.xml", "build.gradle", "build.gradle.kts",
 		"settings.gradle", "settings.gradle.kts", "gradle.properties", "libs.versions.toml", "composer.json",
-		"Gemfile", "Package.swift":
+		"Gemfile", "Package.swift", "package-lock.json", "npm-shrinkwrap.json",
+		"pnpm-lock.yaml", "yarn.lock", "Cargo.lock", "poetry.lock", "uv.lock",
+		"packages.lock.json", "gradle.lockfile":
 		return true
 	default:
-		return strings.HasSuffix(filePath, ".csproj") || strings.HasSuffix(filePath, ".sln")
+		base := strings.ToLower(path.Base(filePath))
+		return (strings.HasPrefix(base, "requirements") && strings.HasSuffix(base, ".txt")) ||
+			strings.HasSuffix(filePath, ".csproj") || strings.HasSuffix(filePath, ".sln")
 	}
 }
 
@@ -3155,6 +3876,9 @@ func manifestKind(filePath string) string {
 		return "Swift package"
 	default:
 		switch {
+		case strings.HasPrefix(strings.ToLower(path.Base(filePath)), "requirements") &&
+			strings.HasSuffix(strings.ToLower(path.Base(filePath)), ".txt"):
+			return "Python requirements"
 		case strings.HasSuffix(filePath, ".csproj"):
 			return ".NET project"
 		case strings.HasSuffix(filePath, ".sln"):

@@ -51,6 +51,7 @@ type Config struct {
 	AcquisitionGitLabAPI   string
 	AcquisitionGitHubHost  string
 	AcquisitionGitLabHost  string
+	DependencyRegistries   []dependencies.RegistryConfig
 }
 
 func DefaultConfig() (Config, error) {
@@ -62,6 +63,12 @@ func DefaultConfig() (Config, error) {
 	workingDirectory, err := os.Getwd()
 	if err != nil {
 		return Config{}, fmt.Errorf("resolve working directory: %w", err)
+	}
+	dependencyRegistries, err := dependencies.ParseRegistryConfigs(
+		os.Getenv("REPOKARTA_DEPENDENCY_REGISTRIES"),
+	)
+	if err != nil {
+		return Config{}, err
 	}
 
 	return Config{
@@ -85,6 +92,7 @@ func DefaultConfig() (Config, error) {
 		AcquisitionGitLabAPI:  strings.TrimSpace(os.Getenv("REPOKARTA_GITLAB_API")),
 		AcquisitionGitHubHost: strings.TrimSpace(os.Getenv("REPOKARTA_GITHUB_HOST")),
 		AcquisitionGitLabHost: strings.TrimSpace(os.Getenv("REPOKARTA_GITLAB_HOST")),
+		DependencyRegistries:  dependencyRegistries,
 	}, nil
 }
 
@@ -200,6 +208,7 @@ func Run(ctx context.Context, cfg Config) error {
 	codeInsights := insights.New(database, baseURL)
 	codeInsights.StartPolling(ctx)
 	dependencyRegistry := dependencies.NewService(ctx, database, nil)
+	dependencyRegistry.UseRegistries(cfg.DependencyRegistries)
 	operations, err := maintenance.New(maintenance.Config{
 		DataDirectory:   cfg.DataDirectory,
 		RepositoryRoot:  cfg.RepositoryRoot,
