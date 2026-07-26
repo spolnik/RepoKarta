@@ -333,9 +333,11 @@ func TestHostedCheckoutLifecycleUsesOwnedStorageAndRecoverableRemoval(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !acquired.Owned || acquired.State != StateReady ||
-		!strings.HasPrefix(filepath.Clean(acquired.CheckoutPath), filepath.Clean(filepath.Join(dataDirectory, "repositories"))+string(filepath.Separator)) {
+	if !acquired.Owned || acquired.State != StateReady {
 		t.Fatalf("hosted acquisition = %#v", acquired)
+	}
+	if err := service.validateOwnedTarget(acquired.CheckoutPath); err != nil {
+		t.Fatalf("hosted checkout path = %q: %v", acquired.CheckoutPath, err)
 	}
 	if _, err := os.Stat(filepath.Join(acquired.CheckoutPath, "README.md")); err != nil {
 		t.Fatal(err)
