@@ -709,6 +709,11 @@ select {
   box-shadow: 0 0 0 4px rgb(253 164 175 / 0.1), 0 0 14px rgb(253 164 175 / 0.5);
 }
 
+.index-health-dot[data-state="empty"] {
+  background: var(--color-ink-faint);
+  box-shadow: 0 0 0 4px rgb(148 163 184 / 0.08);
+}
+
 /* First-run indexing progress. */
 .index-progress {
   overflow: hidden;
@@ -4091,6 +4096,11 @@ a.brand-mark:hover,
   color: var(--color-danger);
 }
 
+.status-empty {
+  background: rgb(148 163 184 / 0.08);
+  color: var(--color-ink-faint);
+}
+
 .secondary-button {
   display: inline-flex;
   align-items: center;
@@ -5830,6 +5840,10 @@ a.brand-mark:hover,
 
 .conversation-repository-list li strong.status-error {
   color: var(--color-danger);
+}
+
+.conversation-repository-list li strong.status-empty {
+  color: var(--color-ink-faint);
 }
 
 .conversation-safety-note {

@@ -126,6 +126,8 @@ type Repository struct {
 	DefaultRevision string `json:"default_revision,omitempty"`
 	HeadCommit      string `json:"head_commit,omitempty"`
 	IndexedCommit   string `json:"indexed_commit,omitempty"`
+	ScanState       string `json:"scan_state"`
+	ScanError       string `json:"scan_error,omitempty"`
 	IndexState      string `json:"index_state"`
 	IndexError      string `json:"index_error,omitempty"`
 }
@@ -381,6 +383,8 @@ func (s *Service) Repositories(ctx context.Context) (RepositoryList, error) {
 			DefaultRevision: repository.DefaultRevision,
 			HeadCommit:      repository.HeadCommit,
 			IndexedCommit:   repository.IndexedCommit,
+			ScanState:       repository.ScanState,
+			ScanError:       repository.ScanError,
 			IndexState:      repository.IndexState,
 			IndexError:      repository.IndexError,
 		})

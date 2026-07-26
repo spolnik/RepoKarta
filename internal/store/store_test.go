@@ -342,6 +342,53 @@ func TestOpenMigratesM0DatabaseAndPreservesIndexStateAcrossScans(t *testing.T) {
 	}
 }
 
+func TestEmptyRepositoryRemainsTerminalAcrossScansAndConfigurationChanges(t *testing.T) {
+	storage, err := Open(filepath.Join(t.TempDir(), "repokarta.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer storage.Close()
+
+	repository := catalog.Repository{
+		Name:         "empty",
+		Path:         filepath.Join(t.TempDir(), "empty"),
+		ScanState:    "empty",
+		ScanError:    catalog.EmptyRepositoryReason,
+		IndexState:   "empty",
+		IndexError:   catalog.EmptyRepositoryReason,
+		DiscoveredAt: time.Now(),
+		ScannedAt:    time.Now(),
+	}
+	ctx := context.Background()
+	if err := storage.SyncRepositories(ctx, []catalog.Repository{repository}); err != nil {
+		t.Fatal(err)
+	}
+	assertEmpty := func(stage string) {
+		t.Helper()
+		repositories, listErr := storage.ListRepositories(ctx)
+		if listErr != nil {
+			t.Fatal(listErr)
+		}
+		if len(repositories) != 1 ||
+			repositories[0].ScanState != "empty" ||
+			repositories[0].IndexState != "empty" ||
+			repositories[0].IndexError != catalog.EmptyRepositoryReason {
+			t.Fatalf("%s empty repository = %#v", stage, repositories)
+		}
+	}
+	assertEmpty("initial sync")
+
+	if changed, err := storage.EnsureIndexConfiguration(ctx, "empty-state-test"); err != nil || !changed {
+		t.Fatalf("index configuration change = %v, %v", changed, err)
+	}
+	assertEmpty("configuration change")
+
+	if err := storage.SyncRepositories(ctx, []catalog.Repository{repository}); err != nil {
+		t.Fatal(err)
+	}
+	assertEmpty("rescan")
+}
+
 func TestIndexConfigurationChangeQueuesRepositoriesOnce(t *testing.T) {
 	storage, err := Open(filepath.Join(t.TempDir(), "repokarta.db"))
 	if err != nil {

@@ -661,6 +661,9 @@ func (s *Service) repositories(ctx context.Context, repositoryID int64) ([]catal
 		if err != nil {
 			return nil, err
 		}
+		if repository.IndexedCommit == "" && repository.HeadCommit == "" {
+			return []catalog.Repository{}, nil
+		}
 		return []catalog.Repository{repository}, nil
 	}
 	repositories, err := s.store.ListRepositories(ctx)

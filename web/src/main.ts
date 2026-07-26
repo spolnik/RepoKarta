@@ -218,22 +218,35 @@ function enableFirstRunProgress(): void {
   const heading = panel.querySelector<HTMLElement>("[data-first-run-heading]");
   const detail = panel.querySelector<HTMLElement>("[data-first-run-detail]");
   const bar = panel.querySelector<HTMLElement>("[data-first-run-bar]");
-  const total = Number(panel.dataset.total ?? "0");
-  if (!heading || !detail || !bar || total <= 0) {
+  if (!heading || !detail || !bar) {
     return;
   }
 
   const sync = (): void => {
     const values = Array.from(metrics.querySelectorAll("strong")).map((node) => Number(node.textContent ?? "0"));
-    const [ready = 0, pending = 0, failed = 0] = values;
+    const [ready = 0, pending = 0, failed = 0, empty = 0] = values;
+    const total = ready + pending + failed;
+    if (total <= 0) {
+      heading.textContent = "No repositories need indexing";
+      detail.textContent = empty
+        ? `${empty} empty ${empty === 1 ? "repository has" : "repositories have"} nothing to index.`
+        : "No Git repositories were found.";
+      bar.style.width = "0%";
+      return;
+    }
     if (pending === 0) {
-      heading.textContent = `Indexed ${ready} of ${total} repositories`;
-      detail.textContent = "Search now covers every indexed repository. Run a query to begin.";
+      heading.textContent = `Indexed ${ready} of ${total} indexable repositories`;
+      detail.textContent = failed
+        ? `${failed} ${failed === 1 ? "repository needs" : "repositories need"} attention` +
+          (empty ? ` · ${empty} empty with nothing to index` : "") + "."
+        : "Search now covers every indexable repository" +
+          (empty ? ` · ${empty} empty with nothing to index` : "") + ".";
     } else {
-      heading.textContent = `Indexing ${pending} of ${total} repositories`;
+      heading.textContent = `Indexing ${pending} of ${total} indexable repositories`;
       detail.textContent =
         `Search works now, but results stay partial until every repository is indexed. ${ready} ready` +
-        (failed ? ` · ${failed} need attention` : "") + ".";
+        (failed ? ` · ${failed} need attention` : "") +
+        (empty ? ` · ${empty} empty with nothing to index` : "") + ".";
     }
     bar.style.width = `${Math.min(100, Math.round((ready / total) * 100))}%`;
   };

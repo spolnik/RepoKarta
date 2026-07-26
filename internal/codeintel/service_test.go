@@ -42,6 +42,29 @@ func TestSourceWindowKeepsFocusInsideUsefulContext(t *testing.T) {
 	}
 }
 
+func TestRepositoryAPIExposesEmptyTerminalReason(t *testing.T) {
+	repository := catalog.Repository{
+		ID:         31,
+		Name:       "empty",
+		ScanState:  "empty",
+		ScanError:  catalog.EmptyRepositoryReason,
+		IndexState: "empty",
+		IndexError: catalog.EmptyRepositoryReason,
+	}
+	service := New(referenceTestStore{repository: repository}, fixedResultSearcher{}, "")
+	result, err := service.Repositories(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Repositories) != 1 ||
+		result.Repositories[0].ScanState != "empty" ||
+		result.Repositories[0].ScanError != catalog.EmptyRepositoryReason ||
+		result.Repositories[0].IndexState != "empty" ||
+		result.Repositories[0].IndexError != catalog.EmptyRepositoryReason {
+		t.Fatalf("empty repository API = %#v", result)
+	}
+}
+
 func TestServiceCommittedFileTreeAndHistoryAPIs(t *testing.T) {
 	directory := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(directory, "internal"), 0o755); err != nil {

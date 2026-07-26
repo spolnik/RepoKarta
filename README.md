@@ -12,6 +12,8 @@ dependency-management workspace:
 
 - regular, linked-worktree, and bare Git repository discovery;
 - origin, default revision, HEAD, scan, and index metadata in SQLite;
+- explicit terminal `empty` state and reason for repositories with no commits,
+  excluded from indexing and derived-artifact pending counts;
 - canonical path reconciliation that removes stale and duplicate catalogue rows
   on every discovery;
 - administrator-reviewed repository acquisition for local Git roots, GitHub
@@ -655,11 +657,11 @@ Windows amd64 and Apple Silicon macOS. The workflow:
 Run the same packagers locally:
 
 ```powershell
-.\scripts\package-release.ps1 -Version 0.49.0-dev
+.\scripts\package-release.ps1 -Version 0.50.0-dev
 ```
 
 ```sh
-./scripts/package-release.sh 0.49.0-dev
+./scripts/package-release.sh 0.50.0-dev
 ```
 
 macOS packages are signed with the hardened runtime when

@@ -79,7 +79,7 @@
           <span class="status-dot" aria-hidden="true"></span>
           <span>Stored locally</span>
           <span aria-hidden="true">·</span>
-          <span>{{len .Repositories}} repos indexed</span>
+          <span>{{.ReadyCount}} repos indexed</span>
         </footer>
       </aside>
 
@@ -140,7 +140,7 @@
             <p class="conversation-empty-kicker">Grounded in your code</p>
             <h3>What do you want to understand?</h3>
             <p class="conversation-empty-copy">
-              Ask across {{len .Repositories}} indexed repositories. Every answer stays read-only and links back to commit-pinned evidence.
+              Ask across {{.ReadyCount}} indexed repositories. Every answer stays read-only and links back to commit-pinned evidence.
             </p>
             {{/*
               Starters name a repository actually present in the catalogue
@@ -352,7 +352,7 @@
             <div class="conversation-inspector-section-heading">
               <div>
                 <p>Retrieval scope</p>
-                <h3 id="scope-heading">{{len .Repositories}} indexed repositories</h3>
+                <h3 id="scope-heading">{{.ReadyCount}} indexed repositories</h3>
               </div>
             </div>
             <ul class="conversation-repository-list">

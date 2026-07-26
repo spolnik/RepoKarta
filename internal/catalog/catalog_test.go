@@ -37,6 +37,36 @@ func TestDiscoverFindsWorktreeRepositories(t *testing.T) {
 	}
 }
 
+func TestDiscoverClassifiesRepositoryWithoutCommitsAsEmpty(t *testing.T) {
+	root := t.TempDir()
+	repositoryPath := filepath.Join(root, "owner", "empty")
+	runGit(t, root, "init", repositoryPath)
+
+	repositories, err := Discover(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repositories) != 1 {
+		t.Fatalf("empty repository discovery = %#v", repositories)
+	}
+	repository := repositories[0]
+	if repository.ScanState != "empty" ||
+		repository.IndexState != "empty" ||
+		repository.ScanError != EmptyRepositoryReason ||
+		repository.IndexError != EmptyRepositoryReason ||
+		repository.HeadCommit != "" {
+		t.Fatalf("empty repository metadata = %#v", repository)
+	}
+
+	inspected, err := Inspect(repositoryPath)
+	if err != nil {
+		t.Fatalf("inspect empty repository: %v", err)
+	}
+	if inspected.IndexState != "empty" {
+		t.Fatalf("inspected empty repository = %#v", inspected)
+	}
+}
+
 func TestDiscoverFindsWorktreesAndBareRepositoriesAndHonorsExclusions(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git is not installed")

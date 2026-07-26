@@ -574,7 +574,16 @@ func (s *Store) EnsureIndexConfiguration(ctx context.Context, signature string) 
 	}
 	if _, err := tx.ExecContext(ctx, `
 UPDATE repositories
-SET index_state = 'pending', index_error = '', indexed_at = ''`); err != nil {
+SET index_state = CASE
+        WHEN scan_state = 'empty' THEN 'empty'
+        WHEN scan_state = 'error' THEN 'error'
+        ELSE 'pending'
+    END,
+    index_error = CASE
+        WHEN scan_state IN ('empty', 'error') THEN scan_error
+        ELSE ''
+    END,
+    indexed_at = ''`); err != nil {
 		return false, err
 	}
 	if _, err := tx.ExecContext(ctx, `
@@ -674,11 +683,32 @@ func (s *Store) SyncRepositories(ctx context.Context, repositories []catalog.Rep
 	for _, repository := range repositories {
 		discoveredAt := formatTime(repository.DiscoveredAt)
 		scannedAt := formatTime(repository.ScannedAt)
+		indexState := repository.IndexState
+		indexError := repository.IndexError
+		if indexState == "" {
+			switch repository.ScanState {
+			case "empty":
+				indexState = "empty"
+				if indexError == "" {
+					indexError = repository.ScanError
+				}
+				if indexError == "" {
+					indexError = catalog.EmptyRepositoryReason
+				}
+			case "error":
+				indexState = "error"
+				if indexError == "" {
+					indexError = repository.ScanError
+				}
+			default:
+				indexState = "pending"
+			}
+		}
 		if _, err := tx.ExecContext(ctx, `
 INSERT INTO repositories (
     name, path, origin_url, default_revision, head_commit, bare,
-    scan_state, scan_error, discovered_at, scanned_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    scan_state, scan_error, index_state, index_error, discovered_at, scanned_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(path) DO UPDATE SET
     name = excluded.name,
     origin_url = excluded.origin_url,
@@ -689,11 +719,15 @@ ON CONFLICT(path) DO UPDATE SET
     scan_error = excluded.scan_error,
     scanned_at = excluded.scanned_at,
     index_state = CASE
+        WHEN excluded.index_state IN ('empty', 'error')
+        THEN excluded.index_state
         WHEN repositories.indexed_commit = excluded.head_commit AND repositories.index_state = 'ready'
         THEN repositories.index_state
         ELSE 'pending'
     END,
     index_error = CASE
+        WHEN excluded.index_state IN ('empty', 'error')
+        THEN excluded.index_error
         WHEN repositories.indexed_commit = excluded.head_commit AND repositories.index_state = 'ready'
         THEN repositories.index_error
         ELSE ''
@@ -706,6 +740,8 @@ ON CONFLICT(path) DO UPDATE SET
 			repository.Bare,
 			repository.ScanState,
 			repository.ScanError,
+			indexState,
+			indexError,
 			discoveredAt,
 			scannedAt,
 		); err != nil {

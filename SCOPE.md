@@ -63,6 +63,8 @@ repositories on managed Windows and Apple Silicon macOS laptops.
 - Work naturally with the directory layout produced by ghorg.
 - Record repository path, display name, origin URL, default revision, HEAD
   commit, scan state, index state, and timestamps.
+- Treat a repository with no commits as an explicit terminal empty state, show
+  the reason, and exclude it from pending work and readiness denominators.
 - Allow repositories and directories to be excluded.
 - Skip hidden directories such as `.git` internals and `.jobguard-wt`
   worktrees by default.
@@ -868,7 +870,7 @@ completion criteria include:
 
 ## Current implementation version
 
-`0.49.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
+`0.50.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
 The M9 dependency inventory, public registry refresh, lockfile resolution, and
 explicit private-registry routing are implemented; discrepancy filtering and
 fail-closed classification of unconfigured internal package prefixes remain.
@@ -878,7 +880,9 @@ now enforce insight mutation permissions and revision staleness, paginate
 dependency declarations, cache immutable file context trees, open the
 administrator console directly in loopback-local mode, and support
 credential-backed acquisition from explicitly configured GitHub and GitLab
-HTTPS hosts with canonical checkout validation.
+HTTPS hosts with canonical checkout validation. Empty Git repositories now
+remain visible as terminal `empty` catalogue entries without inflating pending
+index or derived-artifact work.
 
 ## Recommended next session
 

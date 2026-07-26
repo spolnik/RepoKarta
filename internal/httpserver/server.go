@@ -181,6 +181,8 @@ type pageData struct {
 	ReadyCount          int
 	PendingCount        int
 	ErrorCount          int
+	EmptyCount          int
+	IndexableCount      int
 	ArtifactProgress    graph.ArtifactProgress
 	ActivePage          string
 	ChatEnabled         bool
@@ -1696,8 +1698,13 @@ func (s *Server) pageData(ctx context.Context) (pageData, error) {
 			data.ReadyCount++
 		case "error":
 			data.ErrorCount++
+		case "empty":
+			data.EmptyCount++
 		default:
 			data.PendingCount++
+		}
+		if repository.IndexState != "empty" {
+			data.IndexableCount++
 		}
 	}
 	if s.maps != nil {
@@ -2112,6 +2119,8 @@ func statusLabel(state string) string {
 		return "Indexing"
 	case "error":
 		return "Needs attention"
+	case "empty":
+		return "Empty"
 	default:
 		return "Queued"
 	}
@@ -2189,7 +2198,16 @@ func indexProgress(ready, total int) int {
 func repositorySignature(repositories []catalog.Repository) string {
 	var builder strings.Builder
 	for _, repository := range repositories {
-		fmt.Fprintf(&builder, "%d:%s:%s:%s;", repository.ID, repository.HeadCommit, repository.IndexState, repository.IndexError)
+		fmt.Fprintf(
+			&builder,
+			"%d:%s:%s:%s:%s:%s;",
+			repository.ID,
+			repository.HeadCommit,
+			repository.ScanState,
+			repository.ScanError,
+			repository.IndexState,
+			repository.IndexError,
+		)
 	}
 	return builder.String()
 }

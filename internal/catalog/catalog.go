@@ -16,6 +16,13 @@ import (
 
 const gitCommandTimeout = 10 * time.Second
 
+const (
+	// EmptyRepositoryReason is deliberately stable across the catalogue, API,
+	// and UI so an unborn Git repository is reported as a terminal condition
+	// instead of looking like indexing work that will eventually start.
+	EmptyRepositoryReason = "Nothing to index: repository has no commits."
+)
+
 // Repository is a read-only description of a local Git repository.
 type Repository struct {
 	ID              int64
@@ -66,7 +73,7 @@ func Inspect(path string) (Repository, error) {
 		return Repository{}, fmt.Errorf("%q is not a Git repository", path)
 	}
 	repository := inspectRepository(repositoryPath, bare)
-	if repository.ScanState != "ready" {
+	if repository.ScanState == "error" {
 		return Repository{}, errors.New(repository.ScanError)
 	}
 	return repository, nil
@@ -273,9 +280,18 @@ func inspectRepository(path string, bare bool) Repository {
 	if head, err := gitOutput(ctx, path, bare, "rev-parse", "--verify", "HEAD"); err == nil {
 		repository.HeadCommit = head
 	} else {
-		repository.ScanState = "error"
-		repository.ScanError = err.Error()
-		return repository
+		commit, commitErr := gitOutput(ctx, path, bare, "rev-list", "--all", "--max-count=1")
+		if commitErr == nil && commit == "" {
+			repository.ScanState = "empty"
+			repository.ScanError = EmptyRepositoryReason
+			repository.IndexState = "empty"
+			repository.IndexError = EmptyRepositoryReason
+		} else {
+			repository.ScanState = "error"
+			repository.ScanError = err.Error()
+			repository.IndexState = "error"
+			repository.IndexError = repository.ScanError
+		}
 	}
 
 	if revision, err := gitOutput(ctx, path, bare, "symbolic-ref", "--quiet", "--short", "HEAD"); err == nil {

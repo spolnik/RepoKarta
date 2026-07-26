@@ -47,6 +47,44 @@ func (s graphStore) RepositoryByID(_ context.Context, id int64) (catalog.Reposit
 	return catalog.Repository{}, os.ErrNotExist
 }
 
+func TestEmptyRepositoryIsNotReportedAsPendingArtifactWork(t *testing.T) {
+	repository := catalog.Repository{
+		ID:         23,
+		Name:       "empty",
+		ScanState:  "empty",
+		ScanError:  catalog.EmptyRepositoryReason,
+		IndexState: "empty",
+		IndexError: catalog.EmptyRepositoryReason,
+	}
+	service, err := New(
+		graphStore{repository: repository},
+		filepath.Join(t.TempDir(), "maps"),
+		"http://127.0.0.1:7331",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	progress, err := service.StructureProgress(t.Context(), repository.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if progress.State != "ready" ||
+		progress.RequestedRepositories != 0 ||
+		progress.PendingRepositories != 0 {
+		t.Fatalf("empty repository artifact progress = %#v", progress)
+	}
+
+	_, dependencyProgress, err := service.ReadDependencySnapshot(t.Context(), repository.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dependencyProgress.RequestedRepositories != 0 ||
+		dependencyProgress.PendingRepositories != 0 {
+		t.Fatalf("empty repository dependency progress = %#v", dependencyProgress)
+	}
+}
+
 func TestStructuralIndexIsPreparedInBackgroundAndReadWithoutBuilding(t *testing.T) {
 	root, revision := javaGraphFixture(t, map[string]string{
 		"src/main/java/com/acme/PaymentJob.java": `package com.acme;

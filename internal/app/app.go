@@ -138,7 +138,7 @@ func Run(ctx context.Context, cfg Config) error {
 	if changed, err := database.EnsureIndexConfiguration(ctx, engine.IndexConfiguration()); err != nil {
 		return fmt.Errorf("validate index configuration: %w", err)
 	} else if changed {
-		slog.Info("index capabilities changed; queued repositories for rebuild", "configuration", engine.IndexConfiguration())
+		slog.Info("index capabilities changed; queued indexable repositories for rebuild", "configuration", engine.IndexConfiguration())
 	}
 
 	internalBaseURL := "http://" + cfg.ListenAddress

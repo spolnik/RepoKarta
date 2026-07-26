@@ -620,6 +620,85 @@ func TestLocalAdministratorOpensAdminConsoleWithoutBootstrapCredentials(t *testi
 	}
 }
 
+func TestEmptyRepositoryIsTerminalAndExcludedFromIndexProgress(t *testing.T) {
+	repositories := []catalog.Repository{
+		{
+			ID: 1, Name: "ready", ScanState: "ready", IndexState: "ready",
+			HeadCommit: "aaaaaaaa", IndexedCommit: "aaaaaaaa",
+		},
+		{ID: 2, Name: "pending", ScanState: "ready", IndexState: "pending", HeadCommit: "bbbbbbbb"},
+		{
+			ID: 3, Name: "empty", ScanState: "empty", ScanError: catalog.EmptyRepositoryReason,
+			IndexState: "empty", IndexError: catalog.EmptyRepositoryReason,
+		},
+		{
+			ID: 4, Name: "broken", ScanState: "error", ScanError: "cannot read HEAD",
+			IndexState: "error", IndexError: "cannot read HEAD",
+		},
+	}
+	server, err := New(
+		Config{Address: "127.0.0.1:7331", Version: "test"},
+		codeintel.New(testStore{repositories: repositories}, testSearcher{}, "http://127.0.0.1:7331"),
+		testRefresher{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := server.pageData(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data.ReadyCount != 1 ||
+		data.PendingCount != 1 ||
+		data.ErrorCount != 1 ||
+		data.EmptyCount != 1 ||
+		data.IndexableCount != 3 {
+		t.Fatalf("repository state counts = %#v", data)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7331/", nil)
+	response := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	body := response.Body.String()
+	for _, expected := range []string{
+		`data-total="3"`,
+		"Indexing 1 of 3 indexable repositories",
+		"1 empty with nothing to index",
+		"status-badge status-empty",
+		"Nothing to index: repository has no commits.",
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("empty repository page is missing %q: %s", expected, body)
+		}
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7331/api/repositories", nil)
+	response = httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK ||
+		!strings.Contains(response.Body.String(), `"scan_state":"empty"`) ||
+		!strings.Contains(response.Body.String(), `"index_state":"empty"`) ||
+		!strings.Contains(response.Body.String(), catalog.EmptyRepositoryReason) {
+		t.Fatalf("empty repository API = %d: %s", response.Code, response.Body.String())
+	}
+
+	emptyServer, err := New(
+		Config{Address: "127.0.0.1:7331", Version: "test"},
+		codeintel.New(testStore{repositories: repositories[2:3]}, testSearcher{}, "http://127.0.0.1:7331"),
+		testRefresher{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request = httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7331/", nil)
+	response = httptest.NewRecorder()
+	emptyServer.server.Handler.ServeHTTP(response, request)
+	if !strings.Contains(response.Body.String(), "No repositories are searchable") ||
+		strings.Contains(response.Body.String(), "Search is ready") {
+		t.Fatalf("all-empty catalogue page = %d: %s", response.Code, response.Body.String())
+	}
+}
+
 func TestAdministratorCanEnableAllowedOpenMode(t *testing.T) {
 	settingsStore := &testSettingsStore{values: make(map[string]string)}
 	securityManager, err := security.New(context.Background(), settingsStore, security.Config{

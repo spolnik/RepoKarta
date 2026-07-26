@@ -167,8 +167,8 @@
 <span class="index-health-dot" data-state="pending" aria-hidden="true"></span>
 <span data-artifact-progress>References {{.ArtifactProgress.ReadyRepositories}}/{{.ArtifactProgress.RequestedRepositories}}</span>
 {{else}}
-<span class="index-health-dot" data-state="ready" aria-hidden="true"></span>
-<span data-artifact-progress>{{.ReadyCount}} indexed</span>
+<span class="index-health-dot" data-state="{{if and (eq .ReadyCount 0) .EmptyCount}}empty{{else}}ready{{end}}" aria-hidden="true"></span>
+<span data-artifact-progress>{{.ReadyCount}} indexed{{if .EmptyCount}} · {{.EmptyCount}} empty{{end}}</span>
 {{end}}
 <span class="index-health-scope">· {{if eq .AuthMode "local"}}local only{{else}}{{.AuthMode}}{{end}}</span>
 {{end}}
@@ -357,18 +357,27 @@
     was still in flight, so early searches returned quietly partial results.
     This panel is replaced out of band as the catalogue progresses.
   */}}
-  <div class="result-state" role="status" data-first-run data-total="{{len .Repositories}}">
+  <div class="result-state" role="status" data-first-run data-total="{{.IndexableCount}}">
     <p class="flex items-center gap-2 font-medium text-ink">
       <span class="index-health-dot" data-state="pending" aria-hidden="true"></span>
-      <span data-first-run-heading>Indexing {{.PendingCount}} of {{len .Repositories}} repositories</span>
+      <span data-first-run-heading>Indexing {{.PendingCount}} of {{.IndexableCount}} indexable repositories</span>
     </p>
     <p class="mt-2 max-w-xl text-sm leading-6 text-ink-soft" data-first-run-detail>
       Search works now, but results stay partial until every repository is indexed.
-      {{.ReadyCount}} ready{{if .ErrorCount}} · {{.ErrorCount}} need attention{{end}}.
+      {{.ReadyCount}} ready{{if .ErrorCount}} · {{.ErrorCount}} need attention{{end}}{{if .EmptyCount}} · {{.EmptyCount}} empty with nothing to index{{end}}.
     </p>
     <div class="index-progress" aria-hidden="true">
-      <span data-first-run-bar style="width: {{indexProgress .ReadyCount (len .Repositories)}}%"></span>
+      <span data-first-run-bar style="width: {{indexProgress .ReadyCount .IndexableCount}}%"></span>
     </div>
+  </div>
+  {{else if and (eq .ReadyCount 0) (or .EmptyCount .ErrorCount)}}
+  <div class="result-state" role="status">
+    <p class="font-medium text-ink">No repositories are searchable</p>
+    <p class="mt-2 max-w-xl text-sm leading-6 text-ink-soft">
+      {{if .EmptyCount}}{{.EmptyCount}} {{if eq .EmptyCount 1}}repository is{{else}}repositories are{{end}} empty with nothing to index.{{end}}
+      {{if .ErrorCount}}{{.ErrorCount}} {{if eq .ErrorCount 1}}repository needs{{else}}repositories need{{end}} attention.{{end}}
+      Open the repository drawer for the exact reason.
+    </p>
   </div>
   {{else}}
   <div class="result-state">
@@ -436,7 +445,7 @@
           hx-swap="outerHTML"
         >↻</button>
       </div>
-      <div id="repository-metrics" class="grid grid-cols-3 gap-2">{{template "repository-metrics" .}}</div>
+      <div id="repository-metrics" class="grid grid-cols-4 gap-2">{{template "repository-metrics" .}}</div>
       <p class="mt-4 truncate border-t border-white/[0.06] pt-4 font-mono text-xs leading-5 text-ink-faint" title="{{.RepositoryRoot}}">{{.RepositoryRoot}}</p>
     </section>
 
@@ -454,6 +463,7 @@
 <div class="metric"><strong class="text-emerald-300">{{.ReadyCount}}</strong><span>Ready</span></div>
 <div class="metric"><strong class="text-amber-300">{{.PendingCount}}</strong><span>Active</span></div>
 <div class="metric"><strong class="text-rose-300">{{.ErrorCount}}</strong><span>Errors</span></div>
+<div class="metric"><strong class="text-slate-300">{{.EmptyCount}}</strong><span>Empty</span></div>
 {{end}}
 
 {{/*
@@ -465,7 +475,7 @@
 */}}
 {{define "repository-list-fragment"}}
 <a id="index-health" href="/" class="index-health" data-index-health hx-swap-oob="true">{{template "index-health" .}}</a>
-<div id="repository-metrics" class="grid grid-cols-3 gap-2" hx-swap-oob="true">{{template "repository-metrics" .}}</div>
+<div id="repository-metrics" class="grid grid-cols-4 gap-2" hx-swap-oob="true">{{template "repository-metrics" .}}</div>
 {{template "repository-list" .}}
 {{end}}
 
@@ -487,7 +497,7 @@
         {{if .DefaultRevision}}<span>·</span><span class="truncate">{{.DefaultRevision}}</span>{{end}}
         {{if .Bare}}<span>· bare</span>{{end}}
       </div>
-      {{if .IndexError}}<p class="mt-2 line-clamp-2 text-xs leading-4 text-rose-300/70" title="{{.IndexError}}">{{.IndexError}}</p>{{end}}
+      {{if .IndexError}}<p class="mt-2 line-clamp-2 text-xs leading-4 {{if eq .IndexState "empty"}}text-ink-faint{{else}}text-rose-300/70{{end}}" title="{{.IndexError}}">{{.IndexError}}</p>{{end}}
     </li>
     {{end}}
   </ul>
