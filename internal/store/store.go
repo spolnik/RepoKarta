@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	currentSchemaVersion = 14
+	currentSchemaVersion = 15
 
 	schemaV1 = `
 CREATE TABLE IF NOT EXISTS repositories (
@@ -378,6 +378,57 @@ CREATE TABLE IF NOT EXISTS sonar_connections (
     failure_count INTEGER NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL
 );`
+
+	// Version 15 records administrator-approved local and hosted repository
+	// sources separately from the derived search catalogue. Secret values are
+	// deliberately excluded; credential_ref stores only an environment variable
+	// or external credential-helper reference.
+	schemaV15 = `
+CREATE TABLE IF NOT EXISTS repository_acquisitions (
+    id INTEGER PRIMARY KEY,
+    provider TEXT NOT NULL CHECK(provider IN ('local', 'github', 'gitlab')),
+    provider_repository_id TEXT NOT NULL DEFAULT '',
+    canonical_id TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    name TEXT NOT NULL,
+    namespace TEXT NOT NULL DEFAULT '',
+    remote_url TEXT NOT NULL DEFAULT '',
+    web_url TEXT NOT NULL DEFAULT '',
+    checkout_path TEXT NOT NULL UNIQUE,
+    default_branch TEXT NOT NULL DEFAULT '',
+    credential_ref TEXT NOT NULL DEFAULT '',
+    inclusion_policy TEXT NOT NULL DEFAULT 'approved',
+    visibility TEXT NOT NULL DEFAULT '',
+    archived INTEGER NOT NULL DEFAULT 0,
+    forked INTEGER NOT NULL DEFAULT 0,
+    owned INTEGER NOT NULL DEFAULT 0,
+    state TEXT NOT NULL CHECK(state IN ('acquiring', 'ready', 'syncing', 'error')),
+    last_error TEXT NOT NULL DEFAULT '',
+    head_commit TEXT NOT NULL DEFAULT '',
+    failure_count INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    discovered_at TEXT NOT NULL,
+    synced_at TEXT NOT NULL DEFAULT '',
+    next_sync_at TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL
+);
+ALTER TABLE repositories ADD COLUMN acquisition_id INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX IF NOT EXISTS repository_acquisitions_state_index
+ON repository_acquisitions(state, next_sync_at);
+CREATE UNIQUE INDEX IF NOT EXISTS repository_acquisitions_provider_id_index
+ON repository_acquisitions(provider, provider_repository_id)
+WHERE provider_repository_id <> '';
+CREATE TABLE IF NOT EXISTS repository_acquisition_events (
+    id INTEGER PRIMARY KEY,
+    repository_id INTEGER NOT NULL DEFAULT 0,
+    canonical_id TEXT NOT NULL DEFAULT '',
+    action TEXT NOT NULL,
+    outcome TEXT NOT NULL,
+    revision TEXT NOT NULL DEFAULT '',
+    detail TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS repository_acquisition_events_created_index
+ON repository_acquisition_events(created_at DESC);`
 )
 
 // SchemaVersion is the current durable SQLite format. Diagnostics and upgrade
@@ -456,6 +507,8 @@ func migrate(db *sql.DB) error {
 			migration = schemaV13
 		case 14:
 			migration = schemaV14
+		case 15:
+			migration = schemaV15
 		default:
 			return fmt.Errorf("missing migration for schema version %d", next)
 		}
@@ -657,6 +710,15 @@ ON CONFLICT(path) DO UPDATE SET
 			return err
 		}
 	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE repositories
+SET acquisition_id = COALESCE((
+    SELECT a.id
+    FROM repository_acquisitions a
+    WHERE a.checkout_path = repositories.path
+), 0)`); err != nil {
+		return fmt.Errorf("link repository acquisition provenance: %w", err)
+	}
 
 	for key, repository := range current {
 		if _, existed := previous[key]; existed {
@@ -737,7 +799,7 @@ func (s *Store) ListRepositories(ctx context.Context) ([]catalog.Repository, err
 SELECT
     r.id, r.name, r.path, r.origin_url, r.default_revision, r.head_commit, r.bare,
     r.scan_state, r.scan_error, r.index_state, r.index_error, r.indexed_commit,
-    r.discovered_at, r.scanned_at, r.indexed_at
+    r.discovered_at, r.scanned_at, r.indexed_at, r.acquisition_id
 FROM repositories r`
 	arguments := []any{}
 	if viewer, restricted := access.ViewerFromContext(ctx); restricted && !viewer.Admin {
@@ -781,7 +843,7 @@ func (s *Store) RepositoryByID(ctx context.Context, id int64) (catalog.Repositor
 SELECT
     r.id, r.name, r.path, r.origin_url, r.default_revision, r.head_commit, r.bare,
     r.scan_state, r.scan_error, r.index_state, r.index_error, r.indexed_commit,
-    r.discovered_at, r.scanned_at, r.indexed_at
+    r.discovered_at, r.scanned_at, r.indexed_at, r.acquisition_id
 FROM repositories r`
 	arguments := []any{id}
 	if viewer, restricted := access.ViewerFromContext(ctx); restricted && !viewer.Admin {
@@ -988,6 +1050,7 @@ func scanRepository(row rowScanner) (catalog.Repository, error) {
 		&discoveredAt,
 		&scannedAt,
 		&indexedAt,
+		&repository.AcquisitionID,
 	); err != nil {
 		return catalog.Repository{}, err
 	}

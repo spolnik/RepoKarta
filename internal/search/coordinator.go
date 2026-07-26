@@ -24,14 +24,22 @@ type Coordinator struct {
 	store    CatalogueStore
 	engine   Engine
 
-	startOnce       sync.Once
-	baseCtx         context.Context
-	indexing        atomic.Bool
-	indexedObserver func(context.Context, int64) error
-	indexedSignal   chan struct{}
-	indexedMu       sync.Mutex
-	indexedPending  []int64
-	indexedQueued   map[int64]struct{}
+	startOnce          sync.Once
+	baseCtx            context.Context
+	indexing           atomic.Bool
+	indexedObserver    func(context.Context, int64) error
+	indexedSignal      chan struct{}
+	indexedMu          sync.Mutex
+	indexedPending     []int64
+	indexedQueued      map[int64]struct{}
+	repositoryProvider func(context.Context) ([]catalog.Repository, error)
+}
+
+// UseRepositoryProvider merges verified administrator-approved repositories
+// into every authoritative catalogue refresh.
+func (c *Coordinator) UseRepositoryProvider(provider func(context.Context) ([]catalog.Repository, error)) *Coordinator {
+	c.repositoryProvider = provider
+	return c
 }
 
 // NewCoordinator creates an indexing coordinator.
@@ -88,6 +96,13 @@ func (c *Coordinator) Refresh(ctx context.Context) error {
 	repositories, err := catalog.DiscoverWithOptions(c.root, catalog.DiscoverOptions{Exclude: c.excludes})
 	if err != nil {
 		return fmt.Errorf("discover repositories: %w", err)
+	}
+	if c.repositoryProvider != nil {
+		managed, err := c.repositoryProvider(ctx)
+		if err != nil {
+			return fmt.Errorf("load managed repositories: %w", err)
+		}
+		repositories = append(repositories, managed...)
 	}
 	if err := c.store.SyncRepositories(ctx, repositories); err != nil {
 		return fmt.Errorf("store repositories: %w", err)

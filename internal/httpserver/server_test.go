@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spolnik/RepoKarta/internal/acquisition"
 	"github.com/spolnik/RepoKarta/internal/agent"
 	"github.com/spolnik/RepoKarta/internal/audit"
 	"github.com/spolnik/RepoKarta/internal/catalog"
@@ -99,6 +100,7 @@ func TestAdministratorCanPreviewCleanupAndExportDiagnostics(t *testing.T) {
 		OwnerID:        "local:admin",
 		Visibility:     "private",
 	}}}
+	acquisitionStore := &acquisitionTestService{}
 	operations, err := maintenance.New(maintenance.Config{
 		DataDirectory:   dataDirectory,
 		RepositoryRoot:  repositoryRoot,
@@ -124,11 +126,12 @@ func TestAdministratorCanPreviewCleanupAndExportDiagnostics(t *testing.T) {
 	}
 	server, err := New(
 		Config{
-			Address:          "127.0.0.1:7331",
-			Version:          "test",
-			Security:         securityManager,
-			Maintenance:      operations,
-			RepositoryAccess: accessStore,
+			Address:               "127.0.0.1:7331",
+			Version:               "test",
+			Security:              securityManager,
+			Maintenance:           operations,
+			RepositoryAccess:      accessStore,
+			RepositoryAcquisition: acquisitionStore,
 		},
 		codeintel.New(testStore{}, testSearcher{}, "http://127.0.0.1:7331"),
 		testRefresher{},
@@ -153,6 +156,7 @@ func TestAdministratorCanPreviewCleanupAndExportDiagnostics(t *testing.T) {
 	server.server.Handler.ServeHTTP(response, request)
 	if response.Code != http.StatusOK ||
 		!strings.Contains(response.Body.String(), "Storage and diagnostics") ||
+		!strings.Contains(response.Body.String(), "Repository acquisition") ||
 		!strings.Contains(response.Body.String(), "private-repository") ||
 		!strings.Contains(response.Body.String(), "logs/repokarta.log") {
 		t.Fatalf("admin storage response = %d, body %q", response.Code, response.Body.String())
@@ -161,6 +165,46 @@ func TestAdministratorCanPreviewCleanupAndExportDiagnostics(t *testing.T) {
 	targetMatch := regexp.MustCompile(`name="target" value="([^"]+)"`).FindStringSubmatch(response.Body.String())
 	if len(csrfMatch) != 2 || len(targetMatch) != 2 {
 		t.Fatalf("storage controls missing: %q", response.Body.String())
+	}
+
+	discoveryForm := url.Values{
+		"csrf":            {csrfMatch[1]},
+		"provider":        {"github"},
+		"location":        {"acme"},
+		"include_private": {"true"},
+		"team":            {"platform"},
+	}
+	request = httptest.NewRequest(http.MethodPost, "http://127.0.0.1:7331/admin/repositories/discover", strings.NewReader(discoveryForm.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(adminCookie)
+	response = httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK ||
+		!strings.Contains(response.Body.String(), "github.com/acme/preview-example") ||
+		acquisitionStore.lastDiscovery.Team != "platform" {
+		t.Fatalf("repository discovery response = %d, discovery = %#v, body %q", response.Code, acquisitionStore.lastDiscovery, response.Body.String())
+	}
+
+	acquireForm := url.Values{
+		"csrf":                   {csrfMatch[1]},
+		"provider":               {"github"},
+		"provider_repository_id": {"42"},
+		"canonical_id":           {"github.com/acme/preview-example"},
+		"name":                   {"preview-example"},
+		"namespace":              {"acme"},
+		"remote_url":             {"https://github.com/acme/preview-example.git"},
+		"default_branch":         {"main"},
+		"visibility":             {"private"},
+		"inclusion_policy":       {"approved; team=platform"},
+	}
+	request = httptest.NewRequest(http.MethodPost, "http://127.0.0.1:7331/admin/repositories/acquire", strings.NewReader(acquireForm.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(adminCookie)
+	response = httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || len(acquisitionStore.repositories) != 1 ||
+		!strings.Contains(response.Body.String(), "queued for commit-pinned indexing") {
+		t.Fatalf("repository acquisition response = %d, repositories = %#v, body %q", response.Code, acquisitionStore.repositories, response.Body.String())
 	}
 
 	accessForm := url.Values{
@@ -229,6 +273,59 @@ type maintenanceTestStore struct{}
 
 type accessTestStore struct {
 	policies []store.RepositoryAccess
+}
+
+type acquisitionTestService struct {
+	lastDiscovery acquisition.DiscoverRequest
+	repositories  []acquisition.Repository
+}
+
+func (s *acquisitionTestService) List(context.Context) ([]acquisition.Repository, error) {
+	return append([]acquisition.Repository(nil), s.repositories...), nil
+}
+
+func (s *acquisitionTestService) Discover(_ context.Context, request acquisition.DiscoverRequest) ([]acquisition.Candidate, error) {
+	s.lastDiscovery = request
+	return []acquisition.Candidate{{
+		Provider:             acquisition.ProviderGitHub,
+		ProviderRepositoryID: "42",
+		CanonicalID:          "github.com/acme/preview-example",
+		Name:                 "preview-example",
+		Namespace:            "acme",
+		RemoteURL:            "https://github.com/acme/preview-example.git",
+		DefaultBranch:        "main",
+		Visibility:           "private",
+		InclusionPolicy:      "approved; team=platform",
+	}}, nil
+}
+
+func (s *acquisitionTestService) Acquire(_ context.Context, candidate acquisition.Candidate, _ string) (acquisition.Repository, error) {
+	repository := acquisition.Repository{
+		ID:                   1,
+		Provider:             candidate.Provider,
+		ProviderRepositoryID: candidate.ProviderRepositoryID,
+		CanonicalID:          candidate.CanonicalID,
+		Name:                 candidate.Name,
+		Namespace:            candidate.Namespace,
+		RemoteURL:            candidate.RemoteURL,
+		CheckoutPath:         `C:\RepoKarta\repositories\github\acme\preview-example`,
+		DefaultBranch:        candidate.DefaultBranch,
+		InclusionPolicy:      candidate.InclusionPolicy,
+		Owned:                true,
+		State:                acquisition.StateReady,
+		HeadCommit:           strings.Repeat("a", 40),
+	}
+	s.repositories = []acquisition.Repository{repository}
+	return repository, nil
+}
+
+func (s *acquisitionTestService) Sync(context.Context, int64) (acquisition.Repository, error) {
+	return s.repositories[0], nil
+}
+
+func (s *acquisitionTestService) Remove(context.Context, int64) (string, error) {
+	s.repositories = nil
+	return `C:\RepoKarta\repository-trash\preview-example`, nil
 }
 
 func (s *accessTestStore) ListRepositoryAccess(context.Context) ([]store.RepositoryAccess, error) {
@@ -480,7 +577,7 @@ func TestMCPSetupPageProvidesCopyableReadOnlyConfiguration(t *testing.T) {
 		`read_dependency_inventory`,
 		`list_deep_wiki_pages`,
 		`read_generated_document`,
-			`14 tools · no writes`,
+		`14 tools · no writes`,
 	} {
 		if !strings.Contains(response.Body.String(), expected) {
 			t.Fatalf("MCP setup page does not contain %q", expected)
