@@ -97,6 +97,116 @@
         <div class="flex justify-end"><button class="search-button" type="submit">Save and activate</button></div>
       </form>
 
+      {{if .EnterpriseAvailable}}
+      <section class="mt-12 border-t border-white/[0.08] pt-10" aria-labelledby="identity-title">
+        <div>
+          <p class="mb-2 text-xs font-semibold uppercase tracking-[0.24em] text-emerald-400">Enterprise administration</p>
+          <h2 id="identity-title" class="text-3xl font-semibold tracking-[-0.04em] text-white">Identity and least privilege</h2>
+          <p class="mt-3 max-w-3xl text-sm leading-6 text-ink-soft">SCIM-provisioned and observed identities are evaluated on every request. Suspension immediately blocks an existing provider session; role changes are effective on the next request.</p>
+        </div>
+
+        {{if .EnterpriseError}}
+        <p class="mt-6 rounded-lg border border-red-400/30 bg-red-400/10 px-4 py-3 text-sm text-red-200">{{.EnterpriseError}}</p>
+        {{else}}
+        <div class="mt-6 overflow-hidden rounded-xl border border-white/[0.08]">
+          <table class="w-full text-left text-sm">
+            <thead class="border-b border-white/[0.08] bg-white/[0.035] text-xs uppercase tracking-[0.14em] text-ink-faint">
+              <tr><th class="px-4 py-3 font-medium">Capability</th><th class="px-4 py-3 font-medium">Reader</th><th class="px-4 py-3 font-medium">Knowledge maintainer</th><th class="px-4 py-3 font-medium">Administrator</th></tr>
+            </thead>
+            <tbody class="divide-y divide-white/[0.06] text-ink-soft">
+              <tr><td class="px-4 py-3 text-ink">Read repositories and shared artifacts; own conversations; exports</td><td class="px-4 py-3">Yes</td><td class="px-4 py-3">Yes</td><td class="px-4 py-3">Yes</td></tr>
+              <tr><td class="px-4 py-3 text-ink">AI generation and shared artifact generation</td><td class="px-4 py-3">No</td><td class="px-4 py-3">Yes</td><td class="px-4 py-3">Yes</td></tr>
+              <tr><td class="px-4 py-3 text-ink">Cross-author conversations, repository refresh/acquisition, security, roles, audit</td><td class="px-4 py-3">No</td><td class="px-4 py-3">No</td><td class="px-4 py-3">Yes</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="mt-8 grid gap-6 lg:grid-cols-2">
+          <section class="rounded-2xl border border-white/[0.08] bg-white/[0.025] p-6">
+            <h3 class="text-lg font-semibold text-white">Users</h3>
+            <p class="mt-2 text-sm leading-6 text-ink-soft">Unknown authenticated identities start as readers. SCIM deprovisioning preserves historical authorship while denying new requests.</p>
+            <div class="mt-5 grid gap-3">
+              {{range .Users}}
+              <form action="/admin/identities/role" method="post" class="rounded-xl border border-white/[0.08] bg-black/10 p-4">
+                <input type="hidden" name="csrf" value="{{$.CSRFToken}}">
+                <input type="hidden" name="user_id" value="{{.ID}}">
+                <div class="flex flex-wrap items-start justify-between gap-3">
+                  <div class="min-w-0"><div class="font-semibold text-white">{{.DisplayName}}{{if not .DisplayName}}{{.UserName}}{{end}}</div><div class="mt-1 break-all font-mono text-xs text-ink-faint">{{.UserName}} · {{.ID}}</div></div>
+                  <span class="rounded-full border px-2 py-0.5 text-xs {{if .Active}}border-emerald-400/25 text-emerald-300{{else}}border-red-400/25 text-red-300{{end}}">{{if .Active}}active{{else}}suspended{{end}}</span>
+                </div>
+                <div class="mt-3 flex gap-3">
+                  <select name="role" class="min-w-0 flex-1"><option value="reader" {{if eq .Role "reader"}}selected{{end}}>Reader</option><option value="knowledge-maintainer" {{if eq .Role "knowledge-maintainer"}}selected{{end}}>Knowledge maintainer</option><option value="administrator" {{if eq .Role "administrator"}}selected{{end}}>Administrator</option></select>
+                  <button class="secondary-button" type="submit">Save role</button>
+                </div>
+              </form>
+              {{else}}<p class="text-sm text-ink-faint">No shared identities have authenticated or been provisioned yet.</p>{{end}}
+            </div>
+          </section>
+
+          <section class="rounded-2xl border border-white/[0.08] bg-white/[0.025] p-6">
+            <h3 class="text-lg font-semibold text-white">SCIM groups</h3>
+            <p class="mt-2 text-sm leading-6 text-ink-soft">Membership and group roles are immediately included in effective authorization.</p>
+            <div class="mt-5 grid gap-3">
+              {{range .Groups}}
+              <form action="/admin/groups/role" method="post" class="rounded-xl border border-white/[0.08] bg-black/10 p-4">
+                <input type="hidden" name="csrf" value="{{$.CSRFToken}}">
+                <input type="hidden" name="group_id" value="{{.ID}}">
+                <div class="font-semibold text-white">{{.DisplayName}}</div>
+                <div class="mt-1 font-mono text-xs text-ink-faint">{{len .Members}} members · {{.ID}}</div>
+                <div class="mt-3 flex gap-3">
+                  <select name="role" class="min-w-0 flex-1"><option value="reader" {{if eq .Role "reader"}}selected{{end}}>Reader</option><option value="knowledge-maintainer" {{if eq .Role "knowledge-maintainer"}}selected{{end}}>Knowledge maintainer</option><option value="administrator" {{if eq .Role "administrator"}}selected{{end}}>Administrator</option></select>
+                  <button class="secondary-button" type="submit">Save role</button>
+                </div>
+              </form>
+              {{else}}<p class="text-sm text-ink-faint">No SCIM groups are provisioned.</p>{{end}}
+            </div>
+          </section>
+        </div>
+
+        <section class="mt-6 rounded-2xl border border-white/[0.08] bg-white/[0.025] p-6">
+          <h3 class="text-lg font-semibold text-white">Identity-provider group mappings</h3>
+          <p class="mt-2 text-sm leading-6 text-ink-soft">Map an exact provider group claim to a role. Removed and unknown groups do not retain elevated access.</p>
+          <div class="mt-4 grid gap-2">
+            {{range .RoleMappings}}
+            <form action="/admin/role-mappings/delete" method="post" class="flex flex-wrap items-center gap-3 rounded-lg border border-white/[0.08] bg-black/10 px-4 py-3">
+              <input type="hidden" name="csrf" value="{{$.CSRFToken}}"><input type="hidden" name="mapping_id" value="{{.ID}}">
+              <span class="font-mono text-xs text-ink">{{.Provider}} · {{.GroupValue}}</span><span class="text-xs text-emerald-300">{{.Role}}</span>
+              <button class="ml-auto text-xs text-red-300 hover:text-red-200" type="submit">Remove</button>
+            </form>
+            {{end}}
+          </div>
+          <form action="/admin/role-mappings" method="post" class="mt-5 grid gap-3 md:grid-cols-4">
+            <input type="hidden" name="csrf" value="{{.CSRFToken}}">
+            <label class="filter-field"><span>Provider</span><select name="provider"><option value="cloudflare-access">Cloudflare Access</option><option value="saml">SAML</option></select></label>
+            <label class="filter-field md:col-span-2"><span>Exact group claim</span><input name="group" required placeholder="engineering"></label>
+            <label class="filter-field"><span>Role</span><select name="role"><option value="reader">Reader</option><option value="knowledge-maintainer">Knowledge maintainer</option><option value="administrator">Administrator</option></select></label>
+            <div class="md:col-span-4 flex justify-end"><button class="secondary-button" type="submit">Add mapping</button></div>
+          </form>
+        </section>
+
+        <section class="mt-6 rounded-2xl border border-white/[0.08] bg-white/[0.025] p-6">
+          <div class="flex flex-wrap items-start justify-between gap-4">
+            <div><h3 class="text-lg font-semibold text-white">Audit evidence</h3><p class="mt-2 text-sm leading-6 text-ink-soft">Events are append-only outside this explicit retention control. Metadata excludes tokens, credentials, prompts, and repository source content.</p></div>
+            <div class="flex gap-2"><a class="secondary-button" href="/admin/audit/export">Export JSON</a><a class="secondary-button" href="/admin/audit/export?format=csv">Export CSV</a></div>
+          </div>
+          <form action="/admin/audit/retention" method="post" class="mt-5 grid gap-3 sm:grid-cols-3">
+            <input type="hidden" name="csrf" value="{{.CSRFToken}}">
+            <label class="filter-field"><span>Retention days</span><input name="days" type="number" min="1" max="3650" value="{{.AuditRetention.Days}}" required></label>
+            <label class="filter-field"><span>Maximum events</span><input name="max_events" type="number" min="100" max="10000000" value="{{.AuditRetention.MaxEvents}}" required></label>
+            <div class="flex items-end"><button class="secondary-button w-full justify-center" type="submit">Apply retention</button></div>
+          </form>
+          <p class="mt-3 text-xs text-ink-faint">{{.AuditRetention.EventCount}} retained events{{if .AuditRetention.CompleteSince}} · evidence complete since {{formatTime .AuditRetention.CompleteSince}}{{end}}</p>
+          <div class="mt-5 overflow-x-auto rounded-xl border border-white/[0.08]">
+            <table class="w-full min-w-[760px] text-left text-xs">
+              <thead class="border-b border-white/[0.08] bg-white/[0.035] uppercase tracking-[0.12em] text-ink-faint"><tr><th class="px-3 py-2">Time</th><th class="px-3 py-2">Actor</th><th class="px-3 py-2">Action</th><th class="px-3 py-2">Target</th><th class="px-3 py-2">Outcome</th><th class="px-3 py-2">Correlation</th></tr></thead>
+              <tbody class="divide-y divide-white/[0.06]">{{range .RecentAudit}}<tr><td class="px-3 py-2 text-ink-faint">{{formatTime .CreatedAt}}</td><td class="px-3 py-2 text-ink">{{.ActorID}}</td><td class="px-3 py-2 text-ink">{{.Action}}</td><td class="px-3 py-2 text-ink-soft">{{.TargetType}}:{{.TargetID}}</td><td class="px-3 py-2 {{if eq .Outcome "success"}}text-emerald-300{{else}}text-amber-300{{end}}">{{.Outcome}}</td><td class="px-3 py-2 font-mono text-ink-faint">{{.CorrelationID}}</td></tr>{{else}}<tr><td class="px-3 py-4 text-ink-faint" colspan="6">No audit events have been recorded.</td></tr>{{end}}</tbody>
+            </table>
+          </div>
+        </section>
+        {{end}}
+      </section>
+      {{end}}
+
       <section class="mt-8 rounded-2xl border border-white/[0.08] bg-white/[0.025] p-6">
         <h2 class="text-lg font-semibold text-white">Repository and artifact access</h2>
         <p class="mt-2 text-sm leading-6 text-ink-soft">A private repository is visible only to its owner and explicit user or identity-provider group grants. Shared visibility is an explicit instance-wide grant. Maps, Wiki pages, dependency facts, source exports, and MCP reads inherit the same policy.</p>

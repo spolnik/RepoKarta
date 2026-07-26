@@ -59,6 +59,16 @@ questions, M3 evidence-backed repository maps, and M4 living documentation:
 - deny-by-default shared repository ownership with explicit user, identity
   provider group, and instance-shared grants inherited by source, Search,
   Maps, Wiki, dependencies, exports, and conversation-scoped MCP tools;
+- immediately evaluated reader, knowledge-maintainer, and administrator roles,
+  including direct assignments, SCIM group membership, and exact
+  identity-provider group mappings;
+- SCIM 2.0 user and group provisioning with stable external IDs, idempotent
+  replacement and patch operations, suspension, deprovisioning, and
+  next-request session revocation;
+- append-only redacted audit evidence for authentication, authorization,
+  administration, role changes, cross-author access, repository catalogue
+  changes, exports, generation, and destructive RepoKarta-owned operations,
+  with bounded filters, retention, and JSON or CSV export;
 - visible token usage plus per-turn cancellation, timeout, and output-token
   budget controls;
 - adversarial coverage that keeps instructions found in repository content
@@ -171,6 +181,7 @@ go run ./cmd/repokarta serve `
   -open=false `
   -admin-user repokarta-admin `
   -admin-password-file C:\secure\repokarta-admin-password.txt `
+  -scim-token-file C:\secure\repokarta-scim-token.txt `
   C:\Work\ghorg
 ```
 
@@ -195,8 +206,10 @@ supplied on first startup with `-auth-mode`, `-public-url`,
 `REPOKARTA_AUTH_MODE`, `REPOKARTA_PUBLIC_URL`,
 `REPOKARTA_CF_TEAM_DOMAIN`, `REPOKARTA_CF_AUDIENCE`,
 `REPOKARTA_SAML_METADATA_URL`, and `REPOKARTA_SAML_ENTITY_ID`.
-`REPOKARTA_ADMIN_USER`, `REPOKARTA_ADMIN_PASSWORD_FILE`, and
-`REPOKARTA_ALLOW_OPEN` cover the startup-only controls.
+`REPOKARTA_ADMIN_USER`, `REPOKARTA_ADMIN_PASSWORD_FILE`,
+`REPOKARTA_SCIM_TOKEN_FILE`, and `REPOKARTA_ALLOW_OPEN` cover the startup-only
+controls. The SCIM bearer token itself is read only from its
+permission-restricted file and is never persisted.
 
 Authentication establishes a stable conversation author. Shared users can
 list, open, continue, rename, interrupt, and delete only their own
@@ -205,6 +218,27 @@ always acts as the local administrator. Repositories and every derived
 artifact default to private `local:admin` ownership after an upgrade or new
 discovery. Use the administrator panel to grant a stable user ID, an IdP group,
 or explicit instance-wide shared visibility.
+
+When `-scim-token-file` is configured, the SCIM base URL is
+`https://repokarta.example.com/scim/v2`. Provisioning clients authenticate with
+that bearer token. The administrator page assigns direct and SCIM-group roles,
+maps exact SAML or Cloudflare Access group claims, controls audit retention,
+and shows recent redacted evidence. Application administrators can use the
+permission-checked `/api/admin/*` JSON endpoints. `GET /api/whoami` returns the
+effective role and permissions.
+
+The role matrix is:
+
+| Capability | Reader | Knowledge maintainer | Administrator |
+| --- | --- | --- | --- |
+| Read authorized repositories and artifacts, own conversations, artifact export | Yes | Yes | Yes |
+| AI chat and Wiki generation | No | Yes | Yes |
+| Cross-author conversations, repository refresh/acquisition, security settings, roles, audit evidence | No | No | Yes |
+
+Unknown authenticated identities start as readers. Unknown or removed groups
+never grant elevation. A suspended or deprovisioned managed identity is denied
+on its next request even if its upstream SAML or Cloudflare session remains
+valid. See [enterprise identity and audit operations](./docs/enterprise-administration.md).
 
 Release archives include service templates and the complete
 [shared-deployment runbook](./docs/shared-deployment.md), including reverse
@@ -453,11 +487,11 @@ Windows amd64 and Apple Silicon macOS. The workflow:
 Run the same packagers locally:
 
 ```powershell
-.\scripts\package-release.ps1 -Version 0.40.0-dev
+.\scripts\package-release.ps1 -Version 0.43.0-dev
 ```
 
 ```sh
-./scripts/package-release.sh 0.40.0-dev
+./scripts/package-release.sh 0.43.0-dev
 ```
 
 macOS packages are signed with the hardened runtime when

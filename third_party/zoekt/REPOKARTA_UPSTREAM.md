@@ -15,6 +15,8 @@ The RepoKarta portability delta is intentionally small:
 - `index/builder.go` no longer imports `golang.org/x/sys/unix` directly.
 - `search/shards.go` closes mapped Windows shards synchronously when an explicit
   directory searcher shutdown occurs.
+- Upstream's `.vscode/launch.json` editor configuration is not vendored because
+  it is not source, build input, or distribution content.
 
-All other files are an unmodified copy of the pinned upstream revision. The
-upstream Apache 2.0 license is retained in `LICENSE`.
+All other vendored files are an unmodified copy of the pinned upstream
+revision. The upstream Apache 2.0 license is retained in `LICENSE`.

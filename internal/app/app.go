@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -21,6 +22,7 @@ import (
 	"github.com/spolnik/RepoKarta/internal/httpserver"
 	"github.com/spolnik/RepoKarta/internal/maintenance"
 	"github.com/spolnik/RepoKarta/internal/mcpserver"
+	"github.com/spolnik/RepoKarta/internal/scim"
 	"github.com/spolnik/RepoKarta/internal/search"
 	zoektadapter "github.com/spolnik/RepoKarta/internal/search/zoekt"
 	"github.com/spolnik/RepoKarta/internal/security"
@@ -39,6 +41,7 @@ type Config struct {
 	AllowOpen      bool
 	AdminUser      string
 	AdminPassword  string
+	SCIMToken      string
 	Security       security.Settings
 }
 
@@ -96,9 +99,15 @@ func Run(ctx context.Context, cfg Config) error {
 		AdminUser:     cfg.AdminUser,
 		AdminPassword: cfg.AdminPassword,
 		Initial:       cfg.Security,
+		Identities:    database,
+		Audit:         database,
 	})
 	if err != nil {
 		return fmt.Errorf("initialize authentication: %w", err)
+	}
+	scimService, err := scim.New(database, database, cfg.SCIMToken)
+	if err != nil {
+		return fmt.Errorf("initialize SCIM provisioning: %w", err)
 	}
 
 	engine, err := zoektadapter.New(filepath.Join(cfg.DataDirectory, "indexes"))
@@ -229,6 +238,13 @@ func Run(ctx context.Context, cfg Config) error {
 		Security:         securityManager,
 		Maintenance:      operations,
 		RepositoryAccess: database,
+		Enterprise:       database,
+		SCIMHandler: func() http.Handler {
+			if scimService == nil {
+				return nil
+			}
+			return scimService.Handler()
+		}(),
 	}, intelligence, coordinator)
 	if err != nil {
 		return err

@@ -15,12 +15,13 @@ import (
 
 	"github.com/spolnik/RepoKarta/internal/access"
 	"github.com/spolnik/RepoKarta/internal/agent"
+	"github.com/spolnik/RepoKarta/internal/audit"
 	"github.com/spolnik/RepoKarta/internal/catalog"
 	_ "modernc.org/sqlite"
 )
 
 const (
-	currentSchemaVersion = 10
+	currentSchemaVersion = 12
 
 	schemaV1 = `
 CREATE TABLE IF NOT EXISTS repositories (
@@ -183,6 +184,89 @@ END;`
 	// the same team grants as the initiating browser request.
 	schemaV10 = `
 ALTER TABLE conversations ADD COLUMN author_groups TEXT NOT NULL DEFAULT '[]';`
+
+	// Version 11 adds immutable, redacted security evidence. Application code
+	// only appends events; the sole deletion path is the explicit retention
+	// operation, which records its own administration event afterward.
+	schemaV11 = `
+CREATE TABLE IF NOT EXISTS audit_events (
+    id INTEGER PRIMARY KEY,
+    actor_id TEXT NOT NULL,
+    actor_name TEXT NOT NULL DEFAULT '',
+    action TEXT NOT NULL,
+    target_type TEXT NOT NULL,
+    target_id TEXT NOT NULL DEFAULT '',
+    outcome TEXT NOT NULL,
+    authentication_provider TEXT NOT NULL,
+    correlation_id TEXT NOT NULL,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS audit_events_created_index
+ON audit_events(created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS audit_events_actor_index
+ON audit_events(actor_id COLLATE NOCASE, id DESC);
+CREATE INDEX IF NOT EXISTS audit_events_action_index
+ON audit_events(action COLLATE NOCASE, id DESC);`
+
+	// Version 12 adds SCIM-managed identities and groups plus immediately
+	// evaluated direct and identity-provider-group role assignments.
+	schemaV12 = `
+CREATE TABLE IF NOT EXISTS identities (
+    id TEXT PRIMARY KEY,
+    external_id TEXT NOT NULL DEFAULT '',
+    user_name TEXT NOT NULL,
+    display_name TEXT NOT NULL DEFAULT '',
+    email TEXT NOT NULL DEFAULT '',
+    auth_provider TEXT NOT NULL DEFAULT '',
+    auth_subject TEXT NOT NULL DEFAULT '',
+    active INTEGER NOT NULL DEFAULT 1,
+    role TEXT NOT NULL DEFAULT 'reader'
+        CHECK(role IN ('reader', 'knowledge-maintainer', 'administrator')),
+    scim_managed INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS identities_external_id_unique
+ON identities(external_id) WHERE external_id <> '';
+CREATE UNIQUE INDEX IF NOT EXISTS identities_auth_unique
+ON identities(auth_provider, auth_subject)
+WHERE auth_provider <> '' AND auth_subject <> '';
+CREATE UNIQUE INDEX IF NOT EXISTS identities_username_unique
+ON identities(user_name COLLATE NOCASE);
+CREATE INDEX IF NOT EXISTS identities_email_index
+ON identities(email COLLATE NOCASE);
+
+CREATE TABLE IF NOT EXISTS identity_groups (
+    id TEXT PRIMARY KEY,
+    external_id TEXT NOT NULL DEFAULT '',
+    display_name TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'reader'
+        CHECK(role IN ('reader', 'knowledge-maintainer', 'administrator')),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS identity_groups_external_id_unique
+ON identity_groups(external_id) WHERE external_id <> '';
+CREATE UNIQUE INDEX IF NOT EXISTS identity_groups_name_unique
+ON identity_groups(display_name COLLATE NOCASE);
+CREATE TABLE IF NOT EXISTS identity_group_members (
+    group_id TEXT NOT NULL REFERENCES identity_groups(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES identities(id) ON DELETE CASCADE,
+    PRIMARY KEY(group_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS identity_group_members_user_index
+ON identity_group_members(user_id, group_id);
+
+CREATE TABLE IF NOT EXISTS identity_role_mappings (
+    id INTEGER PRIMARY KEY,
+    provider TEXT NOT NULL,
+    group_value TEXT NOT NULL,
+    role TEXT NOT NULL
+        CHECK(role IN ('reader', 'knowledge-maintainer', 'administrator')),
+    updated_at TEXT NOT NULL,
+    UNIQUE(provider, group_value COLLATE NOCASE)
+);`
 )
 
 // SchemaVersion is the current durable SQLite format. Diagnostics and upgrade
@@ -253,6 +337,10 @@ func migrate(db *sql.DB) error {
 			migration = schemaV9
 		case 10:
 			migration = schemaV10
+		case 11:
+			migration = schemaV11
+		case 12:
+			migration = schemaV12
 		default:
 			return fmt.Errorf("missing migration for schema version %d", next)
 		}
@@ -374,7 +462,25 @@ func (s *Store) SyncRepositories(ctx context.Context, repositories []catalog.Rep
 	}
 	defer tx.Rollback()
 
+	previous := make(map[string]string)
+	rows, err := tx.QueryContext(ctx, `SELECT path, CAST(id AS TEXT) FROM repositories`)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var path, id string
+		if err := rows.Scan(&path, &id); err != nil {
+			rows.Close()
+			return err
+		}
+		previous[repositoryPathKey(path)] = id
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+
 	seen := make([]string, 0, len(repositories))
+	current := make(map[string]catalog.Repository, len(repositories))
 	for _, repository := range repositories {
 		discoveredAt := formatTime(repository.DiscoveredAt)
 		scannedAt := formatTime(repository.ScannedAt)
@@ -416,6 +522,7 @@ ON CONFLICT(path) DO UPDATE SET
 			return fmt.Errorf("sync repository %q: %w", repository.Path, err)
 		}
 		seen = append(seen, repository.Path)
+		current[repositoryPathKey(repository.Path)] = repository
 	}
 
 	if len(seen) == 0 {
@@ -432,6 +539,37 @@ ON CONFLICT(path) DO UPDATE SET
 			}
 		}
 		if _, err := tx.ExecContext(ctx, "DELETE FROM repositories WHERE path NOT IN ("+placeholders+")", arguments...); err != nil {
+			return err
+		}
+	}
+
+	for key, repository := range current {
+		if _, existed := previous[key]; existed {
+			continue
+		}
+		var repositoryID string
+		if err := tx.QueryRowContext(ctx, `SELECT CAST(id AS TEXT) FROM repositories WHERE path = ?`, repository.Path).Scan(&repositoryID); err != nil {
+			return err
+		}
+		if err := appendAuditEvent(ctx, tx, audit.Event{
+			ActorID: "system:catalogue", ActorName: "Repository catalogue",
+			Action: "repository.acquire", TargetType: "repository", TargetID: repositoryID,
+			Outcome: "success", Provider: "system",
+			Metadata: map[string]string{"name": repository.Name, "path": repository.Path},
+		}); err != nil {
+			return err
+		}
+	}
+	for key, repositoryID := range previous {
+		if _, retained := current[key]; retained {
+			continue
+		}
+		if err := appendAuditEvent(ctx, tx, audit.Event{
+			ActorID: "system:catalogue", ActorName: "Repository catalogue",
+			Action: "repository.remove", TargetType: "repository", TargetID: repositoryID,
+			Outcome: "success", Provider: "system",
+			Metadata: map[string]string{"path_key": key},
+		}); err != nil {
 			return err
 		}
 	}

@@ -87,7 +87,7 @@ try {
         $env:GOOS = "windows"
         $env:GOARCH = "amd64"
         $env:CGO_ENABLED = "0"
-        go build -tags $grammarTags -trimpath -ldflags "-s -w -X main.version=$Version" -o (Join-Path $stageDirectory "repokarta.exe") ./cmd/repokarta
+        go build -buildvcs=false -tags $grammarTags -trimpath -ldflags "-s -w -X main.version=$Version" -o (Join-Path $stageDirectory "repokarta.exe") ./cmd/repokarta
         if ($LASTEXITCODE -ne 0) { throw "Windows build failed" }
     }
     finally {
@@ -101,6 +101,7 @@ try {
     New-Item -ItemType Directory -Force -Path (Join-Path $stageDirectory "docs") | Out-Null
     New-Item -ItemType Directory -Force -Path (Join-Path $stageDirectory "deploy") | Out-Null
     Copy-Item -LiteralPath (Join-Path $repositoryRoot "docs\shared-deployment.md") -Destination (Join-Path $stageDirectory "docs\shared-deployment.md") -Force
+    Copy-Item -LiteralPath (Join-Path $repositoryRoot "docs\enterprise-administration.md") -Destination (Join-Path $stageDirectory "docs\enterprise-administration.md") -Force
     Copy-Item -Path (Join-Path $repositoryRoot "deploy\*") -Destination (Join-Path $stageDirectory "deploy") -Recurse -Force
     Copy-ThirdPartyLicenses -Destination (Join-Path $stageDirectory "licenses")
 
@@ -113,6 +114,9 @@ try {
     }
     if (-not (Test-Path -LiteralPath (Join-Path $stageDirectory "docs\shared-deployment.md"))) {
         throw "package is missing the shared-deployment runbook"
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $stageDirectory "docs\enterprise-administration.md"))) {
+        throw "package is missing the enterprise-administration runbook"
     }
     if (-not (Test-Path -LiteralPath (Join-Path $stageDirectory "deploy\repokarta.env.example"))) {
         throw "package is missing the shared-deployment environment template"

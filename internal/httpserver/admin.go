@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/spolnik/RepoKarta/internal/agent"
+	"github.com/spolnik/RepoKarta/internal/audit"
+	"github.com/spolnik/RepoKarta/internal/identity"
 	"github.com/spolnik/RepoKarta/internal/maintenance"
 	"github.com/spolnik/RepoKarta/internal/security"
 	"github.com/spolnik/RepoKarta/internal/store"
@@ -35,6 +37,13 @@ type adminPageData struct {
 	CleanupPlan           *maintenance.CleanupPlan
 	RepositoryAccess      []store.RepositoryAccess
 	RepositoryAccessError string
+	EnterpriseAvailable   bool
+	EnterpriseError       string
+	Users                 []identity.User
+	Groups                []identity.Group
+	RoleMappings          []identity.RoleMapping
+	AuditRetention        audit.Retention
+	RecentAudit           []audit.Event
 }
 
 func (s *Server) updateRepositoryAccess(response http.ResponseWriter, request *http.Request) {
@@ -65,12 +74,16 @@ func (s *Server) updateRepositoryAccess(response http.ResponseWriter, request *h
 		Groups:       splitAccessSubjects(request.FormValue("groups")),
 	}
 	if err := s.repositoryAccess.SetRepositoryAccess(request.Context(), policy); err != nil {
+		s.recordAdminEvent(request, "repository.access.update", "repository", strconv.FormatInt(repositoryID, 10), "failure", nil)
 		data := s.adminData(request.Context(), csrf)
 		data.Error = err.Error()
 		response.WriteHeader(http.StatusBadRequest)
 		s.renderAdmin(response, data)
 		return
 	}
+	s.recordAdminEvent(request, "repository.access.update", "repository", strconv.FormatInt(repositoryID, 10), "success", map[string]string{
+		"owner": policy.OwnerID, "visibility": policy.Visibility,
+	})
 	data := s.adminData(request.Context(), csrf)
 	data.Notice = "Repository access saved. Source and every derived artifact now use this policy."
 	s.renderAdmin(response, data)
@@ -100,13 +113,16 @@ func (s *Server) adminLogin(response http.ResponseWriter, request *http.Request)
 		return
 	}
 	if !s.security.AuthenticateAdmin(request.FormValue("username"), request.FormValue("password")) {
+		s.recordAdminEvent(request, "authentication.bootstrap", "administrator-session", "login", "failure", nil)
 		s.renderAdminError(response, "The administrator credentials were not accepted")
 		return
 	}
 	if _, err := s.security.CreateAdminSession(response); err != nil {
+		s.recordAdminEvent(request, "authentication.bootstrap", "administrator-session", "login", "failure", nil)
 		http.Error(response, "Could not create administrator session", http.StatusInternalServerError)
 		return
 	}
+	s.recordAdminEvent(request, "authentication.bootstrap", "administrator-session", "login", "success", nil)
 	http.Redirect(response, request, "/admin", http.StatusSeeOther)
 }
 
@@ -143,6 +159,7 @@ func (s *Server) updateSecurity(response http.ResponseWriter, request *http.Requ
 		SAMLEntityID:         request.FormValue("saml_entity_id"),
 	}
 	if err := s.security.UpdateSettings(request.Context(), settings); err != nil {
+		s.recordAdminEvent(request, "security.settings.update", "security-configuration", string(settings.Mode), "failure", nil)
 		data := s.adminData(request.Context(), csrf)
 		data.Error = err.Error()
 		data.Mode = string(settings.Mode)
@@ -155,6 +172,9 @@ func (s *Server) updateSecurity(response http.ResponseWriter, request *http.Requ
 		s.renderAdmin(response, data)
 		return
 	}
+	s.recordAdminEvent(request, "security.settings.update", "security-configuration", string(settings.Mode), "success", map[string]string{
+		"mode": string(settings.Mode), "public_url": settings.PublicURL,
+	})
 	data := s.adminData(request.Context(), csrf)
 	data.Notice = "Authentication settings saved and activated."
 	s.renderAdmin(response, data)
@@ -178,11 +198,16 @@ func (s *Server) previewCleanup(response http.ResponseWriter, request *http.Requ
 	data := s.adminData(request.Context(), csrf)
 	plan, err := s.maintenance.Plan(request.Context(), request.Form["target"])
 	if err != nil {
+		s.recordAdminEvent(request, "owned-data.cleanup.preview", "storage", "cleanup-plan", "failure", nil)
 		data.Error = err.Error()
 		response.WriteHeader(http.StatusBadRequest)
 		s.renderAdmin(response, data)
 		return
 	}
+	s.recordAdminEvent(request, "owned-data.cleanup.preview", "storage", "cleanup-plan", "success", map[string]string{
+		"planned_items": strconv.Itoa(len(plan.Items)),
+		"planned_bytes": strconv.FormatInt(plan.TotalBytes, 10),
+	})
 	data.CleanupPlan = &plan
 	data.Notice = "Cleanup preview is ready. Review every exact target before confirming."
 	s.renderAdmin(response, data)
@@ -216,11 +241,16 @@ func (s *Server) executeCleanup(response http.ResponseWriter, request *http.Requ
 		request.FormValue("plan_token"),
 	)
 	if err != nil {
+		s.recordAdminEvent(request, "owned-data.cleanup", "storage", "cleanup-plan", "failure", nil)
 		data.Error = err.Error()
 		response.WriteHeader(http.StatusConflict)
 		s.renderAdmin(response, data)
 		return
 	}
+	s.recordAdminEvent(request, "owned-data.cleanup", "storage", "cleanup-plan", "success", map[string]string{
+		"removed_items": strconv.Itoa(result.RemovedItems),
+		"removed_bytes": strconv.FormatInt(result.RemovedBytes, 10),
+	})
 	data = s.adminData(request.Context(), csrf)
 	data.Notice = "Cleanup completed: removed " + formatItemCount(result.RemovedItems) +
 		" and reclaimed " + formatBytes(result.RemovedBytes) + "."
@@ -244,9 +274,11 @@ func (s *Server) exportDiagnostics(response http.ResponseWriter, request *http.R
 		ProviderStatuses: providers,
 	})
 	if err != nil {
+		s.recordAdminEvent(request, "administration.diagnostics.export", "diagnostics", "bundle", "failure", nil)
 		http.Error(response, "Could not create diagnostics export", http.StatusInternalServerError)
 		return
 	}
+	s.recordAdminEvent(request, "administration.diagnostics.export", "diagnostics", name, "success", nil)
 	response.Header().Set("Cache-Control", "no-store")
 	response.Header().Set("Content-Type", "application/zip")
 	response.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
@@ -265,6 +297,7 @@ func (s *Server) adminLogout(response http.ResponseWriter, request *http.Request
 		return
 	}
 	s.security.DeleteAdminSession(response, request)
+	s.recordAdminEvent(request, "authentication.bootstrap.logout", "administrator-session", "logout", "success", nil)
 	http.Redirect(response, request, "/admin/login", http.StatusSeeOther)
 }
 
@@ -303,6 +336,27 @@ func (s *Server) adminData(ctx context.Context, csrf string) adminPageData {
 			data.RepositoryAccessError = err.Error()
 		} else {
 			data.RepositoryAccess = policies
+		}
+	}
+	if s.enterprise != nil {
+		data.EnterpriseAvailable = true
+		users, _, usersErr := s.enterprise.ListUsers(ctx, 0, 500)
+		groups, _, groupsErr := s.enterprise.ListGroups(ctx, 0, 500)
+		mappings, mappingsErr := s.enterprise.ListRoleMappings(ctx)
+		retention, retentionErr := s.enterprise.AuditRetention(ctx)
+		recent, auditErr := s.enterprise.AuditEvents(ctx, audit.Filter{Limit: 25})
+		for _, err := range []error{usersErr, groupsErr, mappingsErr, retentionErr, auditErr} {
+			if err != nil {
+				data.EnterpriseError = err.Error()
+				break
+			}
+		}
+		if data.EnterpriseError == "" {
+			data.Users = users
+			data.Groups = groups
+			data.RoleMappings = mappings
+			data.AuditRetention = retention
+			data.RecentAudit = recent.Events
 		}
 	}
 	return data

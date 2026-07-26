@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/spolnik/RepoKarta/internal/agent"
+	"github.com/spolnik/RepoKarta/internal/audit"
 	"github.com/spolnik/RepoKarta/internal/catalog"
 	"github.com/spolnik/RepoKarta/internal/codeintel"
 	"github.com/spolnik/RepoKarta/internal/docs"
@@ -24,6 +25,55 @@ import (
 	"github.com/spolnik/RepoKarta/internal/security"
 	"github.com/spolnik/RepoKarta/internal/store"
 )
+
+func TestReaderPermissionDenialIsAudited(t *testing.T) {
+	database, err := store.Open(filepath.Join(t.TempDir(), "repokarta.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	securityManager, err := security.New(context.Background(), database, security.Config{
+		Address:       "0.0.0.0:7331",
+		DataDirectory: t.TempDir(),
+		AllowOpen:     true,
+		AdminUser:     "admin",
+		AdminPassword: "reader-test-password",
+		Initial: security.Settings{
+			Mode: security.ModeOpen, PublicURL: "https://repo.example.com",
+		},
+		Audit: database,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := New(Config{
+		Address: "0.0.0.0:7331", Version: "test",
+		Security: securityManager, Enterprise: database,
+	}, codeintel.New(testStore{}, testSearcher{}, "https://repo.example.com"), testRefresher{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "https://repo.example.com/repositories/refresh", nil)
+	response := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("reader refresh status = %d, body = %q", response.Code, response.Body.String())
+	}
+	request = httptest.NewRequest(http.MethodGet, "https://repo.example.com/api/whoami", nil)
+	response = httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"role":"reader"`) {
+		t.Fatalf("whoami status = %d, body = %q", response.Code, response.Body.String())
+	}
+	page, err := database.AuditEvents(context.Background(), audit.Filter{Action: "authorization.denied", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Events) != 1 || page.Events[0].Outcome != "denied" ||
+		page.Events[0].Metadata["permission"] != "repositories.acquire" {
+		t.Fatalf("denial audit = %#v", page.Events)
+	}
+}
 
 func TestAdministratorCanPreviewCleanupAndExportDiagnostics(t *testing.T) {
 	root := t.TempDir()

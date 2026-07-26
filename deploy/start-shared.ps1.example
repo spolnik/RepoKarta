@@ -9,4 +9,5 @@ $ErrorActionPreference = "Stop"
     -data-dir "C:\ProgramData\RepoKarta" `
     -admin-user "repokarta-admin" `
     -admin-password-file "C:\ProgramData\RepoKarta-Secrets\admin-password.txt" `
+    -scim-token-file "C:\ProgramData\RepoKarta-Secrets\scim-token.txt" `
     "D:\Repositories"

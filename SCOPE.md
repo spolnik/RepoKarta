@@ -742,27 +742,27 @@ RepoKarta modifying a repository.
 Add an auditable organization-control layer without weakening RepoKarta's
 read-only source boundary.
 
-- [ ] Record append-only audit events for authentication, authorization
+- [x] Record append-only audit events for authentication, authorization
   failures, administration changes, role assignments, cross-author access,
   repository acquisition and removal, exports, generation, and destructive
   RepoKarta-owned data operations.
-- [ ] Include actor, action, target, outcome, authentication provider, request
+- [x] Include actor, action, target, outcome, authentication provider, request
   correlation ID, and timestamp while redacting credentials, tokens, prompts,
   and repository source content by default.
-- [ ] Provide bounded audit-log search, filters, retention controls, and
+- [x] Provide bounded audit-log search, filters, retention controls, and
   administrator export with explicit completeness and retention metadata.
-- [ ] Support SCIM 2.0 user and group provisioning, updates, suspension, and
+- [x] Support SCIM 2.0 user and group provisioning, updates, suspension, and
   deprovisioning with stable external IDs and idempotent operations.
-- [ ] Map configured identity-provider or SCIM groups to RepoKarta roles;
+- [x] Map configured identity-provider or SCIM groups to RepoKarta roles;
   unknown or removed identities receive no implicit elevated access.
-- [ ] Define an explicit permission matrix for reader, knowledge maintainer,
+- [x] Define an explicit permission matrix for reader, knowledge maintainer,
   and administrator roles, including AI generation, shared artifacts,
   cross-author conversations, repository acquisition, security settings,
   role management, and audit-log access.
-- [ ] Make role changes auditable and immediately effective for new requests;
+- [x] Make role changes auditable and immediately effective for new requests;
   deprovisioning must revoke active application sessions without erasing
   historical authorship.
-- [ ] Keep loopback-local mode simple by treating its single local identity as
+- [x] Keep loopback-local mode simple by treating its single local identity as
   administrator without requiring SCIM or external role configuration.
 
 Exit condition: an administrator can provision and deprovision identities,
@@ -857,8 +857,9 @@ completion criteria include:
 
 ## Current implementation version
 
-`0.42.0-dev`. M0 through M6 are complete. The M9 dependency inventory
-foundation and linked-worktree discovery deduplication are complete.
+`0.43.0-dev`. M0 through M6 are complete. The M9 dependency inventory
+foundation and linked-worktree discovery deduplication are complete. The M10
+enterprise identity and administration milestone is complete.
 
 ## Recommended next session
 
