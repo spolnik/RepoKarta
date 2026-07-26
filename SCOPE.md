@@ -518,8 +518,76 @@ SQLite; bootstrap administrator credentials and SAML private keys do not.
 - [x] Per-user ownership and access enforcement for durable conversations,
   with administrator own/all and author filters.
 - [ ] Per-user separation of generated artifacts on a shared instance.
-- [ ] Scheduled ghorg synchronization.
 - [ ] Shared or team deployment packaging and operations.
+
+### Future: enterprise identity and administration
+
+Add an auditable organization-control layer without weakening RepoKarta's
+read-only source boundary.
+
+- [ ] Record append-only audit events for authentication, authorization
+  failures, administration changes, role assignments, cross-author access,
+  repository acquisition and removal, exports, generation, and destructive
+  RepoKarta-owned data operations.
+- [ ] Include actor, action, target, outcome, authentication provider, request
+  correlation ID, and timestamp while redacting credentials, tokens, prompts,
+  and repository source content by default.
+- [ ] Provide bounded audit-log search, filters, retention controls, and
+  administrator export with explicit completeness and retention metadata.
+- [ ] Support SCIM 2.0 user and group provisioning, updates, suspension, and
+  deprovisioning with stable external IDs and idempotent operations.
+- [ ] Map configured identity-provider or SCIM groups to RepoKarta roles;
+  unknown or removed identities receive no implicit elevated access.
+- [ ] Define an explicit permission matrix for reader, knowledge maintainer,
+  and administrator roles, including AI generation, shared artifacts,
+  cross-author conversations, repository acquisition, security settings,
+  role management, and audit-log access.
+- [ ] Make role changes auditable and immediately effective for new requests;
+  deprovisioning must revoke active application sessions without erasing
+  historical authorship.
+- [ ] Keep loopback-local mode simple by treating its single local identity as
+  administrator without requiring SCIM or external role configuration.
+
+Exit condition: an administrator can provision and deprovision identities,
+assign least-privilege roles, and reconstruct security-relevant activity from
+redacted, queryable audit evidence.
+
+### Future: repository acquisition
+
+Add a separate administrator-managed intake pipeline for bringing repositories
+into RepoKarta-owned storage and keeping them current.
+
+- [ ] Support existing local roots, explicit Git remote URLs, ghorg-managed
+  directories, and organization discovery adapters for configured Git hosts.
+- [ ] Maintain a repository-source registry containing canonical remote
+  identity, provider, RepoKarta-owned checkout path, default branch, inclusion
+  policy, credential reference, sync state, timestamps, and actionable errors.
+- [ ] Preview discoveries before acquisition, deduplicate aliases and renamed
+  remotes, and expose archived, forked, private, excluded, and already-managed
+  states explicitly.
+- [ ] Clone and fetch without pushing or modifying upstream repositories;
+  disable executable hooks and avoid submodule recursion unless an
+  administrator deliberately enables a bounded policy.
+- [ ] Use configured credential helpers or secret references without storing
+  raw Git credentials in repository metadata, logs, diagnostics, or audit
+  payloads.
+- [ ] Provide manual and scheduled synchronization with cancellation, bounded
+  concurrency, backoff, rate-limit handling, and honest partial-fleet status.
+- [ ] Allow organization, team, topic, visibility, archive, fork, and repository
+  allow/deny policies before data is cloned.
+- [ ] Trigger catalogue refresh and commit-pinned indexing only after a checkout
+  reaches a verified Git revision; preserve the last usable index when a later
+  synchronization fails.
+- [ ] Audit discovery, acquisition, synchronization, policy skips, credential
+  failures, and removal using repository identity and revision metadata rather
+  than source content.
+- [ ] Remove only checkouts proven to be RepoKarta-owned, require an explicit
+  confirmation for deletion, and never delete or rewrite user-owned local
+  repositories.
+
+Exit condition: an administrator can discover, approve, acquire, synchronize,
+and safely remove a bounded repository fleet while every indexed revision has
+clear acquisition provenance and failures never silently shrink coverage.
 
 ### Future: dependency management
 
