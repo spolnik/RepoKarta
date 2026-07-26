@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"github.com/crewjam/saml/samlsp"
+	"github.com/spolnik/RepoKarta/internal/audit"
+	"github.com/spolnik/RepoKarta/internal/identity"
 )
 
 type Mode string
@@ -60,6 +62,8 @@ type Config struct {
 	AdminPassword string
 	Initial       Settings
 	HTTPClient    *http.Client
+	Identities    identity.Store
+	Audit         audit.Recorder
 }
 
 // Principal is the authenticated identity attached to an application request.
@@ -69,6 +73,7 @@ type Principal struct {
 	Name     string
 	Provider string
 	Groups   []string
+	Role     identity.Role
 	Admin    bool
 }
 
@@ -98,6 +103,8 @@ type Manager struct {
 	adminPassword [32]byte
 	adminEnabled  bool
 	httpClient    *http.Client
+	identities    identity.Store
+	audit         audit.Recorder
 
 	mu             sync.RWMutex
 	settings       Settings
@@ -122,6 +129,8 @@ func New(ctx context.Context, store Store, config Config) (*Manager, error) {
 		allowOpen:     config.AllowOpen,
 		adminUser:     strings.TrimSpace(config.AdminUser),
 		httpClient:    config.HTTPClient,
+		identities:    config.Identities,
+		audit:         config.Audit,
 		adminSessions: make(map[[32]byte]adminSession),
 	}
 	if manager.adminUser != "" && config.AdminPassword != "" {

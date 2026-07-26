@@ -24,11 +24,13 @@ import (
 	"unicode/utf16"
 
 	"github.com/spolnik/RepoKarta/internal/agent"
+	"github.com/spolnik/RepoKarta/internal/audit"
 	"github.com/spolnik/RepoKarta/internal/catalog"
 	"github.com/spolnik/RepoKarta/internal/codeintel"
 	"github.com/spolnik/RepoKarta/internal/dependencies"
 	"github.com/spolnik/RepoKarta/internal/docs"
 	"github.com/spolnik/RepoKarta/internal/graph"
+	"github.com/spolnik/RepoKarta/internal/identity"
 	"github.com/spolnik/RepoKarta/internal/maintenance"
 	"github.com/spolnik/RepoKarta/internal/search"
 	"github.com/spolnik/RepoKarta/internal/security"
@@ -82,6 +84,15 @@ type RepositoryAccessService interface {
 	SetRepositoryAccess(context.Context, store.RepositoryAccess) error
 }
 
+// EnterpriseStore supplies M10 identity administration and audit evidence.
+type EnterpriseStore interface {
+	identity.Store
+	audit.Recorder
+	AuditEvents(context.Context, audit.Filter) (audit.Page, error)
+	AuditRetention(context.Context) (audit.Retention, error)
+	SetAuditRetention(context.Context, int, int) (int64, error)
+}
+
 // Config controls the local HTTP server.
 type Config struct {
 	Address          string
@@ -98,6 +109,8 @@ type Config struct {
 	Security         *security.Manager
 	Maintenance      *maintenance.Service
 	RepositoryAccess RepositoryAccessService
+	Enterprise       EnterpriseStore
+	SCIMHandler      http.Handler
 }
 
 // Server hosts RepoKarta's loopback interface.
@@ -114,6 +127,7 @@ type Server struct {
 	security         *security.Manager
 	maintenance      *maintenance.Service
 	repositoryAccess RepositoryAccessService
+	enterprise       EnterpriseStore
 }
 
 type pageData struct {
@@ -250,6 +264,7 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 		security:         config.Security,
 		maintenance:      config.Maintenance,
 		repositoryAccess: config.RepositoryAccess,
+		enterprise:       config.Enterprise,
 	}
 	server.history, _ = config.Conversations.(ConversationHistoryService)
 
@@ -257,7 +272,9 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 	mux.Handle("GET /assets/", staticAssets(dist))
 	mux.HandleFunc("GET /{$}", server.home)
 	mux.HandleFunc("GET /repositories", server.repositoryList)
-	mux.HandleFunc("POST /repositories/refresh", server.refreshRepositories)
+	mux.HandleFunc("POST /repositories/refresh", server.controlled(
+		identity.PermissionAcquireRepositories, "repository.refresh", "repository-catalogue", server.refreshRepositories,
+	))
 	mux.HandleFunc("GET /search", server.search)
 	mux.HandleFunc("GET /source/{repositoryID}", server.source)
 	mux.HandleFunc("GET /api/search", server.apiSearch)
@@ -278,6 +295,50 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 		if server.repositoryAccess != nil {
 			mux.HandleFunc("POST /admin/repositories/access", server.updateRepositoryAccess)
 		}
+		if server.enterprise != nil {
+			mux.HandleFunc("POST /admin/identities/role", server.updateUserRole)
+			mux.HandleFunc("POST /admin/groups/role", server.updateGroupRole)
+			mux.HandleFunc("POST /admin/role-mappings", server.addRoleMapping)
+			mux.HandleFunc("POST /admin/role-mappings/delete", server.deleteRoleMapping)
+			mux.HandleFunc("POST /admin/audit/retention", server.updateAuditRetention)
+			mux.HandleFunc("GET /admin/audit/export", server.exportBootstrapAudit)
+			mux.HandleFunc("GET /api/admin/audit", server.controlled(
+				identity.PermissionViewAudit, "audit.search", "audit-log", server.apiAudit,
+			))
+			mux.HandleFunc("GET /api/admin/audit/export", server.controlled(
+				identity.PermissionViewAudit, "audit.export", "audit-log", server.exportAudit,
+			))
+			mux.HandleFunc("GET /api/admin/identities", server.controlled(
+				identity.PermissionManageRoles, "administration.identities.list", "identity-directory", server.apiIdentityAdministration,
+			))
+			mux.HandleFunc("PATCH /api/admin/identities/{userID}/role", server.controlled(
+				identity.PermissionManageRoles, "role.user.assign", "identity", server.apiUpdateUserRole,
+			))
+			mux.HandleFunc("PATCH /api/admin/groups/{groupID}/role", server.controlled(
+				identity.PermissionManageRoles, "role.group.assign", "identity-group", server.apiUpdateGroupRole,
+			))
+			mux.HandleFunc("GET /api/admin/role-mappings", server.controlled(
+				identity.PermissionManageRoles, "role.mapping.list", "role-mapping", server.apiRoleMappings,
+			))
+			mux.HandleFunc("POST /api/admin/role-mappings", server.controlled(
+				identity.PermissionManageRoles, "role.mapping.set", "role-mapping", server.apiRoleMappings,
+			))
+			mux.HandleFunc("DELETE /api/admin/role-mappings/{mappingID}", server.controlled(
+				identity.PermissionManageRoles, "role.mapping.delete", "role-mapping", server.apiDeleteRoleMapping,
+			))
+			mux.HandleFunc("GET /api/admin/security", server.controlled(
+				identity.PermissionManageSecurity, "security.settings.read", "security-configuration", server.apiSecuritySettings,
+			))
+			mux.HandleFunc("PUT /api/admin/security", server.controlled(
+				identity.PermissionManageSecurity, "security.settings.update", "security-configuration", server.apiSecuritySettings,
+			))
+			mux.HandleFunc("GET /api/admin/audit/retention", server.controlled(
+				identity.PermissionManageAuditRetention, "audit.retention.read", "audit-log", server.apiAuditRetention,
+			))
+			mux.HandleFunc("PUT /api/admin/audit/retention", server.controlled(
+				identity.PermissionManageAuditRetention, "audit.retention.update", "audit-log", server.apiAuditRetention,
+			))
+		}
 		if server.maintenance != nil {
 			mux.HandleFunc("POST /admin/storage/preview", server.previewCleanup)
 			mux.HandleFunc("POST /admin/storage/cleanup", server.executeCleanup)
@@ -290,31 +351,46 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 	if server.maps != nil {
 		mux.HandleFunc("GET /maps", server.mapPage)
 		mux.HandleFunc("GET /api/maps", server.apiMap)
-		mux.HandleFunc("GET /api/maps/export", server.exportMap)
+		mux.HandleFunc("GET /api/maps/export", server.controlled(
+			identity.PermissionExportArtifacts, "artifact.export", "map", server.exportMap,
+		))
 		mux.HandleFunc("GET /dependencies", server.dependencyPage)
 		mux.HandleFunc("GET /api/dependencies", server.apiDependencies)
 	}
 	if server.docs != nil {
 		mux.HandleFunc("GET /wiki", server.wikiPage)
 		mux.HandleFunc("GET /api/wiki", server.apiWiki)
-		mux.HandleFunc("POST /api/wiki/generate", server.generateWiki)
-		mux.HandleFunc("GET /api/wiki/export", server.exportWiki)
+		mux.HandleFunc("POST /api/wiki/generate", server.controlled(
+			identity.PermissionManageArtifacts, "generation.wiki", "wiki", server.generateWiki,
+		))
+		mux.HandleFunc("GET /api/wiki/export", server.controlled(
+			identity.PermissionExportArtifacts, "artifact.export", "wiki", server.exportWiki,
+		))
 		mux.HandleFunc("GET /api/wiki/{repositoryID}/{page}", server.apiWikiPage)
 	}
 	if config.MCPHandler != nil {
 		mux.HandleFunc("GET /mcp/setup", server.mcpPage)
 		mux.Handle("/mcp", config.MCPHandler)
 	}
+	if config.SCIMHandler != nil {
+		mux.Handle("/scim/v2/", config.SCIMHandler)
+	}
 	if config.Conversations != nil {
 		mux.HandleFunc("GET /chat", server.chatPage)
 		mux.HandleFunc("GET /api/providers", server.providerStatuses)
-		mux.HandleFunc("POST /api/chat", server.chat)
-		mux.HandleFunc("POST /api/chat/{conversationID}/interrupt", server.interruptChat)
+		mux.HandleFunc("POST /api/chat", server.controlled(
+			identity.PermissionGenerateAI, "generation.chat", "conversation", server.chat,
+		))
+		mux.HandleFunc("POST /api/chat/{conversationID}/interrupt", server.controlled(
+			identity.PermissionGenerateAI, "generation.interrupt", "conversation", server.interruptChat,
+		))
 		if server.history != nil {
 			mux.HandleFunc("GET /api/conversations", server.listConversations)
 			mux.HandleFunc("GET /api/conversations/{conversationID}", server.getConversation)
 			mux.HandleFunc("PATCH /api/conversations/{conversationID}", server.renameConversation)
-			mux.HandleFunc("DELETE /api/conversations/{conversationID}", server.deleteConversation)
+			mux.HandleFunc("DELETE /api/conversations/{conversationID}", server.controlled(
+				identity.PermissionReadRepositories, "owned-data.conversation.delete", "conversation", server.deleteConversation,
+			))
 		}
 	}
 
@@ -322,6 +398,7 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 	if server.security != nil {
 		handler = server.security.Middleware(mux)
 	}
+	handler = correlationMiddleware(handler)
 	server.server = &http.Server{
 		Addr:              config.Address,
 		Handler:           requestLog(handler),
@@ -335,9 +412,18 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 func (s *Server) listConversations(response http.ResponseWriter, request *http.Request) {
 	viewer := s.conversationViewer(request.Context())
 	scope := "own"
-	all := strings.EqualFold(strings.TrimSpace(request.URL.Query().Get("scope")), "all") && viewer.Admin
+	requestedAll := strings.EqualFold(strings.TrimSpace(request.URL.Query().Get("scope")), "all")
+	all := requestedAll && viewer.Admin
 	if all {
 		scope = "all"
+	}
+	if requestedAll {
+		principal, _ := security.PrincipalFromContext(request.Context())
+		outcome := "denied"
+		if all {
+			outcome = "success"
+		}
+		s.recordApplicationEvent(request, principal, "conversation.cross-author.list", "conversation-history", "all", outcome, nil)
 	}
 	conversations, err := s.history.ListConversations(request.Context(), agent.ConversationFilter{
 		AuthorID: viewer.Author.ID,
@@ -368,9 +454,11 @@ func (s *Server) getConversation(response http.ResponseWriter, request *http.Req
 		return
 	}
 	if err := s.authorizeConversation(request.Context(), conversation); err != nil {
+		s.recordCrossAuthorConversation(request, conversation, "conversation.cross-author.read", "denied")
 		writeConversationError(response, err)
 		return
 	}
+	s.recordCrossAuthorConversation(request, conversation, "conversation.cross-author.read", "success")
 	writeJSON(response, http.StatusOK, conversation)
 }
 
@@ -390,9 +478,11 @@ func (s *Server) renameConversation(response http.ResponseWriter, request *http.
 		return
 	}
 	if err := s.authorizeConversation(request.Context(), conversation); err != nil {
+		s.recordCrossAuthorConversation(request, conversation, "conversation.cross-author.rename", "denied")
 		writeConversationError(response, err)
 		return
 	}
+	s.recordCrossAuthorConversation(request, conversation, "conversation.cross-author.rename", "success")
 	if err := s.history.RenameConversation(
 		request.Context(),
 		conversationID,
@@ -412,9 +502,11 @@ func (s *Server) deleteConversation(response http.ResponseWriter, request *http.
 		return
 	}
 	if err := s.authorizeConversation(request.Context(), conversation); err != nil {
+		s.recordCrossAuthorConversation(request, conversation, "conversation.cross-author.delete", "denied")
 		writeConversationError(response, err)
 		return
 	}
+	s.recordCrossAuthorConversation(request, conversation, "conversation.cross-author.delete", "success")
 	if err := s.history.DeleteConversation(
 		request.Context(),
 		conversationID,
@@ -508,9 +600,11 @@ func (s *Server) interruptChat(response http.ResponseWriter, request *http.Reque
 			return
 		}
 		if err := s.authorizeConversation(request.Context(), conversation); err != nil {
+			s.recordCrossAuthorConversation(request, conversation, "conversation.cross-author.interrupt", "denied")
 			writeConversationError(response, err)
 			return
 		}
+		s.recordCrossAuthorConversation(request, conversation, "conversation.cross-author.interrupt", "success")
 	}
 	if err := s.agents.Interrupt(request.Context(), conversationID); err != nil {
 		switch {
@@ -650,12 +744,14 @@ func (s *Server) apiWhoAmI(response http.ResponseWriter, request *http.Request) 
 	viewer := s.conversationViewer(request.Context())
 	groups := append([]string{}, principal.Groups...)
 	writeJSON(response, http.StatusOK, map[string]any{
-		"id":       viewer.Author.ID,
-		"name":     viewer.Author.Name,
-		"email":    viewer.Author.Email,
-		"provider": viewer.Author.Provider,
-		"groups":   groups,
-		"admin":    viewer.Admin,
+		"id":          viewer.Author.ID,
+		"name":        viewer.Author.Name,
+		"email":       viewer.Author.Email,
+		"provider":    viewer.Author.Provider,
+		"groups":      groups,
+		"admin":       viewer.Admin,
+		"role":        identity.NormalizeRole(principal.Role),
+		"permissions": identity.Permissions(principal.Role),
 	})
 }
 
@@ -974,11 +1070,24 @@ func (s *Server) apiMap(response http.ResponseWriter, request *http.Request) {
 		writeAPIError(response, http.StatusBadRequest, err)
 		return
 	}
-	snapshot, err := s.maps.Snapshot(request.Context(), repositoryID, request.URL.Query().Get("refresh") == "true")
+	refresh := request.URL.Query().Get("refresh") == "true"
+	principal, allowed := s.requirePermission(response, request, func() identity.Permission {
+		if refresh {
+			return identity.PermissionManageArtifacts
+		}
+		return identity.PermissionReadRepositories
+	}())
+	if !allowed {
+		return
+	}
+	snapshot, err := s.maps.Snapshot(request.Context(), repositoryID, refresh)
 	if err != nil {
 		slog.Error("build repository map", "repository_id", repositoryID, "error", err)
 		writeAPIError(response, http.StatusInternalServerError, errors.New("repository map could not be built"))
 		return
+	}
+	if refresh {
+		s.recordApplicationEvent(request, principal, "generation.map", "map", strconv.FormatInt(repositoryID, 10), "success", nil)
 	}
 	writeJSON(response, http.StatusOK, snapshot)
 }

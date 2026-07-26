@@ -17,7 +17,7 @@ import (
 	"github.com/spolnik/RepoKarta/internal/security"
 )
 
-var version = "0.42.0-dev"
+var version = "0.43.0-dev"
 
 type stringList []string
 
@@ -95,6 +95,7 @@ func serve(args []string) error {
 	allowOpen := flags.Bool("allow-open", defaults.AllowOpen, "allow the administrator to enable unauthenticated shared access")
 	adminUser := flags.String("admin-user", defaults.AdminUser, "bootstrap administrator username")
 	adminPasswordFile := flags.String("admin-password-file", strings.TrimSpace(os.Getenv("REPOKARTA_ADMIN_PASSWORD_FILE")), "file containing the bootstrap administrator password")
+	scimTokenFile := flags.String("scim-token-file", strings.TrimSpace(os.Getenv("REPOKARTA_SCIM_TOKEN_FILE")), "file containing the SCIM 2.0 bearer token")
 	cloudflareTeamDomain := flags.String("cloudflare-team-domain", defaults.Security.CloudflareTeamDomain, "Cloudflare Access team domain")
 	cloudflareAudience := flags.String("cloudflare-audience", defaults.Security.CloudflareAudience, "Cloudflare Access application audience tag")
 	samlMetadataURL := flags.String("saml-metadata-url", defaults.Security.SAMLMetadataURL, "SAML identity-provider metadata URL")
@@ -128,6 +129,17 @@ func serve(args []string) error {
 			return errors.New("administrator password file is empty")
 		}
 	}
+	scimToken := ""
+	if strings.TrimSpace(*scimTokenFile) != "" {
+		tokenBytes, err := os.ReadFile(*scimTokenFile)
+		if err != nil {
+			return fmt.Errorf("read SCIM token file: %w", err)
+		}
+		scimToken = strings.TrimRight(string(tokenBytes), "\r\n")
+		if scimToken == "" {
+			return errors.New("SCIM token file is empty")
+		}
+	}
 
 	cfg := app.Config{
 		ListenAddress:  *listenAddress,
@@ -141,6 +153,7 @@ func serve(args []string) error {
 		AllowOpen:      *allowOpen,
 		AdminUser:      *adminUser,
 		AdminPassword:  adminPassword,
+		SCIMToken:      scimToken,
 		Security: security.Settings{
 			Mode:                 security.Mode(*authMode),
 			PublicURL:            *publicURL,
@@ -177,6 +190,7 @@ Serve options:
   -allow-open        permit administrator-controlled unauthenticated shared mode
   -admin-user        bootstrap administrator username
   -admin-password-file file containing the bootstrap administrator password
+  -scim-token-file  file containing the SCIM 2.0 bearer token
   -cloudflare-team-domain Cloudflare Access team domain
   -cloudflare-audience Cloudflare Access application audience tag
   -saml-metadata-url SAML identity-provider metadata URL

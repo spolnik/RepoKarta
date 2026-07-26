@@ -13,6 +13,7 @@
     <string>-data-dir</string><string>/Library/Application Support/RepoKarta</string>
     <string>-admin-user</string><string>repokarta-admin</string>
     <string>-admin-password-file</string><string>/Library/Application Support/RepoKarta-Secrets/admin-password</string>
+    <string>-scim-token-file</string><string>/Library/Application Support/RepoKarta-Secrets/scim-token</string>
     <string>/srv/repositories</string>
   </array>
   <key>RunAtLoad</key><true/>

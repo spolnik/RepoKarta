@@ -35,7 +35,7 @@ fi
 (
     cd "$repository_root"
     GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 \
-        go build -tags "$grammar_tags" -trimpath \
+    go build -buildvcs=false -tags "$grammar_tags" -trimpath \
         -ldflags "-s -w -X main.version=$version" \
         -o "$stage_directory/repokarta" ./cmd/repokarta
 )
@@ -43,6 +43,8 @@ chmod 0755 "$stage_directory/repokarta"
 cp "$repository_root/README.md" "$stage_directory/README.md"
 cp "$repository_root/docs/shared-deployment.md" \
     "$stage_directory/docs/shared-deployment.md"
+cp "$repository_root/docs/enterprise-administration.md" \
+    "$stage_directory/docs/enterprise-administration.md"
 cp "$repository_root/deploy/"* "$stage_directory/deploy/"
 cp "$repository_root/third_party/zoekt/LICENSE" \
     "$stage_directory/licenses/zoekt-Apache-2.0.txt"
@@ -98,6 +100,7 @@ mkdir -p "$verify_directory"
 tar -C "$verify_directory" -xzf "$archive_path"
 test -f "$verify_directory/$package_name/licenses/zoekt-Apache-2.0.txt"
 test -f "$verify_directory/$package_name/docs/shared-deployment.md"
+test -f "$verify_directory/$package_name/docs/enterprise-administration.md"
 test -f "$verify_directory/$package_name/deploy/repokarta.env.example"
 if [ "$(uname -s)" = "Darwin" ]; then
     reported_version=$("$verify_directory/$package_name/repokarta" version)

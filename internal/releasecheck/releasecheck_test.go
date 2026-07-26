@@ -74,19 +74,19 @@ func TestEveryPackagePathCarriesRequiredLicensesAndVerification(t *testing.T) {
 		}
 	}
 	powerShell := string(readFile(t, root, filepath.Join("scripts", "package-release.ps1")))
-	for _, expected := range []string{"Get-FileHash", "Compress-Archive", "repokarta.exe", "main.version"} {
+	for _, expected := range []string{"Get-FileHash", "Compress-Archive", "repokarta.exe", "main.version", "-buildvcs=false"} {
 		if !strings.Contains(powerShell, expected) {
 			t.Fatalf("Windows packager is missing %q", expected)
 		}
 	}
 	shell := string(readFile(t, root, filepath.Join("scripts", "package-release.sh")))
-	for _, expected := range []string{"shasum -a 256", "codesign --verify", "xcrun notarytool submit", "main.version"} {
+	for _, expected := range []string{"shasum -a 256", "codesign --verify", "xcrun notarytool submit", "main.version", "-buildvcs=false"} {
 		if !strings.Contains(shell, expected) {
 			t.Fatalf("macOS packager is missing %q", expected)
 		}
 	}
 	for _, script := range []string{powerShell, shell} {
-		for _, expected := range []string{"shared-deployment.md", "repokarta.env.example"} {
+		for _, expected := range []string{"shared-deployment.md", "enterprise-administration.md", "repokarta.env.example"} {
 			if !strings.Contains(script, expected) {
 				t.Fatalf("release packager is missing shared operations artifact %q", expected)
 			}
