@@ -589,6 +589,70 @@ Exit condition: an administrator can discover, approve, acquire, synchronize,
 and safely remove a bounded repository fleet while every indexed revision has
 clear acquisition provenance and failures never silently shrink coverage.
 
+### Future: code insights and monitoring
+
+Add a commit-aware Code Insights workspace for test coverage, static-analysis
+findings, maintainability signals, and quality trends without silently running
+repository build scripts.
+
+- [ ] Define a normalized observation model for metrics and findings containing
+  repository, revision, branch, tool, rule or metric key, severity, file and
+  line evidence where available, observed timestamp, source run, and ingestion
+  confidence.
+- [ ] Import coverage from established report formats before adding
+  language-specific execution: JaCoCo XML, LCOV, and Cobertura XML, with
+  explicit line, branch, aggregate, skipped-file, and parse-error states.
+- [ ] Import static-analysis findings through SARIF 2.1.0 as the primary
+  tool-neutral interchange, preserving rule metadata, severity, fingerprints,
+  locations, suppressions, and code-flow evidence when supplied.
+- [ ] Add an optional read-only SonarQube Community Build adapter over its Web
+  API for project measures, issues, quality-gate status, coverage, complexity,
+  duplication, reliability, security, and maintainability metrics.
+- [ ] Keep SonarQube externally managed rather than embedding its server,
+  database, or scanner in RepoKarta; store only connection configuration,
+  project mappings, redacted credential references, and normalized observations.
+- [ ] Evaluate optional Semgrep Community Edition and MegaLinter ingestion via
+  SARIF or JSON, recording exact engine, rule-pack, configuration, and license
+  provenance instead of presenting every finding as RepoKarta-native analysis.
+- [ ] Derive only safe deterministic metrics directly from RepoKarta's committed
+  syntax data, such as code size and bounded complexity indicators; label these
+  separately from externally measured coverage and scanner findings.
+- [ ] Map every imported report to the exact Git revision it analyzed. Reject,
+  quarantine, or visibly mark reports whose revision or paths cannot be
+  reconciled with the indexed snapshot.
+- [ ] Show fleet, repository, branch, directory, file, language, tool, rule,
+  severity, ownership, and time filters with drill-down to commit-pinned source.
+- [ ] Track current values and history separately, including new-code versus
+  overall coverage, introduced versus resolved findings, quality-gate changes,
+  and regressions between comparable revisions.
+- [ ] Support administrator-defined advisory thresholds for coverage,
+  reliability, security, maintainability, duplication, and unresolved findings;
+  never claim RepoKarta enforced a CI gate unless the originating system proves
+  that outcome.
+- [ ] Ingest trusted CI artifacts, configured scanner APIs, or explicitly
+  uploaded reports by default. Any local scanner or test execution must be a
+  separately enabled, sandboxed, resource-bounded policy with cancellation and
+  no repository mutation.
+- [ ] Poll external systems with bounded concurrency, backoff, credential
+  rotation support, retention controls, and explicit stale, partial, unavailable,
+  and rate-limited states.
+- [ ] Expose normalized, already-computed insights through the read-only API and
+  MCP surface without invoking AI; AI may explain selected evidence but must not
+  manufacture missing measurements.
+
+Initial integration order:
+
+1. Generic SARIF and coverage-report ingestion.
+2. SonarQube Community Build Web API.
+3. Optional Semgrep Community Edition and MegaLinter report adapters.
+4. Explicitly sandboxed local execution only if imported CI evidence proves
+   insufficient.
+
+Exit condition: a user can compare code quality and coverage across repositories
+and revisions, distinguish measured facts from derived indicators, open exact
+source evidence, and see incomplete or stale monitoring without RepoKarta
+executing untrusted project code by default.
+
 ### Future: dependency management
 
 Add a read-only Dependency Management workspace over the dependencies already
