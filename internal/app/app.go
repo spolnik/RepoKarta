@@ -18,6 +18,7 @@ import (
 	"github.com/spolnik/RepoKarta/internal/docs"
 	"github.com/spolnik/RepoKarta/internal/graph"
 	"github.com/spolnik/RepoKarta/internal/httpserver"
+	"github.com/spolnik/RepoKarta/internal/maintenance"
 	"github.com/spolnik/RepoKarta/internal/mcpserver"
 	"github.com/spolnik/RepoKarta/internal/search"
 	zoektadapter "github.com/spolnik/RepoKarta/internal/search/zoekt"
@@ -161,6 +162,18 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 	documents.UseGenerator(conversations)
+	operations, err := maintenance.New(maintenance.Config{
+		DataDirectory:   cfg.DataDirectory,
+		RepositoryRoot:  cfg.RepositoryRoot,
+		Version:         cfg.Version,
+		Address:         cfg.ListenAddress,
+		DatabaseVersion: store.SchemaVersion,
+		MapVersion:      graph.ArtifactVersion,
+		WikiVersion:     docs.ArtifactVersion,
+	}, database)
+	if err != nil {
+		return fmt.Errorf("initialize maintenance: %w", err)
+	}
 	securityManager.SetChangeHandler(func(settings security.Settings) {
 		updatedBaseURL := internalBaseURL
 		if settings.PublicURL != "" {
@@ -195,6 +208,7 @@ func Run(ctx context.Context, cfg Config) error {
 		Maps:           maps,
 		Docs:           documents,
 		Security:       securityManager,
+		Maintenance:    operations,
 	}, intelligence, coordinator)
 	if err != nil {
 		return err

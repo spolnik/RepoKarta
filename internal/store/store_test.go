@@ -406,6 +406,79 @@ PRAGMA user_version = 7;`,
 	}
 }
 
+func TestMigrationIsIdempotentAcrossRepeatedUpgradeOpens(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "repeated-upgrade.db")
+	legacy, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := legacy.Exec(schemaV1 + `
+INSERT INTO repositories (id, name, path, discovered_at)
+VALUES (42, 'legacy', 'C:/repositories/legacy', '2026-07-20T10:00:00Z');
+PRAGMA user_version = 1;`); err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	for attempt := 0; attempt < 2; attempt++ {
+		storage, err := Open(path)
+		if err != nil {
+			t.Fatalf("open attempt %d: %v", attempt+1, err)
+		}
+		repositories, err := storage.ListRepositories(context.Background())
+		if err != nil {
+			storage.Close()
+			t.Fatal(err)
+		}
+		if len(repositories) != 1 || repositories[0].ID != 42 || repositories[0].Name != "legacy" {
+			storage.Close()
+			t.Fatalf("repositories after attempt %d = %#v", attempt+1, repositories)
+		}
+		if err := storage.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestOpenRejectsFutureSchemaWithoutMutatingIt(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "future.db")
+	future, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := future.Exec(`
+CREATE TABLE future_marker (value TEXT NOT NULL);
+INSERT INTO future_marker VALUES ('preserve-me');
+PRAGMA user_version = 999;`); err != nil {
+		t.Fatal(err)
+	}
+	if err := future.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Open(path); err == nil || !strings.Contains(err.Error(), "newer than supported") {
+		t.Fatalf("future schema error = %v", err)
+	}
+	verify, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer verify.Close()
+	var marker string
+	var version int
+	if err := verify.QueryRow("SELECT value FROM future_marker").Scan(&marker); err != nil {
+		t.Fatal(err)
+	}
+	if err := verify.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if marker != "preserve-me" || version != 999 {
+		t.Fatalf("future database was mutated: marker %q, version %d", marker, version)
+	}
+}
+
 func TestRepositoryByIDReportsAMissingRepositoryClearly(t *testing.T) {
 	storage, err := Open(filepath.Join(t.TempDir(), "missing.db"))
 	if err != nil {

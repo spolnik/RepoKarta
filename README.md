@@ -88,7 +88,13 @@ questions, M3 evidence-backed repository maps, and M4 living documentation:
 - commit-aware selective staleness and regeneration based on exact changed
   supporting files;
 - validated Mermaid diagrams, reviewed `.repokarta.yml` steering, a dedicated
-  Wiki workspace, and portable Markdown ZIP export.
+  Wiki workspace, and portable Markdown ZIP export;
+- administrator storage inventory with signed dry-run cleanup plans that can
+  remove only stale map snapshots, orphaned attachments, logs, and interrupted
+  temporary files while protecting source, live indexes, current Wiki content,
+  SQLite, and SAML identity;
+- source-free diagnostic ZIP export with an explicit inclusion/omission
+  manifest, redacted failures, format versions, readiness, and storage totals.
 
 The full product definition and non-goals live in [SCOPE.md](./SCOPE.md).
 
@@ -97,7 +103,7 @@ The full product definition and non-goals live in [SCOPE.md](./SCOPE.md).
 Requirements for a development build:
 
 - Go 1.26 or newer
-- Node.js 20 or newer
+- Node.js 24 or newer
 - Git
 
 Build the embedded frontend:
@@ -379,9 +385,22 @@ Conversation images, Zoekt shards, and future generated documentation are
 filesystem-backed under RepoKarta's own data directory. Deleting a chat removes
 its transcript and its exact owned image files.
 
+The protected administrator page includes a storage inventory and diagnostics
+workspace. Cleanup is intentionally narrower than file browsing: select safe
+candidates, preview the exact paths and byte count, then confirm the signed
+plan. RepoKarta re-inventories the targets immediately before deletion and
+fails closed if a path, size, or modification time changed. It never accepts a
+path supplied by the browser and never recursively deletes a source directory.
+
+The diagnostics download contains only `manifest.json` and `diagnostics.json`.
+It excludes database pages, prompts, source, absolute repository paths, logs,
+Wiki text, images, environment variables, cookies, tokens, credentials, and
+private keys.
+
 ## Validate and package
 
 ```sh
+npm --prefix web test
 npm --prefix web run typecheck
 npm --prefix web run build
 go test -tags "grammar_subset,grammar_subset_bash,grammar_subset_go,grammar_subset_groovy,grammar_subset_java,grammar_subset_javascript,grammar_subset_kotlin,grammar_subset_python,grammar_subset_sql,grammar_subset_tsx,grammar_subset_typescript" ./...
@@ -397,6 +416,50 @@ third-party license texts under `dist/licenses/`:
 ```sh
 ./scripts/build.sh
 ```
+
+## Releases and package verification
+
+Pushing a semantic-version tag such as `v0.38.0` runs the release matrix for
+Windows amd64 and Apple Silicon macOS. The workflow:
+
+1. validates the frontend and Go application;
+2. injects the tag version into the packaged binary;
+3. includes the README and every required third-party license;
+4. smoke-tests the packaged executable and Zoekt license;
+5. creates a ZIP for Windows and a `tar.gz` for macOS;
+6. verifies per-package SHA-256 files and publishes a combined `SHA256SUMS`;
+7. creates the GitHub release only after both native packages pass.
+
+Run the same packagers locally:
+
+```powershell
+.\scripts\package-release.ps1 -Version 0.38.0-dev
+```
+
+```sh
+./scripts/package-release.sh 0.38.0-dev
+```
+
+macOS packages are signed with the hardened runtime when
+`REPOKARTA_CODESIGN_IDENTITY` is configured. A release is also submitted to
+Apple notary service when `APPLE_ID`, `APPLE_TEAM_ID`, and
+`APPLE_APP_PASSWORD` are supplied together. The GitHub workflow imports the
+base64 PKCS#12 certificate from `MACOS_CERTIFICATE_P12` using
+`MACOS_CERTIFICATE_PASSWORD`; the signing identity name comes from
+`MACOS_CODESIGN_IDENTITY`. Without those secrets CI still proves the unsigned
+package layout, version, checksum, and licenses.
+
+The repository publishes a HEAD formula at
+[`Formula/repokarta.rb`](./Formula/repokarta.rb). Install and test it with:
+
+```sh
+brew install --HEAD --build-from-source ./Formula/repokarta.rb
+brew test repokarta
+```
+
+Main-branch CI performs the same Homebrew installation on macOS. The formula
+builds from source, installs the native executable, and preserves the packaged
+third-party license directory.
 
 The pinned Zoekt revision and Windows portability decision are documented in
 [docs/zoekt-windows-portability.md](./docs/zoekt-windows-portability.md).

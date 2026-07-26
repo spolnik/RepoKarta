@@ -60,6 +60,9 @@ const (
 	knowledgeModel               = "deep-wiki-v2"
 )
 
+// ArtifactVersion is the persisted Deep Wiki manifest and page format.
+const ArtifactVersion = documentVersion
+
 var (
 	errPageNotFound           = errors.New("documentation page not found")
 	errInvalidKnowledgePreset = errors.New("invalid Deep Wiki quality preset")

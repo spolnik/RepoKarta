@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -17,9 +19,140 @@ import (
 	"github.com/spolnik/RepoKarta/internal/codeintel"
 	"github.com/spolnik/RepoKarta/internal/docs"
 	"github.com/spolnik/RepoKarta/internal/graph"
+	"github.com/spolnik/RepoKarta/internal/maintenance"
 	"github.com/spolnik/RepoKarta/internal/search"
 	"github.com/spolnik/RepoKarta/internal/security"
 )
+
+func TestAdministratorCanPreviewCleanupAndExportDiagnostics(t *testing.T) {
+	root := t.TempDir()
+	dataDirectory := filepath.Join(root, "data")
+	repositoryRoot := filepath.Join(root, "repositories")
+	if err := os.MkdirAll(filepath.Join(dataDirectory, "logs"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(repositoryRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(dataDirectory, "logs", "repokarta.log")
+	if err := os.WriteFile(logPath, []byte("bounded diagnostic log"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	operationsStore := maintenanceTestStore{}
+	operations, err := maintenance.New(maintenance.Config{
+		DataDirectory:   dataDirectory,
+		RepositoryRoot:  repositoryRoot,
+		Version:         "test",
+		Address:         "127.0.0.1:7331",
+		DatabaseVersion: 8,
+		MapVersion:      4,
+		WikiVersion:     3,
+	}, operationsStore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settingsStore := &testSettingsStore{values: make(map[string]string)}
+	securityManager, err := security.New(context.Background(), settingsStore, security.Config{
+		Address:       "127.0.0.1:7331",
+		DataDirectory: dataDirectory,
+		AdminUser:     "admin",
+		AdminPassword: "maintenance-password",
+		Initial:       security.Settings{Mode: security.ModeLocal},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := New(
+		Config{
+			Address:     "127.0.0.1:7331",
+			Version:     "test",
+			Security:    securityManager,
+			Maintenance: operations,
+		},
+		codeintel.New(testStore{}, testSearcher{}, "http://127.0.0.1:7331"),
+		testRefresher{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	loginForm := url.Values{"username": {"admin"}, "password": {"maintenance-password"}}
+	request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:7331/admin/login", strings.NewReader(loginForm.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	response := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusSeeOther {
+		t.Fatalf("login response = %d, body %q", response.Code, response.Body.String())
+	}
+	adminCookie := response.Result().Cookies()[0]
+
+	request = httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7331/admin", nil)
+	request.AddCookie(adminCookie)
+	response = httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK ||
+		!strings.Contains(response.Body.String(), "Storage and diagnostics") ||
+		!strings.Contains(response.Body.String(), "logs/repokarta.log") {
+		t.Fatalf("admin storage response = %d, body %q", response.Code, response.Body.String())
+	}
+	csrfMatch := regexp.MustCompile(`name="csrf" value="([^"]+)"`).FindStringSubmatch(response.Body.String())
+	targetMatch := regexp.MustCompile(`name="target" value="([^"]+)"`).FindStringSubmatch(response.Body.String())
+	if len(csrfMatch) != 2 || len(targetMatch) != 2 {
+		t.Fatalf("storage controls missing: %q", response.Body.String())
+	}
+
+	previewForm := url.Values{"csrf": {csrfMatch[1]}, "target": {targetMatch[1]}}
+	request = httptest.NewRequest(http.MethodPost, "http://127.0.0.1:7331/admin/storage/preview", strings.NewReader(previewForm.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(adminCookie)
+	response = httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "Cleanup preview") {
+		t.Fatalf("preview response = %d, body %q", response.Code, response.Body.String())
+	}
+	tokenMatch := regexp.MustCompile(`name="plan_token" value="([^"]+)"`).FindStringSubmatch(response.Body.String())
+	if len(tokenMatch) != 2 {
+		t.Fatalf("cleanup token missing: %q", response.Body.String())
+	}
+
+	cleanupForm := url.Values{
+		"csrf":       {csrfMatch[1]},
+		"target":     {targetMatch[1]},
+		"plan_token": {tokenMatch[1]},
+		"confirm":    {"remove"},
+	}
+	request = httptest.NewRequest(http.MethodPost, "http://127.0.0.1:7331/admin/storage/cleanup", strings.NewReader(cleanupForm.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(adminCookie)
+	response = httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "Cleanup completed") {
+		t.Fatalf("cleanup response = %d, body %q", response.Code, response.Body.String())
+	}
+	if _, err := os.Stat(logPath); !os.IsNotExist(err) {
+		t.Fatalf("cleaned log still exists: %v", err)
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7331/admin/diagnostics", nil)
+	request.AddCookie(adminCookie)
+	response = httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK ||
+		response.Header().Get("Content-Type") != "application/zip" ||
+		response.Body.Len() == 0 {
+		t.Fatalf("diagnostics response = %d, type %q, bytes %d", response.Code, response.Header().Get("Content-Type"), response.Body.Len())
+	}
+}
+
+type maintenanceTestStore struct{}
+
+func (maintenanceTestStore) ListRepositories(context.Context) ([]catalog.Repository, error) {
+	return []catalog.Repository{}, nil
+}
+
+func (maintenanceTestStore) ConversationImagePaths(context.Context) (map[string]struct{}, error) {
+	return map[string]struct{}{}, nil
+}
 
 type testStore struct {
 	repositories []catalog.Repository

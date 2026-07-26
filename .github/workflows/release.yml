@@ -1,0 +1,98 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-amd64
+            os: windows-latest
+          - name: macos-arm64
+            os: macos-14
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.x"
+          cache: true
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Resolve release version
+        shell: bash
+        run: echo "RELEASE_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+      - name: Import Apple signing identity
+        if: matrix.name == 'macos-arm64'
+        shell: bash
+        env:
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          if [ -z "$MACOS_CERTIFICATE_P12" ]; then
+            echo "No signing certificate configured; producing an unsigned package."
+            exit 0
+          fi
+          certificate="$RUNNER_TEMP/repokarta-signing.p12"
+          keychain="$RUNNER_TEMP/repokarta-signing.keychain-db"
+          printf '%s' "$MACOS_CERTIFICATE_P12" | base64 -D > "$certificate"
+          security create-keychain -p "$RUNNER_TEMP" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$RUNNER_TEMP" "$keychain"
+          security import "$certificate" -P "$MACOS_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$keychain"
+          security list-keychain -d user -s "$keychain"
+          security set-key-partition-list -S apple-tool:,apple: -k "$RUNNER_TEMP" "$keychain"
+      - name: Package Windows
+        if: matrix.name == 'windows-amd64'
+        shell: pwsh
+        run: ./scripts/package-release.ps1 -Version $env:RELEASE_VERSION -OutputDirectory dist/release
+      - name: Package signed macOS
+        if: matrix.name == 'macos-arm64'
+        shell: bash
+        env:
+          REPOKARTA_CODESIGN_IDENTITY: ${{ secrets.MACOS_CODESIGN_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: ./scripts/package-release.sh "$RELEASE_VERSION" dist/release
+      - uses: actions/upload-artifact@v7
+        with:
+          name: repokarta-${{ matrix.name }}
+          path: |
+            dist/release/*.zip
+            dist/release/*.tar.gz
+            dist/release/*.sha256
+          if-no-files-found: error
+
+  publish:
+    name: publish-release
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist/release
+          merge-multiple: true
+      - name: Verify and combine checksums
+        working-directory: dist/release
+        run: |
+          cat ./*.sha256 | sort -k2 > SHA256SUMS
+          sha256sum --check SHA256SUMS
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/release/* --generate-notes --verify-tag

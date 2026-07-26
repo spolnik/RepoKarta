@@ -28,6 +28,7 @@ import (
 	"github.com/spolnik/RepoKarta/internal/codeintel"
 	"github.com/spolnik/RepoKarta/internal/docs"
 	"github.com/spolnik/RepoKarta/internal/graph"
+	"github.com/spolnik/RepoKarta/internal/maintenance"
 	"github.com/spolnik/RepoKarta/internal/search"
 	"github.com/spolnik/RepoKarta/internal/security"
 	"github.com/spolnik/RepoKarta/internal/source"
@@ -87,6 +88,7 @@ type Config struct {
 	Maps           MapService
 	Docs           DocumentationService
 	Security       *security.Manager
+	Maintenance    *maintenance.Service
 }
 
 // Server hosts RepoKarta's loopback interface.
@@ -101,6 +103,7 @@ type Server struct {
 	maps         MapService
 	docs         DocumentationService
 	security     *security.Manager
+	maintenance  *maintenance.Service
 }
 
 type pageData struct {
@@ -206,6 +209,7 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 		"statusLabel":     statusLabel,
 		"nextSearchLimit": nextSearchLimit,
 		"indexProgress":   indexProgress,
+		"formatBytes":     formatBytes,
 	}
 	templates, err := template.New("repokarta").Funcs(functions).ParseFS(web.Files, "templates/*.html")
 	if err != nil {
@@ -226,6 +230,7 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 		maps:         config.Maps,
 		docs:         config.Docs,
 		security:     config.Security,
+		maintenance:  config.Maintenance,
 	}
 	server.history, _ = config.Conversations.(ConversationHistoryService)
 
@@ -250,6 +255,11 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 		mux.HandleFunc("POST /admin/login", server.adminLogin)
 		mux.HandleFunc("GET /admin", server.adminPage)
 		mux.HandleFunc("POST /admin/security", server.updateSecurity)
+		if server.maintenance != nil {
+			mux.HandleFunc("POST /admin/storage/preview", server.previewCleanup)
+			mux.HandleFunc("POST /admin/storage/cleanup", server.executeCleanup)
+			mux.HandleFunc("GET /admin/diagnostics", server.exportDiagnostics)
+		}
 		mux.HandleFunc("POST /admin/logout", server.adminLogout)
 		mux.HandleFunc("POST /auth/logout", server.authLogout)
 		mux.Handle("/saml/", server.security.SAMLHandler())

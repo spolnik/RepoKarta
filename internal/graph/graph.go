@@ -51,6 +51,9 @@ const (
 	commandTimeout                = 20 * time.Second
 )
 
+// ArtifactVersion is the persisted repository-map snapshot format.
+const ArtifactVersion = snapshotVersion
+
 // RepositoryStore supplies the catalogue without exposing paths to clients.
 type RepositoryStore interface {
 	ListRepositories(context.Context) ([]catalog.Repository, error)

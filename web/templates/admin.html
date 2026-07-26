@@ -96,6 +96,103 @@
 
         <div class="flex justify-end"><button class="search-button" type="submit">Save and activate</button></div>
       </form>
+
+      {{if .MaintenanceAvailable}}
+      <section class="mt-12 border-t border-white/[0.08] pt-10" aria-labelledby="storage-title">
+        <div class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <p class="mb-2 text-xs font-semibold uppercase tracking-[0.24em] text-emerald-400">Local operations</p>
+            <h2 id="storage-title" class="text-3xl font-semibold tracking-[-0.04em] text-white">Storage and diagnostics</h2>
+            <p class="mt-3 max-w-3xl text-sm leading-6 text-ink-soft">Inspect RepoKarta-owned data, preview exact cleanup targets, and export a source-free diagnostic bundle. Source repositories and live security identity are never cleanup targets.</p>
+          </div>
+          <a class="secondary-button shrink-0" href="/admin/diagnostics">Export diagnostics</a>
+        </div>
+
+        {{if .StorageError}}
+        <p class="mt-6 rounded-lg border border-red-400/30 bg-red-400/10 px-4 py-3 text-sm text-red-200" role="alert">Storage inventory is unavailable: {{.StorageError}}</p>
+        {{else}}
+        <div class="mt-6 grid gap-3 sm:grid-cols-3">
+          <div class="rounded-xl border border-white/[0.08] bg-white/[0.025] p-4">
+            <div class="text-xs uppercase tracking-[0.16em] text-ink-faint">Owned storage</div>
+            <div class="mt-2 font-mono text-xl font-semibold text-white">{{formatBytes .Storage.TotalBytes}}</div>
+          </div>
+          <div class="rounded-xl border border-white/[0.08] bg-white/[0.025] p-4">
+            <div class="text-xs uppercase tracking-[0.16em] text-ink-faint">Safely reclaimable</div>
+            <div class="mt-2 font-mono text-xl font-semibold text-emerald-300">{{formatBytes .Storage.ReclaimableBytes}}</div>
+          </div>
+          <div class="rounded-xl border border-white/[0.08] bg-white/[0.025] p-4">
+            <div class="text-xs uppercase tracking-[0.16em] text-ink-faint">Inventory generated</div>
+            <div class="mt-2 font-mono text-sm text-ink">{{formatTime .Storage.GeneratedAt}}</div>
+          </div>
+        </div>
+
+        <div class="mt-5 overflow-hidden rounded-xl border border-white/[0.08]">
+          <table class="w-full text-left text-sm">
+            <thead class="border-b border-white/[0.08] bg-white/[0.035] text-xs uppercase tracking-[0.14em] text-ink-faint">
+              <tr><th class="px-4 py-3 font-medium">Category</th><th class="px-4 py-3 text-right font-medium">Files</th><th class="px-4 py-3 text-right font-medium">Used</th><th class="px-4 py-3 text-right font-medium">Reclaimable</th></tr>
+            </thead>
+            <tbody class="divide-y divide-white/[0.06]">
+              {{range .Storage.Categories}}
+              <tr><td class="px-4 py-3 text-ink">{{.Label}}</td><td class="px-4 py-3 text-right font-mono text-ink-soft">{{.FileCount}}</td><td class="px-4 py-3 text-right font-mono text-ink-soft">{{formatBytes .SizeBytes}}</td><td class="px-4 py-3 text-right font-mono {{if .ReclaimableBytes}}text-emerald-300{{else}}text-ink-faint{{end}}">{{formatBytes .ReclaimableBytes}}</td></tr>
+              {{end}}
+            </tbody>
+          </table>
+        </div>
+
+        {{if .CleanupPlan}}
+        <div class="mt-6 rounded-2xl border border-amber-300/25 bg-amber-300/[0.06] p-6">
+          <p class="text-xs font-semibold uppercase tracking-[0.2em] text-amber-300">Cleanup preview</p>
+          <h3 class="mt-2 text-lg font-semibold text-white">Review {{len .CleanupPlan.Items}} exact targets · {{formatBytes .CleanupPlan.TotalBytes}}</h3>
+          <div class="mt-4 grid gap-2">
+            {{range .CleanupPlan.Items}}
+            <div class="rounded-lg border border-white/[0.08] bg-black/20 px-4 py-3">
+              <div class="break-all font-mono text-xs text-ink">{{.RelativePath}}</div>
+              <div class="mt-1 text-xs text-ink-faint">{{formatBytes .SizeBytes}} · {{.Reason}}</div>
+            </div>
+            {{end}}
+          </div>
+          <form action="/admin/storage/cleanup" method="post" class="mt-5 grid gap-4">
+            <input type="hidden" name="csrf" value="{{.CSRFToken}}">
+            <input type="hidden" name="plan_token" value="{{.CleanupPlan.Token}}">
+            {{range .CleanupPlan.Items}}<input type="hidden" name="target" value="{{.ID}}">{{end}}
+            <label class="flex items-start gap-3 text-sm text-ink-soft">
+              <input class="mt-1" type="checkbox" name="confirm" value="remove" required>
+              <span>I reviewed every exact path. Remove only this unchanged plan; otherwise fail and require a new preview.</span>
+            </label>
+            <div><button class="rounded-lg border border-red-400/30 bg-red-400/10 px-4 py-2 text-sm font-semibold text-red-100 hover:bg-red-400/15" type="submit">Remove reviewed files</button></div>
+          </form>
+        </div>
+        {{else}}
+        <form action="/admin/storage/preview" method="post" class="mt-6 rounded-2xl border border-white/[0.08] bg-white/[0.025] p-6">
+          <input type="hidden" name="csrf" value="{{.CSRFToken}}">
+          <div>
+            <h3 class="text-lg font-semibold text-white">Safe cleanup candidates</h3>
+            <p class="mt-2 text-sm leading-6 text-ink-soft">Only stale map snapshots, orphaned attachments, logs, and interrupted temporary files are selectable. Current indexes, Wiki pages, database state, and authentication identity stay protected.</p>
+          </div>
+          <div class="mt-5 grid gap-2">
+            {{range .Storage.Items}}
+            {{if .Cleanable}}
+            <label class="flex cursor-pointer items-start gap-3 rounded-lg border border-white/[0.08] bg-black/15 px-4 py-3 hover:border-emerald-400/25">
+              <input class="mt-1" type="checkbox" name="target" value="{{.ID}}">
+              <span class="min-w-0 flex-1">
+                <span class="block break-all font-mono text-xs text-ink">{{.RelativePath}}</span>
+                <span class="mt-1 block text-xs leading-5 text-ink-faint">{{formatBytes .SizeBytes}} · {{.Reason}}</span>
+              </span>
+            </label>
+            {{end}}
+            {{end}}
+          </div>
+          {{if .Storage.ItemsTruncated}}<p class="mt-4 text-xs text-amber-200">The item list is bounded. Clean visible candidates, then refresh the inventory for the next batch.</p>{{end}}
+          {{if .Storage.ReclaimableBytes}}
+          <div class="mt-5 flex justify-end"><button class="secondary-button" type="submit">Preview selected cleanup</button></div>
+          {{else}}
+          <p class="mt-5 rounded-lg border border-emerald-400/20 bg-emerald-400/[0.06] px-4 py-3 text-sm text-emerald-100">No safe cleanup candidates are currently present.</p>
+          {{end}}
+        </form>
+        {{end}}
+        {{end}}
+      </section>
+      {{end}}
       {{end}}
     </main>
   </body>

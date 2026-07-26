@@ -1,0 +1,125 @@
+param(
+    [Parameter(Mandatory = $true)]
+    [ValidatePattern('^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$')]
+    [string]$Version,
+
+    [string]$OutputDirectory,
+
+    [switch]$SkipValidation
+)
+
+$ErrorActionPreference = "Stop"
+
+$repositoryRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
+if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
+    $OutputDirectory = Join-Path $repositoryRoot "dist\release"
+}
+$OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
+$packageName = "repokarta-$Version-windows-amd64"
+$stageRoot = Join-Path $OutputDirectory ".stage"
+$stageDirectory = Join-Path $stageRoot $packageName
+$archivePath = Join-Path $OutputDirectory "$packageName.zip"
+$checksumPath = "$archivePath.sha256"
+$outputPrefix = $OutputDirectory.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+$stagePrefix = [IO.Path]::GetFullPath($stageDirectory)
+if (-not $stagePrefix.StartsWith($outputPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "release staging directory escaped the configured output directory"
+}
+
+$grammarTags = @(
+    "grammar_subset",
+    "grammar_subset_bash",
+    "grammar_subset_go",
+    "grammar_subset_groovy",
+    "grammar_subset_java",
+    "grammar_subset_javascript",
+    "grammar_subset_kotlin",
+    "grammar_subset_python",
+    "grammar_subset_sql",
+    "grammar_subset_tsx",
+    "grammar_subset_typescript"
+) -join ","
+
+function Copy-ThirdPartyLicenses {
+    param([string]$Destination)
+    New-Item -ItemType Directory -Force -Path $Destination | Out-Null
+    $licenses = [ordered]@{
+        "third_party\zoekt\LICENSE" = "zoekt-Apache-2.0.txt"
+        "third_party\licenses\gotreesitter-MIT.txt" = "gotreesitter-MIT.txt"
+        "third_party\licenses\tree-sitter-grammars-MIT.txt" = "tree-sitter-grammars-MIT.txt"
+        "third_party\licenses\nvim-treesitter-Kotlin-query-NOTICE.txt" = "nvim-treesitter-Kotlin-query-NOTICE.txt"
+        "third_party\licenses\crewjam-saml-BSD-2-Clause.txt" = "crewjam-saml-BSD-2-Clause.txt"
+    }
+    foreach ($source in $licenses.Keys) {
+        Copy-Item -LiteralPath (Join-Path $repositoryRoot $source) -Destination (Join-Path $Destination $licenses[$source]) -Force
+    }
+}
+
+New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
+if (Test-Path -LiteralPath $stageDirectory) {
+    Remove-Item -LiteralPath $stageDirectory -Recurse -Force
+}
+New-Item -ItemType Directory -Force -Path $stageDirectory | Out-Null
+
+try {
+    if (-not $SkipValidation) {
+        npm --prefix (Join-Path $repositoryRoot "web") ci
+        if ($LASTEXITCODE -ne 0) { throw "npm ci failed" }
+        npm --prefix (Join-Path $repositoryRoot "web") test
+        if ($LASTEXITCODE -ne 0) { throw "frontend tests failed" }
+        npm --prefix (Join-Path $repositoryRoot "web") run typecheck
+        if ($LASTEXITCODE -ne 0) { throw "frontend typecheck failed" }
+        npm --prefix (Join-Path $repositoryRoot "web") run build
+        if ($LASTEXITCODE -ne 0) { throw "frontend build failed" }
+
+        Push-Location $repositoryRoot
+        try {
+            go test -tags $grammarTags ./...
+            if ($LASTEXITCODE -ne 0) { throw "Go tests failed" }
+        }
+        finally {
+            Pop-Location
+        }
+    }
+
+    Push-Location $repositoryRoot
+    try {
+        $env:GOOS = "windows"
+        $env:GOARCH = "amd64"
+        $env:CGO_ENABLED = "0"
+        go build -tags $grammarTags -trimpath -ldflags "-s -w -X main.version=$Version" -o (Join-Path $stageDirectory "repokarta.exe") ./cmd/repokarta
+        if ($LASTEXITCODE -ne 0) { throw "Windows build failed" }
+    }
+    finally {
+        Remove-Item Env:GOOS -ErrorAction SilentlyContinue
+        Remove-Item Env:GOARCH -ErrorAction SilentlyContinue
+        Remove-Item Env:CGO_ENABLED -ErrorAction SilentlyContinue
+        Pop-Location
+    }
+
+    Copy-Item -LiteralPath (Join-Path $repositoryRoot "README.md") -Destination (Join-Path $stageDirectory "README.md") -Force
+    Copy-ThirdPartyLicenses -Destination (Join-Path $stageDirectory "licenses")
+
+    $reportedVersion = & (Join-Path $stageDirectory "repokarta.exe") version
+    if ($LASTEXITCODE -ne 0 -or $reportedVersion.Trim() -ne $Version) {
+        throw "packaged executable reports '$reportedVersion', expected '$Version'"
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $stageDirectory "licenses\zoekt-Apache-2.0.txt"))) {
+        throw "packaged executable is missing the full Zoekt Apache-2.0 license"
+    }
+
+    if (Test-Path -LiteralPath $archivePath) {
+        Remove-Item -LiteralPath $archivePath -Force
+    }
+    Compress-Archive -LiteralPath $stageDirectory -DestinationPath $archivePath -CompressionLevel Optimal
+    $hash = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    Set-Content -LiteralPath $checksumPath -Value "$hash  $packageName.zip" -Encoding ascii
+}
+finally {
+    if (Test-Path -LiteralPath $stageDirectory) {
+        Remove-Item -LiteralPath $stageDirectory -Recurse -Force
+    }
+}
+
+Write-Host "Packaged $archivePath"
+Write-Host "Checksum $checksumPath"

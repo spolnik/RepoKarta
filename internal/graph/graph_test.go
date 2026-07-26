@@ -170,6 +170,64 @@ func Run() {}
 	}
 }
 
+func TestSnapshotRegeneratesUnsupportedCachedArtifact(t *testing.T) {
+	root := t.TempDir()
+	writeGraphFixture(t, root, "go.mod", "module example.com/upgrade\n\ngo 1.26\n")
+	writeGraphFixture(t, root, "main.go", "package main\n\nfunc main() {}\n")
+	runGraphGit(t, root, "init")
+	runGraphGit(t, root, "config", "user.email", "graph@example.com")
+	runGraphGit(t, root, "config", "user.name", "Graph Test")
+	runGraphGit(t, root, "add", ".")
+	runGraphGit(t, root, "commit", "-m", "fixture")
+	revision := strings.TrimSpace(runGraphGit(t, root, "rev-parse", "HEAD"))
+	directory := filepath.Join(t.TempDir(), "maps")
+	service, err := New(graphStore{repository: catalog.Repository{
+		ID: 15, Name: "upgrade", Path: root, HeadCommit: revision,
+		IndexedCommit: revision, IndexState: "ready",
+	}}, directory, "http://127.0.0.1:7331")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := service.Snapshot(context.Background(), 15, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := filepath.Glob(filepath.Join(directory, "repository-15-*.json"))
+	if err != nil || len(files) != 1 {
+		t.Fatalf("cached files = %#v, error = %v", files, err)
+	}
+	unsupported := bytes.ReplaceAll(
+		mustReadGraphFile(t, files[0]),
+		[]byte(`"version": 4`),
+		[]byte(`"version": 999`),
+	)
+	unsupported = append(unsupported, []byte("\nunsupported-marker")...)
+	if err := os.WriteFile(files[0], unsupported, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := service.Snapshot(context.Background(), 15, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.Version != ArtifactVersion || recovered.ID != first.ID {
+		t.Fatalf("recovered snapshot = %+v", recovered)
+	}
+	content := mustReadGraphFile(t, files[0])
+	if bytes.Contains(content, []byte("unsupported-marker")) ||
+		!bytes.Contains(content, []byte(`"version": 4`)) {
+		t.Fatalf("unsupported cache was not regenerated: %s", content)
+	}
+}
+
+func mustReadGraphFile(t *testing.T, path string) []byte {
+	t.Helper()
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return content
+}
+
 func TestSnapshotExtractsGradleSpringRoutesAndServiceCalls(t *testing.T) {
 	paymentRoot, paymentRevision := javaGraphFixture(t, map[string]string{
 		"settings.gradle": `rootProject.name = "payment-service"`,

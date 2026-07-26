@@ -17,8 +17,11 @@ $grammarTags = @(
     "grammar_subset_typescript"
 ) -join ","
 
-npm --prefix (Join-Path $repositoryRoot "web") install
-if ($LASTEXITCODE -ne 0) { throw "npm install failed" }
+npm --prefix (Join-Path $repositoryRoot "web") ci
+if ($LASTEXITCODE -ne 0) { throw "npm ci failed" }
+
+npm --prefix (Join-Path $repositoryRoot "web") test
+if ($LASTEXITCODE -ne 0) { throw "frontend tests failed" }
 
 npm --prefix (Join-Path $repositoryRoot "web") run typecheck
 if ($LASTEXITCODE -ne 0) { throw "frontend typecheck failed" }

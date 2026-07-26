@@ -6,7 +6,8 @@ output_directory="$repository_root/dist"
 license_directory="$output_directory/licenses"
 grammar_tags="grammar_subset,grammar_subset_bash,grammar_subset_go,grammar_subset_groovy,grammar_subset_java,grammar_subset_javascript,grammar_subset_kotlin,grammar_subset_python,grammar_subset_sql,grammar_subset_tsx,grammar_subset_typescript"
 
-npm --prefix "$repository_root/web" install
+npm --prefix "$repository_root/web" ci
+npm --prefix "$repository_root/web" test
 npm --prefix "$repository_root/web" run typecheck
 npm --prefix "$repository_root/web" run build
 

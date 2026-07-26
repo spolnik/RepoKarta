@@ -497,13 +497,16 @@ changes.
 
 ### M5: distributable local product
 
-- [ ] Release matrix and checksums.
-- [ ] Storage and cleanup UI.
-- [ ] Diagnostics export with secret redaction.
-- [ ] Windows packaging.
-- [ ] macOS signing and notarization.
-- [ ] Homebrew formula.
-- [ ] Upgrade and database migration tests.
+- [x] Release matrix and checksums.
+- [x] Storage and cleanup UI with bounded inventory, exact-target dry runs,
+  confirmation, stale-plan rejection, and source-path protection.
+- [x] Diagnostics export with an explicit manifest, secret redaction, and
+  source/prompt/database/log omission.
+- [x] Windows amd64 packaging with version and bundled-license smoke checks.
+- [x] macOS arm64 packaging with optional Developer ID signing and notarization.
+- [x] Source-build Homebrew formula with CI installation and license checks.
+- [x] Upgrade and database/artifact migration tests, including idempotent retry
+  and unsupported-future-format rejection.
 
 ### M6: shared deployment (in progress)
 
@@ -839,65 +842,32 @@ completion criteria include:
 
 ## Current implementation version
 
-`0.37.0-dev`. M0 through M4 are complete. M5 and M6 are in progress.
+`0.38.0-dev`. M0 through M5 are complete. M6 is in progress.
 
 ## Recommended next session
 
-Focus the next implementation sprint on **storage and operations hardening**.
-RepoKarta already has a useful core product; safe long-lived operation and
-upgrade confidence now have higher priority than adding another broad feature.
+Complete the **M6 shared-artifact authorization boundary** before adding more
+shared-deployment surface area.
 
-### Priority 1: storage and maintenance
+1. Define repository and artifact visibility for users, teams, and
+   administrators without changing loopback-local behavior.
+2. Enforce the same policy on maps, Wiki plans/pages, exports, conversation
+   attachments, dependency facts, and MCP tools. An API, UI, export, or MCP
+   response must never reveal an artifact the caller cannot access.
+3. Migrate existing artifacts to an explicit owner/scope without silently
+   granting broader access, and keep the migration idempotent and recoverable.
+4. Test cross-user isolation, administrator own/all views, stale sessions, and
+   all four authentication modes.
+5. Finish shared/team deployment packaging and operational guidance only after
+   the artifact boundary is proven.
 
-1. Add a storage inventory covering SQLite, search indexes, map snapshots,
-   generated Wiki artifacts, conversation attachments, logs, and temporary or
-   interrupted-job data. Report exact size, repository, revision, artifact
-   owner, freshness, and whether RepoKarta can safely remove it.
-2. Add dry-run cleanup plans and exact-target cleanup controls. Every plan must
-   show what will be deleted and reclaimed, require confirmation for material
-   removal, reject source-repository paths, avoid unresolved globs, and preserve
-   the last usable artifact when a newer job failed.
-3. Make cleanup cancellation, partial failure, retry, and audit-ready actor and
-   target metadata explicit even before the full enterprise audit-log feature
-   exists.
-4. Build a secret-redacted diagnostics export containing version, platform,
-   effective non-secret configuration, provider and indexer readiness, storage
-   summary, schema and artifact-format versions, bounded recent failures, and a
-   manifest of included and intentionally omitted data.
-5. Add upgrade fixtures and migration tests spanning older SQLite schemas,
-   indexes, maps, Wiki manifests and pages, conversations, and attachments.
-   Prove forward migration, interrupted-upgrade recovery, idempotent retry, and
-   actionable rejection of unsupported future formats.
+Exit condition: two users sharing an instance cannot discover or retrieve one
+another's repositories or derived artifacts unless an explicit shared scope
+allows it, and administrators can diagnose access decisions without exposing
+source or secrets.
 
-Exit condition: a user can understand RepoKarta's disk use, preview and perform
-safe cleanup, export useful diagnostics without leaking secrets or source, and
-upgrade representative older data without losing the last usable state.
-
-### Priority 2: distribution
-
-1. Produce checksummed Windows amd64 and macOS arm64 release artifacts from the
-   tested upgrade path.
-2. Add Windows packaging and macOS signing and notarization.
-3. Publish and verify the Homebrew formula.
-4. Keep workflow actions and runtime versions current enough that supported
-   runners do not rely on deprecated execution environments.
-
-### Release and sequencing gates
-
-- Before presenting shared SAML or Cloudflare Access deployment as
-  production-ready, complete M6 per-user access enforcement for generated maps,
-  Wiki pages, exports, attachments, and MCP artifact tools. Authentication
-  without artifact authorization is not a complete shared-deployment boundary.
-- After the storage and shared-artifact foundations are complete, implement the
-  first advanced-search slice: structured `@repository` and `@file` mentions,
-  permission-aware context chips, and typed deterministic results.
-- Follow with the Dependency Management MVP because commit-pinned dependency
-  names, versions, and source evidence already exist. Repository acquisition,
-  Code Insights, and enterprise audit, role, and SCIM work follow according to
-  deployment demand.
-- Do not begin the full agentic Deep Search loop until structured contexts,
-  typed deterministic results, completeness metadata, and artifact permissions
-  are implemented and tested.
-- Do not mark any M5, M6, or future item complete by documenting it. A capability
-  counts only when it exists in the executable and satisfies the definition of
-  quality above.
+Then implement structured `@repository` and `@file` search contexts with
+permission-aware chips and typed deterministic results. Follow with the
+Dependency Management MVP; defer the full agentic Deep Search loop until
+structured contexts, completeness metadata, and artifact permissions are all
+implemented and tested.

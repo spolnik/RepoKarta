@@ -130,6 +130,10 @@ CREATE INDEX IF NOT EXISTS conversations_author_updated_index
 ON conversations(author_id, updated_at DESC);`
 )
 
+// SchemaVersion is the current durable SQLite format. Diagnostics and upgrade
+// tests use this value without reaching into migration internals.
+const SchemaVersion = currentSchemaVersion
+
 // Store persists RepoKarta-owned metadata. Repository source remains read-only.
 type Store struct {
 	db                    *sql.DB
@@ -273,6 +277,32 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key, value); err != nil 
 // Close closes the metadata database.
 func (s *Store) Close() error {
 	return s.db.Close()
+}
+
+// ConversationImagePaths returns the exact RepoKarta-owned image filenames
+// referenced by durable conversation metadata. Callers use this to distinguish
+// live attachments from orphaned files without reading image contents.
+func (s *Store) ConversationImagePaths(ctx context.Context) (map[string]struct{}, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT storage_path
+FROM conversation_message_images
+ORDER BY storage_path`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	paths := make(map[string]struct{})
+	for rows.Next() {
+		var storagePath string
+		if err := rows.Scan(&storagePath); err != nil {
+			return nil, err
+		}
+		if filepath.Base(storagePath) == storagePath && storagePath != "." && storagePath != "" {
+			paths[storagePath] = struct{}{}
+		}
+	}
+	return paths, rows.Err()
 }
 
 // SyncRepositories updates discovered repositories without discarding existing

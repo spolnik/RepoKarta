@@ -593,6 +593,82 @@ func TestGenerationResumeSelectiveStalenessAndExport(t *testing.T) {
 	}
 }
 
+type upgradeMapService struct{}
+
+func (upgradeMapService) Snapshot(context.Context, int64, bool) (graph.Snapshot, error) {
+	return graph.Snapshot{}, nil
+}
+
+func TestOlderManifestNormalizesAndUpgradesOnWrite(t *testing.T) {
+	directory := t.TempDir()
+	repositoryDirectory := filepath.Join(directory, "repository-9")
+	if err := os.MkdirAll(repositoryDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	legacy := `{
+  "version": 1,
+  "pages": [{
+    "repository_id": 9,
+    "slug": "overview",
+    "title": "Overview",
+    "status": "ready"
+  }]
+}`
+	if err := os.WriteFile(filepath.Join(repositoryDirectory, "manifest.json"), []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	service, err := New(&memoryStorage{}, upgradeMapService{}, directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := service.loadManifest(9)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Version != 1 || len(manifest.Pages) != 1 ||
+		manifest.Pages[0].SupportingFiles == nil ||
+		manifest.Pages[0].Citations == nil {
+		t.Fatalf("legacy manifest was not normalized: %+v", manifest)
+	}
+	if err := service.savePlan(9, manifest.Pages); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := os.ReadFile(filepath.Join(repositoryDirectory, "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(updated, []byte(`"version": 3`)) {
+		t.Fatalf("manifest was not upgraded to version 3: %s", updated)
+	}
+}
+
+func TestFutureManifestIsRejectedWithoutRewrite(t *testing.T) {
+	directory := t.TempDir()
+	repositoryDirectory := filepath.Join(directory, "repository-9")
+	if err := os.MkdirAll(repositoryDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	future := []byte(`{"version":999,"pages":[]}`)
+	path := filepath.Join(repositoryDirectory, "manifest.json")
+	if err := os.WriteFile(path, future, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	service, err := New(&memoryStorage{}, upgradeMapService{}, directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.loadManifest(9); err == nil || !strings.Contains(err.Error(), "newer than supported") {
+		t.Fatalf("future manifest error = %v", err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(after, future) {
+		t.Fatalf("future manifest was rewritten: %s", after)
+	}
+}
+
 func TestSteeringRejectsUnknownFieldsAndUnsafeMermaid(t *testing.T) {
 	t.Parallel()
 	repositoryPath := t.TempDir()
