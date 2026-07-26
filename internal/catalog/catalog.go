@@ -40,8 +40,12 @@ type DiscoverOptions struct {
 	Exclude []string
 }
 
-// Discover finds regular, linked-worktree, and bare Git repositories below root.
-// It only uses read-only Git commands and never follows directory symlinks.
+// Discover finds regular and bare Git repositories below root. A linked
+// worktree is included only when it is the explicit root; linked worktrees
+// encountered during a broader parent scan are skipped to avoid cataloguing
+// several checkouts of the same repository as independent repositories.
+// Discovery only uses read-only Git commands and never follows directory
+// symlinks.
 func Discover(root string) ([]Repository, error) {
 	return DiscoverWithOptions(root, DiscoverOptions{})
 }
@@ -85,6 +89,9 @@ func DiscoverWithOptions(root string, options DiscoverOptions) ([]Repository, er
 		if !entry.IsDir() {
 			return nil
 		}
+		if path != root && linkedWorktreeAt(path) {
+			return filepath.SkipDir
+		}
 
 		ignoreScopes = activeIgnoreScopes(ignoreScopes, path)
 		if path != root && ignoredDirectory(ignoreScopes, path) {
@@ -121,6 +128,12 @@ func DiscoverWithOptions(root string, options DiscoverOptions) ([]Repository, er
 	})
 
 	return repositories, nil
+}
+
+func linkedWorktreeAt(path string) bool {
+	gitPath := filepath.Join(path, ".git")
+	info, err := os.Lstat(gitPath)
+	return err == nil && info.Mode().IsRegular() && validGitFile(gitPath)
 }
 
 func canonicalDirectory(root string) (string, error) {

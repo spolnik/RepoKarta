@@ -141,6 +141,41 @@ func TestDiscoverSkipsHiddenWorktreeDirectoriesByDefault(t *testing.T) {
 	}
 }
 
+func TestDiscoverSkipsLinkedWorktreesBelowScanRoot(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+
+	root := t.TempDir()
+	primary := filepath.Join(root, "RepoKarta")
+	linked := filepath.Join(root, "RepoKarta-m9")
+	runGit(t, root, "init", primary)
+	runGit(t, primary, "config", "user.email", "repokarta@example.test")
+	runGit(t, primary, "config", "user.name", "RepoKarta tests")
+	if err := os.WriteFile(filepath.Join(primary, "README.md"), []byte("primary\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, primary, "add", "README.md")
+	runGit(t, primary, "commit", "-m", "Initial commit")
+	runGit(t, primary, "worktree", "add", "--detach", linked)
+
+	repositories, err := Discover(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repositories) != 1 || repositories[0].Path != mustCanonicalDirectory(t, primary) {
+		t.Fatalf("parent scan discovered linked worktree: %#v", repositories)
+	}
+
+	repositories, err = Discover(linked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repositories) != 1 || repositories[0].Path != mustCanonicalDirectory(t, linked) {
+		t.Fatalf("explicit linked-worktree scan = %#v", repositories)
+	}
+}
+
 func TestDiscoverIgnoresInvalidGitMarkerAndContinues(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git is not installed")

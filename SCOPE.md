@@ -857,8 +857,8 @@ completion criteria include:
 
 ## Current implementation version
 
-`0.41.0-dev`. M0 through M6 are complete. The M9 dependency inventory
-foundation is in progress.
+`0.42.0-dev`. M0 through M6 are complete. The M9 dependency inventory
+foundation and linked-worktree discovery deduplication are complete.
 
 ## Recommended next session
 
