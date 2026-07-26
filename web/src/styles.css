@@ -5206,19 +5206,22 @@ a.brand-mark:hover,
   scrollbar-width: thin;
 }
 
-/* The sidebar scrolls its page list only; the provenance rail scrolls whole. */
+/* Both rails remain independently reachable when the viewport is short. */
 .wiki-provenance {
   overflow-y: auto;
 }
 
 /*
- * The bounded page set scrolls independently so repository and generation
- * controls remain stable while the reader moves between pages.
+ * Scroll the complete control rail as one surface. A nested page-list scroller
+ * becomes unreachable when the controls above it are taller than the viewport.
  */
 .wiki-sidebar {
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   border-right: 1px solid rgb(148 163 184 / 0.09);
   padding: 1.35rem 1rem 1.5rem;
 }
@@ -5582,12 +5585,11 @@ a.brand-mark:hover,
 
 .wiki-page-list {
   display: grid;
-  flex: 1;
+  flex: none;
   align-content: start;
   gap: 0.35rem;
   min-height: 6rem;
-  overflow-y: auto;
-  overscroll-behavior: contain;
+  overflow: visible;
   padding: 0.1rem 0.1rem 0.75rem;
 }
 
