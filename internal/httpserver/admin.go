@@ -297,6 +297,16 @@ func (s *Server) adminLogin(response http.ResponseWriter, request *http.Request)
 
 func (s *Server) adminPage(response http.ResponseWriter, request *http.Request) {
 	csrf, ok := s.security.AdminSession(request)
+	if !ok && s.security.Mode() == security.ModeLocal {
+		var err error
+		csrf, err = s.security.CreateAdminSession(response)
+		ok = err == nil
+		if err != nil {
+			slog.Error("create local administrator session", "error", err)
+			http.Error(response, "Could not create local administrator session", http.StatusInternalServerError)
+			return
+		}
+	}
 	if !ok {
 		http.Redirect(response, request, "/admin/login", http.StatusSeeOther)
 		return
@@ -579,7 +589,7 @@ func (s *Server) renderAdmin(response http.ResponseWriter, data adminPageData) {
 		http.Error(response, "Administrator interface is unavailable", http.StatusNotFound)
 		return
 	}
-	if !data.AdminEnabled && data.Error == "" {
+	if !data.AdminEnabled && !data.Authenticated && data.Error == "" {
 		data.Error = security.ErrAdminUnavailable.Error()
 	}
 	response.Header().Set("Cache-Control", "no-store")

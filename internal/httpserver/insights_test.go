@@ -6,12 +6,15 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/spolnik/RepoKarta/internal/catalog"
 	"github.com/spolnik/RepoKarta/internal/codeintel"
 	"github.com/spolnik/RepoKarta/internal/insights"
+	"github.com/spolnik/RepoKarta/internal/security"
+	"github.com/spolnik/RepoKarta/internal/store"
 )
 
 func TestInsightsWorkspaceAndAPIExposeExplicitEvidenceStates(t *testing.T) {
@@ -109,10 +112,58 @@ func TestInsightMultipartImportCarriesProvenanceAndRedirects(t *testing.T) {
 	}
 }
 
+func TestReaderCannotMutateInsightsAndDoesNotSeeMutationControls(t *testing.T) {
+	database, err := store.Open(filepath.Join(t.TempDir(), "repokarta.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	securityManager, err := security.New(context.Background(), database, security.Config{
+		Address:       "0.0.0.0:7331",
+		DataDirectory: t.TempDir(),
+		AllowOpen:     true,
+		AdminUser:     "admin",
+		AdminPassword: "reader-test-password",
+		Initial: security.Settings{
+			Mode: security.ModeOpen, PublicURL: "https://repo.example.com",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository := catalog.Repository{ID: 8, Name: "service", IndexedCommit: "abc", IndexState: "ready"}
+	evidence := &testInsightService{}
+	server, err := New(Config{
+		Address: "0.0.0.0:7331", Version: "test", Insights: evidence, Security: securityManager,
+	}, codeintel.New(testStore{repositories: []catalog.Repository{repository}}, testSearcher{}, "https://repo.example.com"), testRefresher{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "https://repo.example.com/api/insights/derive", strings.NewReader("repository_id=8"))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	response := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden || evidence.deriveCalls != 0 {
+		t.Fatalf("reader derive status = %d, calls = %d, body = %s", response.Code, evidence.deriveCalls, response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "https://repo.example.com/insights?repository=8", nil)
+	response = httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK ||
+		strings.Contains(response.Body.String(), `action="/insights/import"`) ||
+		strings.Contains(response.Body.String(), `action="/insights/derive"`) ||
+		!strings.Contains(response.Body.String(), "Maintainer permission required") {
+		t.Fatalf("reader insights page status = %d, body = %s", response.Code, response.Body.String())
+	}
+}
+
 type testInsightService struct {
-	response   insights.QueryResponse
-	lastFilter insights.Filter
-	lastImport insights.ImportRequest
+	response    insights.QueryResponse
+	lastFilter  insights.Filter
+	lastImport  insights.ImportRequest
+	deriveCalls int
 }
 
 func (s *testInsightService) Query(_ context.Context, filter insights.Filter) (insights.QueryResponse, error) {
@@ -123,7 +174,8 @@ func (s *testInsightService) Import(_ context.Context, request insights.ImportRe
 	s.lastImport = request
 	return insights.Run{Tool: request.Tool, Status: insights.StatusCurrent}, nil
 }
-func (*testInsightService) Derive(context.Context, int64) (insights.Run, error) {
+func (s *testInsightService) Derive(context.Context, int64) (insights.Run, error) {
+	s.deriveCalls++
 	return insights.Run{Tool: "derived", Status: insights.StatusCurrent}, nil
 }
 func (*testInsightService) Compare(context.Context, int64, string, string) (insights.Comparison, error) {

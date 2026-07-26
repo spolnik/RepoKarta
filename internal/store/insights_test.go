@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -66,6 +67,63 @@ func TestInsightRunsPersistFilterCompareEvidenceAndRetention(t *testing.T) {
 	runs, err = storage.ListInsightRuns(ctx, insights.Filter{RepositoryID: repository.ID, Limit: 10})
 	if err != nil || len(runs) != 1 || runs[0].Revision != "def" {
 		t.Fatalf("retained runs = %#v, err = %v", runs, err)
+	}
+}
+
+func TestInsightRetentionBoundsUniqueToolNamesPerRepository(t *testing.T) {
+	ctx := context.Background()
+	storage, err := Open(filepath.Join(t.TempDir(), "insights.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer storage.Close()
+	if err := storage.SyncRepositories(ctx, []catalog.Repository{{
+		Name: "service", Path: filepath.Join(t.TempDir(), "service"),
+		DiscoveredAt: time.Now().UTC(), ScanState: "ready", IndexState: "ready",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	repository := mustRepositoryByName(t, storage, "service")
+	tx, err := storage.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	for index := 0; index < maximumInsightRunsPerRepository+5; index++ {
+		if _, err := tx.ExecContext(ctx, `
+INSERT INTO insight_runs (
+    id, repository_id, revision, tool, source_kind, status, confidence,
+    observed_at, ingested_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			fmt.Sprintf("run-%04d", index),
+			repository.ID,
+			"abc",
+			fmt.Sprintf("tool-%04d", index),
+			"test",
+			insights.StatusCurrent,
+			"reported",
+			formatTime(now.Add(time.Duration(index)*time.Second)),
+			formatTime(now.Add(time.Duration(index)*time.Second)),
+		); err != nil {
+			tx.Rollback()
+			t.Fatal(err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := storage.DeleteOldInsightRuns(ctx, repository.ID, "tool-1004", 50); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := storage.db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM insight_runs WHERE repository_id = ?",
+		repository.ID,
+	).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != maximumInsightRunsPerRepository {
+		t.Fatalf("retained unique-tool runs = %d, want %d", count, maximumInsightRunsPerRepository)
 	}
 }
 

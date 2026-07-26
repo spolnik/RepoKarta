@@ -182,6 +182,10 @@ func (s *Service) Query(ctx context.Context, filter Filter) (QueryResponse, erro
 	if err != nil {
 		return QueryResponse{}, err
 	}
+	currentRevisions, err := s.currentRevisions(ctx, filter)
+	if err != nil {
+		return QueryResponse{}, err
+	}
 	if filter.Limit <= 0 {
 		filter.Limit = 1000
 	}
@@ -205,13 +209,37 @@ func (s *Service) Query(ctx context.Context, filter Filter) (QueryResponse, erro
 		Current: []Observation{}, History: []Observation{}, Runs: runs,
 		Truncated: truncated, Facets: emptyFacets(), GeneratedAt: time.Now().UTC(),
 	}
+	for index := range response.Runs {
+		run := &response.Runs[index]
+		currentRevision := currentRevisions[run.RepositoryID]
+		if currentRevision == "" && run.Status != StatusQuarantined {
+			run.Status = StatusUnavailable
+			run.StatusMessage = appendStatus(run.StatusMessage, "repository has no indexed revision")
+		} else if run.Revision != currentRevision && run.Status != StatusQuarantined {
+			run.Status = StatusStale
+			run.StatusMessage = appendStatus(
+				run.StatusMessage,
+				fmt.Sprintf("indexed revision advanced to %s", shortRevision(currentRevision)),
+			)
+		}
+	}
 	seen := make(map[string]struct{})
+	staleObservations := 0
 	for _, observation := range observations {
 		identity := observationIdentity(observation)
-		if _, ok := seen[identity]; !ok {
-			seen[identity] = struct{}{}
-			response.Current = append(response.Current, observation)
+		selectedRevision := strings.TrimSpace(filter.Revision)
+		if selectedRevision == "" {
+			selectedRevision = currentRevisions[observation.RepositoryID]
+		}
+		if selectedRevision != "" && observation.Revision == selectedRevision {
+			if _, ok := seen[identity]; !ok {
+				seen[identity] = struct{}{}
+				response.Current = append(response.Current, observation)
+			} else {
+				response.History = append(response.History, observation)
+			}
 		} else {
+			staleObservations++
 			response.History = append(response.History, observation)
 		}
 		addFacet(response.Facets.Repositories, observation.Repository)
@@ -226,7 +254,41 @@ func (s *Service) Query(ctx context.Context, filter Filter) (QueryResponse, erro
 	if truncated {
 		response.Warnings = append(response.Warnings, fmt.Sprintf("observation window truncated at %d entries", requestedLimit))
 	}
+	if staleObservations > 0 {
+		response.Warnings = append(response.Warnings, fmt.Sprintf(
+			"%d observations are historical because their revision is no longer indexed",
+			staleObservations,
+		))
+	}
 	return response, nil
+}
+
+func (s *Service) currentRevisions(ctx context.Context, filter Filter) (map[int64]string, error) {
+	output := make(map[int64]string)
+	if filter.RepositoryID > 0 {
+		repository, err := s.store.RepositoryByID(ctx, filter.RepositoryID)
+		if err != nil {
+			return nil, err
+		}
+		output[repository.ID] = strings.TrimSpace(repository.IndexedCommit)
+		return output, nil
+	}
+	repositories, err := s.store.ListRepositories(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, repository := range repositories {
+		output[repository.ID] = strings.TrimSpace(repository.IndexedCommit)
+	}
+	return output, nil
+}
+
+func shortRevision(revision string) string {
+	revision = strings.TrimSpace(revision)
+	if len(revision) > 8 {
+		return revision[:8]
+	}
+	return revision
 }
 
 func (s *Service) Compare(ctx context.Context, repositoryID int64, fromRevision, toRevision string) (Comparison, error) {

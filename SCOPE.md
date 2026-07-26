@@ -868,10 +868,15 @@ completion criteria include:
 
 ## Current implementation version
 
-`0.45.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
+`0.46.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
 The M9 dependency inventory foundation, linked-worktree discovery
 deduplication, and M10 enterprise identity and administration milestone are
-complete. The remaining M9 work is planned; M11 is complete.
+complete. The remaining M9 registry work is planned; M11 is complete. The
+implemented M7-M11 slices now enforce insight mutation permissions and
+revision staleness, paginate dependency declarations, cache immutable file
+context trees, open the administrator console directly in loopback-local mode,
+and support credential-backed acquisition from explicitly configured GitHub
+and GitLab HTTPS hosts with canonical checkout validation.
 
 ## Recommended next session
 

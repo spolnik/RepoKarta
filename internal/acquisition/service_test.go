@@ -2,6 +2,7 @@ package acquisition
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -316,6 +317,7 @@ func TestFailedLocalSyncPreservesLastVerifiedRevisionAndSchedulesBackoff(t *test
 
 func TestHostedCheckoutLifecycleUsesOwnedStorageAndRecoverableRemoval(t *testing.T) {
 	source := createGitRepository(t)
+	t.Setenv("GITHUB_TOKEN", "hosted-lifecycle-token")
 	registry := &memoryRegistry{}
 	dataDirectory := t.TempDir()
 	service, err := New(Config{DataDirectory: dataDirectory}, registry)
@@ -382,6 +384,7 @@ func TestHostedCheckoutLifecycleUsesOwnedStorageAndRecoverableRemoval(t *testing
 
 func TestFailedHostedCloneCanBeRetriedBySynchronization(t *testing.T) {
 	source := createGitRepository(t)
+	t.Setenv("GITLAB_TOKEN", "hosted-retry-token")
 	service, err := New(Config{DataDirectory: t.TempDir()}, &memoryRegistry{})
 	if err != nil {
 		t.Fatal(err)
@@ -405,6 +408,106 @@ func TestFailedHostedCloneCanBeRetriedBySynchronization(t *testing.T) {
 	}
 	if retried.State != StateReady || retried.HeadCommit == "" || retried.FailureCount != 0 {
 		t.Fatalf("retried acquisition = %#v", retried)
+	}
+}
+
+func TestHostedGitOperationsReceiveCredentialWithoutCommandArgument(t *testing.T) {
+	source := createGitRepository(t)
+	t.Setenv("REPOKARTA_PRIVATE_TOKEN", "private-token-value")
+	service, err := New(Config{DataDirectory: t.TempDir()}, &memoryRegistry{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.UseRefresher(func(context.Context) error { return nil })
+	runner := hostedGitOverride(source, "https://github.com/acme/private.git")
+	var cloneEnvironment map[string]string
+	var cloneArguments []string
+	service.gitEnvironmentOverride = func(ctx context.Context, environment map[string]string, arguments ...string) (string, error) {
+		if safeGitAction(arguments) == "clone" {
+			cloneEnvironment = make(map[string]string, len(environment))
+			for key, value := range environment {
+				cloneEnvironment[key] = value
+			}
+			cloneArguments = append([]string(nil), arguments...)
+		}
+		return runner(ctx, arguments...)
+	}
+	if _, err := service.Acquire(context.Background(), Candidate{
+		Provider:      ProviderGitHub,
+		RemoteURL:     "https://github.com/acme/private.git",
+		DefaultBranch: "main",
+		Visibility:    "private",
+	}, "REPOKARTA_PRIVATE_TOKEN"); err != nil {
+		t.Fatal(err)
+	}
+	expected := "Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:private-token-value"))
+	if cloneEnvironment["GIT_CONFIG_VALUE_0"] != expected ||
+		cloneEnvironment["GIT_CONFIG_KEY_0"] != "http.https://github.com/.extraHeader" {
+		t.Fatalf("clone credential environment = %#v", cloneEnvironment)
+	}
+	for _, argument := range cloneArguments {
+		if strings.Contains(argument, "private-token-value") || strings.Contains(argument, expected) {
+			t.Fatalf("credential leaked into Git argument %q", argument)
+		}
+	}
+}
+
+func TestConfiguredHostedOriginSupportsEnterpriseGitServers(t *testing.T) {
+	source := createGitRepository(t)
+	service, err := New(Config{
+		DataDirectory: t.TempDir(),
+		GitHubHost:    "https://git.example.com",
+	}, &memoryRegistry{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.UseRefresher(func(context.Context) error { return nil })
+	service.gitOverride = hostedGitOverride(source, "https://git.example.com/acme/service.git")
+	acquired, err := service.Acquire(context.Background(), Candidate{
+		Provider:      ProviderGitHub,
+		RemoteURL:     "https://git.example.com/acme/service.git",
+		DefaultBranch: "main",
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if acquired.CanonicalID != "git.example.com/acme/service" ||
+		acquired.RemoteURL != "https://git.example.com/acme/service.git" {
+		t.Fatalf("enterprise acquisition = %#v", acquired)
+	}
+	if _, err := normalizeCandidateForHosts(Candidate{
+		Provider:  ProviderGitHub,
+		RemoteURL: "https://github.com/acme/service.git",
+	}, service.githubHost, service.gitlabHost); err == nil {
+		t.Fatal("public GitHub remote was accepted for an enterprise-only GitHub host")
+	}
+}
+
+func TestOwnedCheckoutRejectsSymlinkOrJunctionReplacement(t *testing.T) {
+	source := createGitRepository(t)
+	service, err := New(Config{DataDirectory: t.TempDir()}, &memoryRegistry{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.UseRefresher(func(context.Context) error { return nil })
+	service.gitOverride = hostedGitOverride(source, "https://github.com/acme/example.git")
+	acquired, err := service.Acquire(context.Background(), Candidate{
+		Provider:      ProviderGitHub,
+		RemoteURL:     "https://github.com/acme/example.git",
+		DefaultBranch: "main",
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(acquired.CheckoutPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(source, acquired.CheckoutPath); err != nil {
+		t.Skipf("directory symlinks are unavailable: %v", err)
+	}
+	if _, err := service.Sync(context.Background(), acquired.ID); err == nil ||
+		!strings.Contains(err.Error(), "symbolic link or junction") {
+		t.Fatalf("symlinked checkout sync error = %v", err)
 	}
 }
 

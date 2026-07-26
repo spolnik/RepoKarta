@@ -61,7 +61,7 @@ type githubRepository struct {
 }
 
 func (s *Service) discoverGitHub(ctx context.Context, request DiscoverRequest) ([]Candidate, error) {
-	location, direct, err := providerLocation(request.Location, "github.com")
+	location, direct, err := providerLocation(request.Location, s.githubHost)
 	if err != nil {
 		return nil, err
 	}
@@ -92,7 +92,7 @@ func (s *Service) discoverGitHub(ctx context.Context, request DiscoverRequest) (
 		candidate := Candidate{
 			Provider:             ProviderGitHub,
 			ProviderRepositoryID: providerRepositoryID(repository.ID),
-			CanonicalID:          strings.ToLower("github.com/" + repository.FullName),
+			CanonicalID:          strings.ToLower(s.githubHost + "/" + repository.FullName),
 			Name:                 repository.Name,
 			Namespace:            strings.TrimSuffix(repository.FullName, "/"+repository.Name),
 			RemoteURL:            repository.CloneURL,
@@ -161,7 +161,7 @@ type gitlabRepository struct {
 }
 
 func (s *Service) discoverGitLab(ctx context.Context, request DiscoverRequest) ([]Candidate, error) {
-	location, direct, err := providerLocation(request.Location, "gitlab.com")
+	location, direct, err := providerLocation(request.Location, s.gitlabHost)
 	if err != nil {
 		return nil, err
 	}
@@ -197,7 +197,7 @@ func (s *Service) discoverGitLab(ctx context.Context, request DiscoverRequest) (
 		candidate := Candidate{
 			Provider:             ProviderGitLab,
 			ProviderRepositoryID: providerRepositoryID(repository.ID),
-			CanonicalID:          strings.ToLower("gitlab.com/" + repository.PathWithNamespace),
+			CanonicalID:          strings.ToLower(s.gitlabHost + "/" + repository.PathWithNamespace),
 			Name:                 repository.Name,
 			Namespace:            strings.TrimSuffix(repository.PathWithNamespace, "/"+repository.Name),
 			RemoteURL:            repository.HTTPURLToRepository,
@@ -329,7 +329,7 @@ func providerLocation(value, expectedHost string) (string, bool, error) {
 	}
 	direct := false
 	if parsed, err := url.Parse(value); err == nil && parsed.Host != "" {
-		if !strings.EqualFold(parsed.Hostname(), expectedHost) {
+		if !strings.EqualFold(parsed.Host, expectedHost) {
 			return "", false, fmt.Errorf("expected a %s URL", expectedHost)
 		}
 		value = strings.Trim(parsed.Path, "/")

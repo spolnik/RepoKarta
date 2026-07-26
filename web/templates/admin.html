@@ -46,7 +46,7 @@
       <div class="mb-8">
         <p class="mb-2 text-xs font-semibold uppercase tracking-[0.24em] text-emerald-400">Deployment security</p>
         <h1 class="text-3xl font-semibold tracking-[-0.04em] text-white">Authentication</h1>
-        <p class="mt-3 max-w-3xl text-sm leading-6 text-ink-soft">Choose how application requests are authenticated. The administrator panel always uses the startup-only bootstrap credentials.</p>
+        <p class="mt-3 max-w-3xl text-sm leading-6 text-ink-soft">Choose how application requests are authenticated. Loopback-local mode opens this console for the local administrator; shared modes retain the startup-only bootstrap boundary.</p>
       </div>
 
       {{if .Notice}}<p class="mb-6 rounded-lg border border-emerald-400/30 bg-emerald-400/10 px-4 py-3 text-sm text-emerald-100" role="status">{{.Notice}}</p>{{end}}
@@ -239,7 +239,7 @@
             <label class="flex items-center gap-2"><input type="checkbox" name="include_forks" value="true" {{if .IncludeForks}}checked{{end}}>Include forks</label>
             <label class="flex items-center gap-2"><input type="checkbox" name="include_archived" value="true" {{if .IncludeArchived}}checked{{end}}>Include archived</label>
           </div>
-          <p class="text-xs leading-5 text-ink-faint">The reference names an environment variable available to RepoKarta; its token value is used only for provider API requests and is never written to SQLite, logs, diagnostics, forms, or Git remotes. Git cloning uses the configured credential helper.</p>
+          <p class="text-xs leading-5 text-ink-faint">The reference names an environment variable available to RepoKarta. Its token is supplied ephemerally to provider API and HTTPS Git operations, and is never written to SQLite, logs, diagnostics, forms, Git remotes, or command arguments.</p>
           <div class="flex justify-end"><button class="secondary-button" type="submit">Preview discovery</button></div>
         </form>
 

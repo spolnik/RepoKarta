@@ -148,6 +148,7 @@
         {{end}}
       </section>
 
+      {{if .CanManage}}
       <div class="insights-columns insights-operations">
         <section class="insights-panel">
           <header><div><p>Trusted evidence</p><h2>Import a report</h2></div><span>32 MiB maximum</span></header>
@@ -189,6 +190,12 @@
           {{end}}
         </section>
       </div>
+      {{else}}
+      <section class="insights-panel">
+        <header><div><p>Read-only access</p><h2>Evidence management</h2></div><span>Maintainer permission required</span></header>
+        <p class="insights-panel-copy">You can inspect current and historical evidence, but importing reports and deriving new indicators requires the knowledge-maintainer or administrator role.</p>
+      </section>
+      {{end}}
 
       {{if .CanAdminister}}
       <section class="insights-panel">

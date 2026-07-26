@@ -27,7 +27,7 @@
               Declared packages are extracted from committed manifests. Registry freshness is kept separate and remains visibly unchecked until observed.
             </p>
           </div>
-          <form action="/dependencies" method="get" class="flex min-w-72 items-end gap-3">
+          <form action="/dependencies" method="get" class="grid min-w-72 gap-3 sm:grid-cols-2 lg:grid-cols-5">
             <label class="filter-field min-w-64 flex-1">
               <span>Repository scope</span>
               <select name="repository">
@@ -37,7 +37,11 @@
                 {{end}}
               </select>
             </label>
-            <button class="search-button px-5 py-3" type="submit">Apply</button>
+            <label class="filter-field lg:col-span-2"><span>Package, manifest, or repository</span><input name="query" value="{{.Inventory.Query}}" placeholder="Search declarations"></label>
+            <label class="filter-field"><span>Ecosystem</span><select name="ecosystem"><option value="">All ecosystems</option><option value="go" {{if eq .Inventory.Ecosystem "go"}}selected{{end}}>Go</option><option value="npm" {{if eq .Inventory.Ecosystem "npm"}}selected{{end}}>npm</option><option value="maven" {{if eq .Inventory.Ecosystem "maven"}}selected{{end}}>Maven</option><option value="cargo" {{if eq .Inventory.Ecosystem "cargo"}}selected{{end}}>Cargo</option><option value="pypi" {{if eq .Inventory.Ecosystem "pypi"}}selected{{end}}>PyPI</option></select></label>
+            <label class="filter-field"><span>Resolution</span><select name="resolution"><option value="">All resolutions</option><option value="exact" {{if eq .Inventory.Resolution "exact"}}selected{{end}}>Exact</option><option value="constraint" {{if eq .Inventory.Resolution "constraint"}}selected{{end}}>Constraint</option><option value="variable" {{if eq .Inventory.Resolution "variable"}}selected{{end}}>Variable</option><option value="unresolved" {{if eq .Inventory.Resolution "unresolved"}}selected{{end}}>Unresolved</option></select></label>
+            <label class="filter-field"><span>Rows per page</span><select name="limit"><option value="50" {{if eq .Inventory.Limit 50}}selected{{end}}>50</option><option value="100" {{if eq .Inventory.Limit 100}}selected{{end}}>100</option><option value="250" {{if eq .Inventory.Limit 250}}selected{{end}}>250</option><option value="500" {{if eq .Inventory.Limit 500}}selected{{end}}>500</option></select></label>
+            <button class="search-button px-5 py-3" type="submit">Apply filters</button>
           </form>
         </div>
 
@@ -70,9 +74,9 @@
           <div class="flex items-center justify-between border-b border-white/[0.08] px-5 py-4">
             <div>
               <h2 class="font-semibold text-white">Declared dependencies</h2>
-              <p class="mt-1 text-xs text-ink-faint">Freshness checks do not alter manifests or lockfiles.</p>
+              <p class="mt-1 text-xs text-ink-faint">Showing {{.Inventory.ReturnedCount}} of {{.Inventory.DependencyCount}} matching declarations{{if ne .Inventory.TotalCount .Inventory.DependencyCount}} from {{.Inventory.TotalCount}} total{{end}}. Freshness checks do not alter manifests or lockfiles.</p>
             </div>
-            <a class="app-nav-link" href="/api/dependencies{{if .SelectedRepositoryID}}?repository={{.SelectedRepositoryID}}{{end}}">JSON API</a>
+            <a class="app-nav-link" href="{{.APIURL}}">JSON API</a>
           </div>
           {{if .Inventory.Declarations}}
           <div class="overflow-x-auto">
@@ -114,6 +118,13 @@
           </div>
           {{else}}
           <p class="px-5 py-10 text-center text-sm text-ink-soft">No normalized dependency declarations were captured for this scope.</p>
+          {{end}}
+          {{if or .PreviousURL .NextURL}}
+          <nav class="flex items-center justify-between border-t border-white/[0.08] px-5 py-4" aria-label="Dependency inventory pages">
+            {{if .PreviousURL}}<a class="app-nav-link" href="{{.PreviousURL}}">Previous page</a>{{else}}<span></span>{{end}}
+            <span class="text-xs text-ink-faint">Rows {{.FirstRow}}–{{.LastRow}} of {{.Inventory.DependencyCount}}</span>
+            {{if .NextURL}}<a class="app-nav-link" href="{{.NextURL}}">Next page</a>{{else}}<span></span>{{end}}
+          </nav>
           {{end}}
         </div>
       </section>

@@ -12,6 +12,8 @@ import (
 	"github.com/spolnik/RepoKarta/internal/insights"
 )
 
+const maximumInsightRunsPerRepository = 1000
+
 func (s *Store) SaveInsightRun(ctx context.Context, run insights.Run, observations []insights.Observation) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -222,15 +224,32 @@ func (s *Store) DeleteOldInsightRuns(ctx context.Context, repositoryID int64, to
 	if keep < 1 {
 		keep = 1
 	}
-	_, err := s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `
 DELETE FROM insight_runs
 WHERE repository_id = ? AND lower(tool) = lower(?) AND id NOT IN (
     SELECT id FROM insight_runs
     WHERE repository_id = ? AND lower(tool) = lower(?)
     ORDER BY observed_at DESC, id DESC
     LIMIT ?
-)`, repositoryID, tool, repositoryID, tool, keep)
-	return err
+)`, repositoryID, tool, repositoryID, tool, keep); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+DELETE FROM insight_runs
+WHERE repository_id = ? AND id NOT IN (
+    SELECT id FROM insight_runs
+    WHERE repository_id = ?
+    ORDER BY observed_at DESC, id DESC
+    LIMIT ?
+)`, repositoryID, repositoryID, maximumInsightRunsPerRepository); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) ListInsightThresholds(ctx context.Context, repositoryID int64) ([]insights.Threshold, error) {

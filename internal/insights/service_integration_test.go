@@ -95,6 +95,53 @@ func TestImportReconcilesIndexedPathsAndQuarantinesOtherRevisions(t *testing.T) 
 	}
 }
 
+func TestQueryMarksEvidenceStaleAfterIndexedRevisionAdvances(t *testing.T) {
+	ctx := context.Background()
+	storage, repository, revision := insightRepository(t)
+	defer storage.Close()
+	service := insights.New(storage, "http://127.0.0.1:7331")
+	if _, err := service.Import(ctx, insights.ImportRequest{
+		RepositoryID: repository.ID,
+		Revision:     revision,
+		Format:       "lcov",
+		Content:      []byte("SF:internal/service.go\nLF:10\nLH:8\nend_of_record\n"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repository.Path, "NEW.md"), []byte("new revision\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repository.Path, "add", "NEW.md")
+	runGit(t, repository.Path, "commit", "-m", "advance indexed revision")
+	nextRevision := strings.TrimSpace(runGit(t, repository.Path, "rev-parse", "HEAD"))
+	if err := storage.UpdateIndexState(ctx, repository.ID, "ready", nextRevision, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := service.Query(ctx, insights.Filter{RepositoryID: repository.ID, Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Current) != 0 || len(result.History) == 0 || len(result.Warnings) == 0 {
+		t.Fatalf("stale current/history/warnings = %d/%d/%#v", len(result.Current), len(result.History), result.Warnings)
+	}
+	if len(result.Runs) != 1 || result.Runs[0].Status != insights.StatusStale ||
+		!strings.Contains(result.Runs[0].StatusMessage, nextRevision[:8]) {
+		t.Fatalf("stale runs = %#v", result.Runs)
+	}
+
+	historical, err := service.Query(ctx, insights.Filter{
+		RepositoryID: repository.ID, Revision: revision, Limit: 100,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(historical.Current) == 0 || len(historical.Runs) != 1 ||
+		historical.Runs[0].Status != insights.StatusStale {
+		t.Fatalf("explicit historical revision = %#v", historical)
+	}
+}
+
 func TestDeriveReadsCommittedSourceWithoutRunningRepositoryScripts(t *testing.T) {
 	ctx := context.Background()
 	storage, repository, _ := insightRepository(t)

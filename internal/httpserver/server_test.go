@@ -356,6 +356,41 @@ type testStore struct {
 	repositories []catalog.Repository
 }
 
+func TestLocalAdministratorOpensAdminConsoleWithoutBootstrapCredentials(t *testing.T) {
+	settingsStore := &testSettingsStore{values: make(map[string]string)}
+	securityManager, err := security.New(context.Background(), settingsStore, security.Config{
+		Address:       "127.0.0.1:7331",
+		DataDirectory: t.TempDir(),
+		Initial:       security.Settings{Mode: security.ModeLocal},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := New(
+		Config{Address: "127.0.0.1:7331", Version: "test", Security: securityManager},
+		codeintel.New(testStore{}, testSearcher{}, "http://127.0.0.1:7331"),
+		testRefresher{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7331/admin", nil)
+	response := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || len(response.Result().Cookies()) != 1 ||
+		strings.Contains(response.Body.String(), security.ErrAdminUnavailable.Error()) ||
+		!strings.Contains(response.Body.String(), "Authentication") {
+		t.Fatalf("default local admin status = %d, cookies = %d, body = %s",
+			response.Code, len(response.Result().Cookies()), response.Body.String())
+	}
+	request = httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7331/", nil)
+	response = httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `href="/admin"`) {
+		t.Fatalf("local administrator navigation status = %d, body = %s", response.Code, response.Body.String())
+	}
+}
+
 func TestAdministratorCanEnableAllowedOpenMode(t *testing.T) {
 	settingsStore := &testSettingsStore{values: make(map[string]string)}
 	securityManager, err := security.New(context.Background(), settingsStore, security.Config{
@@ -385,20 +420,9 @@ func TestAdministratorCanEnableAllowedOpenMode(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7331/admin", nil)
 	response := httptest.NewRecorder()
 	server.server.Handler.ServeHTTP(response, request)
-	if response.Code != http.StatusSeeOther || response.Header().Get("Location") != "/admin/login" {
-		t.Fatalf("anonymous admin response = %d, location %q", response.Code, response.Header().Get("Location"))
-	}
-
-	loginForm := url.Values{
-		"username": {"bootstrap-admin"},
-		"password": {"correct horse battery staple"},
-	}
-	request = httptest.NewRequest(http.MethodPost, "http://127.0.0.1:7331/admin/login", strings.NewReader(loginForm.Encode()))
-	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	response = httptest.NewRecorder()
-	server.server.Handler.ServeHTTP(response, request)
-	if response.Code != http.StatusSeeOther || len(response.Result().Cookies()) != 1 {
-		t.Fatalf("login response = %d, cookies %d, body %q", response.Code, len(response.Result().Cookies()), response.Body.String())
+	if response.Code != http.StatusOK || len(response.Result().Cookies()) != 1 ||
+		!strings.Contains(response.Body.String(), "Cloudflare Access") {
+		t.Fatalf("local admin response = %d, cookies %d, body %q", response.Code, len(response.Result().Cookies()), response.Body.String())
 	}
 	adminCookie := response.Result().Cookies()[0]
 
@@ -853,6 +877,8 @@ func TestDependencyWorkspaceAndAPIExposeNormalizedDeclarations(t *testing.T) {
 		`^16.4.1`,
 		`Not checked`,
 		`web/package.json:14`,
+		`Rows per page`,
+		`Showing 1 of 1 matching declarations`,
 	} {
 		if !strings.Contains(pageResponse.Body.String(), expected) {
 			t.Fatalf("dependency page does not contain %q: %s", expected, pageResponse.Body.String())
@@ -867,6 +893,8 @@ func TestDependencyWorkspaceAndAPIExposeNormalizedDeclarations(t *testing.T) {
 	}
 	for _, expected := range []string{
 		`"dependency_count":1`,
+		`"returned_count":1`,
+		`"limit":100`,
 		`"ecosystem":"npm"`,
 		`"package":"marked"`,
 		`"declared":"^16.4.1"`,
@@ -876,6 +904,12 @@ func TestDependencyWorkspaceAndAPIExposeNormalizedDeclarations(t *testing.T) {
 		if !strings.Contains(apiResponse.Body.String(), expected) {
 			t.Fatalf("dependency API does not contain %q: %s", expected, apiResponse.Body.String())
 		}
+	}
+	invalidRequest := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7331/api/dependencies?limit=501", nil)
+	invalidResponse := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(invalidResponse, invalidRequest)
+	if invalidResponse.Code != http.StatusBadRequest {
+		t.Fatalf("oversized dependency page status = %d, body = %s", invalidResponse.Code, invalidResponse.Body.String())
 	}
 }
 

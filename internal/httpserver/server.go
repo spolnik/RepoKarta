@@ -180,6 +180,7 @@ type pageData struct {
 	AuthMode            string
 	UserLabel           string
 	AdminEnabled        bool
+	CanAdminister       bool
 	MCP                 mcpPageData
 }
 
@@ -247,6 +248,11 @@ type dependencyPageData struct {
 	pageData
 	Inventory            dependencies.Inventory
 	SelectedRepositoryID int64
+	PreviousURL          string
+	NextURL              string
+	APIURL               string
+	FirstRow             int
+	LastRow              int
 }
 
 // New builds the local HTTP server and parses embedded templates.
@@ -417,15 +423,23 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 	}
 	if server.insights != nil {
 		mux.HandleFunc("GET /insights", server.insightsPage)
-		mux.HandleFunc("POST /insights/import", server.importInsights)
-		mux.HandleFunc("POST /insights/derive", server.deriveInsights)
+		mux.HandleFunc("POST /insights/import", server.controlled(
+			identity.PermissionManageArtifacts, "insight.import", "insight-run", server.importInsights,
+		))
+		mux.HandleFunc("POST /insights/derive", server.controlled(
+			identity.PermissionManageArtifacts, "insight.derive", "insight-run", server.deriveInsights,
+		))
 		mux.HandleFunc("POST /insights/sonar/sync", server.syncSonar)
 		mux.HandleFunc("POST /insights/sonar", server.configureSonar)
 		mux.HandleFunc("POST /insights/threshold", server.setInsightThreshold)
 		mux.HandleFunc("GET /api/insights", server.apiInsights)
 		mux.HandleFunc("GET /api/insights/compare", server.compareInsights)
-		mux.HandleFunc("POST /api/insights/import", server.importInsights)
-		mux.HandleFunc("POST /api/insights/derive", server.deriveInsights)
+		mux.HandleFunc("POST /api/insights/import", server.controlled(
+			identity.PermissionManageArtifacts, "insight.import", "insight-run", server.importInsights,
+		))
+		mux.HandleFunc("POST /api/insights/derive", server.controlled(
+			identity.PermissionManageArtifacts, "insight.derive", "insight-run", server.deriveInsights,
+		))
 		mux.HandleFunc("GET /api/insights/thresholds", server.insightThresholds)
 		mux.HandleFunc("PUT /api/insights/thresholds", server.setInsightThreshold)
 		mux.HandleFunc("GET /api/insights/sonar", server.sonarConnections)
@@ -1035,6 +1049,11 @@ func (s *Server) dependencyPage(response http.ResponseWriter, request *http.Requ
 		http.Error(response, "Invalid repository", http.StatusBadRequest)
 		return
 	}
+	options, err := dependencyOptions(request)
+	if err != nil {
+		http.Error(response, err.Error(), http.StatusBadRequest)
+		return
+	}
 	snapshot, err := s.maps.Snapshot(request.Context(), repositoryID, false)
 	if err != nil {
 		slog.Error("build dependency inventory", "repository_id", repositoryID, "error", err)
@@ -1042,10 +1061,29 @@ func (s *Server) dependencyPage(response http.ResponseWriter, request *http.Requ
 		return
 	}
 	data.ActivePage = "dependencies"
+	inventory := dependencies.BuildPage(snapshot, options)
+	previousURL := ""
+	if inventory.Offset > 0 {
+		previousURL = dependencyURL("/dependencies", repositoryID, options, max(0, inventory.Offset-inventory.Limit))
+	}
+	nextURL := ""
+	if inventory.HasMore {
+		nextURL = dependencyURL("/dependencies", repositoryID, options, inventory.Offset+inventory.ReturnedCount)
+	}
+	firstRow, lastRow := 0, 0
+	if inventory.ReturnedCount > 0 {
+		firstRow = inventory.Offset + 1
+		lastRow = inventory.Offset + inventory.ReturnedCount
+	}
 	s.render(response, "dependencies", dependencyPageData{
 		pageData:             data,
-		Inventory:            dependencies.Build(snapshot),
+		Inventory:            inventory,
 		SelectedRepositoryID: repositoryID,
+		PreviousURL:          previousURL,
+		NextURL:              nextURL,
+		APIURL:               dependencyURL("/api/dependencies", repositoryID, options, inventory.Offset),
+		FirstRow:             firstRow,
+		LastRow:              lastRow,
 	})
 }
 
@@ -1213,13 +1251,67 @@ func (s *Server) apiDependencies(response http.ResponseWriter, request *http.Req
 		writeAPIError(response, http.StatusBadRequest, err)
 		return
 	}
+	options, err := dependencyOptions(request)
+	if err != nil {
+		writeAPIError(response, http.StatusBadRequest, err)
+		return
+	}
 	snapshot, err := s.maps.Snapshot(request.Context(), repositoryID, false)
 	if err != nil {
 		slog.Error("build dependency inventory", "repository_id", repositoryID, "error", err)
 		writeAPIError(response, http.StatusInternalServerError, errors.New("dependency inventory could not be built"))
 		return
 	}
-	writeJSON(response, http.StatusOK, dependencies.Build(snapshot))
+	writeJSON(response, http.StatusOK, dependencies.BuildPage(snapshot, options))
+}
+
+func dependencyOptions(request *http.Request) (dependencies.Options, error) {
+	query := request.URL.Query()
+	options := dependencies.Options{
+		Query:      query.Get("query"),
+		Ecosystem:  query.Get("ecosystem"),
+		Resolution: query.Get("resolution"),
+		Limit:      dependencies.DefaultPageLimit,
+	}
+	if len(options.Query) > 200 || len(options.Ecosystem) > 50 || len(options.Resolution) > 50 {
+		return dependencies.Options{}, errors.New("dependency filters are too long")
+	}
+	if value := strings.TrimSpace(query.Get("offset")); value != "" {
+		offset, err := strconv.Atoi(value)
+		if err != nil || offset < 0 {
+			return dependencies.Options{}, errors.New("offset must be a non-negative integer")
+		}
+		options.Offset = offset
+	}
+	if value := strings.TrimSpace(query.Get("limit")); value != "" {
+		limit, err := strconv.Atoi(value)
+		if err != nil || limit < 1 || limit > dependencies.MaximumPageLimit {
+			return dependencies.Options{}, fmt.Errorf("limit must be between 1 and %d", dependencies.MaximumPageLimit)
+		}
+		options.Limit = limit
+	}
+	return options, nil
+}
+
+func dependencyURL(base string, repositoryID int64, options dependencies.Options, offset int) string {
+	query := url.Values{}
+	if repositoryID > 0 {
+		query.Set("repository", strconv.FormatInt(repositoryID, 10))
+	}
+	if value := strings.TrimSpace(options.Query); value != "" {
+		query.Set("query", value)
+	}
+	if value := strings.TrimSpace(options.Ecosystem); value != "" {
+		query.Set("ecosystem", value)
+	}
+	if value := strings.TrimSpace(options.Resolution); value != "" {
+		query.Set("resolution", value)
+	}
+	query.Set("limit", strconv.Itoa(options.Limit))
+	if offset > 0 {
+		query.Set("offset", strconv.Itoa(offset))
+	}
+	return base + "?" + query.Encode()
 }
 
 func (s *Server) exportMap(response http.ResponseWriter, request *http.Request) {
@@ -1474,6 +1566,7 @@ func (s *Server) pageData(ctx context.Context) (pageData, error) {
 		data.AuthMode = string(s.security.Mode())
 		data.AdminEnabled = s.security.AdminEnabled()
 		if principal, ok := security.PrincipalFromContext(ctx); ok {
+			data.CanAdminister = principal.Admin
 			data.UserLabel = principal.Name
 			if data.UserLabel == "" {
 				data.UserLabel = principal.Email

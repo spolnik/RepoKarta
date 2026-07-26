@@ -46,6 +46,10 @@ type Config struct {
 	SCIMToken              string
 	Security               security.Settings
 	RepositorySyncInterval time.Duration
+	AcquisitionGitHubAPI   string
+	AcquisitionGitLabAPI   string
+	AcquisitionGitHubHost  string
+	AcquisitionGitLabHost  string
 }
 
 func DefaultConfig() (Config, error) {
@@ -75,7 +79,11 @@ func DefaultConfig() (Config, error) {
 			SAMLMetadataURL:      strings.TrimSpace(os.Getenv("REPOKARTA_SAML_METADATA_URL")),
 			SAMLEntityID:         strings.TrimSpace(os.Getenv("REPOKARTA_SAML_ENTITY_ID")),
 		},
-		AllowOpen: envBool("REPOKARTA_ALLOW_OPEN"),
+		AllowOpen:             envBool("REPOKARTA_ALLOW_OPEN"),
+		AcquisitionGitHubAPI:  strings.TrimSpace(os.Getenv("REPOKARTA_GITHUB_API")),
+		AcquisitionGitLabAPI:  strings.TrimSpace(os.Getenv("REPOKARTA_GITLAB_API")),
+		AcquisitionGitHubHost: strings.TrimSpace(os.Getenv("REPOKARTA_GITHUB_HOST")),
+		AcquisitionGitLabHost: strings.TrimSpace(os.Getenv("REPOKARTA_GITLAB_HOST")),
 	}, nil
 }
 
@@ -139,6 +147,10 @@ func Run(ctx context.Context, cfg Config) error {
 	acquisitions, err := acquisition.New(acquisition.Config{
 		DataDirectory: cfg.DataDirectory,
 		Version:       cfg.Version,
+		GitHubAPI:     cfg.AcquisitionGitHubAPI,
+		GitLabAPI:     cfg.AcquisitionGitLabAPI,
+		GitHubHost:    cfg.AcquisitionGitHubHost,
+		GitLabHost:    cfg.AcquisitionGitLabHost,
 	}, database)
 	if err != nil {
 		return fmt.Errorf("initialize repository acquisition: %w", err)

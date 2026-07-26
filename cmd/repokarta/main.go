@@ -17,7 +17,7 @@ import (
 	"github.com/spolnik/RepoKarta/internal/security"
 )
 
-var version = "0.45.0-dev"
+var version = "0.46.0-dev"
 
 type stringList []string
 
@@ -101,6 +101,10 @@ func serve(args []string) error {
 	samlMetadataURL := flags.String("saml-metadata-url", defaults.Security.SAMLMetadataURL, "SAML identity-provider metadata URL")
 	samlEntityID := flags.String("saml-entity-id", defaults.Security.SAMLEntityID, "optional SAML service-provider entity ID")
 	repositorySyncInterval := flags.Duration("repository-sync-interval", defaults.RepositorySyncInterval, "automatic managed-repository sync interval; zero disables scheduling")
+	acquisitionGitHubAPI := flags.String("github-api", defaults.AcquisitionGitHubAPI, "GitHub REST API base URL used for repository discovery")
+	acquisitionGitLabAPI := flags.String("gitlab-api", defaults.AcquisitionGitLabAPI, "GitLab REST API base URL used for repository discovery")
+	acquisitionGitHubHost := flags.String("github-host", defaults.AcquisitionGitHubHost, "allowed GitHub HTTPS Git host; defaults to github.com")
+	acquisitionGitLabHost := flags.String("gitlab-host", defaults.AcquisitionGitLabHost, "allowed GitLab HTTPS Git host; defaults to gitlab.com")
 	var excludes stringList
 	flags.Var(&excludes, "exclude", "directory to exclude; repeat for multiple directories")
 	if err := flags.Parse(args); err != nil {
@@ -156,6 +160,10 @@ func serve(args []string) error {
 		AdminPassword:          adminPassword,
 		SCIMToken:              scimToken,
 		RepositorySyncInterval: *repositorySyncInterval,
+		AcquisitionGitHubAPI:   *acquisitionGitHubAPI,
+		AcquisitionGitLabAPI:   *acquisitionGitLabAPI,
+		AcquisitionGitHubHost:  *acquisitionGitHubHost,
+		AcquisitionGitLabHost:  *acquisitionGitLabHost,
 		Security: security.Settings{
 			Mode:                 security.Mode(*authMode),
 			PublicURL:            *publicURL,

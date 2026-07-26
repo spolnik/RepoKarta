@@ -3,6 +3,7 @@ package acquisition
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -44,6 +45,8 @@ type Config struct {
 	HTTPClient    *http.Client
 	GitHubAPI     string
 	GitLabAPI     string
+	GitHubHost    string
+	GitLabHost    string
 	GitTimeout    time.Duration
 }
 
@@ -59,11 +62,14 @@ type Service struct {
 	httpClient     *http.Client
 	githubAPI      string
 	gitlabAPI      string
+	githubHost     string
+	gitlabHost     string
 
-	refreshMu   sync.RWMutex
-	refresh     func(context.Context) error
-	operation   sync.Mutex
-	gitOverride func(context.Context, ...string) (string, error)
+	refreshMu              sync.RWMutex
+	refresh                func(context.Context) error
+	operation              sync.Mutex
+	gitOverride            func(context.Context, ...string) (string, error)
+	gitEnvironmentOverride func(context.Context, map[string]string, ...string) (string, error)
 }
 
 // New creates the RepoKarta-owned repository directories and service.
@@ -104,6 +110,14 @@ func New(config Config, registry Registry) (*Service, error) {
 	}
 	if service.gitlabAPI == "" {
 		service.gitlabAPI = "https://gitlab.com/api/v4"
+	}
+	service.githubHost, err = configuredGitHost(config.GitHubHost, "github.com")
+	if err != nil {
+		return nil, fmt.Errorf("configure GitHub host: %w", err)
+	}
+	service.gitlabHost, err = configuredGitHost(config.GitLabHost, "gitlab.com")
+	if err != nil {
+		return nil, fmt.Errorf("configure GitLab host: %w", err)
 	}
 	for _, directory := range []string{service.repositoryRoot, service.trashRoot, service.hooksRoot} {
 		if err := os.MkdirAll(directory, 0o700); err != nil {
@@ -252,7 +266,7 @@ func (s *Service) Acquire(ctx context.Context, candidate Candidate, credentialRe
 	if candidate.Excluded {
 		return Repository{}, errors.New("excluded discovery candidates cannot be acquired")
 	}
-	normalized, err := normalizeCandidate(candidate)
+	normalized, err := normalizeCandidateForHosts(candidate, s.githubHost, s.gitlabHost)
 	if err != nil {
 		return Repository{}, err
 	}
@@ -367,7 +381,7 @@ func (s *Service) clone(ctx context.Context, record Repository) (Repository, err
 		arguments = append(arguments, "--branch", branch, "--single-branch")
 	}
 	arguments = append(arguments, "--", record.RemoteURL, temporary)
-	if _, err := s.runGit(ctx, arguments...); err != nil {
+	if _, err := s.runGitWithCredential(ctx, record, arguments...); err != nil {
 		return record, err
 	}
 	if _, err := s.runGit(ctx, "-C", temporary, "config", "core.hooksPath", s.hooksRoot); err != nil {
@@ -446,7 +460,7 @@ func (s *Service) syncOwned(ctx context.Context, record Repository) (Repository,
 	if canonicalRemoteID(configuredRemote) != strings.ToLower(record.CanonicalID) {
 		return record, errors.New("owned checkout origin no longer matches its approved canonical repository identity")
 	}
-	if _, err := s.runGit(ctx,
+	if _, err := s.runGitWithCredential(ctx, record,
 		"-c", "protocol.file.allow=never",
 		"-c", "protocol.ext.allow=never",
 		"-c", "core.hooksPath="+s.hooksRoot,
@@ -629,17 +643,34 @@ func (s *Service) audit(ctx context.Context, event Event) error {
 }
 
 func (s *Service) runGit(ctx context.Context, arguments ...string) (string, error) {
+	return s.runGitEnvironment(ctx, nil, arguments...)
+}
+
+func (s *Service) runGitWithCredential(ctx context.Context, record Repository, arguments ...string) (string, error) {
+	environment, err := gitCredentialEnvironment(record)
+	if err != nil {
+		return "", err
+	}
+	return s.runGitEnvironment(ctx, environment, arguments...)
+}
+
+func (s *Service) runGitEnvironment(ctx context.Context, environment map[string]string, arguments ...string) (string, error) {
+	if s.gitEnvironmentOverride != nil {
+		return s.gitEnvironmentOverride(ctx, environment, arguments...)
+	}
 	if s.gitOverride != nil {
 		return s.gitOverride(ctx, arguments...)
 	}
 	gitContext, cancel := context.WithTimeout(ctx, s.gitTimeout)
 	defer cancel()
 	command := exec.CommandContext(gitContext, s.gitCommand, arguments...)
-	command.Env = append(os.Environ(),
-		"GIT_TERMINAL_PROMPT=0",
-		"GIT_OPTIONAL_LOCKS=0",
-		"GIT_CONFIG_NOSYSTEM=0",
-	)
+	if environment == nil {
+		environment = make(map[string]string)
+	}
+	environment["GIT_TERMINAL_PROMPT"] = "0"
+	environment["GIT_OPTIONAL_LOCKS"] = "0"
+	environment["GIT_CONFIG_NOSYSTEM"] = "0"
+	command.Env = environmentWithOverrides(environment)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		message := boundedError(errors.New(strings.TrimSpace(string(output))))
@@ -654,6 +685,52 @@ func (s *Service) runGit(ctx context.Context, arguments ...string) (string, erro
 	return strings.TrimSpace(string(output)), nil
 }
 
+func gitCredentialEnvironment(record Repository) (map[string]string, error) {
+	credentialRef := strings.TrimSpace(record.CredentialRef)
+	if credentialRef == "" {
+		return nil, nil
+	}
+	if err := validateCredentialRef(credentialRef); err != nil {
+		return nil, err
+	}
+	token := strings.TrimSpace(os.Getenv(credentialRef))
+	if token == "" {
+		return nil, fmt.Errorf("credential reference %q is not available in the RepoKarta environment", credentialRef)
+	}
+	remote, err := urlForRemote(record.RemoteURL)
+	if err != nil || remote.Scheme != "https" || remote.Host == "" {
+		return nil, errors.New("credential-backed Git operations require an HTTPS remote")
+	}
+	username := "oauth2"
+	if record.Provider == ProviderGitHub {
+		username = "x-access-token"
+	}
+	authorization := base64.StdEncoding.EncodeToString([]byte(username + ":" + token))
+	return map[string]string{
+		"GIT_CONFIG_COUNT":   "1",
+		"GIT_CONFIG_KEY_0":   "http." + remote.Scheme + "://" + remote.Host + "/.extraHeader",
+		"GIT_CONFIG_VALUE_0": "Authorization: Basic " + authorization,
+	}, nil
+}
+
+func environmentWithOverrides(overrides map[string]string) []string {
+	blocked := make(map[string]struct{}, len(overrides))
+	for key := range overrides {
+		blocked[strings.ToUpper(key)] = struct{}{}
+	}
+	environment := make([]string, 0, len(os.Environ())+len(overrides))
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		if _, exists := blocked[strings.ToUpper(key)]; !exists {
+			environment = append(environment, entry)
+		}
+	}
+	for key, value := range overrides {
+		environment = append(environment, key+"="+value)
+	}
+	return environment
+}
+
 func safeGitAction(arguments []string) string {
 	for _, argument := range arguments {
 		switch argument {
@@ -665,6 +742,10 @@ func safeGitAction(arguments []string) string {
 }
 
 func normalizeCandidate(candidate Candidate) (Candidate, error) {
+	return normalizeCandidateForHosts(candidate, "github.com", "gitlab.com")
+}
+
+func normalizeCandidateForHosts(candidate Candidate, githubHost, gitlabHost string) (Candidate, error) {
 	candidate.Provider = strings.ToLower(strings.TrimSpace(candidate.Provider))
 	candidate.Name = strings.TrimSpace(candidate.Name)
 	candidate.Namespace = strings.Trim(strings.TrimSpace(candidate.Namespace), "/")
@@ -683,9 +764,12 @@ func normalizeCandidate(candidate Candidate) (Candidate, error) {
 		candidate.DefaultBranch = repository.DefaultRevision
 		candidate.Visibility = "local"
 	case ProviderGitHub, ProviderGitLab:
-		expectedHost := candidate.Provider + ".com"
+		expectedHost := gitlabHost
+		if candidate.Provider == ProviderGitHub {
+			expectedHost = githubHost
+		}
 		parsed, err := urlForRemote(candidate.RemoteURL)
-		if err != nil || !strings.EqualFold(parsed.Hostname(), expectedHost) {
+		if err != nil || !strings.EqualFold(parsed.Host, expectedHost) {
 			return Candidate{}, fmt.Errorf("%s acquisition requires an HTTPS %s remote", candidate.Provider, expectedHost)
 		}
 		identity := strings.TrimSuffix(strings.Trim(parsed.Path, "/"), ".git")
@@ -704,6 +788,22 @@ func normalizeCandidate(candidate Candidate) (Candidate, error) {
 		return Candidate{}, errors.New("repository name is required")
 	}
 	return candidate, nil
+}
+
+func configuredGitHost(value, fallback string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fallback, nil
+	}
+	if !strings.Contains(value, "://") {
+		value = "https://" + value
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil ||
+		(parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", errors.New("host must be a hostname or absolute HTTPS origin without a path")
+	}
+	return strings.ToLower(parsed.Host), nil
 }
 
 func urlForRemote(value string) (*url.URL, error) {
@@ -841,6 +941,16 @@ func (s *Service) validateOwnedCheckout(record Repository) error {
 	}
 	if !info.IsDir() {
 		return errors.New("owned checkout path is not a directory")
+	}
+	resolved, err := filepath.EvalSymlinks(record.CheckoutPath)
+	if err != nil {
+		return fmt.Errorf("resolve owned checkout: %w", err)
+	}
+	if !samePath(resolved, record.CheckoutPath) {
+		return errors.New("owned checkout path must not be a symbolic link or junction")
+	}
+	if err := validateContainedPath(s.repositoryRoot, resolved, false); err != nil {
+		return fmt.Errorf("resolved owned checkout: %w", err)
 	}
 	return nil
 }

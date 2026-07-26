@@ -189,7 +189,8 @@ Open `/insights` to import trusted CI reports, derive bounded committed-source
 indicators, compare stored revisions, and inspect monitoring state. Every
 upload must name the exact Git revision it analyzed. A report that does not
 match the indexed snapshot is retained as quarantined evidence and is excluded
-from default current-value queries.
+from default current-value queries. When the indexed revision later advances,
+older runs become explicitly stale and their observations move to history.
 
 The read-only query endpoints are:
 
@@ -200,13 +201,18 @@ The read-only query endpoints are:
 - `GET /api/insights/thresholds` for advisory threshold configuration and
   status.
 
-Authorized repository viewers can upload a report with
+Knowledge maintainers and administrators can upload a report with
 `POST /api/insights/import` or request bounded committed-source indicators with
 `POST /api/insights/derive`. Administrators configure advisory thresholds and
 an externally managed SonarQube Community Build through the
 `/api/insights/sonar` endpoints. Sonar tokens are read from the configured
 environment-variable name at poll time; their values are never stored.
 RepoKarta does not include a local test or scanner execution endpoint.
+
+Open `/dependencies` for the commit-pinned declaration inventory. Package,
+manifest, repository, ecosystem, and resolution filters are evaluated before
+returning a bounded page. Both the HTML workspace and `/api/dependencies`
+default to 100 declarations per page and reject limits above 500.
 
 ## Deployment authentication
 
@@ -223,9 +229,11 @@ four explicit modes:
 - `open`: shared access without user authentication. This mode is unavailable
   unless the service starts with `-allow-open=true`.
 
-The administrator panel at `/admin` has a separate bootstrap login in every
-mode. Supply its username and password file at service startup; the credentials
-are held in memory and are not written to SQLite:
+In loopback-local mode, `/admin` opens directly for the single local
+administrator and creates an ephemeral CSRF-protected console session. Shared
+modes retain the separate bootstrap login. Supply its username and password
+file at service startup; the credentials are held in memory and are not written
+to SQLite:
 
 ```powershell
 go run ./cmd/repokarta serve `
@@ -303,18 +311,26 @@ The protected `/admin` page can preview and approve three repository sources:
 
 - a local directory, including a ghorg-managed root, whose repositories remain
   user-owned and are only inspected with read-only Git commands;
-- a GitHub organization, team, user, or exact `https://github.com/...`
-  repository URL;
-- a GitLab group, subgroup, or exact `https://gitlab.com/...` project URL.
+- a GitHub organization, team, user, or exact HTTPS repository URL on the
+  configured GitHub host;
+- a GitLab group, subgroup, or exact HTTPS project URL on the configured GitLab
+  host.
 
 Provider previews are bounded and show forks, archives, visibility, topic and
 allow/deny policy exclusions, and repositories already managed under either
 their canonical URL or stable provider ID. For private provider discovery,
 enter only an environment-variable name such as `GITHUB_TOKEN` or
 `GITLAB_TOKEN`. RepoKarta reads the value from its launch environment for the
-API request and persists only the reference name. Hosted Git cloning continues
-to use the configured Git credential helper; credentials are never embedded in
-the stored remote URL.
+API request and persists only the reference name. The same value is supplied
+ephemerally to HTTPS Git clone and fetch through process-local Git
+configuration; it is never embedded in the stored remote URL or command
+arguments.
+
+GitHub Enterprise and self-hosted GitLab origins can be enabled with
+`-github-host`, `-github-api`, `-gitlab-host`, and `-gitlab-api`, or the
+corresponding `REPOKARTA_GITHUB_HOST`, `REPOKARTA_GITHUB_API`,
+`REPOKARTA_GITLAB_HOST`, and `REPOKARTA_GITLAB_API` environment variables.
+Only the explicitly configured HTTPS origin is accepted for each provider.
 
 Approved GitHub and GitLab repositories are cloned under RepoKarta's own data
 directory with executable hooks and recursive submodules disabled. A successful
@@ -579,11 +595,11 @@ Windows amd64 and Apple Silicon macOS. The workflow:
 Run the same packagers locally:
 
 ```powershell
-.\scripts\package-release.ps1 -Version 0.45.0-dev
+.\scripts\package-release.ps1 -Version 0.46.0-dev
 ```
 
 ```sh
-./scripts/package-release.sh 0.45.0-dev
+./scripts/package-release.sh 0.46.0-dev
 ```
 
 macOS packages are signed with the hardened runtime when

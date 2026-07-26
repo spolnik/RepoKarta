@@ -43,6 +43,7 @@ const (
 	DefaultContextLimit      = 12
 	MaximumContextLimit      = 50
 	maximumContextTreeBytes  = 4 << 20
+	maximumContextFileCaches = 32
 	sourceWindowLines        = 200
 	sourceContextBefore      = 80
 	maxReferenceLinesPerFile = 50
@@ -72,6 +73,24 @@ type Service struct {
 	structure StructuralReader
 	mu        sync.RWMutex
 	baseURL   string
+
+	contextFileMu     sync.Mutex
+	contextFileCache  map[string]contextFileCacheEntry
+	contextFileLoads  map[string]*contextFileLoad
+	contextFileLoader func(context.Context, catalog.Repository, string) ([]string, bool, error)
+}
+
+type contextFileCacheEntry struct {
+	paths     []string
+	truncated bool
+	lastUsed  time.Time
+}
+
+type contextFileLoad struct {
+	done      chan struct{}
+	paths     []string
+	truncated bool
+	err       error
 }
 
 // SetBaseURL changes the absolute URL used for newly returned source evidence.
@@ -84,9 +103,12 @@ func (s *Service) SetBaseURL(baseURL string) {
 // New creates a protocol-independent code-intelligence service.
 func New(store RepositoryStore, searcher CodeSearcher, baseURL string) *Service {
 	return &Service{
-		store:    store,
-		searcher: searcher,
-		baseURL:  strings.TrimRight(baseURL, "/"),
+		store:             store,
+		searcher:          searcher,
+		baseURL:           strings.TrimRight(baseURL, "/"),
+		contextFileCache:  make(map[string]contextFileCacheEntry),
+		contextFileLoads:  make(map[string]*contextFileLoad),
+		contextFileLoader: gitFiles,
 	}
 }
 
@@ -528,7 +550,7 @@ func (s *Service) SuggestContexts(ctx context.Context, request ContextSuggestion
 		if repository.IndexState != "ready" || repository.IndexedCommit == "" {
 			return output, fmt.Errorf("repository %q does not have a ready indexed revision", repository.Name)
 		}
-		paths, truncated, err := gitFiles(ctx, repository, repository.IndexedCommit)
+		paths, truncated, err := s.cachedContextFiles(ctx, repository, repository.IndexedCommit)
 		if err != nil {
 			return output, err
 		}
@@ -556,6 +578,58 @@ func (s *Service) SuggestContexts(ctx context.Context, request ContextSuggestion
 		return output, errors.New("context kind must be repository or file")
 	}
 	return output, nil
+}
+
+func (s *Service) cachedContextFiles(
+	ctx context.Context,
+	repository catalog.Repository,
+	revision string,
+) ([]string, bool, error) {
+	key := strconv.FormatInt(repository.ID, 10) + "\x00" + revision
+	s.contextFileMu.Lock()
+	if cached, ok := s.contextFileCache[key]; ok {
+		cached.lastUsed = time.Now()
+		s.contextFileCache[key] = cached
+		s.contextFileMu.Unlock()
+		return cached.paths, cached.truncated, nil
+	}
+	if load, ok := s.contextFileLoads[key]; ok {
+		s.contextFileMu.Unlock()
+		select {
+		case <-load.done:
+			return load.paths, load.truncated, load.err
+		case <-ctx.Done():
+			return nil, false, ctx.Err()
+		}
+	}
+	load := &contextFileLoad{done: make(chan struct{})}
+	s.contextFileLoads[key] = load
+	loader := s.contextFileLoader
+	s.contextFileMu.Unlock()
+
+	load.paths, load.truncated, load.err = loader(ctx, repository, revision)
+
+	s.contextFileMu.Lock()
+	delete(s.contextFileLoads, key)
+	if load.err == nil {
+		if len(s.contextFileCache) >= maximumContextFileCaches {
+			oldestKey := ""
+			var oldest time.Time
+			for candidateKey, candidate := range s.contextFileCache {
+				if oldestKey == "" || candidate.lastUsed.Before(oldest) {
+					oldestKey = candidateKey
+					oldest = candidate.lastUsed
+				}
+			}
+			delete(s.contextFileCache, oldestKey)
+		}
+		s.contextFileCache[key] = contextFileCacheEntry{
+			paths: load.paths, truncated: load.truncated, lastUsed: time.Now(),
+		}
+	}
+	close(load.done)
+	s.contextFileMu.Unlock()
+	return load.paths, load.truncated, load.err
 }
 
 // CatalogRepositories returns the underlying metadata for HTML presentation.

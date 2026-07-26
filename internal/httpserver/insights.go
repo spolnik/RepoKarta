@@ -11,7 +11,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/spolnik/RepoKarta/internal/identity"
 	"github.com/spolnik/RepoKarta/internal/insights"
+	"github.com/spolnik/RepoKarta/internal/security"
 )
 
 const maximumInsightUploadBytes = 32 << 20
@@ -31,6 +33,7 @@ type insightsPageData struct {
 	SelectedBranch   string
 	Notice           string
 	Error            string
+	CanManage        bool
 	CanAdminister    bool
 	SinceValue       string
 	UntilValue       string
@@ -55,9 +58,15 @@ func (s *Server) insightsPage(response http.ResponseWriter, request *http.Reques
 		return
 	}
 	viewer := s.conversationViewer(request.Context())
+	canManage := true
+	if s.security != nil {
+		principal, ok := security.PrincipalFromContext(request.Context())
+		canManage = ok && identity.Allows(principal.Role, identity.PermissionManageArtifacts)
+	}
 	data := insightsPageData{
 		pageData: base, Response: result, Filter: filter, SelectedID: selected,
 		Notice: request.URL.Query().Get("notice"), Error: request.URL.Query().Get("error"),
+		CanManage:     canManage,
 		CanAdminister: viewer.Admin,
 		SinceValue:    request.URL.Query().Get("since"), UntilValue: request.URL.Query().Get("until"),
 	}

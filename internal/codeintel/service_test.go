@@ -173,6 +173,34 @@ func TestStructuredFileContextPinsAndScopesSearch(t *testing.T) {
 	}
 }
 
+func TestFileContextSuggestionsCacheImmutableGitTree(t *testing.T) {
+	revision := strings.Repeat("a", 40)
+	repository := catalog.Repository{
+		ID: 17, Name: "cached", Path: t.TempDir(),
+		IndexedCommit: revision, IndexState: "ready",
+	}
+	service := New(referenceTestStore{repository: repository}, &capturingSearcher{}, "http://localhost")
+	loads := 0
+	service.contextFileLoader = func(context.Context, catalog.Repository, string) ([]string, bool, error) {
+		loads++
+		return []string{"internal/cache.go", "README.md"}, false, nil
+	}
+	for _, query := range []string{"cache", "readme"} {
+		suggestions, err := service.SuggestContexts(context.Background(), ContextSuggestionRequest{
+			Kind: contextscope.KindFile, Query: query, RepositoryID: repository.ID,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(suggestions.Suggestions) != 1 {
+			t.Fatalf("suggestions for %q = %#v", query, suggestions)
+		}
+	}
+	if loads != 1 {
+		t.Fatalf("immutable Git tree loads = %d, want 1", loads)
+	}
+}
+
 func TestStructuredContextErrorsNeverBroadenSearch(t *testing.T) {
 	directory := t.TempDir()
 	if err := os.WriteFile(filepath.Join(directory, "present.go"), []byte("package fixture\n"), 0o644); err != nil {

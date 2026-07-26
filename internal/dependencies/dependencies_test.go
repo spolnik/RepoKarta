@@ -67,3 +67,31 @@ func TestBuildKeepsLegacyManifestDependenciesHonest(t *testing.T) {
 		t.Fatalf("legacy declaration = %#v", declaration)
 	}
 }
+
+func TestBuildPageFiltersAndBoundsDeclarations(t *testing.T) {
+	snapshot := graph.Snapshot{
+		Repositories: []graph.Repository{{ID: 1, Name: "service", Revision: "abc"}},
+		Manifests: []graph.Manifest{{
+			RepositoryID: 1,
+			Repository:   "service",
+			Kind:         "npm package",
+			Path:         "package.json",
+			Declarations: []graph.DependencyDeclaration{
+				{Ecosystem: "npm", Package: "alpha", Declared: "^1", Resolution: "constraint"},
+				{Ecosystem: "npm", Package: "beta", Declared: "2.0.0", Resolution: "exact"},
+				{Ecosystem: "npm", Package: "gamma", Declared: "^3", Resolution: "constraint"},
+			},
+		}},
+	}
+	inventory := BuildPage(snapshot, Options{Query: "a", Resolution: "constraint", Limit: 1})
+	if inventory.TotalCount != 3 || inventory.DependencyCount != 2 ||
+		inventory.ReturnedCount != 1 || !inventory.HasMore || inventory.Limit != 1 ||
+		inventory.Declarations[0].Package != "alpha" {
+		t.Fatalf("first dependency page = %#v", inventory)
+	}
+	inventory = BuildPage(snapshot, Options{Resolution: "constraint", Offset: 1, Limit: 1})
+	if inventory.ReturnedCount != 1 || inventory.HasMore ||
+		inventory.Declarations[0].Package != "gamma" {
+		t.Fatalf("second dependency page = %#v", inventory)
+	}
+}

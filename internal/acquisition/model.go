@@ -49,8 +49,8 @@ type DiscoverRequest struct {
 }
 
 // Repository is durable acquisition provenance for an approved repository.
-// CredentialRef is the name of an environment variable or credential helper
-// reference; secret values are never persisted.
+// CredentialRef is the name of an environment variable; secret values are
+// supplied ephemerally to provider and Git operations and never persisted.
 type Repository struct {
 	ID                   int64     `json:"id"`
 	Provider             string    `json:"provider"`

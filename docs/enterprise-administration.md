@@ -46,7 +46,10 @@ search/export/retention, and destructive administration of RepoKarta-owned
 data.
 
 Loopback-local mode always resolves its single `local:admin` identity as
-administrator and does not require SCIM configuration.
+administrator, opens `/admin` without separate bootstrap credentials, and does
+not require SCIM configuration. The console still creates an ephemeral
+CSRF-protected administrator session. Shared modes retain the independent
+bootstrap login.
 
 Unknown SAML or Cloudflare identities are observed as readers. An exact direct
 assignment, SCIM group role, or configured provider-group mapping may elevate
