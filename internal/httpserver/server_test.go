@@ -236,6 +236,9 @@ func TestDocumentationPageAPIGenerationAndExport(t *testing.T) {
 	for _, expected := range []string{
 		`aria-current="page">Wiki`,
 		`data-wiki-workspace`,
+		`data-wiki-repository-picker`,
+		`data-wiki-repository-search`,
+		`data-wiki-repository-option`,
 		`data-wiki-pages`,
 		`data-wiki-page-count`,
 		`data-wiki-content`,

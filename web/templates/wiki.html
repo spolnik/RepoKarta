@@ -26,15 +26,117 @@
           <p>Subsystems, flows, concepts, and implementation details generated from exact source.</p>
         </header>
 
-        <label class="wiki-field">
-          <span>Repository</span>
-          <select data-wiki-repository>
-            <option value="">Choose a repository</option>
-            {{range .Repositories}}
-            <option value="{{.ID}}">{{index $.RepositoryLabels .ID}}</option>
-            {{end}}
-          </select>
-        </label>
+        <div class="wiki-field">
+          <span id="wiki-repository-label">Repository</span>
+          <div class="map-repository-picker" data-wiki-repository-picker>
+            {{/*
+              The hidden select remains the canonical value for Wiki loading,
+              URL history, and generation locking. The visible picker avoids
+              the unthemeable native operating-system popup.
+            */}}
+            <select
+              class="map-repository-native"
+              data-wiki-repository
+              tabindex="-1"
+              aria-hidden="true"
+              hidden
+            >
+              <option value="">Choose a repository</option>
+              {{range .Repositories}}
+              <option value="{{.ID}}">{{index $.RepositoryLabels .ID}}</option>
+              {{end}}
+            </select>
+
+            <button
+              class="map-repository-trigger"
+              type="button"
+              aria-labelledby="wiki-repository-label wiki-repository-current"
+              aria-haspopup="listbox"
+              aria-controls="wiki-repository-listbox"
+              aria-expanded="false"
+              data-wiki-repository-trigger
+            >
+              <span class="map-repository-trigger-icon" aria-hidden="true">
+                <svg viewBox="0 0 20 20">
+                  <path d="M4 5.25h12M4 9.75h12M4 14.25h12"></path>
+                  <circle cx="5" cy="5.25" r=".65"></circle>
+                  <circle cx="5" cy="9.75" r=".65"></circle>
+                  <circle cx="5" cy="14.25" r=".65"></circle>
+                </svg>
+              </span>
+              <span class="map-repository-trigger-copy">
+                <strong id="wiki-repository-current" data-wiki-repository-current>
+                  Choose a repository
+                </strong>
+                <small data-wiki-repository-meta>Deep Wiki workspace</small>
+              </span>
+              <svg class="map-repository-chevron" viewBox="0 0 20 20" aria-hidden="true">
+                <path d="m6.5 8 3.5 3.5L13.5 8"></path>
+              </svg>
+            </button>
+
+            <button
+              class="map-repository-backdrop"
+              type="button"
+              aria-label="Close repository picker"
+              tabindex="-1"
+              data-wiki-repository-backdrop
+            ></button>
+
+            <div class="map-repository-popover" data-wiki-repository-popover hidden>
+              <div class="map-repository-popover-heading">
+                <span>Choose repository</span>
+                <span>{{len .Repositories}} indexed</span>
+              </div>
+              <label class="map-repository-search">
+                <svg viewBox="0 0 20 20" aria-hidden="true">
+                  <circle cx="8.5" cy="8.5" r="4.75"></circle>
+                  <path d="m12 12 4 4"></path>
+                </svg>
+                <input
+                  type="search"
+                  placeholder="Find a repository…"
+                  autocomplete="off"
+                  aria-label="Find a repository"
+                  data-wiki-repository-search
+                >
+              </label>
+              <div
+                class="map-repository-options"
+                id="wiki-repository-listbox"
+                role="listbox"
+                aria-label="Wiki repository"
+                data-wiki-repository-options
+              >
+                {{range .Repositories}}
+                <button
+                  class="map-repository-option"
+                  type="button"
+                  role="option"
+                  aria-selected="false"
+                  data-wiki-repository-option
+                  data-value="{{.ID}}"
+                  data-label="{{index $.RepositoryLabels .ID}}"
+                >
+                  <span class="map-repository-option-mark" aria-hidden="true">
+                    <svg viewBox="0 0 20 20">
+                      <path d="M4.5 5.5h11M4.5 10h11M4.5 14.5h11"></path>
+                    </svg>
+                  </span>
+                  <span class="map-repository-option-copy">
+                    <strong>{{index $.RepositoryLabels .ID}}</strong>
+                    <small>Deep Wiki</small>
+                  </span>
+                  <svg class="map-repository-check" viewBox="0 0 20 20" aria-hidden="true">
+                    <path d="m5.5 10 3 3 6-6.5"></path>
+                  </svg>
+                </button>
+                {{end}}
+              </div>
+              <p class="map-repository-hint">Type to filter · arrows to move · Enter to choose</p>
+            </div>
+          </div>
+        </div>
 
         <details class="wiki-generation-controls">
           <summary class="wiki-section-heading">

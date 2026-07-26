@@ -1686,6 +1686,11 @@ a.brand-mark:hover,
     0 10px 24px rgb(0 0 0 / 0.12);
 }
 
+.map-repository-trigger:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
 .map-repository-trigger-icon,
 .map-repository-option-mark {
   display: grid;
