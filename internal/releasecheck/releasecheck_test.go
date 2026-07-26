@@ -87,6 +87,23 @@ func TestEveryPackagePathCarriesRequiredLicensesAndVerification(t *testing.T) {
 	}
 }
 
+func TestHomebrewCIUsesRegisteredTap(t *testing.T) {
+	root := repositoryRoot(t)
+	workflow := string(readFile(t, root, filepath.Join(".github", "workflows", "ci.yml")))
+	for _, expected := range []string{
+		"brew tap spolnik/repokarta https://github.com/spolnik/RepoKarta.git",
+		"brew install --HEAD --build-from-source spolnik/repokarta/repokarta",
+		"brew test spolnik/repokarta/repokarta",
+	} {
+		if !strings.Contains(workflow, expected) {
+			t.Fatalf("Homebrew CI is missing %q", expected)
+		}
+	}
+	if strings.Contains(workflow, "brew install --HEAD --build-from-source ./Formula/") {
+		t.Fatal("Homebrew CI attempts to install a formula outside a registered tap")
+	}
+}
+
 func repositoryRoot(t *testing.T) string {
 	t.Helper()
 	_, current, _, ok := runtime.Caller(0)

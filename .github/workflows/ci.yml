@@ -88,5 +88,6 @@ jobs:
         run: brew style Formula/repokarta.rb
       - name: Install and test HEAD formula
         run: |
-          brew install --HEAD --build-from-source ./Formula/repokarta.rb
-          brew test repokarta
+          brew tap spolnik/repokarta https://github.com/spolnik/RepoKarta.git
+          brew install --HEAD --build-from-source spolnik/repokarta/repokarta
+          brew test spolnik/repokarta/repokarta

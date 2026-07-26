@@ -453,8 +453,9 @@ The repository publishes a HEAD formula at
 [`Formula/repokarta.rb`](./Formula/repokarta.rb). Install and test it with:
 
 ```sh
-brew install --HEAD --build-from-source ./Formula/repokarta.rb
-brew test repokarta
+brew tap spolnik/repokarta https://github.com/spolnik/RepoKarta.git
+brew install --HEAD --build-from-source spolnik/repokarta/repokarta
+brew test spolnik/repokarta/repokarta
 ```
 
 Main-branch CI performs the same Homebrew installation on macOS. The formula
