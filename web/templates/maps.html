@@ -25,15 +25,139 @@
           <p>Facts extracted from committed manifests, packages, imports, entry points, and routes.</p>
         </div>
 
-        <label class="map-field">
-          <span>Repository scope</span>
-          <select data-map-repository>
-            {{range $index, $repository := .Repositories}}
-            <option value="{{$repository.ID}}" {{if eq $index 0}}selected{{end}}>{{index $.RepositoryLabels $repository.ID}}</option>
-            {{end}}
-            <option value="">All {{len .Repositories}} repositories (slower)</option>
-          </select>
-        </label>
+        <div class="map-field">
+          <span id="map-repository-label">Repository scope</span>
+          <div class="map-repository-picker" data-map-repository-picker>
+            {{/*
+              The select remains the canonical value used by URL/history and map
+              loading. The visible picker replaces the unthemeable native popup.
+            */}}
+            <select class="map-repository-native" data-map-repository tabindex="-1" aria-hidden="true" hidden>
+              {{range $index, $repository := .Repositories}}
+              <option value="{{$repository.ID}}" {{if eq $index 0}}selected{{end}}>{{index $.RepositoryLabels $repository.ID}}</option>
+              {{end}}
+              <option value="">Fleet view</option>
+            </select>
+
+            <button
+              class="map-repository-trigger"
+              type="button"
+              aria-labelledby="map-repository-label map-repository-current"
+              aria-haspopup="listbox"
+              aria-controls="map-repository-listbox"
+              aria-expanded="false"
+              data-map-repository-trigger
+            >
+              <span class="map-repository-trigger-icon" aria-hidden="true">
+                <svg viewBox="0 0 20 20">
+                  <path d="M4 5.25h12M4 9.75h12M4 14.25h12"></path>
+                  <circle cx="5" cy="5.25" r=".65"></circle>
+                  <circle cx="5" cy="9.75" r=".65"></circle>
+                  <circle cx="5" cy="14.25" r=".65"></circle>
+                </svg>
+              </span>
+              <span class="map-repository-trigger-copy">
+                <strong id="map-repository-current" data-map-repository-current>
+                  {{range $index, $repository := .Repositories}}{{if eq $index 0}}{{index $.RepositoryLabels $repository.ID}}{{end}}{{end}}
+                </strong>
+                <small data-map-repository-meta>Single repository</small>
+              </span>
+              <svg class="map-repository-chevron" viewBox="0 0 20 20" aria-hidden="true">
+                <path d="m6.5 8 3.5 3.5L13.5 8"></path>
+              </svg>
+            </button>
+
+            <button
+              class="map-repository-backdrop"
+              type="button"
+              aria-label="Close repository picker"
+              tabindex="-1"
+              data-map-repository-backdrop
+            ></button>
+
+            <div class="map-repository-popover" data-map-repository-popover hidden>
+              <div class="map-repository-popover-heading">
+                <span>Choose repository</span>
+                <span>{{len .Repositories}} indexed</span>
+              </div>
+              <label class="map-repository-search">
+                <svg viewBox="0 0 20 20" aria-hidden="true">
+                  <circle cx="8.5" cy="8.5" r="4.75"></circle>
+                  <path d="m12 12 4 4"></path>
+                </svg>
+                <input
+                  type="search"
+                  placeholder="Find a repository…"
+                  autocomplete="off"
+                  aria-label="Find a repository"
+                  data-map-repository-search
+                >
+              </label>
+              <div
+                class="map-repository-options"
+                id="map-repository-listbox"
+                role="listbox"
+                aria-label="Repository scope"
+                data-map-repository-options
+              >
+                {{range $index, $repository := .Repositories}}
+                <button
+                  class="map-repository-option"
+                  type="button"
+                  role="option"
+                  aria-selected="{{if eq $index 0}}true{{else}}false{{end}}"
+                  data-map-repository-option
+                  data-value="{{$repository.ID}}"
+                  data-label="{{index $.RepositoryLabels $repository.ID}}"
+                  data-meta="Single repository"
+                >
+                  <span class="map-repository-option-mark" aria-hidden="true">
+                    <svg viewBox="0 0 20 20">
+                      <path d="M4.5 5.5h11M4.5 10h11M4.5 14.5h11"></path>
+                    </svg>
+                  </span>
+                  <span class="map-repository-option-copy">
+                    <strong>{{index $.RepositoryLabels $repository.ID}}</strong>
+                    <small>Repository map</small>
+                  </span>
+                  <svg class="map-repository-check" viewBox="0 0 20 20" aria-hidden="true">
+                    <path d="m5.5 10 3 3 6-6.5"></path>
+                  </svg>
+                </button>
+                {{end}}
+                <div class="map-repository-fleet-divider" role="separator"></div>
+                <button
+                  class="map-repository-option map-repository-fleet"
+                  type="button"
+                  role="option"
+                  aria-selected="false"
+                  data-map-repository-option
+                  data-value=""
+                  data-label="Fleet view"
+                  data-meta="All {{len .Repositories}} repositories"
+                >
+                  <span class="map-repository-option-mark" aria-hidden="true">
+                    <svg viewBox="0 0 20 20">
+                      <circle cx="6" cy="6" r="2"></circle>
+                      <circle cx="14" cy="6" r="2"></circle>
+                      <circle cx="10" cy="14" r="2"></circle>
+                      <path d="m7.6 7.2 1.45 4.6m3.35-4.6-1.45 4.6M8 6h4"></path>
+                    </svg>
+                  </span>
+                  <span class="map-repository-option-copy">
+                    <strong>Fleet view</strong>
+                    <small>Compare all {{len .Repositories}} repositories</small>
+                  </span>
+                  <span class="map-repository-fleet-badge">Broader</span>
+                  <svg class="map-repository-check" viewBox="0 0 20 20" aria-hidden="true">
+                    <path d="m5.5 10 3 3 6-6.5"></path>
+                  </svg>
+                </button>
+              </div>
+              <p class="map-repository-hint">Use ↑ ↓ to move · Enter to select · Esc to close</p>
+            </div>
+          </div>
+        </div>
 
         <div class="map-field">
           <span>View</span>

@@ -337,6 +337,10 @@ func TestRepositoryMapPageAPIAndExport(t *testing.T) {
 		`data-map-canvas`,
 		`data-map-inspector-content`,
 		`data-map-export`,
+		`data-map-repository-picker`,
+		`data-map-repository-backdrop`,
+		`role="listbox"`,
+		`data-label="Fleet view"`,
 	} {
 		if !strings.Contains(pageResponse.Body.String(), expected) {
 			t.Fatalf("map page does not contain %q", expected)

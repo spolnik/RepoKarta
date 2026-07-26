@@ -2812,6 +2812,16 @@ function enableRepositoryMaps(debug?: DebugLogger): void {
   const canvas = document.querySelector<HTMLElement>("[data-map-canvas]");
   const loading = document.querySelector<HTMLElement>("[data-map-loading]");
   const repository = document.querySelector<HTMLSelectElement>("[data-map-repository]");
+  const repositoryPicker = document.querySelector<HTMLElement>("[data-map-repository-picker]");
+  const repositoryTrigger = document.querySelector<HTMLButtonElement>("[data-map-repository-trigger]");
+  const repositoryCurrent = document.querySelector<HTMLElement>("[data-map-repository-current]");
+  const repositoryMeta = document.querySelector<HTMLElement>("[data-map-repository-meta]");
+  const repositoryBackdrop = document.querySelector<HTMLButtonElement>("[data-map-repository-backdrop]");
+  const repositoryPopover = document.querySelector<HTMLElement>("[data-map-repository-popover]");
+  const repositorySearch = document.querySelector<HTMLInputElement>("[data-map-repository-search]");
+  const repositoryOptions = Array.from(
+    document.querySelectorAll<HTMLButtonElement>("[data-map-repository-option]")
+  );
   const search = document.querySelector<HTMLInputElement>("[data-map-search]");
   const searchResults = document.querySelector<HTMLElement>("[data-map-search-results]");
   const refresh = document.querySelector<HTMLButtonElement>("[data-map-refresh]");
@@ -2851,7 +2861,9 @@ function enableRepositoryMaps(debug?: DebugLogger): void {
   });
   const viewButtons = Array.from(document.querySelectorAll<HTMLButtonElement>("[data-map-view]"));
   if (
-    !workspace || !canvas || !loading || !repository || !search || !searchResults || !refresh || !exportLink || !status ||
+    !workspace || !canvas || !loading || !repository || !repositoryPicker || !repositoryTrigger ||
+    !repositoryCurrent || !repositoryMeta || !repositoryBackdrop || !repositoryPopover || !repositorySearch ||
+    repositoryOptions.length === 0 || !search || !searchResults || !refresh || !exportLink || !status ||
     !summaryHeading || !snapshotID || !repositoryCount || !scopeNote || !fileCount || !nodeCount || !edgeCount ||
     !languages || !focus || !reset || !inspector || !inspectorEmpty || !inspectorContent ||
     !inspectorKind || !inspectorTitle || !inspectorSubtitle || !inspectorLayer ||
@@ -2873,6 +2885,64 @@ function enableRepositoryMaps(debug?: DebugLogger): void {
   let currentRepositoryCount = 0;
 
   const selectedRepositoryQuery = (): string => repository.value ? `repository=${encodeURIComponent(repository.value)}` : "";
+
+  const visibleRepositoryOptions = (): HTMLButtonElement[] =>
+    repositoryOptions.filter((option) => !option.hidden);
+
+  const syncRepositoryPicker = (): void => {
+    const selectedOption = repositoryOptions.find((option) => option.dataset.value === repository.value)
+      ?? repositoryOptions[0];
+    repositoryCurrent.textContent = selectedOption.dataset.label || selectedOption.textContent?.trim() || "Repository";
+    repositoryMeta.textContent = selectedOption.dataset.meta || "Single repository";
+    for (const option of repositoryOptions) {
+      option.setAttribute("aria-selected", String(option === selectedOption));
+    }
+  };
+
+  const filterRepositoryOptions = (): void => {
+    const query = repositorySearch.value.trim().toLocaleLowerCase();
+    for (const option of repositoryOptions) {
+      const label = option.dataset.label?.toLocaleLowerCase() || "";
+      const isFleet = option.dataset.value === "";
+      option.hidden = query !== "" && (isFleet || !label.includes(query));
+    }
+  };
+
+  const closeRepositoryPicker = (restoreFocus = false): void => {
+    repositoryPopover.hidden = true;
+    repositoryPicker.dataset.open = "false";
+    repositoryTrigger.setAttribute("aria-expanded", "false");
+    repositorySearch.value = "";
+    filterRepositoryOptions();
+    if (restoreFocus) {
+      repositoryTrigger.focus();
+    }
+  };
+
+  const openRepositoryPicker = (focusSelected = false): void => {
+    repositoryPopover.hidden = false;
+    repositoryPicker.dataset.open = "true";
+    repositoryTrigger.setAttribute("aria-expanded", "true");
+    if (focusSelected) {
+      (repositoryOptions.find((option) => option.getAttribute("aria-selected") === "true")
+        ?? visibleRepositoryOptions()[0])?.focus();
+      return;
+    }
+    repositorySearch.focus();
+  };
+
+  const focusRepositoryOption = (current: HTMLButtonElement, offset: number): void => {
+    const options = visibleRepositoryOptions();
+    const currentIndex = options.indexOf(current);
+    options[(currentIndex + offset + options.length) % options.length]?.focus();
+  };
+
+  const chooseRepository = (option: HTMLButtonElement): void => {
+    repository.value = option.dataset.value || "";
+    syncRepositoryPicker();
+    repository.dispatchEvent(new Event("change", { bubbles: true }));
+    closeRepositoryPicker(true);
+  };
 
   const updateExportLink = (): void => {
     const query = selectedRepositoryQuery();
@@ -3498,7 +3568,68 @@ function enableRepositoryMaps(debug?: DebugLogger): void {
     }
   };
 
+  repositoryTrigger.addEventListener("click", () => {
+    if (repositoryPopover.hidden) {
+      openRepositoryPicker();
+    } else {
+      closeRepositoryPicker();
+    }
+  });
+  repositoryTrigger.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      openRepositoryPicker(true);
+    }
+  });
+  repositoryBackdrop.addEventListener("click", () => closeRepositoryPicker(true));
+  repositorySearch.addEventListener("input", filterRepositoryOptions);
+  repositorySearch.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      visibleRepositoryOptions()[0]?.focus();
+    } else if (event.key === "Enter") {
+      const options = visibleRepositoryOptions();
+      if (options.length === 1) {
+        event.preventDefault();
+        chooseRepository(options[0]);
+      }
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      closeRepositoryPicker(true);
+    }
+  });
+  for (const option of repositoryOptions) {
+    option.addEventListener("click", () => chooseRepository(option));
+    option.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        chooseRepository(option);
+      } else if (event.key === "ArrowDown") {
+        event.preventDefault();
+        focusRepositoryOption(option, 1);
+      } else if (event.key === "ArrowUp") {
+        event.preventDefault();
+        focusRepositoryOption(option, -1);
+      } else if (event.key === "Home") {
+        event.preventDefault();
+        visibleRepositoryOptions()[0]?.focus();
+      } else if (event.key === "End") {
+        event.preventDefault();
+        visibleRepositoryOptions().at(-1)?.focus();
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        closeRepositoryPicker(true);
+      }
+    });
+  }
+  document.addEventListener("pointerdown", (event) => {
+    if (!repositoryPopover.hidden && !repositoryPicker.contains(event.target as Node)) {
+      closeRepositoryPicker();
+    }
+  });
+
   repository.addEventListener("change", () => {
+    syncRepositoryPicker();
     setMapURL(repository.value, activeView);
     void loadMap(false);
   });
@@ -3524,6 +3655,7 @@ function enableRepositoryMaps(debug?: DebugLogger): void {
     selectView(state.view || "all");
     if (state.repository !== repository.value) {
       repository.value = state.repository;
+      syncRepositoryPicker();
       void loadMap(false);
     } else {
       applyFilters();
@@ -3568,6 +3700,7 @@ function enableRepositoryMaps(debug?: DebugLogger): void {
   if (initialRepository && Array.from(repository.options).some((option) => option.value === initialRepository)) {
     repository.value = initialRepository;
   }
+  syncRepositoryPicker();
   const initialView = initialParameters.get("view");
   if (initialView && viewButtons.some((button) => button.dataset.mapView === initialView)) {
     selectView(initialView);

@@ -1629,7 +1629,6 @@ a.brand-mark:hover,
   text-transform: uppercase;
 }
 
-.map-field select,
 .map-search-input {
   width: 100%;
   border: 1px solid rgb(148 163 184 / 0.12);
@@ -1638,10 +1637,313 @@ a.brand-mark:hover,
   color: var(--color-ink);
 }
 
-.map-field select {
-  height: 2.35rem;
-  padding: 0 2rem 0 0.7rem;
+.map-repository-picker {
+  position: relative;
+}
+
+.map-repository-native {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.map-repository-trigger {
+  display: grid;
+  width: 100%;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.65rem;
+  border: 1px solid rgb(148 163 184 / 0.14);
+  border-radius: var(--r-md);
+  padding: 0.55rem 0.65rem;
+  background:
+    linear-gradient(135deg, rgb(16 185 129 / 0.055), transparent 54%),
+    rgb(15 23 42 / 0.62);
+  color: var(--color-ink);
+  text-align: left;
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.025),
+    0 6px 18px rgb(0 0 0 / 0.08);
+  transition:
+    border-color 150ms ease,
+    background-color 150ms ease,
+    box-shadow 150ms ease;
+}
+
+.map-repository-trigger:hover,
+.map-repository-picker[data-open="true"] .map-repository-trigger {
+  border-color: rgb(52 211 153 / 0.34);
+  background:
+    linear-gradient(135deg, rgb(16 185 129 / 0.085), transparent 54%),
+    rgb(15 23 42 / 0.78);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.035),
+    0 0 0 3px rgb(16 185 129 / 0.045),
+    0 10px 24px rgb(0 0 0 / 0.12);
+}
+
+.map-repository-trigger-icon,
+.map-repository-option-mark {
+  display: grid;
+  place-items: center;
+  border: 1px solid rgb(52 211 153 / 0.14);
+  border-radius: var(--r-sm);
+  background: rgb(16 185 129 / 0.065);
+  color: var(--color-accent-soft);
+}
+
+.map-repository-trigger-icon {
+  width: 1.8rem;
+  height: 1.8rem;
+}
+
+.map-repository-trigger-icon svg,
+.map-repository-option-mark svg {
+  width: 1rem;
+  height: 1rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.45;
+}
+
+.map-repository-trigger-copy,
+.map-repository-option-copy {
+  display: grid;
+  min-width: 0;
+  gap: 0.08rem;
+}
+
+.map-repository-trigger-copy strong,
+.map-repository-option-copy strong {
+  overflow: hidden;
+  color: var(--color-ink);
   font-size: var(--fs-caption);
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.map-repository-trigger-copy small,
+.map-repository-option-copy small {
+  overflow: hidden;
+  color: var(--color-ink-faint);
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.map-repository-chevron {
+  width: 1rem;
+  height: 1rem;
+  fill: none;
+  stroke: var(--color-ink-faint);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.6;
+  transition: transform 150ms ease;
+}
+
+.map-repository-picker[data-open="true"] .map-repository-chevron {
+  transform: rotate(180deg);
+}
+
+.map-repository-backdrop {
+  display: none;
+}
+
+.map-repository-popover {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 0.45rem);
+  right: 0;
+  left: 0;
+  overflow: hidden;
+  border: 1px solid rgb(148 163 184 / 0.16);
+  border-radius: var(--r-lg);
+  padding: 0.45rem;
+  background:
+    radial-gradient(circle at 10% 0%, rgb(16 185 129 / 0.08), transparent 11rem),
+    rgb(13 17 23 / 0.98);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.04),
+    0 24px 60px rgb(0 0 0 / 0.48),
+    0 0 0 1px rgb(0 0 0 / 0.18);
+  backdrop-filter: blur(18px);
+  animation: map-repository-popover-in 130ms ease-out;
+}
+
+.map-repository-popover[hidden] {
+  display: none;
+}
+
+@keyframes map-repository-popover-in {
+  from {
+    opacity: 0;
+    transform: translateY(-0.3rem) scale(0.985);
+  }
+}
+
+.map-repository-popover-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.28rem 0.38rem 0.5rem;
+  color: var(--color-ink-soft);
+  font-size: var(--fs-meta);
+  font-weight: 650;
+}
+
+.map-repository-popover-heading span:last-child {
+  color: var(--color-accent-soft);
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  font-weight: 600;
+}
+
+.map-repository-search {
+  display: flex;
+  align-items: center;
+  gap: 0.42rem;
+  margin-bottom: 0.35rem;
+  border: 1px solid rgb(148 163 184 / 0.11);
+  border-radius: var(--r-sm);
+  padding: 0 0.52rem;
+  background: rgb(7 10 16 / 0.72);
+}
+
+.map-repository-search:focus-within {
+  border-color: rgb(52 211 153 / 0.3);
+  box-shadow: 0 0 0 3px rgb(16 185 129 / 0.045);
+}
+
+.map-repository-search svg {
+  width: 0.85rem;
+  height: 0.85rem;
+  flex: none;
+  fill: none;
+  stroke: var(--color-ink-faint);
+  stroke-linecap: round;
+  stroke-width: 1.45;
+}
+
+.map-repository-search input {
+  width: 100%;
+  min-width: 0;
+  padding: 0.5rem 0;
+  background: transparent;
+  color: var(--color-ink);
+  font-size: var(--fs-caption);
+  outline: none;
+}
+
+.map-repository-search input::placeholder {
+  color: var(--color-ink-faint);
+}
+
+.map-repository-options {
+  display: grid;
+  max-height: 15.5rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+.map-repository-option {
+  display: grid;
+  width: 100%;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.58rem;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  padding: 0.46rem 0.5rem;
+  background: transparent;
+  color: var(--color-ink);
+  text-align: left;
+}
+
+.map-repository-option:hover,
+.map-repository-option:focus-visible {
+  border-color: rgb(148 163 184 / 0.08);
+  background: rgb(148 163 184 / 0.055);
+  outline: none;
+}
+
+.map-repository-option[aria-selected="true"] {
+  border-color: rgb(52 211 153 / 0.18);
+  background: rgb(16 185 129 / 0.08);
+}
+
+.map-repository-option-mark {
+  width: 1.65rem;
+  height: 1.65rem;
+  border-color: rgb(148 163 184 / 0.1);
+  background: rgb(148 163 184 / 0.04);
+  color: var(--color-ink-faint);
+}
+
+.map-repository-option[aria-selected="true"] .map-repository-option-mark {
+  border-color: rgb(52 211 153 / 0.2);
+  background: rgb(16 185 129 / 0.08);
+  color: var(--color-accent-soft);
+}
+
+.map-repository-check {
+  width: 1rem;
+  height: 1rem;
+  fill: none;
+  stroke: var(--color-accent-soft);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+  opacity: 0;
+}
+
+.map-repository-option[aria-selected="true"] .map-repository-check {
+  opacity: 1;
+}
+
+.map-repository-fleet-divider {
+  height: 1px;
+  margin: 0.38rem 0.28rem;
+  background: rgb(148 163 184 / 0.1);
+}
+
+.map-repository-fleet {
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+}
+
+.map-repository-fleet .map-repository-option-mark {
+  border-color: rgb(245 158 11 / 0.16);
+  background: rgb(245 158 11 / 0.055);
+  color: var(--color-warn);
+}
+
+.map-repository-fleet-badge {
+  border: 1px solid rgb(245 158 11 / 0.18);
+  border-radius: 99px;
+  padding: 0.15rem 0.34rem;
+  background: rgb(245 158 11 / 0.055);
+  color: var(--color-warn);
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+}
+
+.map-repository-hint {
+  margin: 0.4rem 0.3rem 0.1rem;
+  color: var(--color-ink-faint);
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  line-height: 1rem;
+  text-align: center;
 }
 
 .map-view-switcher {
@@ -2230,6 +2532,31 @@ a.brand-mark:hover,
   .map-workspace {
     grid-template-columns: 1fr;
     overflow-y: auto;
+  }
+
+  .map-repository-picker[data-open="true"] .map-repository-backdrop {
+    display: block;
+    position: fixed;
+    z-index: 39;
+    inset: 4rem 0 0;
+    border: 0;
+    padding: 0;
+    background: rgb(3 6 11 / 0.62);
+    backdrop-filter: blur(2px);
+  }
+
+  .map-repository-popover {
+    position: fixed;
+    z-index: 40;
+    top: auto;
+    right: 0.75rem;
+    bottom: 0.75rem;
+    left: 0.75rem;
+    max-height: calc(100dvh - 5.5rem);
+  }
+
+  .map-repository-options {
+    max-height: min(52dvh, 22rem);
   }
 
   .map-sidebar {
