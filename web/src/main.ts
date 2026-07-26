@@ -3792,6 +3792,7 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
   const exportLink = document.querySelector<HTMLAnchorElement>("[data-wiki-export]");
   const steering = document.querySelector<HTMLElement>("[data-wiki-steering]");
   const pages = document.querySelector<HTMLElement>("[data-wiki-pages]");
+  const pageCount = document.querySelector<HTMLElement>("[data-wiki-page-count]");
   const pageSearch = document.querySelector<HTMLInputElement>("[data-wiki-page-search]");
   const repositoryName = document.querySelector<HTMLElement>("[data-wiki-repository-name]");
   const pageTitle = document.querySelector<HTMLElement>("[data-wiki-page-title]");
@@ -3836,7 +3837,7 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
   if (
     !workspace || !repository || !provider || !providerState || !providerDetail || !model ||
     !effort || !timeout || !tokenBudget || !tokenBudgetField || !planHeading || !commit || !ready || !stale || !pending || !failed ||
-    !generateAll || !exportLink || !steering || !pages || !repositoryName || !pageTitle || !pageStatus ||
+    !generateAll || !exportLink || !steering || !pages || !pageCount || !repositoryName || !pageTitle || !pageStatus ||
     !refreshPage || !content || !empty || !loading || !error || !errorMessage || !pageRevision ||
     !pageGenerator || !pageGenerated || !pageTokens || !supportCount || !supportingFiles ||
     !citationCount || !citations || !outline || !pageSearch || !runPanel ||
@@ -3849,9 +3850,6 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
 
   let site: WikiSite | undefined;
   let activeSlug = "";
-  // Collapse state survives re-renders: the page list is rebuilt after every
-  // generated page, and a section snapping back open mid-build is disorienting.
-  const collapsedSections = new Set<string>();
   let requestRevision = 0;
   let generating = false;
   let providerStatuses: ProviderStatus[] = [];
@@ -4349,15 +4347,6 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
         return;
       }
       button.setAttribute("aria-current", "page");
-      // Never leave the open page hidden inside a collapsed section.
-      const section = button.closest<HTMLElement>(".wiki-page-section");
-      if (section?.dataset.collapsed === "true") {
-        section.dataset.collapsed = "false";
-        const slug = section.querySelector<HTMLButtonElement>("[data-wiki-page]")?.dataset.wikiPage;
-        if (slug) {
-          collapsedSections.delete(slug);
-        }
-      }
     });
   };
 
@@ -4705,7 +4694,7 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
         : "The selected provider will inspect architecture, flows, tests, and domain concepts before planning pages.";
 
     pages.replaceChildren();
-    let currentChildren: HTMLElement | undefined;
+    pageCount.textContent = String(value.pages.length);
     for (const page of value.pages) {
       const row = document.createElement("div");
       row.className = "wiki-page-row";
@@ -4715,7 +4704,10 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
       select.type = "button";
       select.className = "wiki-page-select";
       select.dataset.wikiPage = page.slug;
-      select.setAttribute("aria-label", `${page.title} · ${page.status}`);
+      const statusLabel = page.status === "planned"
+        ? "Not generated"
+        : page.status.charAt(0).toUpperCase() + page.status.slice(1);
+      select.setAttribute("aria-label", `${page.number || page.order}. ${page.title} · ${statusLabel}`);
       const index = document.createElement("span");
       index.className = "wiki-page-index";
       index.textContent = page.number || String(page.order);
@@ -4725,7 +4717,7 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
       title.textContent = page.title;
       const status = document.createElement("span");
       status.dataset.state = page.status;
-      status.textContent = page.status === "planned" ? "Not generated" : page.status;
+      status.textContent = statusLabel;
       copy.append(title, status);
       select.append(index, copy);
       select.addEventListener("click", () => void loadPage(page.slug));
@@ -4736,49 +4728,17 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
       regenerate.dataset.wikiGeneratePage = page.slug;
       regenerate.title = page.status === "planned" ? `Generate ${page.title}` : `Refresh ${page.title}`;
       regenerate.setAttribute("aria-label", regenerate.title);
-      regenerate.textContent = page.status === "planned" ? "+" : "↻";
+      regenerate.innerHTML = page.status === "planned"
+        ? '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12"></path></svg>'
+        : '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M15.5 7A6 6 0 1 0 16 11M15.5 3.5V7H12"></path></svg>';
       regenerate.disabled = generating || !providerReady();
       regenerate.addEventListener("click", () => void generate(page.slug));
 
-      // Depth-0 pages open a collapsible section; their depth-1 children nest
-      // inside it. A 29-page plan is far too long to cross as a flat list.
-      if ((page.depth || 0) === 0) {
-        const section = document.createElement("div");
-        section.className = "wiki-page-section";
-        section.dataset.collapsed = collapsedSections.has(page.slug) ? "true" : "false";
-
-        const children = document.createElement("div");
-        children.className = "wiki-page-children";
-
-        const disclosure = document.createElement("button");
-        disclosure.type = "button";
-        disclosure.className = "wiki-page-disclosure";
-        disclosure.innerHTML = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 8 5 5 5-5"></path></svg>';
-        const syncDisclosure = (): void => {
-          const collapsed = section.dataset.collapsed === "true";
-          disclosure.setAttribute("aria-expanded", String(!collapsed));
-          disclosure.setAttribute("aria-label", `${collapsed ? "Expand" : "Collapse"} ${page.title}`);
-        };
-        disclosure.addEventListener("click", () => {
-          const collapsed = section.dataset.collapsed === "true";
-          section.dataset.collapsed = String(!collapsed);
-          if (collapsed) {
-            collapsedSections.delete(page.slug);
-          } else {
-            collapsedSections.add(page.slug);
-          }
-          syncDisclosure();
-        });
-        syncDisclosure();
-
-        row.append(disclosure, select, regenerate);
-        section.append(row, children);
-        pages.append(section);
-        currentChildren = children;
-      } else {
-        row.append(select, regenerate);
-        (currentChildren ?? pages).append(row);
-      }
+      // Page numbering already carries hierarchy (for example 2 and 2.1).
+      // A single visual alignment keeps the navigation scannable and prevents
+      // controls from wrapping into misleading indentation levels.
+      row.append(select, regenerate);
+      pages.append(row);
 
       row.hidden = Boolean(
         pageSearch.value.trim() &&
@@ -4886,16 +4846,6 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
     const query = pageSearch.value.trim().toLowerCase();
     pages.querySelectorAll<HTMLElement>(".wiki-page-row").forEach((row) => {
       row.hidden = Boolean(query && !row.dataset.wikiSearch?.includes(query));
-    });
-    // A filter must be able to reach into collapsed sections, and a section
-    // with nothing left to show should not sit there as an empty heading.
-    pages.querySelectorAll<HTMLElement>(".wiki-page-section").forEach((section) => {
-      const rows = Array.from(section.querySelectorAll<HTMLElement>(".wiki-page-row"));
-      const visible = rows.filter((row) => !row.hidden);
-      section.hidden = query !== "" && visible.length === 0;
-      if (query) {
-        section.dataset.collapsed = "false";
-      }
     });
   });
   generateAll.addEventListener("click", () => {

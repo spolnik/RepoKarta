@@ -5212,10 +5212,8 @@ a.brand-mark:hover,
 }
 
 /*
- * The plan is repository-specific and routinely reaches ~29 pages. The sidebar
- * is a fixed column with its own scrolling page list so the repository picker,
- * generation controls, and plan counts stay put instead of scrolling away above
- * the list on every page switch.
+ * The bounded page set scrolls independently so repository and generation
+ * controls remain stable while the reader moves between pages.
  */
 .wiki-sidebar {
   display: flex;
@@ -5556,81 +5554,73 @@ a.brand-mark:hover,
   font-family: var(--font-mono);
 }
 
+.wiki-page-list-heading {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-top: 0.7rem;
+  border-top: 1px solid rgb(148 163 184 / 0.08);
+  padding: 0.8rem 0.3rem 0.4rem;
+  color: var(--color-ink-faint);
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.wiki-page-list-heading span:last-child {
+  min-width: 1.45rem;
+  border: 1px solid rgb(148 163 184 / 0.1);
+  border-radius: 99px;
+  padding: 0.12rem 0.35rem;
+  color: var(--color-ink-soft);
+  text-align: center;
+}
+
 .wiki-page-list {
   display: grid;
   flex: 1;
   align-content: start;
-  gap: 0.12rem;
+  gap: 0.35rem;
   min-height: 6rem;
   overflow-y: auto;
   overscroll-behavior: contain;
-  margin-top: 0.65rem;
-  border-top: 1px solid rgb(148 163 184 / 0.08);
-  padding-top: 0.9rem;
-}
-
-/* Collapsible plan sections: 29 flat rows is a lot of scrolling to cross. */
-.wiki-page-section[data-collapsed="true"] .wiki-page-children {
-  display: none;
-}
-
-.wiki-page-disclosure {
-  display: grid;
-  flex-shrink: 0;
-  place-items: center;
-  border: 0;
-  border-radius: var(--r-xs);
-  width: 1.35rem;
-  height: 1.35rem;
-  background: transparent;
-  color: var(--color-ink-faint);
-  transition: 150ms ease;
-}
-
-.wiki-page-disclosure:hover {
-  background: rgb(255 255 255 / 0.06);
-  color: var(--color-ink);
-}
-
-.wiki-page-disclosure svg {
-  width: 0.7rem;
-  height: 0.7rem;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  transition: transform 150ms ease;
-}
-
-.wiki-page-section[data-collapsed="true"] .wiki-page-disclosure svg {
-  transform: rotate(-90deg);
+  padding: 0.1rem 0.1rem 0.75rem;
 }
 
 .wiki-page-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  border: 0;
-  border-radius: var(--r-sm);
-  background: transparent;
+  grid-template-columns: minmax(0, 1fr) 2.25rem;
+  align-items: stretch;
   overflow: hidden;
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  background: transparent;
+  transition:
+    border-color 150ms ease,
+    background-color 150ms ease,
+    box-shadow 150ms ease;
+}
+
+.wiki-page-row:hover,
+.wiki-page-row:focus-within {
+  border-color: rgb(148 163 184 / 0.1);
+  background: rgb(15 23 42 / 0.34);
+}
+
+.wiki-page-row:has(.wiki-page-select[aria-current="page"]) {
+  border-color: rgb(52 211 153 / 0.2);
+  background:
+    linear-gradient(90deg, rgb(16 185 129 / 0.11), transparent 72%),
+    rgb(15 23 42 / 0.46);
+  box-shadow: inset 2px 0 0 rgb(52 211 153 / 0.74);
 }
 
 .wiki-page-row[hidden] {
   display: none;
-}
-
-.wiki-page-row[data-depth="1"] {
-  margin-left: 0.85rem;
-}
-
-.wiki-page-row[data-depth="1"] .wiki-page-select {
-  padding-block: 0.42rem;
-}
-
-.wiki-page-row[data-depth="1"] .wiki-page-copy strong {
-  color: var(--color-ink-soft);
-  font-weight: 560;
 }
 
 .wiki-page-select,
@@ -5642,54 +5632,76 @@ a.brand-mark:hover,
 .wiki-page-select {
   display: grid;
   min-width: 0;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: 1.8rem minmax(0, 1fr);
   align-items: center;
-  gap: 0.55rem;
-  padding: 0.58rem 0.65rem;
+  gap: 0.65rem;
+  padding: 0.58rem 0.5rem 0.58rem 0.65rem;
   color: var(--color-ink-soft);
   text-align: left;
 }
 
 .wiki-page-select:hover,
 .wiki-page-select[aria-current="page"] {
-  border-radius: var(--r-sm);
-  background: rgb(16 185 129 / 0.065);
   color: var(--color-ink);
 }
 
 .wiki-page-index {
+  display: grid;
+  min-width: 1.8rem;
+  height: 1.8rem;
+  place-items: center;
+  border: 1px solid rgb(148 163 184 / 0.1);
+  border-radius: var(--r-sm);
+  background: rgb(15 23 42 / 0.45);
   color: var(--color-ink-faint);
   font-family: var(--font-mono);
-  font-size: var(--fs-meta);
+  font-size: var(--fs-micro);
+}
+
+.wiki-page-select[aria-current="page"] .wiki-page-index {
+  border-color: rgb(52 211 153 / 0.22);
+  background: rgb(16 185 129 / 0.09);
+  color: var(--color-accent-soft);
 }
 
 .wiki-page-copy {
   display: grid;
   min-width: 0;
-  gap: 0.12rem;
-}
-
-.wiki-page-copy strong,
-.wiki-page-copy span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  gap: 0.22rem;
 }
 
 .wiki-page-copy strong {
+  overflow: hidden;
+  color: inherit;
   font-size: var(--fs-meta);
-  font-weight: 650;
+  font-weight: 640;
+  line-height: 1.05rem;
+  text-overflow: ellipsis;
+  white-space: normal;
 }
 
 .wiki-page-copy span {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  gap: 0.32rem;
   color: var(--color-ink-faint);
   font-family: var(--font-mono);
-  font-size: var(--fs-meta);
-  text-transform: uppercase;
+  font-size: var(--fs-micro);
+}
+
+.wiki-page-copy span::before {
+  width: 0.36rem;
+  height: 0.36rem;
+  flex: none;
+  border-radius: 50%;
+  background: currentColor;
+  content: "";
+  box-shadow: 0 0 0 3px rgb(112 128 150 / 0.06);
 }
 
 .wiki-page-copy span[data-state="ready"] {
-  color: var(--color-accent);
+  color: var(--color-accent-soft);
 }
 
 .wiki-page-copy span[data-state="stale"] {
@@ -5701,10 +5713,21 @@ a.brand-mark:hover,
 }
 
 .wiki-page-generate {
-  width: 2.2rem;
-  border-left: 0;
+  display: grid;
+  width: 2.25rem;
+  place-items: center;
+  border-left: 1px solid rgb(148 163 184 / 0.06);
   color: var(--color-ink-faint);
-  font-size: var(--fs-body);
+  opacity: 0.42;
+  transition:
+    background-color 150ms ease,
+    color 150ms ease,
+    opacity 150ms ease;
+}
+
+.wiki-page-row:hover .wiki-page-generate,
+.wiki-page-generate:focus-visible {
+  opacity: 1;
 }
 
 .wiki-page-generate:hover:not(:disabled) {
@@ -5713,7 +5736,18 @@ a.brand-mark:hover,
 }
 
 .wiki-page-generate:disabled {
-  opacity: 0.35;
+  cursor: not-allowed;
+  opacity: 0.2;
+}
+
+.wiki-page-generate svg {
+  width: 0.95rem;
+  height: 0.95rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.45;
 }
 
 .wiki-page-search {
@@ -6235,21 +6269,9 @@ a.brand-mark:hover,
     border-bottom: 1px solid rgb(148 163 184 / 0.09);
   }
 
-  /* Sections nest, so the stacked layout keeps a single column here. */
   .wiki-page-list {
     flex: none;
     overflow-y: visible;
-  }
-
-  .wiki-page-row {
-    display: block;
-  }
-
-  .wiki-page-generate {
-    width: 100%;
-    min-height: 1.8rem;
-    border-top: 1px solid rgb(148 163 184 / 0.07);
-    border-left: 0;
   }
 
   .wiki-stage {

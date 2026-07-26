@@ -233,7 +233,13 @@ func TestDocumentationPageAPIGenerationAndExport(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("wiki page status = %d, body = %s", response.Code, response.Body.String())
 	}
-	for _, expected := range []string{`aria-current="page">Wiki`, `data-wiki-workspace`, `data-wiki-pages`, `data-wiki-content`} {
+	for _, expected := range []string{
+		`aria-current="page">Wiki`,
+		`data-wiki-workspace`,
+		`data-wiki-pages`,
+		`data-wiki-page-count`,
+		`data-wiki-content`,
+	} {
 		if !strings.Contains(response.Body.String(), expected) {
 			t.Fatalf("wiki page does not contain %q", expected)
 		}
