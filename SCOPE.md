@@ -546,15 +546,26 @@ search must remain fast and AI-free.
 
 #### Structured mentions and scopes
 
-- [ ] Add permission-aware autocomplete for `@repository`, `@file`,
-  `@directory`, and `@symbol` in the Chat and Deep Search composers, including
-  keyboard navigation and useful matching across names containing spaces.
-- [ ] Render mentions as removable context chips and transmit them as structured
-  repository IDs, indexed revisions, paths, and symbol identities; never rely
-  on parsing display labels back out of prompt text.
-- [ ] Resolve every mention against the same commit-pinned catalogue used by
-  search. Show stale, missing, ambiguous, unauthorized, and unindexed mentions
-  as actionable errors instead of silently widening the scope.
+- [x] Add permission-aware Chat autocomplete for `@repository` and `@file`,
+  including keyboard navigation, bounded suggestions, and useful matching
+  across names containing spaces.
+- [ ] Extend permission-aware autocomplete to `@directory` and `@symbol`, and
+  provide repository, file, directory, and symbol parity in the Deep Search
+  composer.
+- [x] Render repository and file mentions as removable context chips and
+  transmit stable repository IDs, indexed revisions, and exact paths; never
+  parse display labels back out of prompt text.
+- [ ] Extend the same structured chip contract to directory and symbol
+  identities.
+- [x] Resolve repository and file mentions against the commit-pinned catalogue
+  used by search. Show invalid, missing, unauthorized, unindexed, and stale
+  contexts as actionable errors instead of silently widening the scope.
+- [ ] Extend resolution to directory and symbol contexts, including explicit
+  ambiguous-identity errors.
+- [x] Share the typed repository/file context contract across Chat,
+  `POST /api/search`, the JSON client, and MCP; persist resolved contexts with
+  user turns and replay them without reconstructing identities from message
+  text.
 - [ ] Support pasting a RepoKarta source, map, Wiki, repository, or search URL
   into a composer and converting it into an equivalent structured context chip.
 - [ ] Add named search contexts representing repositories and revisions for a
@@ -857,13 +868,19 @@ completion criteria include:
 
 ## Current implementation version
 
-`0.43.0-dev`. M0 through M6 are complete. The M9 dependency inventory
-foundation and linked-worktree discovery deduplication are complete. The M10
-enterprise identity and administration milestone is complete.
+`0.44.0-dev`. M0 through M6 are complete; M7 is in progress. The M9 dependency
+inventory foundation, linked-worktree discovery deduplication, and M10
+enterprise identity and administration milestone are complete.
 
 ## Recommended next session
 
-Continue M9 with bounded, cached npm, Go module, and Maven Central registry
-observations. Keep observation timestamps and registry errors separate from the
-commit-pinned declarations, and require explicit configuration before checking
-private or internal package coordinates.
+Continue M7 by converting pasted RepoKarta source/search URLs into structured
+chips, then add `@directory` and `@symbol` resolution on the same typed
+contract. Preserve the current fail-closed permission, revision, and
+completeness behavior before adding named contexts, facets, or agentic Deep
+Search.
+
+Continue M9 afterward with bounded, cached npm, Go module, and Maven Central
+registry observations. Keep observation timestamps and registry errors separate
+from commit-pinned declarations, and require explicit configuration before
+checking private or internal package coordinates.

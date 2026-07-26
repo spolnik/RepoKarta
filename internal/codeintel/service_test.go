@@ -2,6 +2,7 @@ package codeintel
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"github.com/spolnik/RepoKarta/internal/access"
 	"github.com/spolnik/RepoKarta/internal/analysis"
 	"github.com/spolnik/RepoKarta/internal/catalog"
+	"github.com/spolnik/RepoKarta/internal/contextscope"
 	"github.com/spolnik/RepoKarta/internal/graph"
 	"github.com/spolnik/RepoKarta/internal/search"
 )
@@ -109,6 +111,122 @@ func TestSearchDropsMatchesWithoutAnExactAuthorizedRepositoryIdentity(t *testing
 	}
 }
 
+func TestStructuredFileContextPinsAndScopesSearch(t *testing.T) {
+	directory := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(directory, "internal"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "internal", "context.go"), []byte("package internal\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, directory, "init", "-q")
+	runGit(t, directory, "add", ".")
+	runGit(t, directory, "-c", "user.name=RepoKarta Test", "-c", "user.email=test@repokarta.local", "commit", "-qm", "fixture")
+	revision := strings.TrimSpace(runGit(t, directory, "rev-parse", "HEAD"))
+	repository := catalog.Repository{
+		ID:            7,
+		Name:          "context repo",
+		Path:          directory,
+		HeadCommit:    revision,
+		IndexedCommit: revision,
+		IndexState:    "ready",
+	}
+	searcher := &capturingSearcher{}
+	service := New(referenceTestStore{repository: repository}, searcher, "http://localhost")
+	viewerContext := access.WithViewer(context.Background(), access.Viewer{ID: "saml:alice"})
+	result, err := service.Search(viewerContext, SearchRequest{
+		Query: "package",
+		Contexts: []contextscope.Selector{{
+			Kind:         contextscope.KindFile,
+			RepositoryID: repository.ID,
+			Revision:     revision,
+			Path:         "internal/context.go",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(searcher.query.Scopes) != 1 ||
+		searcher.query.Scopes[0].Repository != filepath.ToSlash(directory) ||
+		searcher.query.Scopes[0].Path != "internal/context.go" {
+		t.Fatalf("structured scopes = %#v", searcher.query.Scopes)
+	}
+	if len(searcher.query.RepositoryIDs) != 0 {
+		t.Fatalf("structured contexts duplicated repository allow-list: %#v", searcher.query.RepositoryIDs)
+	}
+	if len(result.Contexts) != 1 ||
+		result.Contexts[0].RepositoryID != repository.ID ||
+		result.Contexts[0].Revision != revision ||
+		result.Contexts[0].Label != "@context repo:internal/context.go" {
+		t.Fatalf("resolved contexts = %#v", result.Contexts)
+	}
+	suggestions, err := service.SuggestContexts(context.Background(), ContextSuggestionRequest{
+		Kind: contextscope.KindFile, Query: "context", RepositoryID: repository.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(suggestions.Suggestions) != 1 ||
+		suggestions.Suggestions[0].Context.Path != "internal/context.go" ||
+		suggestions.Suggestions[0].Context.Revision != revision {
+		t.Fatalf("file suggestions = %#v", suggestions)
+	}
+}
+
+func TestStructuredContextErrorsNeverBroadenSearch(t *testing.T) {
+	directory := t.TempDir()
+	if err := os.WriteFile(filepath.Join(directory, "present.go"), []byte("package fixture\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, directory, "init", "-q")
+	runGit(t, directory, "add", ".")
+	runGit(t, directory, "-c", "user.name=RepoKarta Test", "-c", "user.email=test@repokarta.local", "commit", "-qm", "fixture")
+	revision := strings.TrimSpace(runGit(t, directory, "rev-parse", "HEAD"))
+	repository := catalog.Repository{
+		ID: 9, Name: "fixture", Path: directory, HeadCommit: revision,
+		IndexedCommit: revision, IndexState: "ready",
+	}
+	for _, testCase := range []struct {
+		name     string
+		selector contextscope.Selector
+		code     string
+	}{
+		{
+			name: "stale revision",
+			selector: contextscope.Selector{
+				Kind: contextscope.KindRepository, RepositoryID: repository.ID,
+				Revision: strings.Repeat("b", 40),
+			},
+			code: "stale",
+		},
+		{
+			name: "missing file",
+			selector: contextscope.Selector{
+				Kind: contextscope.KindFile, RepositoryID: repository.ID,
+				Revision: revision, Path: "missing.go",
+			},
+			code: "missing_file",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			searcher := &capturingSearcher{}
+			service := New(referenceTestStore{repository: repository}, searcher, "http://localhost")
+			_, err := service.Search(context.Background(), SearchRequest{
+				Query: "package", Contexts: []contextscope.Selector{testCase.selector},
+			})
+			var resolutionError *contextscope.ResolutionError
+			if !errors.As(err, &resolutionError) ||
+				len(resolutionError.Issues) != 1 ||
+				resolutionError.Issues[0].Code != testCase.code {
+				t.Fatalf("resolution error = %#v, error = %v", resolutionError, err)
+			}
+			if searcher.query.Text != "" {
+				t.Fatalf("invalid context reached search engine: %#v", searcher.query)
+			}
+		})
+	}
+}
+
 func (s *capturingSearcher) Search(_ context.Context, query search.Query) (search.Result, error) {
 	s.query = query
 	return search.Result{}, nil
@@ -129,7 +247,8 @@ func TestFindSymbolUsesBoundedZoektSymbolQuery(t *testing.T) {
 	}
 	if searcher.query.Text != `sym:"Handle\"Request"` ||
 		searcher.query.Mode != "zoekt" ||
-		searcher.query.Repository != filepath.ToSlash(service.store.(symbolTestStore).repository.Path) ||
+		len(searcher.query.RepositoryIDs) != 1 ||
+		searcher.query.RepositoryIDs[0] != uint32(service.store.(symbolTestStore).repository.ID) ||
 		searcher.query.Language != "Go" ||
 		searcher.query.Limit != 17 {
 		t.Fatalf("symbol query = %#v", searcher.query)

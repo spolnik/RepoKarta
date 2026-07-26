@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	stdregexp "regexp"
 	"regexp/syntax"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -93,9 +94,9 @@ func isUniversalCTagsVersion(output []byte) bool {
 // IndexConfiguration changes when existing shards must be rebuilt.
 func (a *Adapter) IndexConfiguration() string {
 	if !a.symbolsEnabled {
-		return "zoekt-" + Revision + ";repository-identity=canonical-path-v1;symbols=disabled"
+		return "zoekt-" + Revision + ";repository-identity=id-v2;symbols=disabled"
 	}
-	return "zoekt-" + Revision + ";repository-identity=canonical-path-v1;symbols=universal-ctags"
+	return "zoekt-" + Revision + ";repository-identity=id-v2;symbols=universal-ctags"
 }
 
 // Close releases adapter resources.
@@ -114,6 +115,9 @@ func (a *Adapter) Index(ctx context.Context, repository catalog.Repository) (boo
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
+	if repository.ID <= 0 || repository.ID > int64(1<<32-1) {
+		return false, fmt.Errorf("repository ID %d cannot be represented in the Zoekt index", repository.ID)
+	}
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -122,8 +126,12 @@ func (a *Adapter) Index(ctx context.Context, repository catalog.Repository) (boo
 		a.searcher = nil
 	}
 
+	shadowPath, err := a.prepareGitShadow(ctx, repository)
+	if err != nil {
+		return false, fmt.Errorf("prepare collision-safe Git shadow for %s: %w", repository.Name, err)
+	}
 	options := gitindex.Options{
-		RepoDir:     repository.Path,
+		RepoDir:     shadowPath,
 		Incremental: true,
 		Submodules:  false,
 		Branches:    []string{"HEAD"},
@@ -138,25 +146,13 @@ func (a *Adapter) Index(ctx context.Context, repository catalog.Repository) (boo
 				// same-named private clone satisfy another repository's
 				// authorization filter. Codeintel resolves this canonical
 				// path back to the public display name before responding.
+				ID:     uint32(repository.ID),
 				Name:   filepath.ToSlash(repository.Path),
 				Source: repository.Path,
 			},
 		},
 	}
 	updated, err := gitindex.IndexGitRepo(options)
-	if err != nil && isRepositoryOpenError(err) {
-		shadowPath, shadowErr := a.prepareGitCLIShadow(ctx, repository)
-		if shadowErr != nil {
-			return false, fmt.Errorf(
-				"Zoekt index %s: %w; Git CLI fallback failed: %v",
-				repository.Name,
-				err,
-				shadowErr,
-			)
-		}
-		options.RepoDir = shadowPath
-		updated, err = gitindex.IndexGitRepo(options)
-	}
 	if err != nil {
 		return false, fmt.Errorf("Zoekt index %s: %w", repository.Name, err)
 	}
@@ -230,11 +226,12 @@ func (a *Adapter) Search(ctx context.Context, request search.Query) (search.Resu
 	}
 	for _, file := range response.Files {
 		match := search.FileMatch{
-			Repository: file.Repository,
-			Revision:   file.Version,
-			Path:       filepath.ToSlash(file.FileName),
-			Language:   file.Language,
-			Score:      file.Score,
+			RepositoryID: int64(file.RepositoryID),
+			Repository:   file.Repository,
+			Revision:     file.Version,
+			Path:         filepath.ToSlash(file.FileName),
+			Language:     file.Language,
+			Score:        file.Score,
 		}
 		for _, line := range file.LineMatches {
 			lineMatch := search.LineMatch{
@@ -322,6 +319,38 @@ func buildQuery(request search.Query) (query.Q, error) {
 		}
 		children = append(children, &query.Repo{Regexp: expression})
 	}
+	if len(request.RepositoryIDs) > 0 {
+		children = append(children, query.NewRepoIDs(request.RepositoryIDs...))
+	}
+	if len(request.Scopes) > 0 {
+		scopeQueries := make([]query.Q, 0, len(request.Scopes))
+		for _, scope := range request.Scopes {
+			repository := strings.TrimSpace(filepath.ToSlash(scope.Repository))
+			if scope.RepositoryID == 0 && repository == "" {
+				return nil, errors.New("structured search scope has no repository identity")
+			}
+			var repositoryQuery query.Q
+			if scope.RepositoryID > 0 {
+				repositoryQuery = query.NewRepoIDs(scope.RepositoryID)
+			} else {
+				expression, err := grafanaregexp.Compile(`(?i)^` + stdregexp.QuoteMeta(repository) + `$`)
+				if err != nil {
+					return nil, fmt.Errorf("invalid structured repository scope: %w", err)
+				}
+				repositoryQuery = &query.Repo{Regexp: expression}
+			}
+			scopeChildren := []query.Q{repositoryQuery}
+			if filePath := strings.TrimSpace(filepath.ToSlash(scope.Path)); filePath != "" {
+				fileQuery, err := exactFileNameQuery(filePath)
+				if err != nil {
+					return nil, err
+				}
+				scopeChildren = append(scopeChildren, fileQuery)
+			}
+			scopeQueries = append(scopeQueries, &query.And{Children: scopeChildren})
+		}
+		children = append(children, &query.Or{Children: scopeQueries})
+	}
 	if language := strings.TrimSpace(request.Language); language != "" {
 		children = append(children, &query.Language{Language: language})
 	}
@@ -332,6 +361,22 @@ func buildQuery(request search.Query) (query.Q, error) {
 		children = append(children, &query.Substring{Pattern: file, FileName: true})
 	}
 	return &query.And{Children: children}, nil
+}
+
+func exactFileNameQuery(filePath string) (query.Q, error) {
+	parts := strings.Split(filepath.ToSlash(filePath), "/")
+	escaped := make([]string, 0, len(parts))
+	for _, part := range parts {
+		escaped = append(escaped, stdregexp.QuoteMeta(part))
+	}
+	expression, err := syntax.Parse(
+		`^`+strings.Join(escaped, `[/\\]`)+`$`,
+		syntax.ClassNL|syntax.PerlX|syntax.UnicodeGroups,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("invalid structured file scope: %w", err)
+	}
+	return &query.Regexp{Regexp: expression, FileName: true, CaseSensitive: true}, nil
 }
 
 func shardPrefix(repository catalog.Repository) string {
@@ -352,16 +397,10 @@ func containsSymbolQuery(parsed query.Q) bool {
 	return found
 }
 
-func isRepositoryOpenError(err error) bool {
-	message := err.Error()
-	return strings.Contains(message, "openRepo:") ||
-		strings.Contains(message, "plainOpenRepo:")
-}
-
-func (a *Adapter) prepareGitCLIShadow(ctx context.Context, repository catalog.Repository) (string, error) {
-	shadowRoot := filepath.Join(a.indexDirectory, "git-cli-fallback")
+func (a *Adapter) prepareGitShadow(ctx context.Context, repository catalog.Repository) (string, error) {
+	shadowRoot := filepath.Join(a.indexDirectory, "git-shadow")
 	if err := os.MkdirAll(shadowRoot, 0o755); err != nil {
-		return "", fmt.Errorf("create fallback directory: %w", err)
+		return "", fmt.Errorf("create Git shadow directory: %w", err)
 	}
 	shadowPath := filepath.Join(shadowRoot, fmt.Sprintf("repo-%d.git", repository.ID))
 	if _, err := os.Stat(filepath.Join(shadowPath, "HEAD")); errors.Is(err, os.ErrNotExist) {
@@ -385,6 +424,12 @@ func (a *Adapter) prepareGitCLIShadow(ctx context.Context, repository catalog.Re
 		return "", err
 	}
 	if err := runGitCommand(ctx, shadowPath, "symbolic-ref", "HEAD", ref); err != nil {
+		return "", err
+	}
+	if err := runGitCommand(ctx, shadowPath, "config", "zoekt.name", filepath.ToSlash(repository.Path)); err != nil {
+		return "", err
+	}
+	if err := runGitCommand(ctx, shadowPath, "config", "zoekt.repoid", strconv.FormatInt(repository.ID, 10)); err != nil {
 		return "", err
 	}
 	return shadowPath, nil

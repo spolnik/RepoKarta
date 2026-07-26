@@ -469,6 +469,25 @@ type ConversationImage = {
   data: string;
 };
 
+type ContextSelector = {
+  kind: "repository" | "file";
+  repository_id: number;
+  revision?: string;
+  path?: string;
+};
+
+type ResolvedContext = ContextSelector & {
+  repository: string;
+  revision: string;
+  label: string;
+};
+
+type ContextSuggestion = {
+  context: ContextSelector;
+  label: string;
+  detail?: string;
+};
+
 type TokenUsage = {
   input_tokens: number;
   output_tokens: number;
@@ -511,6 +530,7 @@ type ConversationRecordMessage = {
   text?: string;
   images?: ConversationImage[];
   sources?: Array<{ label: string; url: string }>;
+  contexts?: ResolvedContext[];
   status?: string;
   error?: string;
   input_tokens?: number;
@@ -1584,6 +1604,10 @@ function enableConversations(debug?: DebugLogger): void {
   const imageInput = document.querySelector<HTMLInputElement>("#conversation-image-input");
   const attachButton = document.querySelector<HTMLButtonElement>("[data-image-attach]");
   const attachmentTray = document.querySelector<HTMLElement>("#conversation-attachments");
+  const contextTray = document.querySelector<HTMLElement>("#conversation-contexts");
+  const contextError = document.querySelector<HTMLElement>("#conversation-context-error");
+  const contextSuggestions = document.querySelector<HTMLElement>("#conversation-context-suggestions");
+  const contextAdd = document.querySelector<HTMLButtonElement>("[data-context-add]");
   const composerActivity = document.querySelector<HTMLElement>("#conversation-activity");
   const imageSupportDetail = document.querySelector<HTMLElement>("#image-support-detail");
   const submit = document.querySelector<HTMLButtonElement>("#conversation-submit");
@@ -1632,6 +1656,10 @@ function enableConversations(debug?: DebugLogger): void {
     !imageInput ||
     !attachButton ||
     !attachmentTray ||
+    !contextTray ||
+    !contextError ||
+    !contextSuggestions ||
+    !contextAdd ||
     !composerActivity ||
     !imageSupportDetail ||
     !submit ||
@@ -1706,6 +1734,11 @@ function enableConversations(debug?: DebugLogger): void {
   let conversationID = "";
   let busy = false;
   let attachedImages: ConversationImage[] = [];
+  let selectedContexts: ContextSuggestion[] = [];
+  let suggestedContexts: ContextSuggestion[] = [];
+  let activeContextSuggestion = -1;
+  let contextRequestSequence = 0;
+  let contextMention: { kind: "repository" | "file"; start: number; end: number } | undefined;
   let attachmentFeedback = "";
   let statuses: ProviderStatus[] = [];
   let conversationSummaries: ConversationRecord[] = [];
@@ -1917,6 +1950,183 @@ function enableConversations(debug?: DebugLogger): void {
     }
   };
 
+  const contextKey = (selector: ContextSelector): string => {
+    return `${selector.kind}:${selector.repository_id}:${selector.revision ?? ""}:${selector.path ?? ""}`;
+  };
+
+  const appendMessageContexts = (
+    message: HTMLElement,
+    contexts: Array<ResolvedContext | ContextSuggestion> = []
+  ): void => {
+    if (contexts.length === 0) {
+      return;
+    }
+    const container = document.createElement("div");
+    container.className = "conversation-message-contexts";
+    for (const context of contexts) {
+      const chip = document.createElement("span");
+      chip.className = "conversation-context-chip conversation-context-chip-readonly";
+      chip.textContent = context.label;
+      chip.title = "context" in context
+        ? `${context.context.kind} context at ${(context.context.revision ?? "").slice(0, 8)}`
+        : `${context.kind} context at ${context.revision.slice(0, 8)}`;
+      container.append(chip);
+    }
+    message.append(container);
+  };
+
+  const showContextError = (message = ""): void => {
+    contextError.textContent = message;
+    contextError.hidden = !message;
+  };
+
+  const closeContextSuggestions = (): void => {
+    contextRequestSequence++;
+    suggestedContexts = [];
+    activeContextSuggestion = -1;
+    contextMention = undefined;
+    contextSuggestions.replaceChildren();
+    contextSuggestions.hidden = true;
+    input.removeAttribute("aria-activedescendant");
+  };
+
+  const renderContextTray = (): void => {
+    contextTray.replaceChildren();
+    contextTray.hidden = selectedContexts.length === 0;
+    for (const [index, context] of selectedContexts.entries()) {
+      const chip = document.createElement("span");
+      chip.className = "conversation-context-chip";
+      const label = document.createElement("span");
+      label.textContent = context.label;
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.setAttribute("aria-label", `Remove ${context.label}`);
+      remove.textContent = "\u00d7";
+      remove.addEventListener("click", () => {
+        selectedContexts.splice(index, 1);
+        renderContextTray();
+        showContextError();
+        input.focus();
+      });
+      chip.append(label, remove);
+      contextTray.append(chip);
+    }
+  };
+
+  const renderContextSuggestions = (): void => {
+    contextSuggestions.replaceChildren();
+    contextSuggestions.hidden = suggestedContexts.length === 0;
+    for (const [index, suggestion] of suggestedContexts.entries()) {
+      const option = document.createElement("button");
+      option.type = "button";
+      option.id = `conversation-context-option-${index}`;
+      option.className = "conversation-context-suggestion";
+      option.setAttribute("role", "option");
+      option.setAttribute("aria-selected", String(index === activeContextSuggestion));
+      const label = document.createElement("strong");
+      label.textContent = suggestion.label;
+      const detail = document.createElement("span");
+      detail.textContent = `${suggestion.context.kind} \u00b7 ${suggestion.detail ?? "indexed"}`;
+      option.append(label, detail);
+      option.addEventListener("pointerdown", (event) => event.preventDefault());
+      option.addEventListener("click", () => selectContextSuggestion(index));
+      contextSuggestions.append(option);
+    }
+    if (activeContextSuggestion >= 0) {
+      input.setAttribute("aria-activedescendant", `conversation-context-option-${activeContextSuggestion}`);
+    } else {
+      input.removeAttribute("aria-activedescendant");
+    }
+  };
+
+  const selectContextSuggestion = (index: number): void => {
+    const suggestion = suggestedContexts[index];
+    if (!suggestion || !contextMention) {
+      return;
+    }
+    if (!selectedContexts.some((context) => contextKey(context.context) === contextKey(suggestion.context))) {
+      selectedContexts.push(suggestion);
+    }
+    const before = input.value.slice(0, contextMention.start);
+    const after = input.value.slice(contextMention.end);
+    const separator = before && !before.endsWith(" ") && after && !after.startsWith(" ") ? " " : "";
+    input.value = before + separator + after;
+    const caret = before.length + separator.length;
+    input.setSelectionRange(caret, caret);
+    renderContextTray();
+    closeContextSuggestions();
+    showContextError();
+    input.focus();
+  };
+
+  const activeMention = (): { kind: "repository" | "file"; query: string; start: number; end: number } | undefined => {
+    const caret = input.selectionStart ?? input.value.length;
+    const beforeCaret = input.value.slice(0, caret);
+    const repositoryStart = beforeCaret.lastIndexOf("@repository:");
+    const fileStart = beforeCaret.lastIndexOf("@file:");
+    const start = Math.max(repositoryStart, fileStart);
+    if (start < 0) {
+      return undefined;
+    }
+    const prefix = start === fileStart ? "@file:" : "@repository:";
+    const previousBoundary = start === 0 || /\s/.test(beforeCaret[start - 1] ?? "");
+    if (!previousBoundary || beforeCaret.slice(start + prefix.length).includes("\n")) {
+      return undefined;
+    }
+    return {
+      kind: prefix === "@file:" ? "file" : "repository",
+      query: beforeCaret.slice(start + prefix.length),
+      start,
+      end: caret
+    };
+  };
+
+  const updateContextSuggestions = async (): Promise<void> => {
+    const mention = activeMention();
+    if (!mention || busy) {
+      closeContextSuggestions();
+      return;
+    }
+    const params = new URLSearchParams({
+      kind: mention.kind,
+      q: mention.query,
+      limit: "12"
+    });
+    if (mention.kind === "file") {
+      const repositoryIDs = Array.from(new Set(selectedContexts.map((context) => context.context.repository_id)));
+      if (repositoryIDs.length !== 1) {
+        closeContextSuggestions();
+        showContextError("Add exactly one repository context before choosing @file.");
+        return;
+      }
+      params.set("repository_id", String(repositoryIDs[0]));
+    }
+    const sequence = ++contextRequestSequence;
+    try {
+      const response = await fetch(`/api/contexts/suggest?${params.toString()}`, {
+        headers: { Accept: "application/json" }
+      });
+      if (!response.ok) {
+        throw new Error(await responseErrorMessage(response, "Context suggestions could not be loaded."));
+      }
+      const result = await response.json() as { suggestions?: ContextSuggestion[] };
+      if (sequence !== contextRequestSequence) {
+        return;
+      }
+      suggestedContexts = result.suggestions ?? [];
+      activeContextSuggestion = suggestedContexts.length > 0 ? 0 : -1;
+      contextMention = { kind: mention.kind, start: mention.start, end: mention.end };
+      showContextError(suggestedContexts.length === 0 ? `No visible ${mention.kind} contexts match.` : "");
+      renderContextSuggestions();
+    } catch (error: unknown) {
+      if (sequence !== contextRequestSequence) {
+        return;
+      }
+      closeContextSuggestions();
+      showContextError(error instanceof Error ? error.message : "Context suggestions could not be loaded.");
+    }
+  };
+
   const configureImageControls = (): void => {
     const status = statuses.find((candidate) => candidate.id === provider.value);
     const ready = Boolean(status?.available && status.authenticated);
@@ -2093,6 +2303,7 @@ function enableConversations(debug?: DebugLogger): void {
           content.textContent = stored.text;
         }
       }
+      appendMessageContexts(message, stored.contexts ?? []);
       appendConversationImages(message, stored.images ?? [], stored.role === "user" ? "input" : "output");
       appendSources(message, stored.sources);
       if (stored.status === "interrupted") {
@@ -2379,6 +2590,7 @@ function enableConversations(debug?: DebugLogger): void {
     model.disabled = !status?.available || !status.authenticated;
     effort.disabled = !status?.available || !status.authenticated || !status.efforts?.length;
     attachedImages = [];
+    selectedContexts = [];
     attachmentFeedback = "";
     runtime.textContent = "Ready";
     headerStatus.textContent = "Ready for a grounded question";
@@ -2387,6 +2599,9 @@ function enableConversations(debug?: DebugLogger): void {
     renderContextUsage();
     renderTokenUsage();
     renderAttachmentTray();
+    renderContextTray();
+    closeContextSuggestions();
+    showContextError();
     configureImageControls();
     messages.replaceChildren();
     if (emptyStateTemplate) {
@@ -2527,6 +2742,8 @@ function enableConversations(debug?: DebugLogger): void {
   });
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
+      closeContextSuggestions();
+      showContextError();
       setSessionPanelOpen(false);
       setInspectorOpen(false);
       settings.open = false;
@@ -2552,6 +2769,27 @@ function enableConversations(debug?: DebugLogger): void {
     }
   });
   input.addEventListener("keydown", (event) => {
+    if (!contextSuggestions.hidden && suggestedContexts.length > 0) {
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        const direction = event.key === "ArrowDown" ? 1 : -1;
+        activeContextSuggestion = (
+          activeContextSuggestion + direction + suggestedContexts.length
+        ) % suggestedContexts.length;
+        renderContextSuggestions();
+        return;
+      }
+      if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        selectContextSuggestion(Math.max(0, activeContextSuggestion));
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeContextSuggestions();
+        return;
+      }
+    }
     if (event.key !== "Enter" || event.isComposing) {
       return;
     }
@@ -2562,6 +2800,24 @@ function enableConversations(debug?: DebugLogger): void {
     event.preventDefault();
     debug?.add("info", "ui.message.submit-key");
     form.requestSubmit();
+  });
+  let contextSuggestionTimer = 0;
+  input.addEventListener("input", () => {
+    window.clearTimeout(contextSuggestionTimer);
+    contextSuggestionTimer = window.setTimeout(() => void updateContextSuggestions(), 120);
+  });
+  input.addEventListener("click", () => void updateContextSuggestions());
+  contextAdd.addEventListener("click", () => {
+    const prefix = selectedContexts.length > 0 ? "@file:" : "@repository:";
+    const caret = input.selectionStart ?? input.value.length;
+    const before = input.value.slice(0, caret);
+    const after = input.value.slice(caret);
+    const leadingSpace = before && !/\s$/.test(before) ? " " : "";
+    input.value = before + leadingSpace + prefix + after;
+    const nextCaret = before.length + leadingSpace.length + prefix.length;
+    input.setSelectionRange(nextCaret, nextCaret);
+    input.focus();
+    void updateContextSuggestions();
   });
   input.addEventListener("paste", (event) => {
     const images = Array.from(event.clipboardData?.files ?? []).filter((file) => file.type.startsWith("image/"));
@@ -2640,6 +2896,8 @@ function enableConversations(debug?: DebugLogger): void {
       return;
     }
     const requestImages = attachedImages.slice();
+    const requestContexts = selectedContexts.map((context) => context.context);
+    const requestContextViews = selectedContexts.slice();
     const requestStarted = performance.now();
     let deltaEvents = 0;
     let answerCharacters = 0;
@@ -2664,6 +2922,7 @@ function enableConversations(debug?: DebugLogger): void {
     empty?.remove();
     messages.querySelector("[data-conversation-empty]")?.remove();
     const userMessage = conversationMessage("user", question);
+    appendMessageContexts(userMessage, requestContextViews);
     appendConversationImages(userMessage, requestImages, "input");
     messages.append(userMessage);
     const assistant = conversationMessage("assistant");
@@ -2704,6 +2963,7 @@ function enableConversations(debug?: DebugLogger): void {
           effort: effort.value,
           message: question,
           images: requestImages,
+          contexts: requestContexts,
           timeout_seconds: Number.parseInt(timeout.value, 10),
           token_budget: providerStatus?.token_budget ? Number.parseInt(tokenBudget.value, 10) : 0
         })
@@ -2714,10 +2974,16 @@ function enableConversations(debug?: DebugLogger): void {
         content_type: response.headers.get("content-type"),
         duration_ms: Math.round(performance.now() - requestStarted)
       });
-      if (!response.ok || !response.body) {
-        const body = await response.text();
-        throw new Error(body || `Conversation failed (${response.status})`);
+      if (!response.ok) {
+        throw new Error(await responseErrorMessage(response, `Conversation failed (${response.status})`));
       }
+      if (!response.body) {
+        throw new Error("Conversation failed because the streaming response was empty.");
+      }
+      selectedContexts = [];
+      renderContextTray();
+      closeContextSuggestions();
+      showContextError();
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";

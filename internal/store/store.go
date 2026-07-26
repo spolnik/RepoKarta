@@ -17,11 +17,12 @@ import (
 	"github.com/spolnik/RepoKarta/internal/agent"
 	"github.com/spolnik/RepoKarta/internal/audit"
 	"github.com/spolnik/RepoKarta/internal/catalog"
+	"github.com/spolnik/RepoKarta/internal/contextscope"
 	_ "modernc.org/sqlite"
 )
 
 const (
-	currentSchemaVersion = 12
+	currentSchemaVersion = 13
 
 	schemaV1 = `
 CREATE TABLE IF NOT EXISTS repositories (
@@ -267,6 +268,25 @@ CREATE TABLE IF NOT EXISTS identity_role_mappings (
     updated_at TEXT NOT NULL,
     UNIQUE(provider, group_value COLLATE NOCASE)
 );`
+
+	// Version 13 keeps server-resolved structured repository/file contexts on
+	// the user message that introduced them. Saved chats can render exact chips
+	// without reconstructing identities from message text. The defensive CREATE
+	// supports early pre-release databases whose recorded version omitted the
+	// conversation tables.
+	schemaV13 = `
+CREATE TABLE IF NOT EXISTS conversation_messages (
+    id INTEGER PRIMARY KEY,
+    conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
+    text TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'complete',
+    error TEXT NOT NULL DEFAULT '',
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+ALTER TABLE conversation_messages ADD COLUMN contexts_json TEXT NOT NULL DEFAULT '[]';`
 )
 
 // SchemaVersion is the current durable SQLite format. Diagnostics and upgrade
@@ -341,6 +361,8 @@ func migrate(db *sql.DB) error {
 			migration = schemaV11
 		case 12:
 			migration = schemaV12
+		case 13:
+			migration = schemaV13
 		default:
 			return fmt.Errorf("missing migration for schema version %d", next)
 		}
@@ -1074,7 +1096,7 @@ WHERE id = ?`, id)
 	rows, err := s.db.QueryContext(ctx, `
 SELECT
     id, conversation_id, role, text, status, error,
-    input_tokens, output_tokens, created_at
+    input_tokens, output_tokens, contexts_json, created_at
 FROM conversation_messages
 WHERE conversation_id = ?
 ORDER BY id`, id)
@@ -1084,6 +1106,7 @@ ORDER BY id`, id)
 	for rows.Next() {
 		var message agent.Message
 		var messageCreatedAt string
+		var messageContexts string
 		if err := rows.Scan(
 			&message.ID,
 			&message.ConversationID,
@@ -1093,12 +1116,17 @@ ORDER BY id`, id)
 			&message.Error,
 			&message.InputTokens,
 			&message.OutputTokens,
+			&messageContexts,
 			&messageCreatedAt,
 		); err != nil {
 			rows.Close()
 			return agent.Conversation{}, err
 		}
 		message.CreatedAt = parseTime(messageCreatedAt)
+		if err := json.Unmarshal([]byte(messageContexts), &message.Contexts); err != nil {
+			rows.Close()
+			return agent.Conversation{}, fmt.Errorf("decode message contexts: %w", err)
+		}
 		conversation.Messages = append(conversation.Messages, message)
 	}
 	if err := rows.Err(); err != nil {
@@ -1137,6 +1165,16 @@ func (s *Store) AppendMessage(ctx context.Context, message agent.Message) (agent
 	if message.Status == "" {
 		message.Status = "complete"
 	}
+	if len(message.Contexts) > contextscope.MaximumContexts {
+		return agent.Message{}, fmt.Errorf(
+			"conversation message exceeds %d structured contexts",
+			contextscope.MaximumContexts,
+		)
+	}
+	contextsJSON, err := json.Marshal(message.Contexts)
+	if err != nil {
+		return agent.Message{}, fmt.Errorf("encode message contexts: %w", err)
+	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -1146,8 +1184,8 @@ func (s *Store) AppendMessage(ctx context.Context, message agent.Message) (agent
 	result, err := tx.ExecContext(ctx, `
 INSERT INTO conversation_messages (
     conversation_id, role, text, status, error,
-    input_tokens, output_tokens, created_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    input_tokens, output_tokens, contexts_json, created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		message.ConversationID,
 		message.Role,
 		message.Text,
@@ -1155,6 +1193,7 @@ INSERT INTO conversation_messages (
 		message.Error,
 		message.InputTokens,
 		message.OutputTokens,
+		string(contextsJSON),
 		formatTime(message.CreatedAt),
 	)
 	if err != nil {

@@ -87,13 +87,20 @@ func TestAdapterIndexesAndSearchesRepositoryOnNativePlatform(t *testing.T) {
 	root := t.TempDir()
 	repositoryPath := filepath.Join(root, "example")
 	runGit(t, root, "init", repositoryPath)
+	internalPath := filepath.Join(repositoryPath, "internal")
+	if err := os.MkdirAll(internalPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	runGit(t, repositoryPath, "config", "user.email", "repokarta@example.test")
 	runGit(t, repositoryPath, "config", "user.name", "RepoKarta tests")
 	source := "package greeting\n\nfunc HelloRepoKarta() string {\n\treturn \"needle from local code\"\n}\n"
-	if err := os.WriteFile(filepath.Join(repositoryPath, "hello.go"), []byte(source), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(internalPath, "hello.go"), []byte(source), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	runGit(t, repositoryPath, "add", "hello.go")
+	if err := os.WriteFile(filepath.Join(repositoryPath, "other.go"), []byte(source), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repositoryPath, "add", "internal/hello.go", "other.go")
 	runGit(t, repositoryPath, "commit", "-m", "Add searchable source")
 	runGit(t, repositoryPath, "remote", "add", "origin", "git@github.com:example/example.git")
 
@@ -132,17 +139,34 @@ func TestAdapterIndexesAndSearchesRepositoryOnNativePlatform(t *testing.T) {
 		t.Fatalf("expected one matching file, got %#v", result)
 	}
 	match := result.Matches[0]
-	if match.Path != "hello.go" || match.Revision != repository.HeadCommit {
+	if match.RepositoryID != repository.ID ||
+		match.Repository != filepath.ToSlash(repository.Path) ||
+		match.Path != "internal/hello.go" ||
+		match.Revision != repository.HeadCommit {
 		t.Fatalf("unexpected search match: %#v", match)
 	}
 	if len(match.Lines) != 1 || match.Lines[0].Number != 4 {
 		t.Fatalf("expected a cited line 4, got %#v", match.Lines)
 	}
-
-	if err := os.WriteFile(filepath.Join(repositoryPath, "hello.go"), []byte(source+"\nconst UpdatedNeedle = \"fresh index\"\n"), 0o644); err != nil {
+	scoped, err := adapter.Search(context.Background(), search.Query{
+		Text: "needle from local code",
+		Scopes: []search.Scope{{
+			RepositoryID: uint32(repository.ID),
+			Repository:   filepath.ToSlash(repositoryPath),
+			Path:         "internal/hello.go",
+		}},
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
-	runGit(t, repositoryPath, "add", "hello.go")
+	if len(scoped.Matches) != 1 || scoped.Matches[0].Path != "internal/hello.go" {
+		t.Fatalf("structured file scope = %#v; indexed repository identity = %q", scoped.Matches, match.Repository)
+	}
+
+	if err := os.WriteFile(filepath.Join(internalPath, "hello.go"), []byte(source+"\nconst UpdatedNeedle = \"fresh index\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repositoryPath, "add", "internal/hello.go")
 	runGit(t, repositoryPath, "commit", "-m", "Update searchable source")
 	repositories, err = catalog.Discover(root)
 	if err != nil {
@@ -256,7 +280,7 @@ func TestSymbolQueryWarnsWhenUniversalCTagsIsUnavailable(t *testing.T) {
 	}
 }
 
-func TestIndexFallsBackToGitCLIForWorktreeConfigRepositories(t *testing.T) {
+func TestIndexUsesGitShadowForWorktreeConfigRepositories(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git is not installed")
 	}
@@ -290,15 +314,15 @@ func TestIndexFallsBackToGitCLIForWorktreeConfigRepositories(t *testing.T) {
 	if _, err := adapter.Index(context.Background(), repository); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(indexDirectory, "git-cli-fallback", "repo-45.git", "HEAD")); err != nil {
-		t.Fatalf("Git CLI fallback was not created: %v", err)
+	if _, err := os.Stat(filepath.Join(indexDirectory, "git-shadow", "repo-45.git", "HEAD")); err != nil {
+		t.Fatalf("Git shadow was not created: %v", err)
 	}
 	result, err := adapter.Search(context.Background(), search.Query{Text: "worktree fallback needle"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(result.Matches) != 1 || result.Matches[0].Revision != repository.HeadCommit {
-		t.Fatalf("fallback search result = %#v", result)
+		t.Fatalf("Git shadow search result = %#v", result)
 	}
 }
 
