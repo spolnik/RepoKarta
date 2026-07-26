@@ -3915,6 +3915,71 @@ a.brand-mark:hover,
   font-weight: 500;
 }
 
+.conversation-history-scope {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.2rem;
+  margin: 0 0.7rem 0.45rem;
+  border: 1px solid rgb(255 255 255 / 0.06);
+  border-radius: var(--r-md);
+  padding: 0.2rem;
+  background: rgb(0 0 0 / 0.16);
+}
+
+.conversation-history-scope:has(button[hidden]) {
+  grid-template-columns: 1fr;
+}
+
+.conversation-history-scope button {
+  min-height: 1.75rem;
+  border-radius: var(--r-sm);
+  color: var(--color-ink-faint);
+  font-size: var(--fs-meta);
+  font-weight: 650;
+  transition: 150ms ease;
+}
+
+.conversation-history-scope button:hover {
+  color: var(--color-ink-soft);
+  background: rgb(255 255 255 / 0.035);
+}
+
+.conversation-history-scope button[aria-pressed="true"] {
+  background: rgb(139 92 246 / 0.12);
+  color: var(--color-ai-soft);
+  box-shadow: inset 0 0 0 1px rgb(167 139 250 / 0.13);
+}
+
+.conversation-author-filter {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0 0.7rem 0.45rem;
+  color: var(--color-ink-faint);
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  text-transform: uppercase;
+  letter-spacing: 0.055em;
+}
+
+.conversation-author-filter[hidden] {
+  display: none;
+}
+
+.conversation-author-filter select {
+  min-width: 0;
+  flex: 1;
+  border: 1px solid rgb(255 255 255 / 0.07);
+  border-radius: var(--r-sm);
+  padding: 0.38rem 1.8rem 0.38rem 0.5rem;
+  background-color: rgb(0 0 0 / 0.18);
+  color: var(--color-ink-soft);
+  font-family: var(--font-sans);
+  font-size: var(--fs-meta);
+  text-transform: none;
+  letter-spacing: normal;
+}
+
 .conversation-history-search {
   display: flex;
   min-height: 2.2rem;
@@ -4018,11 +4083,34 @@ a.brand-mark:hover,
   font-weight: 580;
 }
 
-.conversation-history-open span {
+.conversation-history-open > span {
   margin-top: 0.2rem;
   color: var(--color-ink-faint);
   font-family: var(--font-sans);
   font-size: var(--fs-meta);
+}
+
+.conversation-history-details {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.conversation-history-details .conversation-history-author {
+  overflow: hidden;
+  color: var(--color-ai-soft);
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-history-details .conversation-history-meta {
+  overflow: hidden;
+  color: var(--color-ink-faint);
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .conversation-history-actions {

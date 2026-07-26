@@ -16,18 +16,35 @@ const (
 // Provider credentials are never stored. An opaque provider-native resume
 // cursor is stored separately and is never exposed by the JSON contract.
 type Conversation struct {
-	ID           string    `json:"id"`
-	Title        string    `json:"title"`
-	Provider     string    `json:"provider"`
-	Model        string    `json:"model,omitempty"`
-	Effort       string    `json:"effort,omitempty"`
-	ResumeCursor string    `json:"-"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
-	MessageCount int       `json:"message_count"`
-	InputTokens  int64     `json:"input_tokens"`
-	OutputTokens int64     `json:"output_tokens"`
-	Messages     []Message `json:"messages,omitempty"`
+	ID           string             `json:"id"`
+	Title        string             `json:"title"`
+	Provider     string             `json:"provider"`
+	Model        string             `json:"model,omitempty"`
+	Effort       string             `json:"effort,omitempty"`
+	Author       ConversationAuthor `json:"author"`
+	ResumeCursor string             `json:"-"`
+	CreatedAt    time.Time          `json:"created_at"`
+	UpdatedAt    time.Time          `json:"updated_at"`
+	MessageCount int                `json:"message_count"`
+	InputTokens  int64              `json:"input_tokens"`
+	OutputTokens int64              `json:"output_tokens"`
+	Messages     []Message          `json:"messages,omitempty"`
+}
+
+// ConversationAuthor is the stable authenticated identity that owns a chat.
+// Provider is retained so identical upstream subject IDs cannot collide.
+type ConversationAuthor struct {
+	ID       string `json:"id"`
+	Name     string `json:"name,omitempty"`
+	Email    string `json:"email,omitempty"`
+	Provider string `json:"provider"`
+}
+
+// ConversationFilter bounds durable history to the current author unless an
+// administrator explicitly requests the complete deployment history.
+type ConversationFilter struct {
+	AuthorID string
+	All      bool
 }
 
 // Message is one durable user or assistant turn. Images are persisted as
@@ -49,7 +66,7 @@ type Message struct {
 // ConversationStore is the durable chat surface used by the manager.
 type ConversationStore interface {
 	CreateConversation(context.Context, Conversation) error
-	ListConversations(context.Context) ([]Conversation, error)
+	ListConversations(context.Context, ConversationFilter) ([]Conversation, error)
 	GetConversation(context.Context, string) (Conversation, error)
 	AppendMessage(context.Context, Message) (Message, error)
 	RenameConversation(context.Context, string, string) error

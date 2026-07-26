@@ -54,7 +54,7 @@ type ConversationService interface {
 
 // ConversationHistoryService supplies durable titled transcripts.
 type ConversationHistoryService interface {
-	ListConversations(context.Context) ([]agent.Conversation, error)
+	ListConversations(context.Context, agent.ConversationFilter) ([]agent.Conversation, error)
 	GetConversation(context.Context, string) (agent.Conversation, error)
 	RenameConversation(context.Context, string, string) error
 	DeleteConversation(context.Context, string) error
@@ -298,7 +298,16 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 }
 
 func (s *Server) listConversations(response http.ResponseWriter, request *http.Request) {
-	conversations, err := s.history.ListConversations(request.Context())
+	viewer := s.conversationViewer(request.Context())
+	scope := "own"
+	all := strings.EqualFold(strings.TrimSpace(request.URL.Query().Get("scope")), "all") && viewer.Admin
+	if all {
+		scope = "all"
+	}
+	conversations, err := s.history.ListConversations(request.Context(), agent.ConversationFilter{
+		AuthorID: viewer.Author.ID,
+		All:      all,
+	})
 	if err != nil {
 		writeAPIError(response, http.StatusInternalServerError, err)
 		return
@@ -306,7 +315,12 @@ func (s *Server) listConversations(response http.ResponseWriter, request *http.R
 	if conversations == nil {
 		conversations = []agent.Conversation{}
 	}
-	writeJSON(response, http.StatusOK, map[string]any{"conversations": conversations})
+	writeJSON(response, http.StatusOK, map[string]any{
+		"conversations": conversations,
+		"viewer":        viewer.Author,
+		"can_view_all":  viewer.Admin,
+		"scope":         scope,
+	})
 }
 
 func (s *Server) getConversation(response http.ResponseWriter, request *http.Request) {
@@ -315,6 +329,10 @@ func (s *Server) getConversation(response http.ResponseWriter, request *http.Req
 		strings.TrimSpace(request.PathValue("conversationID")),
 	)
 	if err != nil {
+		writeConversationError(response, err)
+		return
+	}
+	if err := s.authorizeConversation(request.Context(), conversation); err != nil {
 		writeConversationError(response, err)
 		return
 	}
@@ -330,9 +348,19 @@ func (s *Server) renameConversation(response http.ResponseWriter, request *http.
 		writeAPIError(response, http.StatusBadRequest, errors.New("invalid conversation title"))
 		return
 	}
+	conversationID := strings.TrimSpace(request.PathValue("conversationID"))
+	conversation, err := s.history.GetConversation(request.Context(), conversationID)
+	if err != nil {
+		writeConversationError(response, err)
+		return
+	}
+	if err := s.authorizeConversation(request.Context(), conversation); err != nil {
+		writeConversationError(response, err)
+		return
+	}
 	if err := s.history.RenameConversation(
 		request.Context(),
-		strings.TrimSpace(request.PathValue("conversationID")),
+		conversationID,
 		input.Title,
 	); err != nil {
 		writeConversationError(response, err)
@@ -342,9 +370,19 @@ func (s *Server) renameConversation(response http.ResponseWriter, request *http.
 }
 
 func (s *Server) deleteConversation(response http.ResponseWriter, request *http.Request) {
+	conversationID := strings.TrimSpace(request.PathValue("conversationID"))
+	conversation, err := s.history.GetConversation(request.Context(), conversationID)
+	if err != nil {
+		writeConversationError(response, err)
+		return
+	}
+	if err := s.authorizeConversation(request.Context(), conversation); err != nil {
+		writeConversationError(response, err)
+		return
+	}
 	if err := s.history.DeleteConversation(
 		request.Context(),
-		strings.TrimSpace(request.PathValue("conversationID")),
+		conversationID,
 	); err != nil {
 		writeConversationError(response, err)
 		return
@@ -356,6 +394,8 @@ func writeConversationError(response http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, agent.ErrConversationNotFound), errors.Is(err, sql.ErrNoRows):
 		writeAPIError(response, http.StatusNotFound, errors.New("conversation not found"))
+	case errors.Is(err, agent.ErrConversationForbidden):
+		writeAPIError(response, http.StatusForbidden, err)
 	case strings.Contains(err.Error(), "required"), strings.Contains(err.Error(), "exceeds"):
 		writeAPIError(response, http.StatusBadRequest, err)
 	default:
@@ -382,6 +422,9 @@ func (s *Server) chat(response http.ResponseWriter, request *http.Request) {
 	turn.Model = strings.TrimSpace(turn.Model)
 	turn.Effort = strings.TrimSpace(turn.Effort)
 	turn.ConversationID = strings.TrimSpace(turn.ConversationID)
+	viewer := s.conversationViewer(request.Context())
+	turn.Author = viewer.Author
+	turn.AuthorCanViewAll = viewer.Admin
 	for index := range turn.Images {
 		turn.Images[index].Name = strings.TrimSpace(turn.Images[index].Name)
 		turn.Images[index].MediaType = strings.ToLower(strings.TrimSpace(turn.Images[index].MediaType))
@@ -423,6 +466,17 @@ func (s *Server) interruptChat(response http.ResponseWriter, request *http.Reque
 		http.Error(response, "Conversation is required", http.StatusBadRequest)
 		return
 	}
+	if s.history != nil {
+		conversation, err := s.history.GetConversation(request.Context(), conversationID)
+		if err != nil {
+			writeConversationError(response, err)
+			return
+		}
+		if err := s.authorizeConversation(request.Context(), conversation); err != nil {
+			writeConversationError(response, err)
+			return
+		}
+	}
 	if err := s.agents.Interrupt(request.Context(), conversationID); err != nil {
 		switch {
 		case errors.Is(err, agent.ErrConversationNotFound):
@@ -436,6 +490,60 @@ func (s *Server) interruptChat(response http.ResponseWriter, request *http.Reque
 		return
 	}
 	response.WriteHeader(http.StatusNoContent)
+}
+
+type conversationViewer struct {
+	Author agent.ConversationAuthor
+	Admin  bool
+}
+
+func (s *Server) conversationViewer(ctx context.Context) conversationViewer {
+	principal, ok := security.PrincipalFromContext(ctx)
+	if !ok {
+		return conversationViewer{
+			Author: agent.ConversationAuthor{
+				ID:       "local:admin",
+				Name:     "Local administrator",
+				Provider: string(security.ModeLocal),
+			},
+			Admin: true,
+		}
+	}
+	provider := strings.TrimSpace(principal.Provider)
+	if provider == "" {
+		provider = "authenticated"
+	}
+	identity := strings.TrimSpace(principal.ID)
+	if identity == "" {
+		identity = strings.ToLower(strings.TrimSpace(principal.Email))
+	}
+	if identity == "" {
+		identity = "anonymous"
+	}
+	name := strings.TrimSpace(principal.Name)
+	if name == "" {
+		name = strings.TrimSpace(principal.Email)
+	}
+	if name == "" {
+		name = identity
+	}
+	return conversationViewer{
+		Author: agent.ConversationAuthor{
+			ID:       provider + ":" + identity,
+			Name:     name,
+			Email:    strings.TrimSpace(principal.Email),
+			Provider: provider,
+		},
+		Admin: principal.Admin,
+	}
+}
+
+func (s *Server) authorizeConversation(ctx context.Context, conversation agent.Conversation) error {
+	viewer := s.conversationViewer(ctx)
+	if viewer.Admin || conversation.Author.ID == viewer.Author.ID {
+		return nil
+	}
+	return agent.ErrConversationForbidden
 }
 
 func (s *Server) apiSearch(response http.ResponseWriter, request *http.Request) {

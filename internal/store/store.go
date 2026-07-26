@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	currentSchemaVersion = 7
+	currentSchemaVersion = 8
 
 	schemaV1 = `
 CREATE TABLE IF NOT EXISTS repositories (
@@ -106,6 +106,28 @@ CREATE TABLE IF NOT EXISTS conversation_message_citations (
 	schemaV7 = `
 DROP TABLE IF EXISTS document_citations;
 DROP TABLE IF EXISTS document_pages;`
+
+	// Version 8 assigns every durable conversation to a stable authenticated
+	// author. Existing local-first chats belong to the local administrator.
+	schemaV8 = `
+CREATE TABLE IF NOT EXISTS conversations (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL DEFAULT '',
+    effort TEXT NOT NULL DEFAULT '',
+    resume_cursor TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0
+);
+ALTER TABLE conversations ADD COLUMN author_id TEXT NOT NULL DEFAULT 'local:admin';
+ALTER TABLE conversations ADD COLUMN author_name TEXT NOT NULL DEFAULT 'Local administrator';
+ALTER TABLE conversations ADD COLUMN author_email TEXT NOT NULL DEFAULT '';
+ALTER TABLE conversations ADD COLUMN author_provider TEXT NOT NULL DEFAULT 'local';
+CREATE INDEX IF NOT EXISTS conversations_author_updated_index
+ON conversations(author_id, updated_at DESC);`
 )
 
 // Store persists RepoKarta-owned metadata. Repository source remains read-only.
@@ -166,6 +188,8 @@ func migrate(db *sql.DB) error {
 			migration = schemaV6
 		case 7:
 			migration = schemaV7
+		case 8:
+			migration = schemaV8
 		default:
 			return fmt.Errorf("missing migration for schema version %d", next)
 		}
@@ -489,6 +513,13 @@ func (s *Store) CreateConversation(ctx context.Context, conversation agent.Conve
 	if strings.TrimSpace(conversation.ID) == "" {
 		return errors.New("conversation id is required")
 	}
+	if strings.TrimSpace(conversation.Author.ID) == "" {
+		conversation.Author = agent.ConversationAuthor{
+			ID:       "local:admin",
+			Name:     "Local administrator",
+			Provider: "local",
+		}
+	}
 	now := conversation.CreatedAt
 	if now.IsZero() {
 		now = time.Now().UTC()
@@ -499,13 +530,19 @@ func (s *Store) CreateConversation(ctx context.Context, conversation agent.Conve
 	}
 	_, err := s.db.ExecContext(ctx, `
 INSERT INTO conversations (
-    id, title, provider, model, effort, resume_cursor, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    id, title, provider, model, effort,
+    author_id, author_name, author_email, author_provider,
+    resume_cursor, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		conversation.ID,
 		strings.TrimSpace(conversation.Title),
 		strings.TrimSpace(conversation.Provider),
 		strings.TrimSpace(conversation.Model),
 		strings.TrimSpace(conversation.Effort),
+		strings.TrimSpace(conversation.Author.ID),
+		strings.TrimSpace(conversation.Author.Name),
+		strings.TrimSpace(conversation.Author.Email),
+		strings.TrimSpace(conversation.Author.Provider),
 		strings.TrimSpace(conversation.ResumeCursor),
 		formatTime(now),
 		formatTime(updated),
@@ -517,16 +554,24 @@ INSERT INTO conversations (
 }
 
 // ListConversations returns newest-first durable chat summaries.
-func (s *Store) ListConversations(ctx context.Context) ([]agent.Conversation, error) {
-	rows, err := s.db.QueryContext(ctx, `
+func (s *Store) ListConversations(ctx context.Context, filter agent.ConversationFilter) ([]agent.Conversation, error) {
+	query := `
 SELECT
     c.id, c.title, c.provider, c.model, c.effort, c.resume_cursor,
+    c.author_id, c.author_name, c.author_email, c.author_provider,
     c.created_at, c.updated_at, c.input_tokens, c.output_tokens,
     COUNT(m.id)
 FROM conversations c
-LEFT JOIN conversation_messages m ON m.conversation_id = c.id
+LEFT JOIN conversation_messages m ON m.conversation_id = c.id`
+	var arguments []any
+	if !filter.All {
+		query += "\nWHERE c.author_id = ?"
+		arguments = append(arguments, strings.TrimSpace(filter.AuthorID))
+	}
+	query += `
 GROUP BY c.id
-ORDER BY c.updated_at DESC, c.id DESC`)
+ORDER BY c.updated_at DESC, c.id DESC`
+	rows, err := s.db.QueryContext(ctx, query, arguments...)
 	if err != nil {
 		return nil, err
 	}
@@ -543,6 +588,10 @@ ORDER BY c.updated_at DESC, c.id DESC`)
 			&conversation.Model,
 			&conversation.Effort,
 			&conversation.ResumeCursor,
+			&conversation.Author.ID,
+			&conversation.Author.Name,
+			&conversation.Author.Email,
+			&conversation.Author.Provider,
 			&createdAt,
 			&updatedAt,
 			&conversation.InputTokens,
@@ -564,7 +613,9 @@ func (s *Store) GetConversation(ctx context.Context, id string) (agent.Conversat
 	var createdAt, updatedAt string
 	err := s.db.QueryRowContext(ctx, `
 SELECT
-    id, title, provider, model, effort, resume_cursor, created_at, updated_at,
+    id, title, provider, model, effort, resume_cursor,
+    author_id, author_name, author_email, author_provider,
+    created_at, updated_at,
     input_tokens, output_tokens
 FROM conversations
 WHERE id = ?`, id).Scan(
@@ -574,6 +625,10 @@ WHERE id = ?`, id).Scan(
 		&conversation.Model,
 		&conversation.Effort,
 		&conversation.ResumeCursor,
+		&conversation.Author.ID,
+		&conversation.Author.Name,
+		&conversation.Author.Email,
+		&conversation.Author.Provider,
 		&createdAt,
 		&updatedAt,
 		&conversation.InputTokens,

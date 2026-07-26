@@ -565,10 +565,15 @@ type testHistoryConversations struct {
 	testConversations
 	conversation agent.Conversation
 	deleted      bool
+	lastFilter   agent.ConversationFilter
 }
 
-func (s *testHistoryConversations) ListConversations(context.Context) ([]agent.Conversation, error) {
+func (s *testHistoryConversations) ListConversations(_ context.Context, filter agent.ConversationFilter) ([]agent.Conversation, error) {
+	s.lastFilter = filter
 	if s.deleted {
+		return []agent.Conversation{}, nil
+	}
+	if !filter.All && s.conversation.Author.ID != filter.AuthorID {
 		return []agent.Conversation{}, nil
 	}
 	summary := s.conversation
@@ -595,9 +600,14 @@ func (s *testHistoryConversations) DeleteConversation(context.Context, string) e
 
 func TestConversationHistoryCRUDAPI(t *testing.T) {
 	conversations := &testHistoryConversations{conversation: agent.Conversation{
-		ID:           "saved",
-		Title:        "Saved chat",
-		Provider:     "test",
+		ID:       "saved",
+		Title:    "Saved chat",
+		Provider: "test",
+		Author: agent.ConversationAuthor{
+			ID:       "local:admin",
+			Name:     "Local administrator",
+			Provider: "local",
+		},
 		ResumeCursor: "opaque-provider-cursor",
 		CreatedAt:    time.Now().UTC(),
 		UpdatedAt:    time.Now().UTC(),
@@ -618,7 +628,7 @@ func TestConversationHistoryCRUDAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	request := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7331/api/conversations", nil)
+	request := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7331/api/conversations?scope=all", nil)
 	response := httptest.NewRecorder()
 	server.server.Handler.ServeHTTP(response, request)
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"title":"Saved chat"`) {
@@ -626,6 +636,12 @@ func TestConversationHistoryCRUDAPI(t *testing.T) {
 	}
 	if strings.Contains(response.Body.String(), "opaque-provider-cursor") {
 		t.Fatal("provider resume cursor leaked through conversation list API")
+	}
+	if !conversations.lastFilter.All ||
+		!strings.Contains(response.Body.String(), `"can_view_all":true`) ||
+		!strings.Contains(response.Body.String(), `"scope":"all"`) ||
+		!strings.Contains(response.Body.String(), `"name":"Local administrator"`) {
+		t.Fatalf("administrator conversation scope was not exposed correctly: %s", response.Body.String())
 	}
 
 	request = httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7331/api/conversations/saved", nil)
@@ -655,6 +671,67 @@ func TestConversationHistoryCRUDAPI(t *testing.T) {
 	server.server.Handler.ServeHTTP(response, request)
 	if response.Code != http.StatusNoContent || !conversations.deleted {
 		t.Fatalf("delete status = %d, deleted = %v", response.Code, conversations.deleted)
+	}
+}
+
+func TestSharedNonAdminCanOnlyAccessOwnConversations(t *testing.T) {
+	settingsStore := &testSettingsStore{values: make(map[string]string)}
+	securityManager, err := security.New(context.Background(), settingsStore, security.Config{
+		Address:       "127.0.0.1:7331",
+		DataDirectory: t.TempDir(),
+		AllowOpen:     true,
+		AdminUser:     "bootstrap-admin",
+		AdminPassword: "correct horse battery staple",
+		Initial: security.Settings{
+			Mode:      security.ModeOpen,
+			PublicURL: "https://repo.example.com",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	conversations := &testHistoryConversations{conversation: agent.Conversation{
+		ID:       "alice-chat",
+		Title:    "Alice's chat",
+		Provider: "test",
+		Author: agent.ConversationAuthor{
+			ID:       "saml:alice",
+			Name:     "Alice",
+			Provider: "saml",
+		},
+	}}
+	server, err := New(
+		Config{
+			Address:       "127.0.0.1:7331",
+			Conversations: conversations,
+			Security:      securityManager,
+		},
+		codeintel.New(testStore{}, testSearcher{}, "https://repo.example.com"),
+		testRefresher{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	listRequest := httptest.NewRequest(http.MethodGet, "https://repo.example.com/api/conversations?scope=all", nil)
+	listRequest.Host = "repo.example.com"
+	listResponse := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(listResponse, listRequest)
+	if listResponse.Code != http.StatusOK ||
+		!strings.Contains(listResponse.Body.String(), `"conversations":[]`) ||
+		!strings.Contains(listResponse.Body.String(), `"can_view_all":false`) ||
+		conversations.lastFilter.All ||
+		conversations.lastFilter.AuthorID != "open:anonymous" {
+		t.Fatalf("non-admin list status = %d, body = %s, filter = %#v",
+			listResponse.Code, listResponse.Body.String(), conversations.lastFilter)
+	}
+
+	getRequest := httptest.NewRequest(http.MethodGet, "https://repo.example.com/api/conversations/alice-chat", nil)
+	getRequest.Host = "repo.example.com"
+	getResponse := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(getResponse, getRequest)
+	if getResponse.Code != http.StatusForbidden {
+		t.Fatalf("cross-author get status = %d, body = %s", getResponse.Code, getResponse.Body.String())
 	}
 }
 
@@ -774,6 +851,9 @@ func TestSearchAndChatRenderAsSeparatePages(t *testing.T) {
 		`id="conversation-inspector"`,
 		`id="conversation-evidence-list"`,
 		`data-conversation-filter`,
+		`data-conversation-scope="own"`,
+		`data-conversation-scope="all"`,
+		`data-conversation-author-filter`,
 		`data-mermaid-viewer-download`,
 		`aria-label="Ask RepoKarta"`,
 	} {

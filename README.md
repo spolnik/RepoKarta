@@ -53,8 +53,9 @@ questions, M3 evidence-backed repository maps, and M4 living documentation:
   tools;
 - authoritative citation chips recorded from the exact MCP tool results rather
   than trusting a model to reproduce source URLs;
-- locally persisted, automatically titled conversations with reopen, rename,
-  delete, native provider resume, and bounded transcript-replay fallback;
+- locally persisted, author-owned conversations with reopen, rename, delete,
+  administrator-visible own/all history filters, native provider resume, and
+  bounded transcript-replay fallback;
 - visible token usage plus per-turn cancellation, timeout, and output-token
   budget controls;
 - adversarial coverage that keeps instructions found in repository content
@@ -188,9 +189,11 @@ supplied on first startup with `-auth-mode`, `-public-url`,
 `REPOKARTA_ADMIN_USER`, `REPOKARTA_ADMIN_PASSWORD_FILE`, and
 `REPOKARTA_ALLOW_OPEN` cover the startup-only controls.
 
-Authentication establishes a request identity, but conversations and generated
-artifacts are not yet separated per user. Treat the current shared deployment
-as a trusted-team instance.
+Authentication establishes a stable conversation author. Shared users can
+list, open, continue, rename, interrupt, and delete only their own
+conversations; administrators can inspect all authors. Loopback-local mode
+always acts as the local administrator. Generated Wiki artifacts remain shared
+deployment data rather than per-user content.
 
 ## Documentation steering
 
@@ -232,11 +235,15 @@ GET /api/wiki?repository={repository-id}
 POST /api/wiki/generate
 GET /api/wiki/{repository-id}/{page}
 GET /api/wiki/export?repository={repository-id}
-GET /api/conversations
+GET /api/conversations?scope=own|all
 GET /api/conversations/{conversation-id}
 PATCH /api/conversations/{conversation-id}
 DELETE /api/conversations/{conversation-id}
 ```
+
+Conversation list responses include the current viewer, effective scope, and
+`can_view_all`. Asking for `scope=all` without administrator access safely
+falls back to `own`.
 
 Search responses always include `returned_files`, `matching_files`,
 `estimated_total_files`, `total_files_exact`, `truncated`, `files_skipped`,

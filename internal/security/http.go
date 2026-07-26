@@ -24,7 +24,12 @@ func (m *Manager) Middleware(next http.Handler) http.Handler {
 		}
 		switch settings.Mode {
 		case ModeLocal:
-			next.ServeHTTP(response, request)
+			next.ServeHTTP(response, request.WithContext(withPrincipal(request.Context(), Principal{
+				ID:       "admin",
+				Name:     "Local administrator",
+				Provider: string(ModeLocal),
+				Admin:    true,
+			})))
 		case ModeOpen:
 			next.ServeHTTP(response, request.WithContext(withPrincipal(request.Context(), Principal{
 				ID:       "anonymous",

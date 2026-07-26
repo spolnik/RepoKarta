@@ -96,11 +96,14 @@ func TestMiddlewareEnforcesLocalAndSharedBoundaries(t *testing.T) {
 		t.Fatal(err)
 	}
 	handler := manager.Middleware(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		if manager.Mode() == ModeOpen {
-			principal, ok := PrincipalFromContext(request.Context())
-			if !ok || principal.ID != "anonymous" {
-				t.Errorf("open-mode principal = %#v, %v", principal, ok)
-			}
+		principal, ok := PrincipalFromContext(request.Context())
+		if !ok {
+			t.Error("authenticated request does not carry a principal")
+		} else if manager.Mode() == ModeOpen && (principal.ID != "anonymous" || principal.Admin) {
+			t.Errorf("open-mode principal = %#v, want non-admin anonymous", principal)
+		} else if manager.Mode() == ModeLocal &&
+			(principal.ID != "admin" || principal.Name != "Local administrator" || !principal.Admin) {
+			t.Errorf("local-mode principal = %#v, want local administrator", principal)
 		}
 		response.WriteHeader(http.StatusNoContent)
 	}))

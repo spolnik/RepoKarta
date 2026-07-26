@@ -482,12 +482,27 @@ type ConversationRecord = {
   provider: string;
   model?: string;
   effort?: string;
+  author: ConversationAuthor;
   created_at: string;
   updated_at: string;
   message_count: number;
   input_tokens: number;
   output_tokens: number;
   messages?: ConversationRecordMessage[];
+};
+
+type ConversationAuthor = {
+  id: string;
+  name?: string;
+  email?: string;
+  provider: string;
+};
+
+type ConversationHistoryResponse = {
+  conversations: ConversationRecord[];
+  viewer: ConversationAuthor;
+  can_view_all: boolean;
+  scope: "own" | "all";
 };
 
 type ConversationRecordMessage = {
@@ -1582,6 +1597,11 @@ function enableConversations(debug?: DebugLogger): void {
   const history = document.querySelector<HTMLOListElement>("#conversation-history");
   const historyEmpty = document.querySelector<HTMLElement>("[data-conversation-history-empty]");
   const historyFilter = document.querySelector<HTMLInputElement>("[data-conversation-filter]");
+  const historyScopeButtons = Array.from(
+    document.querySelectorAll<HTMLButtonElement>("[data-conversation-scope]")
+  );
+  const authorFilterField = document.querySelector<HTMLElement>(".conversation-author-filter");
+  const authorFilter = document.querySelector<HTMLSelectElement>("[data-conversation-author-filter]");
   const workspace = document.querySelector<HTMLElement>("[data-chat-workspace]");
   const sessionPanel = document.querySelector<HTMLElement>("[data-session-panel]");
   const sessionPanelOpen = document.querySelector<HTMLButtonElement>("[data-session-panel-open]");
@@ -1625,6 +1645,9 @@ function enableConversations(debug?: DebugLogger): void {
     !history ||
     !historyEmpty ||
     !historyFilter ||
+    historyScopeButtons.length !== 2 ||
+    !authorFilterField ||
+    !authorFilter ||
     !workspace ||
     !sessionPanel ||
     !sessionPanelOpen ||
@@ -1686,6 +1709,13 @@ function enableConversations(debug?: DebugLogger): void {
   let attachmentFeedback = "";
   let statuses: ProviderStatus[] = [];
   let conversationSummaries: ConversationRecord[] = [];
+  let conversationScope: "own" | "all" = "own";
+  let conversationViewer: ConversationAuthor = {
+    id: "local:admin",
+    name: "Local administrator",
+    provider: "local"
+  };
+  let canViewAllConversations = false;
   let configuredProviderID = "";
   let runtimeTimer = 0;
   let messageScrollFrame = 0;
@@ -2038,11 +2068,23 @@ function enableConversations(debug?: DebugLogger): void {
     message.append(container);
   };
 
+  const conversationAuthorLabel = (author: ConversationAuthor | undefined): string => {
+    return author?.name?.trim() || author?.email?.trim() || author?.id || "Unknown author";
+  };
+
   const renderStoredTranscript = (conversation: ConversationRecord): void => {
     messages.replaceChildren();
     clearEvidenceSources();
     for (const stored of conversation.messages ?? []) {
       const message = conversationMessage(stored.role);
+      if (stored.role === "user") {
+        const role = message.querySelector<HTMLElement>(".conversation-role");
+        if (role) {
+          role.textContent = conversation.author.id === conversationViewer.id
+            ? "You"
+            : conversationAuthorLabel(conversation.author);
+        }
+      }
       const content = message.querySelector<HTMLElement>(".conversation-content");
       if (content && stored.text) {
         if (stored.role === "assistant") {
@@ -2077,12 +2119,34 @@ function enableConversations(debug?: DebugLogger): void {
   };
 
   const renderConversationHistory = (): void => {
+    for (const button of historyScopeButtons) {
+      const scope = button.dataset.conversationScope;
+      button.hidden = scope === "all" && !canViewAllConversations;
+      button.setAttribute("aria-pressed", String(scope === conversationScope));
+    }
+    authorFilterField.hidden = conversationScope !== "all" || !canViewAllConversations;
+    const selectedAuthor = authorFilter.value;
+    const authors = new Map<string, string>();
+    for (const summary of conversationSummaries) {
+      authors.set(summary.author.id, conversationAuthorLabel(summary.author));
+    }
+    const authorOptions = Array.from(authors, ([id, label]) => ({ id, label }))
+      .sort((left, right) => left.label.localeCompare(right.label));
+    authorFilter.replaceChildren(new Option("All authors", ""));
+    for (const author of authorOptions) {
+      authorFilter.append(new Option(author.label, author.id));
+    }
+    authorFilter.value = authorOptions.some((author) => author.id === selectedAuthor)
+      ? selectedAuthor
+      : "";
+
     history.replaceChildren();
     for (const summary of conversationSummaries) {
       const item = document.createElement("li");
       item.className = "conversation-history-item";
       item.dataset.conversationId = summary.id;
-      item.dataset.searchText = `${summary.title} ${summary.provider}`.toLocaleLowerCase();
+      item.dataset.authorId = summary.author.id;
+      item.dataset.searchText = `${summary.title} ${summary.provider} ${conversationAuthorLabel(summary.author)} ${summary.author.email ?? ""}`.toLocaleLowerCase();
       if (summary.id === conversationID) {
         item.dataset.active = "true";
       }
@@ -2094,13 +2158,22 @@ function enableConversations(debug?: DebugLogger): void {
       }
       const title = document.createElement("strong");
       title.textContent = summary.title;
+      const details = document.createElement("span");
+      details.className = "conversation-history-details";
+      const author = document.createElement("span");
+      author.className = "conversation-history-author";
+      author.textContent = summary.author.id === conversationViewer.id
+        ? "You"
+        : conversationAuthorLabel(summary.author);
       const metadata = document.createElement("span");
+      metadata.className = "conversation-history-meta";
       const updated = new Date(summary.updated_at);
       const updatedLabel = Number.isNaN(updated.valueOf())
         ? "Saved"
         : new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(updated);
       metadata.textContent = `${summary.provider} · ${summary.message_count} messages · ${updatedLabel}`;
-      open.append(title, metadata);
+      details.append(author, metadata);
+      open.append(title, details);
       open.addEventListener("click", () => void openConversation(summary.id));
 
       const actions = document.createElement("div");
@@ -2151,9 +2224,12 @@ function enableConversations(debug?: DebugLogger): void {
       history.append(item);
     }
     const query = historyFilter.value.trim().toLocaleLowerCase();
+    const authorID = conversationScope === "all" ? authorFilter.value : "";
     let visibleConversations = 0;
     for (const item of history.querySelectorAll<HTMLElement>(".conversation-history-item")) {
-      const filtered = Boolean(query) && !(item.dataset.searchText ?? "").includes(query);
+      const queryMismatch = Boolean(query) && !(item.dataset.searchText ?? "").includes(query);
+      const authorMismatch = Boolean(authorID) && item.dataset.authorId !== authorID;
+      const filtered = queryMismatch || authorMismatch;
       item.dataset.filtered = String(filtered);
       if (!filtered) {
         visibleConversations++;
@@ -2161,20 +2237,25 @@ function enableConversations(debug?: DebugLogger): void {
     }
     historyEmpty.hidden = visibleConversations > 0;
     historyEmpty.textContent = conversationSummaries.length === 0
-      ? "No saved chats yet."
+      ? conversationScope === "own" ? "You have no saved chats yet." : "No saved chats yet."
       : visibleConversations === 0
-        ? `No conversations match “${historyFilter.value.trim()}”.`
+        ? "No conversations match the selected filters."
         : "";
     syncConversationChrome();
   };
 
   const refreshConversationHistory = async (): Promise<void> => {
     try {
-      const response = await fetch("/api/conversations", { headers: { Accept: "application/json" } });
+      const response = await fetch(`/api/conversations?scope=${conversationScope}`, {
+        headers: { Accept: "application/json" }
+      });
       if (!response.ok) {
         throw new Error(await response.text() || `Saved chats failed (${response.status})`);
       }
-      const result = await response.json() as { conversations: ConversationRecord[] };
+      const result = await response.json() as ConversationHistoryResponse;
+      conversationViewer = result.viewer;
+      canViewAllConversations = result.can_view_all;
+      conversationScope = result.scope;
       conversationSummaries = result.conversations ?? [];
       renderConversationHistory();
     } catch (error: unknown) {
@@ -2406,6 +2487,18 @@ function enableConversations(debug?: DebugLogger): void {
     });
   });
   historyFilter.addEventListener("input", renderConversationHistory);
+  authorFilter.addEventListener("change", renderConversationHistory);
+  for (const button of historyScopeButtons) {
+    button.addEventListener("click", () => {
+      const requested = button.dataset.conversationScope === "all" ? "all" : "own";
+      if (requested === conversationScope || (requested === "all" && !canViewAllConversations)) {
+        return;
+      }
+      conversationScope = requested;
+      authorFilter.value = "";
+      void refreshConversationHistory();
+    });
+  }
   sessionPanelOpen.addEventListener("click", () => setSessionPanelOpen(true));
   sessionPanelClose.addEventListener("click", () => setSessionPanelOpen(false));
   sessionPanelScrim.addEventListener("click", () => setSessionPanelOpen(false));

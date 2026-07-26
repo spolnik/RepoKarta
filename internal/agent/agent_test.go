@@ -587,12 +587,59 @@ func (s *memoryConversationStore) CreateConversation(_ context.Context, conversa
 	return nil
 }
 
-func (s *memoryConversationStore) ListConversations(context.Context) ([]Conversation, error) {
+func (s *memoryConversationStore) ListConversations(_ context.Context, filter ConversationFilter) ([]Conversation, error) {
 	result := make([]Conversation, 0, len(s.conversations))
 	for _, conversation := range s.conversations {
+		if !filter.All && conversation.Author.ID != filter.AuthorID {
+			continue
+		}
 		result = append(result, conversation)
 	}
 	return result, nil
+}
+
+func TestManagerEnforcesConversationAuthorWhenContinuing(t *testing.T) {
+	store := &memoryConversationStore{conversations: map[string]Conversation{
+		"saved": {
+			ID:       "saved",
+			Title:    "Alice's conversation",
+			Provider: "test",
+			Author: ConversationAuthor{
+				ID:       "saml:alice",
+				Name:     "Alice",
+				Provider: "saml",
+			},
+		},
+	}}
+	adapter := &fakeAdapter{id: "test"}
+	manager := NewManager("", "", "", adapter).UsePersistence(store)
+	defer manager.Close()
+
+	err := manager.Send(context.Background(), TurnRequest{
+		ConversationID: "saved",
+		Message:        "Continue",
+		Author: ConversationAuthor{
+			ID:       "saml:bob",
+			Name:     "Bob",
+			Provider: "saml",
+		},
+	}, func(Event) error { return nil })
+	if !errors.Is(err, ErrConversationForbidden) {
+		t.Fatalf("Send() error = %v, want ErrConversationForbidden", err)
+	}
+	if adapter.started != 0 {
+		t.Fatalf("provider started %d times for an unauthorized author", adapter.started)
+	}
+
+	err = manager.Send(context.Background(), TurnRequest{
+		ConversationID:   "saved",
+		Message:          "Continue as administrator",
+		Author:           ConversationAuthor{ID: "local:admin", Provider: "local"},
+		AuthorCanViewAll: true,
+	}, func(Event) error { return nil })
+	if err != nil {
+		t.Fatalf("administrator continuation failed: %v", err)
+	}
 }
 
 func (s *memoryConversationStore) GetConversation(_ context.Context, id string) (Conversation, error) {

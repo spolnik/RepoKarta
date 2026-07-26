@@ -156,7 +156,8 @@ repositories on managed Windows and Apple Silicon macOS laptops.
   telemetry), never project/local settings; grounding instructions disable
   personal and project memory so answers rest only on RepoKarta tool evidence.
 - Persist titled conversations locally by default, keep provider credentials
-  out of that storage, and provide explicit per-conversation deletion.
+  out of that storage, bind each conversation to its authenticated author, and
+  provide explicit per-conversation deletion.
 - Keep an AI-provider interface so additional hosted or local models can be
   added later.
 - Keep the default orchestration Go-native. The Claude Agent SDK may remain an
@@ -514,8 +515,9 @@ SQLite; bootstrap administrator credentials and SAML private keys do not.
 - [x] Four explicit access modes: loopback-only local, Cloudflare Access JWT,
   native SAML SP, and startup-gated unauthenticated shared access.
 - [x] Startup-credential-protected administration for authentication settings.
-- [ ] Per-user separation of conversations and generated artifacts on a shared
-  instance.
+- [x] Per-user ownership and access enforcement for durable conversations,
+  with administrator own/all and author filters.
+- [ ] Per-user separation of generated artifacts on a shared instance.
 - [ ] Scheduled ghorg synchronization.
 - [ ] Shared or team deployment packaging and operations.
 
@@ -605,7 +607,7 @@ completion criteria include:
 
 ## Current implementation version
 
-`0.36.0-dev`. M0 through M4 are complete. M5 and M6 are in progress.
+`0.37.0-dev`. M0 through M4 are complete. M5 and M6 are in progress.
 
 ## Recommended next session
 

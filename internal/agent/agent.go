@@ -45,6 +45,9 @@ var (
 	ErrNoActiveTurn = errors.New("conversation has no active turn")
 	// ErrConversationNotFound means no live or durable conversation exists.
 	ErrConversationNotFound = errors.New("conversation is no longer active")
+	// ErrConversationForbidden means the authenticated author does not own the
+	// requested conversation and is not an administrator.
+	ErrConversationForbidden = errors.New("conversation belongs to another author")
 )
 
 const (
@@ -155,15 +158,17 @@ type Adapter interface {
 
 // TurnRequest starts or continues a conversation.
 type TurnRequest struct {
-	ConversationID string  `json:"conversation_id"`
-	Provider       string  `json:"provider"`
-	Model          string  `json:"model"`
-	Effort         string  `json:"effort"`
-	Message        string  `json:"message"`
-	Images         []Image `json:"images,omitempty"`
-	TimeoutSeconds int     `json:"timeout_seconds,omitempty"`
-	TokenBudget    int64   `json:"token_budget,omitempty"`
-	ResumeCursor   string  `json:"-"`
+	ConversationID   string             `json:"conversation_id"`
+	Provider         string             `json:"provider"`
+	Model            string             `json:"model"`
+	Effort           string             `json:"effort"`
+	Message          string             `json:"message"`
+	Images           []Image            `json:"images,omitempty"`
+	TimeoutSeconds   int                `json:"timeout_seconds,omitempty"`
+	TokenBudget      int64              `json:"token_budget,omitempty"`
+	ResumeCursor     string             `json:"-"`
+	Author           ConversationAuthor `json:"-"`
+	AuthorCanViewAll bool               `json:"-"`
 }
 
 // Turn is the provider-neutral content sent to one local harness.
@@ -188,6 +193,7 @@ type EphemeralResult struct {
 
 type managedConversation struct {
 	title      string
+	author     ConversationAuthor
 	provider   string
 	model      string
 	effort     string
@@ -282,11 +288,11 @@ func (m *Manager) Statuses(ctx context.Context) []Status {
 }
 
 // ListConversations returns newest-first durable chat summaries.
-func (m *Manager) ListConversations(ctx context.Context) ([]Conversation, error) {
+func (m *Manager) ListConversations(ctx context.Context, filter ConversationFilter) ([]Conversation, error) {
 	if m.persistence == nil {
 		return []Conversation{}, nil
 	}
-	return m.persistence.ListConversations(ctx)
+	return m.persistence.ListConversations(ctx, filter)
 }
 
 // GetConversation loads one durable transcript.
@@ -668,6 +674,7 @@ func (m *Manager) Interrupt(ctx context.Context, conversationID string) error {
 }
 
 func (m *Manager) conversation(ctx context.Context, request TurnRequest) (*managedConversation, string, error) {
+	request.Author = normalizeConversationAuthor(request.Author)
 	if request.ConversationID != "" {
 		m.mu.RLock()
 		conversation := m.conversations[request.ConversationID]
@@ -676,6 +683,10 @@ func (m *Manager) conversation(ctx context.Context, request TurnRequest) (*manag
 			stored, err := m.persistence.GetConversation(ctx, request.ConversationID)
 			if err != nil {
 				return nil, "", ErrConversationNotFound
+			}
+			stored.Author = normalizeConversationAuthor(stored.Author)
+			if !request.AuthorCanViewAll && stored.Author.ID != request.Author.ID {
+				return nil, "", ErrConversationForbidden
 			}
 			request.Provider = stored.Provider
 			request.Model = stored.Model
@@ -686,6 +697,7 @@ func (m *Manager) conversation(ctx context.Context, request TurnRequest) (*manag
 				return nil, "", err
 			}
 			conversation.title = stored.Title
+			conversation.author = stored.Author
 			conversation.history = append([]Message(nil), stored.Messages...)
 			conversation.rehydrate = len(stored.Messages) > 0
 			if restored, ok := conversation.currentSession().(RestoredSession); ok && restored.Restored() {
@@ -697,6 +709,9 @@ func (m *Manager) conversation(ctx context.Context, request TurnRequest) (*manag
 		}
 		if conversation == nil {
 			return nil, "", ErrConversationNotFound
+		}
+		if !request.AuthorCanViewAll && conversation.author.ID != request.Author.ID {
+			return nil, "", ErrConversationForbidden
 		}
 		if request.Provider != "" && request.Provider != conversation.provider {
 			return nil, "", errors.New("a conversation cannot switch providers")
@@ -722,6 +737,7 @@ func (m *Manager) conversation(ctx context.Context, request TurnRequest) (*manag
 		return nil, "", err
 	}
 	conversation.title = DefaultConversationTitle(request.Message, request.Images)
+	conversation.author = request.Author
 	if m.persistence != nil {
 		now := time.Now().UTC()
 		if err := m.persistence.CreateConversation(ctx, Conversation{
@@ -730,6 +746,7 @@ func (m *Manager) conversation(ctx context.Context, request TurnRequest) (*manag
 			Provider:  conversation.provider,
 			Model:     conversation.model,
 			Effort:    conversation.effort,
+			Author:    conversation.author,
 			CreatedAt: now,
 			UpdatedAt: now,
 		}); err != nil {
@@ -742,6 +759,23 @@ func (m *Manager) conversation(ctx context.Context, request TurnRequest) (*manag
 	m.conversations[conversationID] = conversation
 	m.mu.Unlock()
 	return conversation, conversationID, nil
+}
+
+func normalizeConversationAuthor(author ConversationAuthor) ConversationAuthor {
+	author.ID = strings.TrimSpace(author.ID)
+	author.Name = strings.TrimSpace(author.Name)
+	author.Email = strings.TrimSpace(author.Email)
+	author.Provider = strings.TrimSpace(author.Provider)
+	if author.Provider == "" {
+		author.Provider = "local"
+	}
+	if author.ID == "" {
+		author.ID = "local:admin"
+	}
+	if author.Name == "" && author.Email == "" && author.ID == "local:admin" {
+		author.Name = "Local administrator"
+	}
+	return author
 }
 
 func (m *Manager) startConversation(ctx context.Context, request TurnRequest, conversationID string) (*managedConversation, error) {

@@ -69,6 +69,7 @@ type Principal struct {
 	Name     string
 	Provider string
 	Groups   []string
+	Admin    bool
 }
 
 type principalContextKey struct{}

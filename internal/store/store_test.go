@@ -24,10 +24,16 @@ func TestConversationTranscriptPersistsAcrossDatabaseReopen(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Second)
 	conversation := agent.Conversation{
-		ID:        "conversation-1",
-		Title:     "Trace authentication",
-		Provider:  "anthropic-api",
-		Model:     "claude-sonnet-5",
+		ID:       "conversation-1",
+		Title:    "Trace authentication",
+		Provider: "anthropic-api",
+		Model:    "claude-sonnet-5",
+		Author: agent.ConversationAuthor{
+			ID:       "saml:alice",
+			Name:     "Alice Example",
+			Email:    "alice@example.com",
+			Provider: "saml",
+		},
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
@@ -78,7 +84,8 @@ func TestConversationTranscriptPersistsAcrossDatabaseReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Title != conversation.Title || got.ResumeCursor != "opaque-provider-cursor" {
+	if got.Title != conversation.Title || got.ResumeCursor != "opaque-provider-cursor" ||
+		got.Author != conversation.Author {
 		t.Fatalf("conversation metadata = %#v", got)
 	}
 	if got.MessageCount != 2 || got.InputTokens != 120 || got.OutputTokens != 30 {
@@ -93,6 +100,28 @@ func TestConversationTranscriptPersistsAcrossDatabaseReopen(t *testing.T) {
 	imagePath := filepath.Join(storage.conversationDirectory, "1-1.png")
 	if _, err := os.Stat(imagePath); err != nil {
 		t.Fatalf("persisted image file: %v", err)
+	}
+	if err := storage.CreateConversation(ctx, agent.Conversation{
+		ID:       "conversation-2",
+		Title:    "Bob's conversation",
+		Provider: "anthropic-api",
+		Author: agent.ConversationAuthor{
+			ID:       "saml:bob",
+			Name:     "Bob Example",
+			Provider: "saml",
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	own, err := storage.ListConversations(ctx, agent.ConversationFilter{AuthorID: "saml:alice"})
+	if err != nil || len(own) != 1 || own[0].Author.ID != "saml:alice" {
+		t.Fatalf("own conversations = %#v, error = %v", own, err)
+	}
+	all, err := storage.ListConversations(ctx, agent.ConversationFilter{All: true})
+	if err != nil || len(all) != 2 {
+		t.Fatalf("all conversations = %#v, error = %v", all, err)
 	}
 	if err := storage.DeleteConversation(ctx, conversation.ID); err != nil {
 		t.Fatal(err)
@@ -332,6 +361,48 @@ WHERE type = 'table' AND name IN ('document_pages', 'document_citations')`).Scan
 	}
 	if count != 0 {
 		t.Fatalf("upgrade left %d Wiki tables in SQLite; Wiki persistence must remain filesystem-only", count)
+	}
+}
+
+func TestMigrationAssignsLegacyConversationsToLocalAdministrator(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-conversations.db")
+	legacy, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if _, err := legacy.Exec(schemaV4); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := legacy.Exec(`
+INSERT INTO conversations (id, title, provider, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?);
+PRAGMA user_version = 7;`,
+		"legacy-chat",
+		"Legacy chat",
+		"codex",
+		formatTime(now),
+		formatTime(now),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	storage, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer storage.Close()
+	conversation, err := storage.GetConversation(context.Background(), "legacy-chat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if conversation.Author.ID != "local:admin" ||
+		conversation.Author.Name != "Local administrator" ||
+		conversation.Author.Provider != "local" {
+		t.Fatalf("legacy author = %#v, want local administrator", conversation.Author)
 	}
 }
 
