@@ -480,7 +480,7 @@ func TestMCPSetupPageProvidesCopyableReadOnlyConfiguration(t *testing.T) {
 		`read_dependency_inventory`,
 		`list_deep_wiki_pages`,
 		`read_generated_document`,
-		`12 tools · no writes`,
+			`14 tools · no writes`,
 	} {
 		if !strings.Contains(response.Body.String(), expected) {
 			t.Fatalf("MCP setup page does not contain %q", expected)

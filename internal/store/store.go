@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	currentSchemaVersion = 13
+	currentSchemaVersion = 14
 
 	schemaV1 = `
 CREATE TABLE IF NOT EXISTS repositories (
@@ -287,6 +287,97 @@ CREATE TABLE IF NOT EXISTS conversation_messages (
     created_at TEXT NOT NULL
 );
 ALTER TABLE conversation_messages ADD COLUMN contexts_json TEXT NOT NULL DEFAULT '[]';`
+
+	// Version 14 stores normalized, immutable code-insight runs and
+	// observations. Reports inherit repository access and remain separate from
+	// source. Sonar credentials are referenced by environment-variable name;
+	// credential values never enter SQLite.
+	schemaV14 = `
+CREATE TABLE IF NOT EXISTS insight_runs (
+    id TEXT PRIMARY KEY,
+    repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+    revision TEXT NOT NULL,
+    branch TEXT NOT NULL DEFAULT '',
+    tool TEXT NOT NULL,
+    tool_version TEXT NOT NULL DEFAULT '',
+    source_kind TEXT NOT NULL,
+    source_ref TEXT NOT NULL DEFAULT '',
+    rule_pack TEXT NOT NULL DEFAULT '',
+    configuration TEXT NOT NULL DEFAULT '',
+    license TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL,
+    status_message TEXT NOT NULL DEFAULT '',
+    confidence TEXT NOT NULL,
+    observed_at TEXT NOT NULL,
+    ingested_at TEXT NOT NULL,
+    metadata_json TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS insight_runs_repository_time_index
+ON insight_runs(repository_id, observed_at DESC);
+CREATE INDEX IF NOT EXISTS insight_runs_tool_time_index
+ON insight_runs(tool COLLATE NOCASE, observed_at DESC);
+
+CREATE TABLE IF NOT EXISTS insight_observations (
+    id INTEGER PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES insight_runs(id) ON DELETE CASCADE,
+    repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+    revision TEXT NOT NULL,
+    branch TEXT NOT NULL DEFAULT '',
+    kind TEXT NOT NULL CHECK(kind IN ('metric', 'finding')),
+    key TEXT NOT NULL,
+    value REAL,
+    unit TEXT NOT NULL DEFAULT '',
+    severity TEXT NOT NULL DEFAULT '',
+    message TEXT NOT NULL DEFAULT '',
+    path TEXT NOT NULL DEFAULT '',
+    start_line INTEGER NOT NULL DEFAULT 0,
+    end_line INTEGER NOT NULL DEFAULT 0,
+    language TEXT NOT NULL DEFAULT '',
+    owner TEXT NOT NULL DEFAULT '',
+    fingerprint TEXT NOT NULL DEFAULT '',
+    suppressed INTEGER NOT NULL DEFAULT 0,
+    state TEXT NOT NULL,
+    confidence TEXT NOT NULL,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    code_flow_json TEXT NOT NULL DEFAULT 'null',
+    source_url TEXT NOT NULL DEFAULT '',
+    observed_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS insight_observations_repository_revision_index
+ON insight_observations(repository_id, revision, observed_at DESC);
+CREATE INDEX IF NOT EXISTS insight_observations_key_index
+ON insight_observations(key COLLATE NOCASE, kind, observed_at DESC);
+CREATE INDEX IF NOT EXISTS insight_observations_finding_index
+ON insight_observations(fingerprint, severity, observed_at DESC);
+
+CREATE TABLE IF NOT EXISTS insight_thresholds (
+    id INTEGER PRIMARY KEY,
+    repository_id INTEGER NOT NULL DEFAULT 0,
+    key TEXT NOT NULL,
+    operator TEXT NOT NULL CHECK(operator IN ('lt', 'lte', 'gt', 'gte')),
+    value REAL NOT NULL,
+    severity TEXT NOT NULL DEFAULT 'warning',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    updated_at TEXT NOT NULL,
+    UNIQUE(repository_id, key)
+);
+
+CREATE TABLE IF NOT EXISTS sonar_connections (
+    id INTEGER PRIMARY KEY,
+    repository_id INTEGER NOT NULL UNIQUE REFERENCES repositories(id) ON DELETE CASCADE,
+    base_url TEXT NOT NULL,
+    project_key TEXT NOT NULL,
+    token_env TEXT NOT NULL,
+    poll_interval_minutes INTEGER NOT NULL DEFAULT 15,
+    retention_runs INTEGER NOT NULL DEFAULT 50,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    state TEXT NOT NULL DEFAULT 'stale',
+    status_message TEXT NOT NULL DEFAULT '',
+    last_polled_at TEXT NOT NULL DEFAULT '',
+    next_poll_at TEXT NOT NULL DEFAULT '',
+    failure_count INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL
+);`
 )
 
 // SchemaVersion is the current durable SQLite format. Diagnostics and upgrade
@@ -363,6 +454,8 @@ func migrate(db *sql.DB) error {
 			migration = schemaV12
 		case 13:
 			migration = schemaV13
+		case 14:
+			migration = schemaV14
 		default:
 			return fmt.Errorf("missing migration for schema version %d", next)
 		}

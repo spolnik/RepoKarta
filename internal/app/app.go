@@ -20,6 +20,7 @@ import (
 	"github.com/spolnik/RepoKarta/internal/docs"
 	"github.com/spolnik/RepoKarta/internal/graph"
 	"github.com/spolnik/RepoKarta/internal/httpserver"
+	"github.com/spolnik/RepoKarta/internal/insights"
 	"github.com/spolnik/RepoKarta/internal/maintenance"
 	"github.com/spolnik/RepoKarta/internal/mcpserver"
 	"github.com/spolnik/RepoKarta/internal/scim"
@@ -171,6 +172,8 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 	documents.UseGenerator(conversations)
+	codeInsights := insights.New(database, baseURL)
+	codeInsights.StartPolling(ctx)
 	operations, err := maintenance.New(maintenance.Config{
 		DataDirectory:   cfg.DataDirectory,
 		RepositoryRoot:  cfg.RepositoryRoot,
@@ -190,12 +193,14 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 		intelligence.SetBaseURL(updatedBaseURL)
 		maps.SetBaseURL(updatedBaseURL)
+		codeInsights.SetBaseURL(updatedBaseURL)
 	})
 	mcpHandler := mcpserver.NewHandler(mcpserver.Config{
 		Version:   cfg.Version,
 		BaseURL:   baseURL,
 		Token:     mcpToken,
 		Artifacts: mcpserver.Artifacts{Maps: maps, Documents: documents},
+		Insights:  codeInsights,
 		ResolveViewer: func(ctx context.Context, conversationID string) (access.Viewer, error) {
 			if author, ok := conversations.AuthorForMCP(conversationID); ok {
 				return access.Viewer{
@@ -245,6 +250,7 @@ func Run(ctx context.Context, cfg Config) error {
 			}
 			return scimService.Handler()
 		}(),
+		Insights: codeInsights,
 	}, intelligence, coordinator)
 	if err != nil {
 		return err
