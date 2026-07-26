@@ -304,6 +304,24 @@ function enableCopyButtons(): void {
   });
 }
 
+function enableMCPSecretControls(): void {
+  const secret = document.querySelector<HTMLElement>("[data-mcp-secret]");
+  const toggle = document.querySelector<HTMLButtonElement>("[data-mcp-secret-toggle]");
+  if (!secret || !toggle) {
+    return;
+  }
+  const masked = secret.textContent || "";
+  const value = secret.dataset.secret || "";
+  let revealed = false;
+  toggle.setAttribute("aria-pressed", "false");
+  toggle.addEventListener("click", () => {
+    revealed = !revealed;
+    secret.textContent = revealed ? value : masked;
+    toggle.textContent = revealed ? "Hide" : "Reveal";
+    toggle.setAttribute("aria-pressed", String(revealed));
+  });
+}
+
 function enableTokenBudgetHelp(): void {
   const dialog = document.querySelector<HTMLDialogElement>("#token-budget-help");
   const close = dialog?.querySelector<HTMLButtonElement>("[data-token-budget-help-close]");
@@ -5101,6 +5119,7 @@ enableFirstRunProgress();
 enableSearchShortcut();
 localiseShortcutHints();
 enableCopyButtons();
+enableMCPSecretControls();
 enableTokenBudgetHelp();
 highlightSource();
 focusSourceLine();

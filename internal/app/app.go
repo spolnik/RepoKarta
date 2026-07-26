@@ -169,6 +169,10 @@ func Run(ctx context.Context, cfg Config) error {
 		Token:     mcpToken,
 		Artifacts: mcpserver.Artifacts{Maps: maps, Documents: documents},
 	}, intelligence, citations)
+	mcpCommand, executableError := os.Executable()
+	if executableError != nil {
+		mcpCommand = "repokarta"
+	}
 	conversations.StartIdleReaper(ctx, 30*time.Minute)
 	defer conversations.Close()
 
@@ -178,6 +182,9 @@ func Run(ctx context.Context, cfg Config) error {
 		Version:        cfg.Version,
 		OpenBrowser:    cfg.OpenBrowser,
 		MCPHandler:     mcpHandler,
+		MCPToken:       mcpToken,
+		MCPBaseURL:     internalBaseURL,
+		MCPCommand:     mcpCommand,
 		Conversations:  conversations,
 		Maps:           maps,
 		Docs:           documents,

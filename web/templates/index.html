@@ -125,6 +125,9 @@
       {{if .ChatEnabled}}
       <a href="/chat" class="app-nav-link{{if eq .ActivePage "chat"}} app-nav-link-active{{end}}" {{if eq .ActivePage "chat"}}aria-current="page"{{end}}>Chat</a>
       {{end}}
+      {{if .MCPEnabled}}
+      <a href="/mcp/setup" class="app-nav-link{{if eq .ActivePage "mcp"}} app-nav-link-active{{end}}" {{if eq .ActivePage "mcp"}}aria-current="page"{{end}}>MCP</a>
+      {{end}}
     </nav>
     <div class="hidden items-center justify-end gap-2 sm:flex">
       <a id="index-health" href="/" class="index-health" data-index-health>{{template "index-health" .}}</a>

@@ -80,6 +80,9 @@ type Config struct {
 	Version        string
 	OpenBrowser    bool
 	MCPHandler     http.Handler
+	MCPToken       string
+	MCPBaseURL     string
+	MCPCommand     string
 	Conversations  ConversationService
 	Maps           MapService
 	Docs           DocumentationService
@@ -113,10 +116,27 @@ type pageData struct {
 	ActivePage       string
 	ChatEnabled      bool
 	WikiEnabled      bool
+	MCPEnabled       bool
 	Search           searchData
 	AuthMode         string
 	UserLabel        string
 	AdminEnabled     bool
+	MCP              mcpPageData
+}
+
+type mcpPageData struct {
+	Endpoint       string
+	Token          string
+	TokenPreview   string
+	HTTPConfig     string
+	HTTPConfigView string
+	StdioConfig    string
+	Tools          []mcpToolView
+}
+
+type mcpToolView struct {
+	Name        string
+	Description string
 }
 
 type searchData struct {
@@ -247,6 +267,7 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 		mux.HandleFunc("GET /api/wiki/{repositoryID}/{page}", server.apiWikiPage)
 	}
 	if config.MCPHandler != nil {
+		mux.HandleFunc("GET /mcp/setup", server.mcpPage)
 		mux.Handle("/mcp", config.MCPHandler)
 	}
 	if config.Conversations != nil {
@@ -635,6 +656,34 @@ func (s *Server) wikiPage(response http.ResponseWriter, request *http.Request) {
 	s.render(response, "wiki", data)
 }
 
+func (s *Server) mcpPage(response http.ResponseWriter, request *http.Request) {
+	data, err := s.pageData(request.Context())
+	if err != nil {
+		http.Error(response, "Could not load MCP configuration", http.StatusInternalServerError)
+		return
+	}
+	data.ActivePage = "mcp"
+	endpointBaseURL := strings.TrimRight(strings.TrimSpace(s.config.MCPBaseURL), "/")
+	if s.security != nil {
+		if publicURL := s.security.Settings().PublicURL; publicURL != "" {
+			endpointBaseURL = publicURL
+		}
+	}
+	if endpointBaseURL == "" {
+		endpointBaseURL = "http://" + request.Host
+	}
+	data.MCP = buildMCPPageData(
+		endpointBaseURL+"/mcp",
+		s.config.MCPToken,
+		s.config.MCPCommand,
+		strings.TrimRight(strings.TrimSpace(s.config.MCPBaseURL), "/"),
+	)
+	response.Header().Set("Cache-Control", "no-store")
+	response.Header().Set("Referrer-Policy", "no-referrer")
+	response.Header().Set("X-Robots-Tag", "noindex, nofollow")
+	s.render(response, "mcp-setup", data)
+}
+
 func (s *Server) apiWiki(response http.ResponseWriter, request *http.Request) {
 	repositoryID, err := requiredRepositoryID(request.URL.Query().Get("repository"))
 	if err != nil {
@@ -982,6 +1031,7 @@ func (s *Server) pageData(ctx context.Context) (pageData, error) {
 		ActivePage:       "search",
 		ChatEnabled:      s.agents != nil,
 		WikiEnabled:      s.docs != nil,
+		MCPEnabled:       s.config.MCPHandler != nil,
 		Search: searchData{
 			Query: search.Query{Limit: codeintel.DefaultSearchLimit},
 		},
@@ -1010,6 +1060,65 @@ func (s *Server) pageData(ctx context.Context) (pageData, error) {
 		}
 	}
 	return data, nil
+}
+
+func buildMCPPageData(endpoint, token, command, stdioBaseURL string) mcpPageData {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		command = "repokarta"
+	}
+	if stdioBaseURL == "" {
+		stdioBaseURL = strings.TrimSuffix(endpoint, "/mcp")
+	}
+	httpConfiguration, _ := json.MarshalIndent(map[string]any{
+		"mcpServers": map[string]any{
+			"repokarta": struct {
+				Type    string            `json:"type"`
+				URL     string            `json:"url"`
+				Headers map[string]string `json:"headers"`
+			}{
+				Type: "http",
+				URL:  endpoint,
+				Headers: map[string]string{
+					"Authorization": "Bearer " + token,
+				},
+			},
+		},
+	}, "", "  ")
+	stdioConfiguration, _ := json.MarshalIndent(map[string]any{
+		"mcpServers": map[string]any{
+			"repokarta": struct {
+				Command string   `json:"command"`
+				Args    []string `json:"args"`
+			}{
+				Command: command,
+				Args:    []string{"mcp", "-url", stdioBaseURL},
+			},
+		},
+	}, "", "  ")
+	tokenPreview := token
+	if len(token) > 20 {
+		tokenPreview = token[:8] + "••••••••" + token[len(token)-8:]
+	}
+	return mcpPageData{
+		Endpoint:       endpoint,
+		Token:          token,
+		TokenPreview:   tokenPreview,
+		HTTPConfig:     string(httpConfiguration),
+		HTTPConfigView: strings.ReplaceAll(string(httpConfiguration), "Bearer "+token, "Bearer <current-token>"),
+		StdioConfig:    string(stdioConfiguration),
+		Tools: []mcpToolView{
+			{Name: "list_repositories", Description: "Indexed repositories, stable IDs, and pinned commits."},
+			{Name: "search_code", Description: "Literal, regex, or Zoekt search with explicit completeness metadata."},
+			{Name: "find_symbol", Description: "Commit-pinned symbol definitions across indexed code."},
+			{Name: "get_file", Description: "Bounded source reads with exact revision and citation URLs."},
+			{Name: "list_tree", Description: "Bounded repository trees at an exact indexed commit."},
+			{Name: "git_log", Description: "Newest-first commit history with truncation metadata."},
+			{Name: "git_diff", Description: "Resolved revisions and bounded unified patches."},
+			{Name: "read_repository_map", Description: "Saved structural facts, dependencies, and architecture edges."},
+			{Name: "read_generated_document", Description: "Generated Deep Wiki pages and their grounded evidence."},
+		},
+	}
 }
 
 func (s *Server) render(response http.ResponseWriter, name string, data any) {

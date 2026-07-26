@@ -246,6 +246,13 @@ and `maximum_bytes`. If `to` is omitted the indexed commit is used; if `from`
 is omitted its first parent is used. Commits returned by `git_log` can be
 passed to `get_file` and `list_tree` for commit-pinned historical evidence.
 
+Open the **MCP** tab or `/mcp/setup` for the current Streamable HTTP endpoint,
+masked bearer token, copyable client configuration, and the exact read-only
+tool catalog. The page is never cached. Its process-scoped token rotates when
+RepoKarta restarts, so refresh the configuration after a restart. Streamable
+HTTP exposes all nine tools, including repository maps and generated Deep Wiki
+pages.
+
 For MCP clients that launch a stdio process, keep RepoKarta running and add:
 
 ```json
@@ -259,9 +266,11 @@ For MCP clients that launch a stdio process, keep RepoKarta running and add:
 }
 ```
 
-The stdio adapter is deliberately thin: it calls the JSON API and exposes no
-MCP-only code capability. RepoKarta's own Codex and Claude harnesses use the
-same tool definitions over its authenticated loopback HTTP MCP endpoint.
+The stdio adapter is deliberately thin: it calls the JSON API, exposes the
+core source/search/tree/Git tools, and adds no MCP-only code capability. Use
+Streamable HTTP when a client also needs repository maps or generated Deep Wiki
+pages. RepoKarta's own Codex and Claude harnesses use the complete tool
+definitions over its authenticated loopback HTTP MCP endpoint.
 
 ## Ask with Codex, Claude, or the Anthropic API
 

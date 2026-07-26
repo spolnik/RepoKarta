@@ -192,6 +192,62 @@ func (*testDocumentationService) Export(context.Context, int64) ([]byte, string,
 	return []byte("PK fixture"), "repokarta-wiki-fixture.zip", nil
 }
 
+func TestMCPSetupPageProvidesCopyableReadOnlyConfiguration(t *testing.T) {
+	const token = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	transportCalled := false
+	server, err := New(
+		Config{
+			Address:    "127.0.0.1:7331",
+			Version:    "test",
+			MCPToken:   token,
+			MCPBaseURL: "http://127.0.0.1:7331",
+			MCPCommand: `C:\Tools\RepoKarta\repokarta.exe`,
+			MCPHandler: http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+				transportCalled = true
+				response.WriteHeader(http.StatusNoContent)
+			}),
+		},
+		codeintel.New(testStore{}, testSearcher{}, "http://127.0.0.1:7331"),
+		testRefresher{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7331/mcp/setup", nil)
+	response := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("MCP setup status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if response.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store", response.Header().Get("Cache-Control"))
+	}
+	for _, expected := range []string{
+		`aria-current="page">MCP`,
+		`data-mcp-secret`,
+		`data-mcp-secret-toggle`,
+		`http://127.0.0.1:7331/mcp`,
+		`Authorization`,
+		`Bearer ` + token,
+		`C:\\Tools\\RepoKarta\\repokarta.exe`,
+		`read_repository_map`,
+		`read_generated_document`,
+		`9 tools · no writes`,
+	} {
+		if !strings.Contains(response.Body.String(), expected) {
+			t.Fatalf("MCP setup page does not contain %q", expected)
+		}
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7331/mcp", nil)
+	response = httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent || !transportCalled {
+		t.Fatalf("MCP transport status = %d, called = %v", response.Code, transportCalled)
+	}
+}
+
 func TestDocumentationPageAPIGenerationAndExport(t *testing.T) {
 	repository := catalog.Repository{ID: 6, Name: "Documented Repo", IndexState: "ready"}
 	documents := &testDocumentationService{
