@@ -14,9 +14,10 @@ import (
 )
 
 const (
-	maximumSymbolsPerDocument    = 400
-	maximumRelationsPerDocument  = 800
-	maximumBuildFactsPerDocument = 200
+	maximumSymbolsPerDocument             = 400
+	maximumNavigationRelationsPerDocument = 800
+	maximumCallRelationsPerDocument       = 800
+	maximumBuildFactsPerDocument          = 200
 )
 
 // Range is a stable, one-based source location with a half-open byte span.
@@ -180,13 +181,14 @@ func Analyze(filePath string, source []byte) (document Document, supported bool)
 		})
 	}
 	document.Symbols = extractSymbols(tree, source, lines)
-	document.Relations = extractRelations(tree, source, lines)
+	var relationsTruncated bool
+	document.Relations, relationsTruncated = extractRelations(tree, source, lines)
 	if isGradlePath(filePath) {
 		document.BuildFacts = extractGradleFacts(tree, source, lines)
 	}
 	document.Truncated =
 		len(document.Symbols) >= maximumSymbolsPerDocument ||
-			len(document.Relations) >= maximumRelationsPerDocument ||
+			relationsTruncated ||
 			len(document.BuildFacts) >= maximumBuildFactsPerDocument
 	return document, true
 }
@@ -316,12 +318,14 @@ func declarationName(node *gotreesitter.Node, language *gotreesitter.Language) *
 	)
 }
 
-func extractRelations(tree *gotreesitter.Tree, source []byte, lines []int) []Relation {
-	relations := make([]Relation, 0)
+func extractRelations(tree *gotreesitter.Tree, source []byte, lines []int) ([]Relation, bool) {
+	navigation := make([]Relation, 0)
+	calls := make([]Relation, 0)
 	seen := make(map[string]struct{})
+	truncated := false
 	appendRelation := func(kind, target, receiver string, start, end uint32) {
 		target = compactText(target, 240)
-		if target == "" || len(relations) >= maximumRelationsPerDocument {
+		if target == "" {
 			return
 		}
 		key := fmt.Sprintf("%s\x00%s\x00%d", kind, target, start)
@@ -329,16 +333,26 @@ func extractRelations(tree *gotreesitter.Tree, source []byte, lines []int) []Rel
 			return
 		}
 		seen[key] = struct{}{}
-		relations = append(relations, Relation{
+		relation := Relation{
 			Kind:       kind,
 			Target:     target,
 			Receiver:   receiver,
 			Confidence: "syntax",
 			Range:      sourceRange(lines, int(start), int(end)),
-		})
-	}
-	for _, call := range gotreesitter.ExtractCalls(tree) {
-		appendRelation("call", call.Name, call.Receiver, call.StartByte, call.EndByte)
+		}
+		if kind == "call" {
+			if len(calls) >= maximumCallRelationsPerDocument {
+				truncated = true
+				return
+			}
+			calls = append(calls, relation)
+			return
+		}
+		if len(navigation) >= maximumNavigationRelationsPerDocument {
+			truncated = true
+			return
+		}
+		navigation = append(navigation, relation)
 	}
 	for _, heritage := range gotreesitter.ExtractHeritage(tree) {
 		appendRelation(heritage.Kind, heritage.Parent, heritage.Name, heritage.StartByte, heritage.EndByte)
@@ -349,6 +363,18 @@ func extractRelations(tree *gotreesitter.Tree, source []byte, lines []int) []Rel
 		if isImportNode(tree.Language().Name, nodeType) {
 			appendRelation("import", node.Text(source), "", node.StartByte(), node.EndByte())
 		}
+		if target := typeReferenceTarget(tree.Language().Name, nodeType, node.Text(source)); target != "" &&
+			!isDeclarationName(node, language) &&
+			!hasImportAncestor(node, tree.Language().Name, language) {
+			appendRelation("type", target, "", node.StartByte(), node.EndByte())
+		}
+		return true
+	})
+	for _, call := range gotreesitter.ExtractCalls(tree) {
+		appendRelation("call", call.Name, call.Receiver, call.StartByte, call.EndByte)
+	}
+	walk(tree.RootNode(), func(node *gotreesitter.Node) bool {
+		nodeType := node.Type(language)
 		if isCustomCallNode(tree.Language().Name, nodeType) {
 			if target := callName(node, language, source); target != "" {
 				appendRelation("call", target, "", node.StartByte(), node.EndByte())
@@ -356,10 +382,49 @@ func extractRelations(tree *gotreesitter.Tree, source []byte, lines []int) []Rel
 		}
 		return true
 	})
+	relations := append(navigation, calls...)
 	sort.Slice(relations, func(i, j int) bool {
 		return relations[i].Range.StartByte < relations[j].Range.StartByte
 	})
-	return relations
+	return relations, truncated
+}
+
+func typeReferenceTarget(languageName, nodeType, text string) string {
+	switch languageName {
+	case "java", "go", "javascript", "typescript", "tsx":
+		if nodeType == "type_identifier" {
+			return text
+		}
+	case "kotlin":
+		if nodeType == "user_type" {
+			return text
+		}
+	}
+	return ""
+}
+
+func isDeclarationName(node *gotreesitter.Node, language *gotreesitter.Language) bool {
+	parent := node.Parent()
+	if parent == nil {
+		return false
+	}
+	name := parent.ChildByFieldName("name", language)
+	return sameNodeRange(node, name)
+}
+
+func hasImportAncestor(node *gotreesitter.Node, languageName string, language *gotreesitter.Language) bool {
+	for parent := node.Parent(); parent != nil; parent = parent.Parent() {
+		if isImportNode(languageName, parent.Type(language)) {
+			return true
+		}
+	}
+	return false
+}
+
+func sameNodeRange(left, right *gotreesitter.Node) bool {
+	return left != nil && right != nil &&
+		left.StartByte() == right.StartByte() &&
+		left.EndByte() == right.EndByte()
 }
 
 func isImportNode(languageName, nodeType string) bool {

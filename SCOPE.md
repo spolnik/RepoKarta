@@ -184,9 +184,9 @@ repositories on managed Windows and Apple Silicon macOS laptops.
   - databases and external services where reliably detectable
 - Build a bounded, language-neutral structural index from pure-Go Tree-sitter
   grammars for Java, Kotlin, Gradle Groovy, TypeScript/TSX, JavaScript, Go,
-  SQL, Bash, and Python. Record declarations, imports, inheritance, call sites,
-  Gradle DSL calls, exact byte/line ranges, parser diagnostics, and confidence
-  without executing repository code.
+  SQL, Bash, and Python. Record declarations, imports, inheritance, type usages,
+  call sites, Gradle DSL calls, exact byte/line ranges, parser diagnostics, and
+  confidence without executing repository code.
 - Feed a curated subset of parsed types, functions, and build facts into the
   Deep Wiki survey starting point. Keep the full syntax inventory separate from
   visual graph nodes so generic call sites do not create a graph hairball.
@@ -857,7 +857,7 @@ completion criteria include:
 
 ## Current implementation version
 
-`0.39.0-dev`. M0 through M6 are complete; M7 through M11 are planned.
+`0.40.0-dev`. M0 through M6 are complete; M7 through M11 are planned.
 
 ## Recommended next session
 

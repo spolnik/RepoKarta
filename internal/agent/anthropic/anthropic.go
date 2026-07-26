@@ -442,7 +442,7 @@ func toolDefinitions() []anthropicapi.ToolUnionParam {
 			"language":   stringProperty("Optional language filter."),
 			"limit":      integerProperty("Maximum files, 1 to 500."),
 		}, []string{"symbol"}),
-		tool("find_references", "Find syntax-backed call, import, extends, and implements sites by exact source-level target name. Results report AST relation kind, receiver, confidence, coverage, and commit-pinned citations; overloads and dynamic dispatch are not type-resolved.", map[string]any{
+		tool("find_references", "Find syntax-backed call, type-usage, import, extends, and implements sites by exact source-level target name. Results report AST relation kind, receiver, confidence, index progress, coverage, and commit-pinned citations; overloads and dynamic dispatch are not type-resolved.", map[string]any{
 			"symbol":     stringProperty("Exact source-level symbol name."),
 			"repository": stringProperty("Optional exact repository name."),
 			"language":   stringProperty("Optional parser language filter."),

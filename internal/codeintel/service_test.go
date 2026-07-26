@@ -161,11 +161,11 @@ func (s referenceTestStore) RepositoryByID(_ context.Context, id int64) (catalog
 }
 
 type referenceTestStructure struct {
-	snapshot graph.Snapshot
+	index graph.StructuralIndex
 }
 
-func (s referenceTestStructure) Snapshot(context.Context, int64, bool) (graph.Snapshot, error) {
-	return s.snapshot, nil
+func (s referenceTestStructure) ReadStructure(context.Context, int64) (graph.StructuralIndex, error) {
+	return s.index, nil
 }
 
 func TestReferenceSearchUsesPersistedASTRelationsAndPinnedSource(t *testing.T) {
@@ -194,8 +194,7 @@ public class PaymentService extends BaseService {
 		IndexedCommit: revision,
 		IndexState:    "ready",
 	}
-	structure := referenceTestStructure{snapshot: graph.Snapshot{
-		Repositories: []graph.Repository{{ID: 7, Name: "payments", Revision: revision}},
+	structure := referenceTestStructure{index: graph.StructuralIndex{
 		Structure: []graph.StructuralDocument{{
 			RepositoryID:  7,
 			Repository:    "payments",
@@ -253,6 +252,10 @@ public class PaymentService extends BaseService {
 		result.MatchCount != 1 || result.MatchingFiles != 1 || result.Truncated || !result.TotalFilesExact {
 		t.Fatalf("reference completeness = %#v", result)
 	}
+	if result.ReferenceIndex == nil || result.ReferenceIndex.State != "ready" ||
+		result.ReferenceIndex.ReadyRepositories != 1 {
+		t.Fatalf("reference index = %#v", result.ReferenceIndex)
+	}
 	if len(result.Matches) != 1 || len(result.Matches[0].Lines) != 1 {
 		t.Fatalf("reference matches = %#v", result.Matches)
 	}
@@ -283,7 +286,7 @@ public class PaymentService extends BaseService {
 
 func TestReferenceSearchReportsPartialASTCoverage(t *testing.T) {
 	service := New(symbolTestStore{}, &capturingSearcher{}, "http://localhost").UseStructure(
-		referenceTestStructure{snapshot: graph.Snapshot{
+		referenceTestStructure{index: graph.StructuralIndex{
 			StructureTruncated: true,
 			Scope: graph.Scope{
 				Complete:             false,
@@ -299,6 +302,11 @@ func TestReferenceSearchReportsPartialASTCoverage(t *testing.T) {
 	}
 	if !result.Truncated || result.TotalFilesExact || len(result.Warnings) != 2 {
 		t.Fatalf("partial coverage = %#v", result)
+	}
+	if result.ReferenceIndex == nil || result.ReferenceIndex.State != "building" ||
+		result.ReferenceIndex.ReadyRepositories != 4 ||
+		result.ReferenceIndex.PendingRepositories != 6 {
+		t.Fatalf("partial index progress = %#v", result.ReferenceIndex)
 	}
 }
 

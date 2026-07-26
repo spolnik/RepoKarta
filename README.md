@@ -283,7 +283,12 @@ masked bearer token, copyable client configuration, and the exact read-only
 tool catalog. The page is never cached. Its process-scoped token rotates when
 RepoKarta restarts, so refresh the configuration after a restart. Streamable
 HTTP exposes all twelve tools. `find_references` searches persisted,
-commit-pinned AST relations without invoking AI. The artifact tools return
+commit-pinned AST calls, type usages, imports, and heritage relations without
+invoking AI. Structural artifacts are prepared in the background after code
+indexing; an incomplete API request returns `202 Accepted`, `Retry-After`, and
+per-repository progress instead of building inside the request. MCP returns the
+same progress and partial-coverage warning in its normal tool result. The
+artifact tools return
 deterministic repository maps, a focused dependency/version and HTTP-call
 inventory, the persisted Deep Wiki page index, and generated page content
 without starting an AI run.
@@ -448,11 +453,11 @@ Windows amd64 and Apple Silicon macOS. The workflow:
 Run the same packagers locally:
 
 ```powershell
-.\scripts\package-release.ps1 -Version 0.39.0-dev
+.\scripts\package-release.ps1 -Version 0.40.0-dev
 ```
 
 ```sh
-./scripts/package-release.sh 0.39.0-dev
+./scripts/package-release.sh 0.40.0-dev
 ```
 
 macOS packages are signed with the hardened runtime when

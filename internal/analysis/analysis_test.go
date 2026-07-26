@@ -1,7 +1,9 @@
 package analysis
 
 import (
+	"fmt"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -125,6 +127,66 @@ public class PaymentService extends BaseService implements Chargeable {
 		}) {
 			t.Fatalf("relations = %#v, want %s %s", document.Relations, expected.kind, expected.target)
 		}
+	}
+}
+
+func TestAnalyzeExtractsJavaTypeUsagesForReferenceNavigation(t *testing.T) {
+	document, supported := Analyze(
+		"src/main/java/com/acme/IncomingPaymentJob.java",
+		[]byte(`package com.acme;
+import com.acme.jobs.JobTimeGuard;
+public class IncomingPaymentJob {
+    private final JobTimeGuard guard;
+    IncomingPaymentJob(JobTimeGuard guard) { this.guard = guard; }
+    JobTimeGuard fallback() { return new JobTimeGuard(); }
+}`),
+	)
+	if !supported || !document.ParseComplete {
+		t.Fatalf("analysis = supported %v, document %#v", supported, document)
+	}
+	typeReferences := 0
+	for _, relation := range document.Relations {
+		if relation.Kind == "type" && relation.Target == "JobTimeGuard" {
+			typeReferences++
+		}
+	}
+	if typeReferences < 3 {
+		t.Fatalf("JobTimeGuard type references = %d in %#v, want at least field, parameter, and return/constructor usages", typeReferences, document.Relations)
+	}
+}
+
+func TestAnalyzeBudgetsNavigationSeparatelyFromHighVolumeCalls(t *testing.T) {
+	var source strings.Builder
+	source.WriteString("package com.acme;\nimport com.acme.jobs.JobTimeGuard;\nclass BusyJob {\n")
+	for index := 0; index < maximumCallRelationsPerDocument+50; index++ {
+		source.WriteString("  void call")
+		source.WriteString(fmt.Sprint(index))
+		source.WriteString("() { guard.check")
+		source.WriteString(fmt.Sprint(index))
+		source.WriteString("(); }\n")
+	}
+	source.WriteString("}\n")
+
+	document, supported := Analyze("src/main/java/com/acme/BusyJob.java", []byte(source.String()))
+	if !supported {
+		t.Fatal("file was not recognized")
+	}
+	if !document.Truncated {
+		t.Fatal("high-volume call document was not marked truncated")
+	}
+	if !slices.ContainsFunc(document.Relations, func(relation Relation) bool {
+		return relation.Kind == "import" && strings.Contains(relation.Target, "JobTimeGuard")
+	}) {
+		t.Fatalf("navigation relation was starved by calls: %#v", document.Relations)
+	}
+	callCount := 0
+	for _, relation := range document.Relations {
+		if relation.Kind == "call" {
+			callCount++
+		}
+	}
+	if callCount != maximumCallRelationsPerDocument {
+		t.Fatalf("call relations = %d, want bounded %d", callCount, maximumCallRelationsPerDocument)
 	}
 }
 

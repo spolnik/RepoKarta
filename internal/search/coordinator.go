@@ -28,7 +28,10 @@ type Coordinator struct {
 	baseCtx         context.Context
 	indexing        atomic.Bool
 	indexedObserver func(context.Context, int64) error
-	indexedQueue    chan int64
+	indexedSignal   chan struct{}
+	indexedMu       sync.Mutex
+	indexedPending  []int64
+	indexedQueued   map[int64]struct{}
 }
 
 // NewCoordinator creates an indexing coordinator.
@@ -47,7 +50,8 @@ func NewCoordinator(root string, excludes []string, store CatalogueStore, engine
 func (c *Coordinator) UseIndexedObserver(observer func(context.Context, int64) error) *Coordinator {
 	c.indexedObserver = observer
 	if observer != nil {
-		c.indexedQueue = make(chan int64, 128)
+		c.indexedSignal = make(chan struct{}, 1)
+		c.indexedQueued = make(map[int64]struct{})
 	}
 	return c
 }
@@ -162,26 +166,49 @@ func (c *Coordinator) indexPending(ctx context.Context) {
 }
 
 func (c *Coordinator) queueIndexed(ctx context.Context, repositoryID int64) {
-	if c.indexedObserver == nil || c.indexedQueue == nil || repositoryID <= 0 {
+	if c.indexedObserver == nil || c.indexedSignal == nil || repositoryID <= 0 {
 		return
 	}
+	c.indexedMu.Lock()
+	if _, queued := c.indexedQueued[repositoryID]; queued {
+		c.indexedMu.Unlock()
+		return
+	}
+	c.indexedQueued[repositoryID] = struct{}{}
+	c.indexedPending = append(c.indexedPending, repositoryID)
+	c.indexedMu.Unlock()
 	select {
-	case c.indexedQueue <- repositoryID:
+	case c.indexedSignal <- struct{}{}:
 	case <-ctx.Done():
 	default:
-		slog.Warn("derived structural index queue is full", "repository_id", repositoryID)
 	}
 }
 
 func (c *Coordinator) observeIndexed(ctx context.Context) {
 	for {
-		select {
-		case <-ctx.Done():
-			return
-		case repositoryID := <-c.indexedQueue:
+		repositoryID, ok := c.nextIndexed()
+		if ok {
 			if err := c.indexedObserver(ctx, repositoryID); err != nil && ctx.Err() == nil {
 				slog.Warn("build derived structural index", "repository_id", repositoryID, "error", err)
 			}
+			continue
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-c.indexedSignal:
 		}
 	}
+}
+
+func (c *Coordinator) nextIndexed() (int64, bool) {
+	c.indexedMu.Lock()
+	defer c.indexedMu.Unlock()
+	if len(c.indexedPending) == 0 {
+		return 0, false
+	}
+	repositoryID := c.indexedPending[0]
+	c.indexedPending = c.indexedPending[1:]
+	delete(c.indexedQueued, repositoryID)
+	return repositoryID, true
 }
