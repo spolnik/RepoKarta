@@ -655,48 +655,48 @@ Add a commit-aware Code Insights workspace for test coverage, static-analysis
 findings, maintainability signals, and quality trends without silently running
 repository build scripts.
 
-- [ ] Define a normalized observation model for metrics and findings containing
+- [x] Define a normalized observation model for metrics and findings containing
   repository, revision, branch, tool, rule or metric key, severity, file and
   line evidence where available, observed timestamp, source run, and ingestion
   confidence.
-- [ ] Import coverage from established report formats before adding
+- [x] Import coverage from established report formats before adding
   language-specific execution: JaCoCo XML, LCOV, and Cobertura XML, with
   explicit line, branch, aggregate, skipped-file, and parse-error states.
-- [ ] Import static-analysis findings through SARIF 2.1.0 as the primary
+- [x] Import static-analysis findings through SARIF 2.1.0 as the primary
   tool-neutral interchange, preserving rule metadata, severity, fingerprints,
   locations, suppressions, and code-flow evidence when supplied.
-- [ ] Add an optional read-only SonarQube Community Build adapter over its Web
+- [x] Add an optional read-only SonarQube Community Build adapter over its Web
   API for project measures, issues, quality-gate status, coverage, complexity,
   duplication, reliability, security, and maintainability metrics.
-- [ ] Keep SonarQube externally managed rather than embedding its server,
+- [x] Keep SonarQube externally managed rather than embedding its server,
   database, or scanner in RepoKarta; store only connection configuration,
   project mappings, redacted credential references, and normalized observations.
-- [ ] Evaluate optional Semgrep Community Edition and MegaLinter ingestion via
+- [x] Evaluate optional Semgrep Community Edition and MegaLinter ingestion via
   SARIF or JSON, recording exact engine, rule-pack, configuration, and license
   provenance instead of presenting every finding as RepoKarta-native analysis.
-- [ ] Derive only safe deterministic metrics directly from RepoKarta's committed
+- [x] Derive only safe deterministic metrics directly from RepoKarta's committed
   syntax data, such as code size and bounded complexity indicators; label these
   separately from externally measured coverage and scanner findings.
-- [ ] Map every imported report to the exact Git revision it analyzed. Reject,
+- [x] Map every imported report to the exact Git revision it analyzed. Reject,
   quarantine, or visibly mark reports whose revision or paths cannot be
   reconciled with the indexed snapshot.
-- [ ] Show fleet, repository, branch, directory, file, language, tool, rule,
+- [x] Show fleet, repository, branch, directory, file, language, tool, rule,
   severity, ownership, and time filters with drill-down to commit-pinned source.
-- [ ] Track current values and history separately, including new-code versus
+- [x] Track current values and history separately, including new-code versus
   overall coverage, introduced versus resolved findings, quality-gate changes,
   and regressions between comparable revisions.
-- [ ] Support administrator-defined advisory thresholds for coverage,
+- [x] Support administrator-defined advisory thresholds for coverage,
   reliability, security, maintainability, duplication, and unresolved findings;
   never claim RepoKarta enforced a CI gate unless the originating system proves
   that outcome.
-- [ ] Ingest trusted CI artifacts, configured scanner APIs, or explicitly
+- [x] Ingest trusted CI artifacts, configured scanner APIs, or explicitly
   uploaded reports by default. Any local scanner or test execution must be a
   separately enabled, sandboxed, resource-bounded policy with cancellation and
   no repository mutation.
-- [ ] Poll external systems with bounded concurrency, backoff, credential
+- [x] Poll external systems with bounded concurrency, backoff, credential
   rotation support, retention controls, and explicit stale, partial, unavailable,
   and rate-limited states.
-- [ ] Expose normalized, already-computed insights through the read-only API and
+- [x] Expose normalized, already-computed insights through the read-only API and
   MCP surface without invoking AI; AI may explain selected evidence but must not
   manufacture missing measurements.
 
@@ -868,9 +868,10 @@ completion criteria include:
 
 ## Current implementation version
 
-`0.44.0-dev`. M0 through M6 are complete; M7 is in progress. The M9 dependency
-inventory foundation, linked-worktree discovery deduplication, and M10
-enterprise identity and administration milestone are complete.
+`0.44.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
+The M9 dependency inventory foundation, linked-worktree discovery
+deduplication, and M10 enterprise identity and administration milestone are
+complete. The remaining M9 work and M11 are planned.
 
 ## Recommended next session
 

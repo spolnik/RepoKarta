@@ -1,0 +1,234 @@
+{{define "insights"}}
+<!doctype html>
+<html lang="en" class="h-full bg-surface-base">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Commit-aware coverage, static-analysis findings, and maintainability signals.">
+    <meta name="theme-color" content="#090b0f">
+    <link rel="icon" href="/assets/favicon.ico" sizes="any">
+    <title>RepoKarta · Code insights</title>
+    <link rel="stylesheet" href="/assets/app.css">
+    <script type="module" src="/assets/app.js"></script>
+  </head>
+  <body class="min-h-full bg-surface-base text-ink antialiased">
+    <a class="skip-link" href="#insight-filters">Skip to insight filters</a>
+    {{template "app-header" .}}
+
+    <main class="insights-workspace">
+      <header class="insights-hero">
+        <div>
+          <p class="insights-kicker">Measured facts · deterministic indicators</p>
+          <h1>Code insights</h1>
+          <p>Compare coverage and code quality at exact Git revisions. RepoKarta imports trusted evidence and never runs repository tests, scanners, or build scripts by default.</p>
+        </div>
+        <div class="insights-safety">
+          <strong>Read-only evidence</strong>
+          <span>Quarantined revisions and unresolved paths stay visible. Advisory thresholds are not CI gates.</span>
+        </div>
+      </header>
+
+      {{if .Notice}}<div class="insights-notice" role="status">{{.Notice}}</div>{{end}}
+      {{if .Error}}<div class="insights-error" role="alert">{{.Error}}</div>{{end}}
+
+      <form id="insight-filters" class="insights-filter-panel" action="/insights" method="get">
+        <label class="filter-field">
+          <span>Repository</span>
+          <select name="repository">
+            <option value="">Accessible fleet</option>
+            {{range .Repositories}}
+            <option value="{{.ID}}" {{if eq $.SelectedID .ID}}selected{{end}}>{{index $.RepositoryLabels .ID}}</option>
+            {{end}}
+          </select>
+        </label>
+        <label class="filter-field"><span>Revision</span><input name="revision" value="{{.Filter.Revision}}" placeholder="Exact commit SHA"></label>
+        <label class="filter-field"><span>Branch</span><input name="branch" value="{{.Filter.Branch}}" placeholder="main"></label>
+        <label class="filter-field"><span>Tool</span><input name="tool" value="{{.Filter.Tool}}" placeholder="SARIF tool or SonarQube"></label>
+        <label class="filter-field"><span>Rule / metric</span><input name="rule" value="{{.Filter.Rule}}" placeholder="coverage.line"></label>
+        <label class="filter-field">
+          <span>Severity</span>
+          <select name="severity"><option value="">Any severity</option><option {{if eq .Filter.Severity "error"}}selected{{end}}>error</option><option {{if eq .Filter.Severity "warning"}}selected{{end}}>warning</option><option {{if eq .Filter.Severity "note"}}selected{{end}}>note</option><option {{if eq .Filter.Severity "none"}}selected{{end}}>none</option></select>
+        </label>
+        <label class="filter-field">
+          <span>Evidence kind</span>
+          <select name="kind"><option value="">Metrics and findings</option><option value="metric" {{if eq .Filter.Kind "metric"}}selected{{end}}>Metrics</option><option value="finding" {{if eq .Filter.Kind "finding"}}selected{{end}}>Findings</option></select>
+        </label>
+        <label class="filter-field"><span>Directory</span><input name="directory" value="{{.Filter.Directory}}" placeholder="internal/"></label>
+        <label class="filter-field"><span>File</span><input name="file" value="{{.Filter.File}}" placeholder="service.go"></label>
+        <label class="filter-field"><span>Language</span><input name="language" value="{{.Filter.Language}}" placeholder="Go"></label>
+        <label class="filter-field"><span>Owner</span><input name="owner" value="{{.Filter.Owner}}" placeholder="@team"></label>
+        <label class="filter-field"><span>Observed since</span><input name="since" value="{{.SinceValue}}" placeholder="2026-07-01T00:00:00Z"></label>
+        <label class="filter-field"><span>Observed until</span><input name="until" value="{{.UntilValue}}" placeholder="2026-08-01T00:00:00Z"></label>
+        <label class="insights-check-field"><input type="checkbox" name="include_quarantined" value="true" {{if .Filter.IncludeQuarantined}}checked{{end}}><span>Include quarantined evidence</span></label>
+        <button class="insights-primary-button" type="submit">Apply filters</button>
+      </form>
+
+      <section class="insights-grid" aria-label="Current insight summary">
+        <article class="insights-summary-card">
+          <span>Current observations</span>
+          <strong>{{len .Response.Current}}</strong>
+          <small>Latest stable identities in this scope</small>
+        </article>
+        <article class="insights-summary-card">
+          <span>Historical observations</span>
+          <strong>{{len .Response.History}}</strong>
+          <small>{{if .Response.Truncated}}Bounded result · refine filters{{else}}Within the selected history window{{end}}</small>
+        </article>
+        <article class="insights-summary-card">
+          <span>Evidence runs</span>
+          <strong>{{len .Response.Runs}}</strong>
+          <small>Imported, polled, or deterministically derived</small>
+        </article>
+        <article class="insights-summary-card">
+          <span>Threshold checks</span>
+          <strong>{{len .Evaluations}}</strong>
+          <small>Advisory only · never represented as enforced CI</small>
+        </article>
+      </section>
+
+      <div class="insights-columns">
+        <section class="insights-panel">
+          <header><div><p>Latest values</p><h2>Metrics</h2></div><span>{{len .Metrics}} shown</span></header>
+          {{if .Metrics}}
+          <div class="insights-metric-grid">
+            {{range .Metrics}}
+            <article>
+              <div><span class="insight-state insight-state-{{.State}}">{{.State}}</span><small>{{.Repository}}{{if .Language}} · {{.Language}}{{end}}</small></div>
+              <h3>{{.Key}}</h3>
+              <strong>{{formatMetric .Value}} <small>{{.Unit}}</small></strong>
+              <p>{{if .Path}}{{.Path}}{{else}}Repository aggregate{{end}}</p>
+              <p>{{.Tool}}{{if .ToolVersion}} · {{.ToolVersion}}{{end}}</p>
+              {{if .SourceURL}}<a href="{{.SourceURL}}">Open pinned source</a>{{end}}
+            </article>
+            {{end}}
+          </div>
+          {{else}}
+          <div class="insights-empty"><strong>No metrics in this scope</strong><span>Import coverage, sync SonarQube, or derive bounded committed-source indicators.</span></div>
+          {{end}}
+        </section>
+
+        <section class="insights-panel">
+          <header><div><p>Unresolved evidence</p><h2>Findings</h2></div><span>{{len .Findings}} shown</span></header>
+          {{if .Findings}}
+          <div class="insights-table-wrap">
+            <table class="insights-table">
+              <thead><tr><th>Severity</th><th>Rule and message</th><th>Evidence</th><th>State</th></tr></thead>
+              <tbody>
+                {{range .Findings}}
+                <tr>
+                  <td><span class="insight-severity insight-severity-{{.Severity}}">{{.Severity}}</span></td>
+                  <td><strong>{{.Key}}</strong><span>{{.Message}}</span></td>
+                  <td>{{if .SourceURL}}<a href="{{.SourceURL}}">{{.Path}}:{{.StartLine}}</a>{{else}}{{if .Path}}{{.Path}}{{else}}No source location{{end}}{{end}}</td>
+                  <td><span class="insight-state insight-state-{{.State}}">{{.State}}</span>{{if .Suppressed}}<small>suppressed</small>{{end}}</td>
+                </tr>
+                {{end}}
+              </tbody>
+            </table>
+          </div>
+          {{else}}
+          <div class="insights-empty"><strong>No findings in this scope</strong><span>An empty result is not a clean bill of health unless a complete scanner run is present.</span></div>
+          {{end}}
+        </section>
+      </div>
+
+      <section class="insights-panel">
+        <header><div><p>Comparable revisions</p><h2>Trend and regression comparison</h2></div><span>Deterministic diff</span></header>
+        <form class="insights-inline-form" action="/insights" method="get">
+          <input type="hidden" name="repository" value="{{.SelectedID}}">
+          <label class="filter-field"><span>Baseline revision</span><input name="from_revision" required placeholder="Exact stored commit"></label>
+          <label class="filter-field"><span>Target revision</span><input name="to_revision" required value="{{.SelectedRevision}}" placeholder="Exact stored commit"></label>
+          <button class="insights-primary-button" type="submit" {{if not .SelectedID}}disabled{{end}}>Compare</button>
+        </form>
+        {{with .Comparison}}
+        <div class="insights-comparison">
+          <article><strong>{{len .MetricDeltas}}</strong><span>metric deltas</span></article>
+          <article><strong>{{len .Introduced}}</strong><span>introduced findings</span></article>
+          <article><strong>{{len .Resolved}}</strong><span>resolved findings</span></article>
+        </div>
+        {{end}}
+      </section>
+
+      <div class="insights-columns insights-operations">
+        <section class="insights-panel">
+          <header><div><p>Trusted evidence</p><h2>Import a report</h2></div><span>32 MiB maximum</span></header>
+          <form class="insights-form" action="/insights/import" method="post" enctype="multipart/form-data">
+            <label class="filter-field"><span>Repository</span><select name="repository_id" required><option value="">Choose repository</option>{{range .Repositories}}<option value="{{.ID}}" {{if eq $.SelectedID .ID}}selected{{end}}>{{index $.RepositoryLabels .ID}}</option>{{end}}</select></label>
+            <label class="filter-field"><span>Exact analyzed revision</span><input name="revision" value="{{.SelectedRevision}}" required></label>
+            <label class="filter-field"><span>Branch label</span><input name="branch" value="{{.SelectedBranch}}"></label>
+            <label class="filter-field"><span>Format</span><select name="format" required><option value="sarif">SARIF 2.1.0</option><option value="lcov">LCOV</option><option value="jacoco">JaCoCo XML</option><option value="cobertura">Cobertura XML</option><option value="semgrep-json">Semgrep JSON</option><option value="megalinter-sarif">MegaLinter SARIF</option></select></label>
+            <label class="filter-field"><span>Producer tool</span><input name="tool" placeholder="Optional producer name"></label>
+            <label class="filter-field"><span>Tool version</span><input name="tool_version" placeholder="Exact engine version"></label>
+            <label class="filter-field"><span>Rule pack</span><input name="rule_pack" placeholder="Ruleset and version"></label>
+            <label class="filter-field"><span>Configuration</span><input name="configuration" placeholder="Configuration identity"></label>
+            <label class="filter-field"><span>License provenance</span><input name="license" placeholder="Scanner/rule-pack license"></label>
+            <label class="filter-field"><span>Path prefix to strip</span><input name="path_prefix" placeholder="/ci/workspace/project"></label>
+            <label class="insights-file-field"><span>Report file</span><input type="file" name="report" required accept=".sarif,.json,.xml,.info,.lcov"></label>
+            <button class="insights-primary-button" type="submit">Import and reconcile</button>
+          </form>
+        </section>
+
+        <section class="insights-panel">
+          <header><div><p>RepoKarta-derived</p><h2>Bounded syntax indicators</h2></div><span>No project execution</span></header>
+          <p class="insights-panel-copy">Counts code size and lexical branch points from at most 500 committed source files / 50 MiB using read-only Git plumbing. Results are labeled <em>derived</em>, never coverage.</p>
+          <form class="insights-form" action="/insights/derive" method="post">
+            <label class="filter-field"><span>Repository</span><select name="repository_id" required><option value="">Choose repository</option>{{range .Repositories}}<option value="{{.ID}}" {{if eq $.SelectedID .ID}}selected{{end}}>{{index $.RepositoryLabels .ID}}</option>{{end}}</select></label>
+            <button class="insights-primary-button" type="submit">Derive committed indicators</button>
+          </form>
+
+          {{if .CanAdminister}}
+          <hr>
+          <h3 class="insights-subheading">Advisory threshold</h3>
+          <form class="insights-form" action="/insights/threshold" method="post">
+            <input type="hidden" name="repository_id" value="{{.SelectedID}}">
+            <label class="filter-field"><span>Metric key</span><input name="key" required placeholder="coverage.line"></label>
+            <label class="filter-field"><span>Advisory operator</span><select name="operator"><option value="lt">value is below</option><option value="lte">value is at or below</option><option value="gt">value is above</option><option value="gte">value is at or above</option></select></label>
+            <label class="filter-field"><span>Threshold value</span><input name="value" type="number" step="any" required placeholder="80"></label>
+            <label class="filter-field"><span>Severity</span><select name="severity"><option>warning</option><option>error</option><option>note</option></select></label>
+            <button class="insights-secondary-button" type="submit">Save advisory threshold</button>
+          </form>
+          {{end}}
+        </section>
+      </div>
+
+      {{if .CanAdminister}}
+      <section class="insights-panel">
+        <header><div><p>Externally managed</p><h2>SonarQube Community Build</h2></div><span>Read-only Web API</span></header>
+        <p class="insights-panel-copy">RepoKarta stores the URL, project mapping, and environment-variable name only. The token value, SonarQube server, database, and scanner stay external.</p>
+        <form class="insights-inline-form" action="/insights/sonar" method="post">
+          <label class="filter-field"><span>Repository</span><select name="repository_id" required><option value="">Choose repository</option>{{range .Repositories}}<option value="{{.ID}}" {{if eq $.SelectedID .ID}}selected{{end}}>{{index $.RepositoryLabels .ID}}</option>{{end}}</select></label>
+          <label class="filter-field"><span>Base URL</span><input name="base_url" required placeholder="https://sonar.example.com"></label>
+          <label class="filter-field"><span>Project key</span><input name="project_key" required></label>
+          <label class="filter-field"><span>Token environment variable</span><input name="token_env" required placeholder="REPOKARTA_SONAR_TOKEN"></label>
+          <label class="filter-field"><span>Poll interval (minutes)</span><input name="poll_interval_minutes" type="number" min="5" max="1440" value="15"></label>
+          <label class="filter-field"><span>Retained runs</span><input name="retention_runs" type="number" min="1" max="500" value="50"></label>
+          <button class="insights-primary-button" type="submit">Save connection</button>
+        </form>
+        {{if .Connections}}
+        <div class="insights-connection-list">
+          {{range .Connections}}
+          <article>
+            <div><strong>{{.Repository}} · {{.ProjectKey}}</strong><span>{{.BaseURL}}</span><small>Credential: {{.TokenEnv}} · next poll {{formatTime .NextPollAt}}</small></div>
+            <span class="insight-state insight-state-{{.State}}">{{.State}}</span>
+            <form action="/insights/sonar/sync" method="post"><input type="hidden" name="repository_id" value="{{.RepositoryID}}"><button class="insights-secondary-button" type="submit">Sync now</button></form>
+          </article>
+          {{end}}
+        </div>
+        {{end}}
+      </section>
+      {{end}}
+
+      <section class="insights-panel">
+        <header><div><p>Audit trail</p><h2>Evidence runs</h2></div><span>{{len .Response.Runs}} retained in view</span></header>
+        {{if .Response.Runs}}
+        <div class="insights-table-wrap">
+          <table class="insights-table">
+            <thead><tr><th>Observed</th><th>Repository / revision</th><th>Producer</th><th>Evidence</th><th>Status</th></tr></thead>
+            <tbody>{{range .Response.Runs}}<tr><td>{{formatTime .ObservedAt}}</td><td><strong>{{.Repository}}</strong><span class="font-mono">{{shortCommit .Revision}} · {{.Branch}}</span></td><td><strong>{{.Tool}}</strong><span>{{.ToolVersion}} · {{.SourceKind}}</span></td><td>{{.ObservationCount}} observations</td><td><span class="insight-state insight-state-{{.Status}}">{{.Status}}</span><small>{{.StatusMessage}}</small></td></tr>{{end}}</tbody>
+          </table>
+        </div>
+        {{else}}<div class="insights-empty"><strong>No evidence runs yet</strong><span>Import a report, sync an external system, or derive bounded committed-source indicators.</span></div>{{end}}
+      </section>
+    </main>
+  </body>
+</html>
+{{end}}

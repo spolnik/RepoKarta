@@ -6,7 +6,9 @@ discovers, incrementally indexes, and searches committed source without
 modifying a worktree.
 
 The current implementation delivers M1 code search, M2 grounded code
-questions, M3 evidence-backed repository maps, and M4 living documentation:
+questions, M3 evidence-backed repository maps, M4 living documentation, M5
+native distribution, M6 shared deployment, M8 code insights, and the M9
+dependency-inventory foundation:
 
 - regular, linked-worktree, and bare Git repository discovery;
 - origin, default revision, HEAD, scan, and index metadata in SQLite;
@@ -47,8 +49,9 @@ questions, M3 evidence-backed repository maps, and M4 living documentation:
 - authenticated loopback HTTP MCP plus a stdio MCP adapter with read-only
   `list_repositories`, `search_code`, `find_symbol`, `find_references`,
   `get_file`, `list_tree`, `git_log`, `git_diff`, `read_repository_map`,
-  `read_dependency_inventory`, `list_deep_wiki_pages`, and
-  `read_generated_document` tools;
+  `read_dependency_inventory`, `list_deep_wiki_pages`,
+  `read_generated_document`, `read_code_insights`, and
+  `compare_code_insights` tools;
 - read-only Codex sandboxes, Claude plan mode, and disabled mutation/shell
   tools;
 - authoritative citation chips recorded from the exact MCP tool results rather
@@ -108,6 +111,24 @@ questions, M3 evidence-backed repository maps, and M4 living documentation:
   SQLite, and SAML identity;
 - source-free diagnostic ZIP export with an explicit inclusion/omission
   manifest, redacted failures, format versions, readiness, and storage totals.
+- a commit-aware Code Insights workspace that imports LCOV, JaCoCo XML,
+  Cobertura XML, SARIF 2.1.0, Semgrep JSON, and MegaLinter SARIF without
+  executing repository code;
+- normalized coverage metrics and scanner findings with exact producer,
+  revision, branch, rule, severity, fingerprint, suppression, code-flow,
+  location, timestamp, confidence, and provenance metadata;
+- strict revision and committed-path reconciliation with visible current,
+  partial, quarantined, unresolved-path, skipped, parse-error, stale,
+  unavailable, and rate-limited states;
+- current-versus-history queries, fleet/repository filters, revision
+  comparisons, introduced and resolved findings, metric deltas, and
+  administrator-defined advisory thresholds that are never represented as
+  enforced CI gates;
+- bounded deterministic code-size and lexical complexity indicators over
+  committed source, clearly separated from externally measured coverage;
+- an optional read-only SonarQube Community Build Web API adapter with bounded
+  polling, backoff, retention, externally rotated environment-variable
+  credentials, and no embedded server, database, or scanner.
 
 The full product definition and non-goals live in [SCOPE.md](./SCOPE.md).
 
@@ -155,6 +176,31 @@ RepoKarta enables symbol indexing automatically when `universal-ctags` is on
 the BSD ctags shipped by macOS. If Universal Ctags is unavailable, `sym:`
 searches return a machine-readable and visible warning instead of a misleading
 silent zero.
+
+## Code insights
+
+Open `/insights` to import trusted CI reports, derive bounded committed-source
+indicators, compare stored revisions, and inspect monitoring state. Every
+upload must name the exact Git revision it analyzed. A report that does not
+match the indexed snapshot is retained as quarantined evidence and is excluded
+from default current-value queries.
+
+The read-only query endpoints are:
+
+- `GET /api/insights` for bounded history, current values, runs, facets, and
+  explicit completeness warnings;
+- `GET /api/insights/compare` for metric deltas and introduced or resolved
+  findings between two exact stored revisions;
+- `GET /api/insights/thresholds` for advisory threshold configuration and
+  status.
+
+Authorized repository viewers can upload a report with
+`POST /api/insights/import` or request bounded committed-source indicators with
+`POST /api/insights/derive`. Administrators configure advisory thresholds and
+an externally managed SonarQube Community Build through the
+`/api/insights/sonar` endpoints. Sonar tokens are read from the configured
+environment-variable name at poll time; their values are never stored.
+RepoKarta does not include a local test or scanner execution endpoint.
 
 ## Deployment authentication
 
@@ -316,7 +362,7 @@ Open the **MCP** tab or `/mcp/setup` for the current Streamable HTTP endpoint,
 masked bearer token, copyable client configuration, and the exact read-only
 tool catalog. The page is never cached. Its process-scoped token rotates when
 RepoKarta restarts, so refresh the configuration after a restart. Streamable
-HTTP exposes all twelve tools. `find_references` searches persisted,
+HTTP exposes all fourteen tools. `find_references` searches persisted,
 commit-pinned AST calls, type usages, imports, and heritage relations without
 invoking AI. Structural artifacts are prepared in the background after code
 indexing; an incomplete API request returns `202 Accepted`, `Retry-After`, and

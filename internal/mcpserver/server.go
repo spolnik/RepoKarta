@@ -21,6 +21,7 @@ import (
 	"github.com/spolnik/RepoKarta/internal/contextscope"
 	"github.com/spolnik/RepoKarta/internal/docs"
 	"github.com/spolnik/RepoKarta/internal/graph"
+	"github.com/spolnik/RepoKarta/internal/insights"
 )
 
 const (
@@ -33,8 +34,16 @@ type Config struct {
 	BaseURL       string
 	Token         string
 	Artifacts     ArtifactReader
+	Insights      InsightReader
 	ResolveViewer func(context.Context, string) (access.Viewer, error)
 	AllowUnscoped func() bool
+}
+
+// InsightReader exposes normalized evidence without invoking AI or scanners.
+type InsightReader interface {
+	Query(context.Context, insights.Filter) (insights.QueryResponse, error)
+	Compare(context.Context, int64, string, string) (insights.Comparison, error)
+	EvaluateThresholds(context.Context, int64) ([]insights.ThresholdEvaluation, error)
 }
 
 // Intelligence is the shared surface implemented by both the in-process
@@ -411,6 +420,68 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 		})
 	}
 
+	if config.Insights != nil {
+		mcp.AddTool(server, &mcp.Tool{
+			Name:        "read_code_insights",
+			Title:       "Read normalized code insights",
+			Description: "Read already-computed coverage metrics, static-analysis findings, deterministic indicators, run status, history, facets, and advisory threshold evaluations. Results are commit-pinned and permission-aware. This never invokes AI, tests, scanners, or repository code.",
+			Annotations: readOnly,
+		}, func(ctx context.Context, _ *mcp.CallToolRequest, input readCodeInsightsInput) (*mcp.CallToolResult, readCodeInsightsOutput, error) {
+			result, err := config.Insights.Query(ctx, insights.Filter{
+				RepositoryID:       input.RepositoryID,
+				Revision:           input.Revision,
+				Branch:             input.Branch,
+				Directory:          input.Directory,
+				File:               input.File,
+				Language:           input.Language,
+				Tool:               input.Tool,
+				Rule:               input.Rule,
+				Severity:           input.Severity,
+				Owner:              input.Owner,
+				Kind:               input.Kind,
+				Limit:              input.Limit,
+				IncludeQuarantined: input.IncludeQuarantined,
+			})
+			if err != nil {
+				return nil, readCodeInsightsOutput{}, err
+			}
+			for _, observation := range result.Current {
+				if observation.SourceURL != "" {
+					tracker.Record(conversationID, agent.Citation{
+						Label: observation.Repository + "@" + shortRevision(observation.Revision) + ":" + observation.Path,
+						URL:   observation.SourceURL,
+					})
+				}
+			}
+			evaluations, err := config.Insights.EvaluateThresholds(ctx, input.RepositoryID)
+			if err != nil {
+				return nil, readCodeInsightsOutput{}, err
+			}
+			return nil, readCodeInsightsOutput{QueryResponse: result, Thresholds: evaluations}, nil
+		})
+
+		mcp.AddTool(server, &mcp.Tool{
+			Name:        "compare_code_insights",
+			Title:       "Compare code insight revisions",
+			Description: "Compare two exact stored revisions for metric deltas and introduced or resolved findings. A missing side remains explicit; RepoKarta does not manufacture measurements or enforce a CI gate.",
+			Annotations: readOnly,
+		}, func(ctx context.Context, _ *mcp.CallToolRequest, input compareCodeInsightsInput) (*mcp.CallToolResult, compareCodeInsightsOutput, error) {
+			result, err := config.Insights.Compare(ctx, input.RepositoryID, input.FromRevision, input.ToRevision)
+			if err != nil {
+				return nil, compareCodeInsightsOutput{}, err
+			}
+			for _, observation := range append(append([]insights.Observation{}, result.Introduced...), result.Resolved...) {
+				if observation.SourceURL != "" {
+					tracker.Record(conversationID, agent.Citation{
+						Label: observation.Repository + "@" + shortRevision(observation.Revision) + ":" + observation.Path,
+						URL:   observation.SourceURL,
+					})
+				}
+			}
+			return nil, result, nil
+		})
+	}
+
 	return server
 }
 
@@ -440,6 +511,35 @@ type searchCodeInput struct {
 	Contexts     []contextscope.Selector `json:"contexts,omitempty" jsonschema:"Optional structured repository and file contexts. Each context uses kind repository or file plus repository_id pinned revision and optional repository-relative path."`
 }
 type searchCodeOutput = codeintel.SearchResponse
+
+type readCodeInsightsInput struct {
+	RepositoryID       int64  `json:"repository_id,omitempty" jsonschema:"Optional repository ID. Omit for the accessible fleet."`
+	Revision           string `json:"revision,omitempty" jsonschema:"Optional exact analyzed Git revision."`
+	Branch             string `json:"branch,omitempty" jsonschema:"Optional reported branch."`
+	Directory          string `json:"directory,omitempty" jsonschema:"Optional repository-relative directory prefix."`
+	File               string `json:"file,omitempty" jsonschema:"Optional path substring."`
+	Language           string `json:"language,omitempty" jsonschema:"Optional language filter."`
+	Tool               string `json:"tool,omitempty" jsonschema:"Optional exact tool name."`
+	Rule               string `json:"rule,omitempty" jsonschema:"Optional exact rule or metric key."`
+	Severity           string `json:"severity,omitempty" jsonschema:"Optional normalized severity."`
+	Owner              string `json:"owner,omitempty" jsonschema:"Optional owner filter."`
+	Kind               string `json:"kind,omitempty" jsonschema:"Optional kind: metric or finding."`
+	Limit              int    `json:"limit,omitempty" jsonschema:"Maximum observations from 1 to 5000."`
+	IncludeQuarantined bool   `json:"include_quarantined,omitempty" jsonschema:"Include reports that do not reconcile to the indexed revision."`
+}
+
+type readCodeInsightsOutput struct {
+	insights.QueryResponse
+	Thresholds []insights.ThresholdEvaluation `json:"threshold_evaluations,omitempty"`
+}
+
+type compareCodeInsightsInput struct {
+	RepositoryID int64  `json:"repository_id" jsonschema:"required,Repository ID returned by list_repositories."`
+	FromRevision string `json:"from_revision" jsonschema:"required,Exact baseline revision already present in insight history."`
+	ToRevision   string `json:"to_revision" jsonschema:"required,Exact target revision already present in insight history."`
+}
+
+type compareCodeInsightsOutput = insights.Comparison
 
 type readRepositoryMapInput struct {
 	RepositoryID int64 `json:"repository_id" jsonschema:"required,Repository ID returned by list_repositories."`

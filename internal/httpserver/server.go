@@ -32,6 +32,7 @@ import (
 	"github.com/spolnik/RepoKarta/internal/docs"
 	"github.com/spolnik/RepoKarta/internal/graph"
 	"github.com/spolnik/RepoKarta/internal/identity"
+	"github.com/spolnik/RepoKarta/internal/insights"
 	"github.com/spolnik/RepoKarta/internal/maintenance"
 	"github.com/spolnik/RepoKarta/internal/search"
 	"github.com/spolnik/RepoKarta/internal/security"
@@ -94,6 +95,20 @@ type EnterpriseStore interface {
 	SetAuditRetention(context.Context, int, int) (int64, error)
 }
 
+// InsightService supplies normalized, already-computed quality evidence.
+type InsightService interface {
+	Query(context.Context, insights.Filter) (insights.QueryResponse, error)
+	Import(context.Context, insights.ImportRequest) (insights.Run, error)
+	Derive(context.Context, int64) (insights.Run, error)
+	Compare(context.Context, int64, string, string) (insights.Comparison, error)
+	Thresholds(context.Context, int64) ([]insights.Threshold, error)
+	SetThreshold(context.Context, insights.Threshold) (insights.Threshold, error)
+	EvaluateThresholds(context.Context, int64) ([]insights.ThresholdEvaluation, error)
+	ConfigureSonar(context.Context, insights.SonarConnection) (insights.SonarConnection, error)
+	SonarConnections(context.Context) ([]insights.SonarConnection, error)
+	SyncSonar(context.Context, int64) (insights.Run, error)
+}
+
 // Config controls the local HTTP server.
 type Config struct {
 	Address          string
@@ -112,6 +127,7 @@ type Config struct {
 	RepositoryAccess RepositoryAccessService
 	Enterprise       EnterpriseStore
 	SCIMHandler      http.Handler
+	Insights         InsightService
 }
 
 // Server hosts RepoKarta's loopback interface.
@@ -129,6 +145,7 @@ type Server struct {
 	maintenance      *maintenance.Service
 	repositoryAccess RepositoryAccessService
 	enterprise       EnterpriseStore
+	insights         InsightService
 }
 
 type pageData struct {
@@ -146,6 +163,7 @@ type pageData struct {
 	WikiEnabled         bool
 	DependenciesEnabled bool
 	MCPEnabled          bool
+	InsightsEnabled     bool
 	Search              searchData
 	AuthMode            string
 	UserLabel           string
@@ -243,6 +261,12 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 		"nextSearchLimit": nextSearchLimit,
 		"indexProgress":   indexProgress,
 		"formatBytes":     formatBytes,
+		"formatMetric": func(value *float64) string {
+			if value == nil {
+				return "—"
+			}
+			return strconv.FormatFloat(*value, 'f', 2, 64)
+		},
 	}
 	templates, err := template.New("repokarta").Funcs(functions).ParseFS(web.Files, "templates/*.html")
 	if err != nil {
@@ -266,6 +290,7 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 		maintenance:      config.Maintenance,
 		repositoryAccess: config.RepositoryAccess,
 		enterprise:       config.Enterprise,
+		insights:         config.Insights,
 	}
 	server.history, _ = config.Conversations.(ConversationHistoryService)
 
@@ -370,6 +395,23 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 			identity.PermissionExportArtifacts, "artifact.export", "wiki", server.exportWiki,
 		))
 		mux.HandleFunc("GET /api/wiki/{repositoryID}/{page}", server.apiWikiPage)
+	}
+	if server.insights != nil {
+		mux.HandleFunc("GET /insights", server.insightsPage)
+		mux.HandleFunc("POST /insights/import", server.importInsights)
+		mux.HandleFunc("POST /insights/derive", server.deriveInsights)
+		mux.HandleFunc("POST /insights/sonar/sync", server.syncSonar)
+		mux.HandleFunc("POST /insights/sonar", server.configureSonar)
+		mux.HandleFunc("POST /insights/threshold", server.setInsightThreshold)
+		mux.HandleFunc("GET /api/insights", server.apiInsights)
+		mux.HandleFunc("GET /api/insights/compare", server.compareInsights)
+		mux.HandleFunc("POST /api/insights/import", server.importInsights)
+		mux.HandleFunc("POST /api/insights/derive", server.deriveInsights)
+		mux.HandleFunc("GET /api/insights/thresholds", server.insightThresholds)
+		mux.HandleFunc("PUT /api/insights/thresholds", server.setInsightThreshold)
+		mux.HandleFunc("GET /api/insights/sonar", server.sonarConnections)
+		mux.HandleFunc("PUT /api/insights/sonar", server.configureSonar)
+		mux.HandleFunc("POST /api/insights/sonar/sync", server.syncSonar)
 	}
 	if config.MCPHandler != nil {
 		mux.HandleFunc("GET /mcp/setup", server.mcpPage)
@@ -1404,6 +1446,7 @@ func (s *Server) pageData(ctx context.Context) (pageData, error) {
 		WikiEnabled:         s.docs != nil,
 		DependenciesEnabled: s.maps != nil,
 		MCPEnabled:          s.config.MCPHandler != nil,
+		InsightsEnabled:     s.insights != nil,
 		Search: searchData{
 			Query: search.Query{Limit: codeintel.DefaultSearchLimit},
 		},
@@ -1492,6 +1535,8 @@ func buildMCPPageData(endpoint, token, command, stdioBaseURL string) mcpPageData
 			{Name: "read_dependency_inventory", Description: "Focused manifests, versioned coordinates, and outbound HTTP calls."},
 			{Name: "list_deep_wiki_pages", Description: "Persisted Wiki plan, page slugs, hierarchy, status, and provenance."},
 			{Name: "read_generated_document", Description: "Generated Deep Wiki pages and their grounded evidence."},
+			{Name: "read_code_insights", Description: "Normalized metrics, findings, history, provenance, and advisory thresholds without executing scanners."},
+			{Name: "compare_code_insights", Description: "Metric deltas and introduced or resolved findings between exact stored revisions."},
 		},
 	}
 }

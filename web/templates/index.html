@@ -123,6 +123,9 @@
       {{if .DependenciesEnabled}}
       <a href="/dependencies" class="app-nav-link{{if eq .ActivePage "dependencies"}} app-nav-link-active{{end}}" {{if eq .ActivePage "dependencies"}}aria-current="page"{{end}}>Dependencies</a>
       {{end}}
+      {{if .InsightsEnabled}}
+      <a href="/insights" class="app-nav-link{{if eq .ActivePage "insights"}} app-nav-link-active{{end}}" {{if eq .ActivePage "insights"}}aria-current="page"{{end}}>Insights</a>
+      {{end}}
       {{if .WikiEnabled}}
       <a href="/wiki" class="app-nav-link{{if eq .ActivePage "wiki"}} app-nav-link-active{{end}}" {{if eq .ActivePage "wiki"}}aria-current="page"{{end}}>Wiki</a>
       {{end}}

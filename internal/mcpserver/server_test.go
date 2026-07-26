@@ -17,6 +17,7 @@ import (
 	"github.com/spolnik/RepoKarta/internal/codeintel"
 	"github.com/spolnik/RepoKarta/internal/docs"
 	"github.com/spolnik/RepoKarta/internal/graph"
+	"github.com/spolnik/RepoKarta/internal/insights"
 	"github.com/spolnik/RepoKarta/internal/search"
 )
 
@@ -103,6 +104,20 @@ func (f fakeArtifacts) GeneratedDocument(context.Context, int64, string) (docs.P
 
 type bearerTransport struct {
 	token string
+}
+
+type testInsightReader struct{}
+
+func (testInsightReader) Query(context.Context, insights.Filter) (insights.QueryResponse, error) {
+	return insights.QueryResponse{}, nil
+}
+
+func (testInsightReader) Compare(context.Context, int64, string, string) (insights.Comparison, error) {
+	return insights.Comparison{}, nil
+}
+
+func (testInsightReader) EvaluateThresholds(context.Context, int64) ([]insights.ThresholdEvaluation, error) {
+	return nil, nil
 }
 
 func (t bearerTransport) RoundTrip(request *http.Request) (*http.Response, error) {
@@ -268,6 +283,7 @@ func TestMCPSearchReturnsPinnedCitation(t *testing.T) {
 		BaseURL:   "http://ui",
 		Token:     "secret",
 		Artifacts: artifacts,
+		Insights:  testInsightReader{},
 	}, intelligence, tracker)
 	server := httptest.NewServer(handler)
 	defer server.Close()
@@ -288,8 +304,8 @@ func TestMCPSearchReturnsPinnedCitation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tools.Tools) != 12 {
-		t.Fatalf("got %d tools, want 12", len(tools.Tools))
+	if len(tools.Tools) != 14 {
+		t.Fatalf("got %d tools, want 14", len(tools.Tools))
 	}
 	toolNames := make(map[string]bool, len(tools.Tools))
 	for _, tool := range tools.Tools {
@@ -308,6 +324,8 @@ func TestMCPSearchReturnsPinnedCitation(t *testing.T) {
 		"read_dependency_inventory",
 		"list_deep_wiki_pages",
 		"read_generated_document",
+		"read_code_insights",
+		"compare_code_insights",
 	} {
 		if !toolNames[name] {
 			t.Fatalf("missing MCP tool %q: %#v", name, toolNames)

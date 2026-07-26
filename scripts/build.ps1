@@ -3,6 +3,8 @@ $ErrorActionPreference = "Stop"
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $outputDirectory = Join-Path $repositoryRoot "dist"
 $licenseDirectory = Join-Path $outputDirectory "licenses"
+$gitMarkerPath = Join-Path $repositoryRoot ".git"
+$worktreeGitDirectory = $null
 $grammarTags = @(
     "grammar_subset",
     "grammar_subset_bash",
@@ -16,6 +18,15 @@ $grammarTags = @(
     "grammar_subset_tsx",
     "grammar_subset_typescript"
 ) -join ","
+
+if (Test-Path -LiteralPath $gitMarkerPath) {
+    $gitMarker = Get-Item -Force -LiteralPath $gitMarkerPath
+    if (-not $gitMarker.PSIsContainer) {
+        $worktreeGitDirectory = git -C $repositoryRoot rev-parse --absolute-git-dir
+        if ($LASTEXITCODE -ne 0) { throw "Could not resolve linked worktree Git directory" }
+        $worktreeGitDirectory = $worktreeGitDirectory.Trim()
+    }
+}
 
 npm --prefix (Join-Path $repositoryRoot "web") ci
 if ($LASTEXITCODE -ne 0) { throw "npm ci failed" }
@@ -35,8 +46,20 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Go tests failed" }
 
     New-Item -ItemType Directory -Force -Path $licenseDirectory | Out-Null
-    go build -tags $grammarTags -trimpath -o (Join-Path $outputDirectory "repokarta.exe") ./cmd/repokarta
-    if ($LASTEXITCODE -ne 0) { throw "Go build failed" }
+    $previousGitDirectory = [Environment]::GetEnvironmentVariable("GIT_DIR", "Process")
+    $previousGitWorkTree = [Environment]::GetEnvironmentVariable("GIT_WORK_TREE", "Process")
+    try {
+        if ($worktreeGitDirectory) {
+            [Environment]::SetEnvironmentVariable("GIT_DIR", $worktreeGitDirectory, "Process")
+            [Environment]::SetEnvironmentVariable("GIT_WORK_TREE", $repositoryRoot, "Process")
+        }
+        go build -tags $grammarTags -trimpath -o (Join-Path $outputDirectory "repokarta.exe") ./cmd/repokarta
+        if ($LASTEXITCODE -ne 0) { throw "Go build failed" }
+    }
+    finally {
+        [Environment]::SetEnvironmentVariable("GIT_DIR", $previousGitDirectory, "Process")
+        [Environment]::SetEnvironmentVariable("GIT_WORK_TREE", $previousGitWorkTree, "Process")
+    }
 
     Copy-Item `
         -LiteralPath (Join-Path $repositoryRoot "third_party\zoekt\LICENSE") `
