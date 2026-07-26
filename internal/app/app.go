@@ -126,8 +126,7 @@ func Run(ctx context.Context, cfg Config) error {
 
 	coordinator := search.NewCoordinator(cfg.RepositoryRoot, cfg.Excludes, database, engine).
 		UseIndexedObserver(func(observerContext context.Context, repositoryID int64) error {
-			_, snapshotError := maps.Snapshot(observerContext, repositoryID, false)
-			return snapshotError
+			return maps.PrepareStructure(observerContext, repositoryID)
 		})
 	if err := coordinator.Start(ctx); err != nil {
 		return err

@@ -31,16 +31,18 @@ import (
 )
 
 const (
-	snapshotVersion       = 4
+	snapshotVersion       = 5
 	maximumFiles          = 20_000
 	maximumSourceFiles    = 5_000
 	maximumSourceFileSize = 1 << 20
 	// Structural budgets keep syntax-backed inventories useful without turning
 	// a repository map into an unbounded dump of every call site.
-	maximumStructuralDocuments  = 3_000
-	maximumStructuralSymbols    = 12_000
-	maximumStructuralRelations  = 24_000
-	maximumStructuralBuildFacts = 4_000
+	maximumStructuralDocuments           = 3_000
+	maximumStructuralSymbols             = 12_000
+	maximumStructuralNavigationRelations = 24_000
+	maximumStructuralCallRelations       = 24_000
+	maximumStructuralBuildFacts          = 4_000
+	maximumStructuralReadConcurrency     = 8
 	// Curated layer budgets keep large Java and Kotlin services legible.
 	maximumComponentsPerRepository = 300
 	maximumRoutesPerRepository     = 900
@@ -167,6 +169,18 @@ type Snapshot struct {
 	StructureTruncated bool                 `json:"structure_truncated"`
 	FileCount          int                  `json:"file_count"`
 	Truncated          bool                 `json:"truncated"`
+	Scope              Scope                `json:"scope"`
+}
+
+// StructuralIndex is the compact, persisted syntax inventory consumed by
+// reference search. Reading it never analyzes source or builds a repository
+// map, so an interactive search cannot accidentally become an indexing job.
+type StructuralIndex struct {
+	Version            int                  `json:"version"`
+	ID                 string               `json:"id"`
+	GeneratedAt        time.Time            `json:"generated_at"`
+	Structure          []StructuralDocument `json:"structure"`
+	StructureTruncated bool                 `json:"structure_truncated"`
 	Scope              Scope                `json:"scope"`
 }
 
@@ -326,7 +340,172 @@ func (s *Service) Snapshot(ctx context.Context, repositoryID int64, refresh bool
 	if err := os.Rename(temporaryName, snapshotPath); err != nil {
 		return Snapshot{}, fmt.Errorf("publish graph snapshot: %w", err)
 	}
+	if repositoryID > 0 {
+		if err := s.writeStructuralIndex(structuralIndexFromSnapshot(snapshot)); err != nil {
+			return Snapshot{}, err
+		}
+	}
 	return snapshot, nil
+}
+
+// PrepareStructure builds or projects the compact structural artifact in the
+// background after normal code indexing completes.
+func (s *Service) PrepareStructure(ctx context.Context, repositoryID int64) error {
+	if repositoryID <= 0 {
+		return errors.New("repository ID is required for structural indexing")
+	}
+	repository, err := s.store.RepositoryByID(ctx, repositoryID)
+	if err != nil {
+		return err
+	}
+	signature := snapshotSignature([]catalog.Repository{repository})
+	if _, ok := s.readStructuralIndex(repositoryID, signature); ok {
+		return nil
+	}
+	snapshot, err := s.Snapshot(ctx, repositoryID, false)
+	if err != nil {
+		return err
+	}
+	if _, ok := s.readStructuralIndex(repositoryID, signature); ok {
+		return nil
+	}
+	return s.writeStructuralIndex(structuralIndexFromSnapshot(snapshot))
+}
+
+// ReadStructure returns only already-persisted per-repository structural
+// artifacts. Missing artifacts are reported through Scope and are never built
+// in the caller's request.
+func (s *Service) ReadStructure(ctx context.Context, repositoryID int64) (StructuralIndex, error) {
+	repositories, err := s.repositories(ctx, repositoryID)
+	if err != nil {
+		return StructuralIndex{}, err
+	}
+	output := StructuralIndex{
+		Version:     snapshotVersion,
+		GeneratedAt: time.Now().UTC(),
+		Structure:   []StructuralDocument{},
+		Scope: Scope{
+			Kind:                  "repository",
+			Complete:              true,
+			TotalRepositories:     len(repositories),
+			RequestedRepositoryID: repositoryID,
+		},
+	}
+	if repositoryID == 0 {
+		output.Scope.Kind = "collection"
+	}
+	type readResult struct {
+		index StructuralIndex
+		ok    bool
+	}
+	results := make([]readResult, len(repositories))
+	workers := make(chan struct{}, maximumStructuralReadConcurrency)
+	var wait sync.WaitGroup
+	for repositoryIndex, repository := range repositories {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			select {
+			case workers <- struct{}{}:
+				defer func() { <-workers }()
+			case <-ctx.Done():
+				return
+			}
+			signature := snapshotSignature([]catalog.Repository{repository})
+			index, ok := s.readStructuralIndex(repository.ID, signature)
+			results[repositoryIndex] = readResult{index: index, ok: ok}
+		}()
+	}
+	wait.Wait()
+	if err := ctx.Err(); err != nil {
+		return StructuralIndex{}, err
+	}
+	for _, result := range results {
+		if !result.ok {
+			continue
+		}
+		output.Structure = append(output.Structure, result.index.Structure...)
+		output.StructureTruncated = output.StructureTruncated || result.index.StructureTruncated
+		output.Scope.AnalyzedRepositories++
+	}
+	output.Scope.OmittedRepositories = output.Scope.TotalRepositories - output.Scope.AnalyzedRepositories
+	output.Scope.Complete = output.Scope.OmittedRepositories == 0
+	output.ID = snapshotSignature(repositories)
+	return output, nil
+}
+
+func structuralIndexFromSnapshot(snapshot Snapshot) StructuralIndex {
+	structure := make([]StructuralDocument, 0, len(snapshot.Structure))
+	for _, document := range snapshot.Structure {
+		structure = append(structure, StructuralDocument{
+			RepositoryID:  document.RepositoryID,
+			Repository:    document.Repository,
+			Revision:      document.Revision,
+			Path:          document.Path,
+			Language:      document.Language,
+			Parser:        document.Parser,
+			ParseComplete: document.ParseComplete,
+			Truncated:     document.Truncated,
+			Relations:     append([]analysis.Relation(nil), document.Relations...),
+		})
+	}
+	return StructuralIndex{
+		Version:            snapshotVersion,
+		ID:                 snapshot.ID,
+		GeneratedAt:        snapshot.GeneratedAt,
+		Structure:          structure,
+		StructureTruncated: snapshot.StructureTruncated,
+		Scope:              snapshot.Scope,
+	}
+}
+
+func (s *Service) readStructuralIndex(repositoryID int64, signature string) (StructuralIndex, bool) {
+	content, err := os.ReadFile(s.structuralIndexPath(repositoryID, signature))
+	if err != nil {
+		return StructuralIndex{}, false
+	}
+	var index StructuralIndex
+	if json.Unmarshal(content, &index) != nil ||
+		index.Version != snapshotVersion ||
+		index.ID != signature {
+		return StructuralIndex{}, false
+	}
+	return index, true
+}
+
+func (s *Service) writeStructuralIndex(index StructuralIndex) error {
+	if index.Scope.RequestedRepositoryID <= 0 {
+		return errors.New("structural artifact must target one repository")
+	}
+	content, err := json.Marshal(index)
+	if err != nil {
+		return fmt.Errorf("encode structural index: %w", err)
+	}
+	fileName := filepath.Base(s.structuralIndexPath(index.Scope.RequestedRepositoryID, index.ID))
+	temporary, err := os.CreateTemp(s.directory, fileName+".*.tmp")
+	if err != nil {
+		return fmt.Errorf("create structural index: %w", err)
+	}
+	temporaryName := temporary.Name()
+	defer os.Remove(temporaryName)
+	if _, err := temporary.Write(content); err != nil {
+		temporary.Close()
+		return fmt.Errorf("write structural index: %w", err)
+	}
+	if err := temporary.Close(); err != nil {
+		return fmt.Errorf("close structural index: %w", err)
+	}
+	if err := os.Rename(temporaryName, filepath.Join(s.directory, fileName)); err != nil {
+		return fmt.Errorf("publish structural index: %w", err)
+	}
+	return nil
+}
+
+func (s *Service) structuralIndexPath(repositoryID int64, signature string) string {
+	return filepath.Join(
+		s.directory,
+		fmt.Sprintf("structure-repository-%d-%s.json", repositoryID, signature),
+	)
 }
 
 func (s *Service) snapshotLock(key string) *sync.Mutex {
@@ -370,21 +549,22 @@ func snapshotSignature(repositories []catalog.Repository) string {
 }
 
 type builder struct {
-	baseURL              string
-	repositories         []Repository
-	languages            map[string]int
-	manifests            []Manifest
-	nodes                map[string]Node
-	edges                map[string]Edge
-	serviceTargets       map[string]string
-	clientReferences     []clientReference
-	structure            []StructuralDocument
-	structuralSymbols    int
-	structuralRelations  int
-	structuralBuildFacts int
-	structureTruncated   bool
-	fileCount            int
-	truncated            bool
+	baseURL                       string
+	repositories                  []Repository
+	languages                     map[string]int
+	manifests                     []Manifest
+	nodes                         map[string]Node
+	edges                         map[string]Edge
+	serviceTargets                map[string]string
+	clientReferences              []clientReference
+	structure                     []StructuralDocument
+	structuralSymbols             int
+	structuralNavigationRelations int
+	structuralCallRelations       int
+	structuralBuildFacts          int
+	structureTruncated            bool
+	fileCount                     int
+	truncated                     bool
 }
 
 type clientReference struct {
@@ -551,19 +731,37 @@ func (b *builder) addStructuralAnalysis(
 			return
 		}
 		symbolBudget := maximumStructuralSymbols - b.structuralSymbols
-		relationBudget := maximumStructuralRelations - b.structuralRelations
+		navigationRelationBudget := maximumStructuralNavigationRelations - b.structuralNavigationRelations
+		callRelationBudget := maximumStructuralCallRelations - b.structuralCallRelations
 		buildFactBudget := maximumStructuralBuildFacts - b.structuralBuildFacts
 		if len(document.Symbols) > symbolBudget ||
-			len(document.Relations) > relationBudget ||
 			len(document.BuildFacts) > buildFactBudget {
 			b.structureTruncated = true
 		}
+		relations := make([]analysis.Relation, 0, len(document.Relations))
+		for _, relation := range document.Relations {
+			if relation.Kind == "call" {
+				if callRelationBudget <= 0 {
+					b.structureTruncated = true
+					continue
+				}
+				callRelationBudget--
+				b.structuralCallRelations++
+			} else {
+				if navigationRelationBudget <= 0 {
+					b.structureTruncated = true
+					continue
+				}
+				navigationRelationBudget--
+				b.structuralNavigationRelations++
+			}
+			relations = append(relations, relation)
+		}
 		b.structureTruncated = b.structureTruncated || document.Truncated
 		document.Symbols = document.Symbols[:min(len(document.Symbols), symbolBudget)]
-		document.Relations = document.Relations[:min(len(document.Relations), relationBudget)]
+		document.Relations = relations
 		document.BuildFacts = document.BuildFacts[:min(len(document.BuildFacts), buildFactBudget)]
 		b.structuralSymbols += len(document.Symbols)
-		b.structuralRelations += len(document.Relations)
 		b.structuralBuildFacts += len(document.BuildFacts)
 		b.structure = append(b.structure, StructuralDocument{
 			RepositoryID:  repository.ID,
@@ -580,7 +778,8 @@ func (b *builder) addStructuralAnalysis(
 			Diagnostics:   document.Diagnostics,
 		})
 		if b.structuralSymbols >= maximumStructuralSymbols &&
-			b.structuralRelations >= maximumStructuralRelations &&
+			b.structuralNavigationRelations >= maximumStructuralNavigationRelations &&
+			b.structuralCallRelations >= maximumStructuralCallRelations &&
 			b.structuralBuildFacts >= maximumStructuralBuildFacts {
 			b.structureTruncated = true
 			return

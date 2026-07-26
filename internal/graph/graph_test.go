@@ -47,6 +47,117 @@ func (s graphStore) RepositoryByID(_ context.Context, id int64) (catalog.Reposit
 	return catalog.Repository{}, os.ErrNotExist
 }
 
+func TestStructuralIndexIsPreparedInBackgroundAndReadWithoutBuilding(t *testing.T) {
+	root, revision := javaGraphFixture(t, map[string]string{
+		"src/main/java/com/acme/PaymentJob.java": `package com.acme;
+import com.acme.JobTimeGuard;
+class PaymentJob {
+    private final JobTimeGuard guard;
+    void run() { guard.check(); }
+}`,
+	})
+	repository := catalog.Repository{
+		ID:            17,
+		Name:          "payment-service",
+		Path:          root,
+		HeadCommit:    revision,
+		IndexedCommit: revision,
+		IndexState:    "ready",
+	}
+	directory := filepath.Join(t.TempDir(), "maps")
+	service, err := New(graphStore{repository: repository}, directory, "http://127.0.0.1:7331")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pending, err := service.ReadStructure(t.Context(), repository.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pending.Scope.Complete || pending.Scope.AnalyzedRepositories != 0 ||
+		pending.Scope.OmittedRepositories != 1 || len(pending.Structure) != 0 {
+		t.Fatalf("unprepared structural index = %#v", pending)
+	}
+	if matches, err := filepath.Glob(filepath.Join(directory, "repository-*.json")); err != nil || len(matches) != 0 {
+		t.Fatalf("read-only lookup built a map: matches=%v err=%v", matches, err)
+	}
+
+	if err := service.PrepareStructure(t.Context(), repository.ID); err != nil {
+		t.Fatal(err)
+	}
+	ready, err := service.ReadStructure(t.Context(), repository.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ready.Scope.Complete || ready.Scope.AnalyzedRepositories != 1 ||
+		ready.Scope.OmittedRepositories != 0 || len(ready.Structure) == 0 {
+		t.Fatalf("prepared structural index = %#v", ready)
+	}
+	if !slices.ContainsFunc(ready.Structure[0].Relations, func(relation analysis.Relation) bool {
+		return relation.Kind == "type" && relation.Target == "JobTimeGuard"
+	}) {
+		t.Fatalf("prepared relations = %#v", ready.Structure[0].Relations)
+	}
+}
+
+func TestStructuralIndexReadsEveryPreparedRepositoryInLargeFleet(t *testing.T) {
+	const repositoryCount = 300
+	repositories := make([]catalog.Repository, 0, repositoryCount)
+	for index := 0; index < repositoryCount; index++ {
+		repositories = append(repositories, catalog.Repository{
+			ID:            int64(index + 1),
+			Name:          fmt.Sprintf("service-%03d", index),
+			IndexedCommit: fmt.Sprintf("%040d", index+1),
+			IndexState:    "ready",
+		})
+	}
+	service, err := New(
+		multiGraphStore{repositories: repositories},
+		filepath.Join(t.TempDir(), "maps"),
+		"http://127.0.0.1:7331",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, repository := range repositories {
+		signature := snapshotSignature([]catalog.Repository{repository})
+		if err := service.writeStructuralIndex(StructuralIndex{
+			Version: snapshotVersion,
+			ID:      signature,
+			Structure: []StructuralDocument{{
+				RepositoryID: repository.ID,
+				Repository:   repository.Name,
+				Revision:     repository.IndexedCommit,
+				Path:         "src/Job.java",
+				Language:     "java",
+				Relations: []analysis.Relation{{
+					Kind:   "type",
+					Target: "JobTimeGuard",
+					Range:  analysis.Range{StartLine: 1},
+				}},
+			}},
+			Scope: Scope{
+				Kind:                  "repository",
+				Complete:              true,
+				TotalRepositories:     1,
+				AnalyzedRepositories:  1,
+				RequestedRepositoryID: repository.ID,
+			},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	index, err := service.ReadStructure(t.Context(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !index.Scope.Complete || index.Scope.AnalyzedRepositories != repositoryCount ||
+		index.Scope.OmittedRepositories != 0 || len(index.Structure) != repositoryCount {
+		t.Fatalf("fleet structural index scope = %#v, documents = %d", index.Scope, len(index.Structure))
+	}
+}
+
 func TestSnapshotBuildsEvidenceBackedInventoryAndDependencyGraph(t *testing.T) {
 	root := t.TempDir()
 	writeGraphFixture(t, root, "go.mod", `module example.com/acme
@@ -120,8 +231,8 @@ func Run() {}
 	assertGraphNode(t, snapshot, "route", "/healthz")
 	assertGraphEdge(t, snapshot, "import", "imports")
 	assertGraphEdge(t, snapshot, "route", "serves")
-	if snapshot.Version != 4 {
-		t.Fatalf("snapshot version = %d, want 4", snapshot.Version)
+	if snapshot.Version != ArtifactVersion {
+		t.Fatalf("snapshot version = %d, want %d", snapshot.Version, ArtifactVersion)
 	}
 	if !snapshot.Scope.Complete || snapshot.Scope.Kind != "repository" ||
 		snapshot.Scope.TotalRepositories != 1 || snapshot.Scope.AnalyzedRepositories != 1 {
@@ -157,7 +268,13 @@ func Run() {}
 		}
 	}
 	entries, err := os.ReadDir(snapshotDirectory)
-	if err != nil || len(entries) != 1 || filepath.Ext(entries[0].Name()) != ".json" {
+	if err != nil || len(entries) != 2 ||
+		!slices.ContainsFunc(entries, func(entry os.DirEntry) bool {
+			return strings.HasPrefix(entry.Name(), "repository-7-") && filepath.Ext(entry.Name()) == ".json"
+		}) ||
+		!slices.ContainsFunc(entries, func(entry os.DirEntry) bool {
+			return strings.HasPrefix(entry.Name(), "structure-repository-7-") && filepath.Ext(entry.Name()) == ".json"
+		}) {
 		t.Fatalf("snapshot files = %#v, err = %v", entries, err)
 	}
 
@@ -198,7 +315,7 @@ func TestSnapshotRegeneratesUnsupportedCachedArtifact(t *testing.T) {
 	}
 	unsupported := bytes.ReplaceAll(
 		mustReadGraphFile(t, files[0]),
-		[]byte(`"version": 4`),
+		[]byte(`"version": 5`),
 		[]byte(`"version": 999`),
 	)
 	unsupported = append(unsupported, []byte("\nunsupported-marker")...)
@@ -214,7 +331,7 @@ func TestSnapshotRegeneratesUnsupportedCachedArtifact(t *testing.T) {
 	}
 	content := mustReadGraphFile(t, files[0])
 	if bytes.Contains(content, []byte("unsupported-marker")) ||
-		!bytes.Contains(content, []byte(`"version": 4`)) {
+		!bytes.Contains(content, []byte(`"version": 5`)) {
 		t.Fatalf("unsupported cache was not regenerated: %s", content)
 	}
 }

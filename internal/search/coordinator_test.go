@@ -83,3 +83,30 @@ func TestIndexCompletionQueuesDerivedStructuralIndex(t *testing.T) {
 		t.Fatalf("indexed repository = %#v", repositories[0])
 	}
 }
+
+func TestDerivedStructuralIndexQueueDoesNotDropLargeFleets(t *testing.T) {
+	const repositories = 300
+	observed := make(chan int64, repositories)
+	coordinator := NewCoordinator("", nil, &observerStore{}, observerEngine{}).
+		UseIndexedObserver(func(_ context.Context, repositoryID int64) error {
+			observed <- repositoryID
+			return nil
+		})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	for repositoryID := int64(1); repositoryID <= repositories; repositoryID++ {
+		coordinator.queueIndexed(ctx, repositoryID)
+	}
+	go coordinator.observeIndexed(ctx)
+
+	seen := make(map[int64]struct{}, repositories)
+	timeout := time.After(2 * time.Second)
+	for len(seen) < repositories {
+		select {
+		case repositoryID := <-observed:
+			seen[repositoryID] = struct{}{}
+		case <-timeout:
+			t.Fatalf("observed %d of %d queued repositories", len(seen), repositories)
+		}
+	}
+}

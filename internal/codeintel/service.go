@@ -57,7 +57,7 @@ type CodeSearcher interface {
 // StructuralReader supplies the cached, commit-pinned syntax inventory used by
 // reference search. Implementations must not execute repository code.
 type StructuralReader interface {
-	Snapshot(context.Context, int64, bool) (graph.Snapshot, error)
+	ReadStructure(context.Context, int64) (graph.StructuralIndex, error)
 }
 
 // Service owns the shared behavior exposed by all external adapters.
@@ -136,6 +136,16 @@ type SearchResponse struct {
 	Matches             []SearchMatch    `json:"matches"`
 	SearchKind          string           `json:"search_kind,omitempty"`
 	ReferenceResolution string           `json:"reference_resolution,omitempty"`
+	ReferenceIndex      *ReferenceIndex  `json:"reference_index,omitempty"`
+}
+
+// ReferenceIndex reports whether every requested repository has a persisted
+// structural artifact. A building response is immediately usable but partial.
+type ReferenceIndex struct {
+	State                 string `json:"state"`
+	RequestedRepositories int    `json:"requested_repositories"`
+	ReadyRepositories     int    `json:"ready_repositories"`
+	PendingRepositories   int    `json:"pending_repositories"`
 }
 
 // SymbolRequest selects bounded symbol-index matches.
@@ -524,11 +534,11 @@ func (s *Service) FindReferences(ctx context.Context, request ReferenceRequest) 
 		}
 		repositoryID = repository.ID
 	}
-	snapshot, err := s.structure.Snapshot(ctx, repositoryID, false)
+	index, err := s.structure.ReadStructure(ctx, repositoryID)
 	if err != nil {
 		return ReferenceResponse{}, fmt.Errorf("load AST reference index: %w", err)
 	}
-	result, err := s.referenceResult(ctx, snapshot, symbol, request)
+	result, err := s.referenceResult(ctx, index, symbol, request)
 	if err != nil {
 		return ReferenceResponse{}, err
 	}
@@ -539,6 +549,15 @@ func (s *Service) FindReferences(ctx context.Context, request ReferenceRequest) 
 	}
 	output.SearchKind = "references"
 	output.ReferenceResolution = "syntax-target-name"
+	output.ReferenceIndex = &ReferenceIndex{
+		State:                 "ready",
+		RequestedRepositories: index.Scope.TotalRepositories,
+		ReadyRepositories:     index.Scope.AnalyzedRepositories,
+		PendingRepositories:   index.Scope.OmittedRepositories,
+	}
+	if !index.Scope.Complete {
+		output.ReferenceIndex.State = "building"
+	}
 	return output, nil
 }
 
@@ -561,7 +580,7 @@ type structuralReferenceFile struct {
 
 func (s *Service) referenceResult(
 	ctx context.Context,
-	snapshot graph.Snapshot,
+	index graph.StructuralIndex,
 	symbol string,
 	request ReferenceRequest,
 ) (search.Result, error) {
@@ -569,7 +588,7 @@ func (s *Service) referenceResult(
 	files := make(map[string]*structuralReferenceFile)
 	matchCount := 0
 	parsePartial := 0
-	for _, document := range snapshot.Structure {
+	for _, document := range index.Structure {
 		if request.RepositoryID > 0 && document.RepositoryID != request.RepositoryID {
 			continue
 		}
@@ -651,7 +670,7 @@ func (s *Service) referenceResult(
 		TotalFilesExact: true,
 		Warnings:        []search.Warning{},
 	}
-	if snapshot.Truncated || snapshot.StructureTruncated {
+	if index.StructureTruncated {
 		result.Truncated = true
 		result.TotalFilesExact = false
 		result.Warnings = append(result.Warnings, search.Warning{
@@ -659,16 +678,16 @@ func (s *Service) referenceResult(
 			Message: "The persisted structural index is bounded; additional references may exist outside captured AST documents or relations.",
 		})
 	}
-	if snapshot.Scope.TotalRepositories > 0 && !snapshot.Scope.Complete {
+	if index.Scope.TotalRepositories > 0 && !index.Scope.Complete {
 		result.Truncated = true
 		result.TotalFilesExact = false
 		result.Warnings = append(result.Warnings, search.Warning{
-			Code: "ast_scope_truncated",
+			Code: "ast_index_building",
 			Message: fmt.Sprintf(
-				"AST reference search analyzed %d of %d requested repositories; %d were omitted.",
-				snapshot.Scope.AnalyzedRepositories,
-				snapshot.Scope.TotalRepositories,
-				snapshot.Scope.OmittedRepositories,
+				"AST reference artifacts are ready for %d of %d requested repositories; %d are still building in the background.",
+				index.Scope.AnalyzedRepositories,
+				index.Scope.TotalRepositories,
+				index.Scope.OmittedRepositories,
 			),
 		})
 	}

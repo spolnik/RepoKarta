@@ -677,6 +677,49 @@ func TestAPISearchReturnsCompletenessAndPinnedEvidence(t *testing.T) {
 	}
 }
 
+type pendingReferenceStructure struct{}
+
+func (pendingReferenceStructure) ReadStructure(context.Context, int64) (graph.StructuralIndex, error) {
+	return graph.StructuralIndex{Scope: graph.Scope{
+		Kind:                 "collection",
+		Complete:             false,
+		TotalRepositories:    3,
+		AnalyzedRepositories: 1,
+		OmittedRepositories:  2,
+	}}, nil
+}
+
+func TestAPIReferenceSearchReturnsAcceptedWithIndexProgress(t *testing.T) {
+	intelligence := codeintel.New(testStore{}, testSearcher{}, "http://127.0.0.1:7331").
+		UseStructure(pendingReferenceStructure{})
+	server, err := New(
+		Config{Address: "127.0.0.1:7331"},
+		intelligence,
+		testRefresher{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"http://127.0.0.1:7331/api/search?q=JobTimeGuard&mode=references",
+		nil,
+	)
+	response := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusAccepted || response.Header().Get("Retry-After") != "2" {
+		t.Fatalf("status = %d, retry = %q, body = %s", response.Code, response.Header().Get("Retry-After"), response.Body.String())
+	}
+	var result codeintel.SearchResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.ReferenceIndex == nil || result.ReferenceIndex.State != "building" ||
+		result.ReferenceIndex.ReadyRepositories != 1 || result.ReferenceIndex.PendingRepositories != 2 {
+		t.Fatalf("reference progress = %#v", result.ReferenceIndex)
+	}
+}
+
 func TestGitAPIRejectsInvalidBoundsBeforeRepositoryAccess(t *testing.T) {
 	server, err := New(
 		Config{Address: "127.0.0.1:7331"},

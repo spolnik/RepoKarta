@@ -593,7 +593,12 @@ func (s *Server) apiSearch(response http.ResponseWriter, request *http.Request) 
 		writeAPIError(response, http.StatusBadRequest, err)
 		return
 	}
-	writeJSON(response, http.StatusOK, result)
+	status := http.StatusOK
+	if result.ReferenceIndex != nil && result.ReferenceIndex.State == "building" {
+		status = http.StatusAccepted
+		response.Header().Set("Retry-After", "2")
+	}
+	writeJSON(response, status, result)
 }
 
 func (s *Server) apiSymbol(response http.ResponseWriter, request *http.Request) {
@@ -1264,7 +1269,7 @@ func buildMCPPageData(endpoint, token, command, stdioBaseURL string) mcpPageData
 			{Name: "list_repositories", Description: "Indexed repositories, stable IDs, and pinned commits."},
 			{Name: "search_code", Description: "Literal, regex, Zoekt, or AST-reference search with explicit completeness metadata."},
 			{Name: "find_symbol", Description: "Commit-pinned symbol definitions from the Zoekt/ctags index."},
-			{Name: "find_references", Description: "Syntax-backed calls, imports, and heritage sites from persisted AST relations."},
+			{Name: "find_references", Description: "Syntax-backed calls, type usages, imports, and heritage sites from persisted AST relations."},
 			{Name: "get_file", Description: "Bounded source reads with exact revision and citation URLs."},
 			{Name: "list_tree", Description: "Bounded repository trees at an exact indexed commit."},
 			{Name: "git_log", Description: "Newest-first commit history with truncation metadata."},

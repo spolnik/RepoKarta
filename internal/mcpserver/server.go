@@ -256,7 +256,7 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "find_references",
 		Title:       "Find AST references",
-		Description: "Find commit-pinned call, import, extends, and implements sites from RepoKarta's persisted AST relations. Matches are exact source-level target names with relation kind, receiver, syntax confidence, and explicit coverage warnings; this does not pretend to resolve overloads or dynamic dispatch.",
+		Description: "Find commit-pinned call, type-usage, import, extends, and implements sites from RepoKarta's persisted AST relations. Matches are exact source-level target names with relation kind, receiver, syntax confidence, index progress, and explicit coverage warnings; this does not pretend to resolve overloads or dynamic dispatch.",
 		Annotations: readOnly,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input findReferencesInput) (*mcp.CallToolResult, findReferencesOutput, error) {
 		result, err := intelligence.FindReferences(ctx, codeintel.ReferenceRequest{
