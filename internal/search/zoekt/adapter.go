@@ -93,9 +93,9 @@ func isUniversalCTagsVersion(output []byte) bool {
 // IndexConfiguration changes when existing shards must be rebuilt.
 func (a *Adapter) IndexConfiguration() string {
 	if !a.symbolsEnabled {
-		return "zoekt-" + Revision + ";symbols=disabled"
+		return "zoekt-" + Revision + ";repository-identity=canonical-path-v1;symbols=disabled"
 	}
-	return "zoekt-" + Revision + ";symbols=universal-ctags"
+	return "zoekt-" + Revision + ";repository-identity=canonical-path-v1;symbols=universal-ctags"
 }
 
 // Close releases adapter resources.
@@ -133,7 +133,12 @@ func (a *Adapter) Index(ctx context.Context, repository catalog.Repository) (boo
 			DisableCTags:        !a.symbolsEnabled,
 			CTagsPath:           a.ctagsPath,
 			RepositoryDescription: upstream.Repository{
-				Name:   repository.Name,
+				// Zoekt requires a unique repository identity. Display names
+				// are not unique across roots, so using one here could let a
+				// same-named private clone satisfy another repository's
+				// authorization filter. Codeintel resolves this canonical
+				// path back to the public display name before responding.
+				Name:   filepath.ToSlash(repository.Path),
 				Source: repository.Path,
 			},
 		},
@@ -297,6 +302,23 @@ func buildQuery(request search.Query) (query.Q, error) {
 		expression, err := grafanaregexp.Compile(`(?i)(^|[\\/])` + stdregexp.QuoteMeta(repository) + `$`)
 		if err != nil {
 			return nil, fmt.Errorf("invalid repository filter: %w", err)
+		}
+		children = append(children, &query.Repo{Regexp: expression})
+	}
+	if len(request.Repositories) > 0 {
+		alternatives := make([]string, 0, len(request.Repositories))
+		for _, repository := range request.Repositories {
+			repository = strings.TrimSpace(filepath.ToSlash(repository))
+			if repository != "" {
+				alternatives = append(alternatives, stdregexp.QuoteMeta(repository))
+			}
+		}
+		if len(alternatives) == 0 {
+			return nil, errors.New("repository allow-list is empty")
+		}
+		expression, err := grafanaregexp.Compile(`(?i)^(?:` + strings.Join(alternatives, "|") + `)$`)
+		if err != nil {
+			return nil, fmt.Errorf("invalid repository allow-list: %w", err)
 		}
 		children = append(children, &query.Repo{Regexp: expression})
 	}

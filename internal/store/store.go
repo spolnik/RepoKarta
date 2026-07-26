@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -12,13 +13,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/spolnik/RepoKarta/internal/access"
 	"github.com/spolnik/RepoKarta/internal/agent"
 	"github.com/spolnik/RepoKarta/internal/catalog"
 	_ "modernc.org/sqlite"
 )
 
 const (
-	currentSchemaVersion = 8
+	currentSchemaVersion = 10
 
 	schemaV1 = `
 CREATE TABLE IF NOT EXISTS repositories (
@@ -128,6 +130,59 @@ ALTER TABLE conversations ADD COLUMN author_email TEXT NOT NULL DEFAULT '';
 ALTER TABLE conversations ADD COLUMN author_provider TEXT NOT NULL DEFAULT 'local';
 CREATE INDEX IF NOT EXISTS conversations_author_updated_index
 ON conversations(author_id, updated_at DESC);`
+
+	// Version 9 gives every repository an explicit, deny-by-default access
+	// policy. Existing local-first repositories stay owned by local:admin.
+	// Derived artifacts inherit the repository policy instead of maintaining a
+	// second authorization system that can drift.
+	schemaV9 = `
+CREATE TABLE IF NOT EXISTS repositories (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    path TEXT NOT NULL UNIQUE,
+    discovered_at TEXT NOT NULL,
+    origin_url TEXT NOT NULL DEFAULT '',
+    default_revision TEXT NOT NULL DEFAULT '',
+    head_commit TEXT NOT NULL DEFAULT '',
+    bare INTEGER NOT NULL DEFAULT 0,
+    scan_state TEXT NOT NULL DEFAULT 'pending',
+    scan_error TEXT NOT NULL DEFAULT '',
+    scanned_at TEXT NOT NULL DEFAULT '',
+    index_state TEXT NOT NULL DEFAULT 'pending',
+    index_error TEXT NOT NULL DEFAULT '',
+    indexed_commit TEXT NOT NULL DEFAULT '',
+    indexed_at TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS repository_access (
+    repository_id INTEGER PRIMARY KEY REFERENCES repositories(id) ON DELETE CASCADE,
+    owner_id TEXT NOT NULL DEFAULT 'local:admin',
+    visibility TEXT NOT NULL DEFAULT 'private'
+        CHECK(visibility IN ('private', 'shared')),
+    updated_at TEXT NOT NULL DEFAULT ''
+);
+INSERT OR IGNORE INTO repository_access (repository_id, owner_id, visibility, updated_at)
+SELECT id, 'local:admin', 'private', '' FROM repositories;
+CREATE TABLE IF NOT EXISTS repository_access_grants (
+    repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+    subject_type TEXT NOT NULL CHECK(subject_type IN ('user', 'group')),
+    subject_id TEXT NOT NULL,
+    PRIMARY KEY(repository_id, subject_type, subject_id)
+);
+CREATE INDEX IF NOT EXISTS repository_access_grants_subject_index
+ON repository_access_grants(subject_type, subject_id, repository_id);
+CREATE TRIGGER IF NOT EXISTS repositories_access_insert
+AFTER INSERT ON repositories
+BEGIN
+    INSERT OR IGNORE INTO repository_access (
+        repository_id, owner_id, visibility, updated_at
+    ) VALUES (NEW.id, 'local:admin', 'private', '');
+END;`
+
+	// Version 10 retains the identity-provider groups captured when a
+	// conversation starts. Internal provider MCP calls can therefore enforce
+	// the same team grants as the initiating browser request.
+	schemaV10 = `
+ALTER TABLE conversations ADD COLUMN author_groups TEXT NOT NULL DEFAULT '[]';`
 )
 
 // SchemaVersion is the current durable SQLite format. Diagnostics and upgrade
@@ -194,6 +249,10 @@ func migrate(db *sql.DB) error {
 			migration = schemaV7
 		case 8:
 			migration = schemaV8
+		case 9:
+			migration = schemaV9
+		case 10:
+			migration = schemaV10
 		default:
 			return fmt.Errorf("missing migration for schema version %d", next)
 		}
@@ -421,13 +480,32 @@ func (s *Store) ReplaceRepositories(ctx context.Context, repositories []catalog.
 
 // ListRepositories returns the repository catalogue in display order.
 func (s *Store) ListRepositories(ctx context.Context) ([]catalog.Repository, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	query := `
 SELECT
-    id, name, path, origin_url, default_revision, head_commit, bare,
-    scan_state, scan_error, index_state, index_error, indexed_commit,
-    discovered_at, scanned_at, indexed_at
-FROM repositories
-ORDER BY name COLLATE NOCASE, path COLLATE NOCASE`)
+    r.id, r.name, r.path, r.origin_url, r.default_revision, r.head_commit, r.bare,
+    r.scan_state, r.scan_error, r.index_state, r.index_error, r.indexed_commit,
+    r.discovered_at, r.scanned_at, r.indexed_at
+FROM repositories r`
+	arguments := []any{}
+	if viewer, restricted := access.ViewerFromContext(ctx); restricted && !viewer.Admin {
+		query += `
+JOIN repository_access a ON a.repository_id = r.id
+WHERE a.visibility = 'shared' OR a.owner_id = ? OR EXISTS (
+    SELECT 1 FROM repository_access_grants g
+    WHERE g.repository_id = r.id AND (
+        (g.subject_type = 'user' AND lower(g.subject_id) = lower(?))`
+		arguments = append(arguments, viewer.ID, viewer.ID)
+		if len(viewer.Groups) > 0 {
+			query += ` OR (g.subject_type = 'group' AND lower(g.subject_id) IN (` +
+				strings.TrimSuffix(strings.Repeat("?,", len(viewer.Groups)), ",") + `))`
+			for _, group := range viewer.Groups {
+				arguments = append(arguments, strings.ToLower(group))
+			}
+		}
+		query += `))`
+	}
+	query += ` ORDER BY r.name COLLATE NOCASE, r.path COLLATE NOCASE`
+	rows, err := s.db.QueryContext(ctx, query, arguments...)
 	if err != nil {
 		return nil, err
 	}
@@ -446,13 +524,34 @@ ORDER BY name COLLATE NOCASE, path COLLATE NOCASE`)
 
 // RepositoryByID returns one repository or sql.ErrNoRows.
 func (s *Store) RepositoryByID(ctx context.Context, id int64) (catalog.Repository, error) {
-	row := s.db.QueryRowContext(ctx, `
+	query := `
 SELECT
-    id, name, path, origin_url, default_revision, head_commit, bare,
-    scan_state, scan_error, index_state, index_error, indexed_commit,
-    discovered_at, scanned_at, indexed_at
-FROM repositories
-WHERE id = ?`, id)
+    r.id, r.name, r.path, r.origin_url, r.default_revision, r.head_commit, r.bare,
+    r.scan_state, r.scan_error, r.index_state, r.index_error, r.indexed_commit,
+    r.discovered_at, r.scanned_at, r.indexed_at
+FROM repositories r`
+	arguments := []any{id}
+	if viewer, restricted := access.ViewerFromContext(ctx); restricted && !viewer.Admin {
+		query += `
+JOIN repository_access a ON a.repository_id = r.id
+WHERE r.id = ? AND (
+    a.visibility = 'shared' OR a.owner_id = ? OR EXISTS (
+        SELECT 1 FROM repository_access_grants g
+        WHERE g.repository_id = r.id AND (
+            (g.subject_type = 'user' AND lower(g.subject_id) = lower(?))`
+		arguments = append(arguments, viewer.ID, viewer.ID)
+		if len(viewer.Groups) > 0 {
+			query += ` OR (g.subject_type = 'group' AND lower(g.subject_id) IN (` +
+				strings.TrimSuffix(strings.Repeat("?,", len(viewer.Groups)), ",") + `))`
+			for _, group := range viewer.Groups {
+				arguments = append(arguments, strings.ToLower(group))
+			}
+		}
+		query += `)))`
+	} else {
+		query += ` WHERE r.id = ?`
+	}
+	row := s.db.QueryRowContext(ctx, query, arguments...)
 	repository, err := scanRepository(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		// Agents and API clients see this message, so it names the missing
@@ -460,6 +559,128 @@ WHERE id = ?`, id)
 		return catalog.Repository{}, fmt.Errorf("repository %d is not indexed", id)
 	}
 	return repository, err
+}
+
+// RepositoryAccess is the administrator-facing policy for one repository.
+// Maps, Wiki pages, exports, dependency facts, and MCP reads inherit it.
+type RepositoryAccess struct {
+	RepositoryID   int64
+	Repository     string
+	RepositoryPath string
+	OwnerID        string
+	Visibility     string
+	Users          []string
+	Groups         []string
+	UpdatedAt      time.Time
+}
+
+// ListRepositoryAccess returns every policy for the protected admin surface.
+func (s *Store) ListRepositoryAccess(ctx context.Context) ([]RepositoryAccess, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT r.id, r.name, r.path, a.owner_id, a.visibility, a.updated_at
+FROM repositories r
+JOIN repository_access a ON a.repository_id = r.id
+ORDER BY r.name COLLATE NOCASE, r.path COLLATE NOCASE`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var policies []RepositoryAccess
+	for rows.Next() {
+		var policy RepositoryAccess
+		var updated string
+		if err := rows.Scan(&policy.RepositoryID, &policy.Repository, &policy.RepositoryPath, &policy.OwnerID, &policy.Visibility, &updated); err != nil {
+			return nil, err
+		}
+		policy.UpdatedAt = parseTime(updated)
+		policies = append(policies, policy)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for index := range policies {
+		grants, err := s.repositoryGrants(ctx, policies[index].RepositoryID)
+		if err != nil {
+			return nil, err
+		}
+		policies[index].Users = grants["user"]
+		policies[index].Groups = grants["group"]
+	}
+	return policies, nil
+}
+
+// SetRepositoryAccess atomically replaces one repository policy.
+func (s *Store) SetRepositoryAccess(ctx context.Context, policy RepositoryAccess) error {
+	policy.OwnerID = strings.TrimSpace(policy.OwnerID)
+	if policy.RepositoryID <= 0 || policy.OwnerID == "" {
+		return errors.New("repository and owner are required")
+	}
+	if policy.Visibility != access.VisibilityPrivate && policy.Visibility != access.VisibilityShared {
+		return errors.New("repository visibility must be private or shared")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `
+UPDATE repository_access
+SET owner_id = ?, visibility = ?, updated_at = ?
+WHERE repository_id = ?`,
+		policy.OwnerID, policy.Visibility, formatTime(time.Now().UTC()), policy.RepositoryID)
+	if err != nil {
+		return err
+	}
+	if affected, err := result.RowsAffected(); err != nil || affected != 1 {
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("repository %d is not indexed", policy.RepositoryID)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM repository_access_grants WHERE repository_id = ?`, policy.RepositoryID); err != nil {
+		return err
+	}
+	for subjectType, values := range map[string][]string{"user": policy.Users, "group": policy.Groups} {
+		seen := map[string]struct{}{}
+		for _, value := range values {
+			value = strings.TrimSpace(value)
+			key := strings.ToLower(value)
+			if value == "" {
+				continue
+			}
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			if _, err := tx.ExecContext(ctx, `
+INSERT INTO repository_access_grants(repository_id, subject_type, subject_id)
+VALUES (?, ?, ?)`, policy.RepositoryID, subjectType, value); err != nil {
+				return err
+			}
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *Store) repositoryGrants(ctx context.Context, repositoryID int64) (map[string][]string, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT subject_type, subject_id
+FROM repository_access_grants
+WHERE repository_id = ?
+ORDER BY subject_type, subject_id COLLATE NOCASE`, repositoryID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	output := map[string][]string{"user": {}, "group": {}}
+	for rows.Next() {
+		var subjectType, subjectID string
+		if err := rows.Scan(&subjectType, &subjectID); err != nil {
+			return nil, err
+		}
+		output[subjectType] = append(output[subjectType], subjectID)
+	}
+	return output, rows.Err()
 }
 
 // UpdateIndexState records an indexing transition.
@@ -558,12 +779,16 @@ func (s *Store) CreateConversation(ctx context.Context, conversation agent.Conve
 	if updated.IsZero() {
 		updated = now
 	}
-	_, err := s.db.ExecContext(ctx, `
+	authorGroups, err := json.Marshal(conversation.Author.Groups)
+	if err != nil {
+		return fmt.Errorf("encode conversation author groups: %w", err)
+	}
+	_, err = s.db.ExecContext(ctx, `
 INSERT INTO conversations (
     id, title, provider, model, effort,
-    author_id, author_name, author_email, author_provider,
+    author_id, author_name, author_email, author_provider, author_groups,
     resume_cursor, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		conversation.ID,
 		strings.TrimSpace(conversation.Title),
 		strings.TrimSpace(conversation.Provider),
@@ -573,6 +798,7 @@ INSERT INTO conversations (
 		strings.TrimSpace(conversation.Author.Name),
 		strings.TrimSpace(conversation.Author.Email),
 		strings.TrimSpace(conversation.Author.Provider),
+		string(authorGroups),
 		strings.TrimSpace(conversation.ResumeCursor),
 		formatTime(now),
 		formatTime(updated),
@@ -583,12 +809,43 @@ INSERT INTO conversations (
 	return nil
 }
 
+// UpdateConversationAuthor refreshes non-secret identity metadata after a
+// newly authenticated continuation request. The stable owner ID never changes.
+func (s *Store) UpdateConversationAuthor(ctx context.Context, id string, author agent.ConversationAuthor) error {
+	groups, err := json.Marshal(author.Groups)
+	if err != nil {
+		return fmt.Errorf("encode conversation author groups: %w", err)
+	}
+	result, err := s.db.ExecContext(ctx, `
+UPDATE conversations
+SET author_name = ?, author_email = ?, author_provider = ?, author_groups = ?
+WHERE id = ? AND author_id = ?`,
+		strings.TrimSpace(author.Name),
+		strings.TrimSpace(author.Email),
+		strings.TrimSpace(author.Provider),
+		string(groups),
+		strings.TrimSpace(id),
+		strings.TrimSpace(author.ID),
+	)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return agent.ErrConversationNotFound
+	}
+	return nil
+}
+
 // ListConversations returns newest-first durable chat summaries.
 func (s *Store) ListConversations(ctx context.Context, filter agent.ConversationFilter) ([]agent.Conversation, error) {
 	query := `
 SELECT
     c.id, c.title, c.provider, c.model, c.effort, c.resume_cursor,
-    c.author_id, c.author_name, c.author_email, c.author_provider,
+    c.author_id, c.author_name, c.author_email, c.author_provider, c.author_groups,
     c.created_at, c.updated_at, c.input_tokens, c.output_tokens,
     COUNT(m.id)
 FROM conversations c
@@ -610,7 +867,7 @@ ORDER BY c.updated_at DESC, c.id DESC`
 	var conversations []agent.Conversation
 	for rows.Next() {
 		var conversation agent.Conversation
-		var createdAt, updatedAt string
+		var createdAt, updatedAt, authorGroups string
 		if err := rows.Scan(
 			&conversation.ID,
 			&conversation.Title,
@@ -622,6 +879,7 @@ ORDER BY c.updated_at DESC, c.id DESC`
 			&conversation.Author.Name,
 			&conversation.Author.Email,
 			&conversation.Author.Provider,
+			&authorGroups,
 			&createdAt,
 			&updatedAt,
 			&conversation.InputTokens,
@@ -632,6 +890,7 @@ ORDER BY c.updated_at DESC, c.id DESC`
 		}
 		conversation.CreatedAt = parseTime(createdAt)
 		conversation.UpdatedAt = parseTime(updatedAt)
+		_ = json.Unmarshal([]byte(authorGroups), &conversation.Author.Groups)
 		conversations = append(conversations, conversation)
 	}
 	return conversations, rows.Err()
@@ -641,14 +900,16 @@ ORDER BY c.updated_at DESC, c.id DESC`
 func (s *Store) GetConversation(ctx context.Context, id string) (agent.Conversation, error) {
 	var conversation agent.Conversation
 	var createdAt, updatedAt string
-	err := s.db.QueryRowContext(ctx, `
+	row := s.db.QueryRowContext(ctx, `
 SELECT
     id, title, provider, model, effort, resume_cursor,
-    author_id, author_name, author_email, author_provider,
+    author_id, author_name, author_email, author_provider, author_groups,
     created_at, updated_at,
     input_tokens, output_tokens
 FROM conversations
-WHERE id = ?`, id).Scan(
+WHERE id = ?`, id)
+	var authorGroups string
+	err := row.Scan(
 		&conversation.ID,
 		&conversation.Title,
 		&conversation.Provider,
@@ -659,6 +920,7 @@ WHERE id = ?`, id).Scan(
 		&conversation.Author.Name,
 		&conversation.Author.Email,
 		&conversation.Author.Provider,
+		&authorGroups,
 		&createdAt,
 		&updatedAt,
 		&conversation.InputTokens,
@@ -669,6 +931,7 @@ WHERE id = ?`, id).Scan(
 	}
 	conversation.CreatedAt = parseTime(createdAt)
 	conversation.UpdatedAt = parseTime(updatedAt)
+	_ = json.Unmarshal([]byte(authorGroups), &conversation.Author.Groups)
 
 	rows, err := s.db.QueryContext(ctx, `
 SELECT

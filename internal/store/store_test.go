@@ -5,10 +5,12 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/spolnik/RepoKarta/internal/access"
 	"github.com/spolnik/RepoKarta/internal/agent"
 	"github.com/spolnik/RepoKarta/internal/catalog"
 	_ "modernc.org/sqlite"
@@ -33,6 +35,7 @@ func TestConversationTranscriptPersistsAcrossDatabaseReopen(t *testing.T) {
 			Name:     "Alice Example",
 			Email:    "alice@example.com",
 			Provider: "saml",
+			Groups:   []string{"engineering"},
 		},
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -85,7 +88,7 @@ func TestConversationTranscriptPersistsAcrossDatabaseReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got.Title != conversation.Title || got.ResumeCursor != "opaque-provider-cursor" ||
-		got.Author != conversation.Author {
+		!reflect.DeepEqual(got.Author, conversation.Author) {
 		t.Fatalf("conversation metadata = %#v", got)
 	}
 	if got.MessageCount != 2 || got.InputTokens != 120 || got.OutputTokens != 30 {
@@ -128,6 +131,69 @@ func TestConversationTranscriptPersistsAcrossDatabaseReopen(t *testing.T) {
 	}
 	if _, err := os.Stat(imagePath); !os.IsNotExist(err) {
 		t.Fatalf("conversation image still exists after delete: %v", err)
+	}
+}
+
+func TestRepositoryAccessDefaultsPrivateAndSupportsUserGroupAndSharedScopes(t *testing.T) {
+	storage, err := Open(filepath.Join(t.TempDir(), "repokarta.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer storage.Close()
+	ctx := context.Background()
+	if err := storage.SyncRepositories(ctx, []catalog.Repository{{
+		Name: "private-repo", Path: filepath.Join(t.TempDir(), "private-repo"),
+		ScanState: "ready", DiscoveredAt: time.Now(),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	all, err := storage.ListRepositories(ctx)
+	if err != nil || len(all) != 1 {
+		t.Fatalf("trusted repository list = %#v, error = %v", all, err)
+	}
+	repositoryID := all[0].ID
+	alice := access.WithViewer(ctx, access.Viewer{ID: "saml:alice"})
+	if repositories, err := storage.ListRepositories(alice); err != nil || len(repositories) != 0 {
+		t.Fatalf("default private visibility = %#v, error = %v", repositories, err)
+	}
+	if _, err := storage.RepositoryByID(alice, repositoryID); err == nil ||
+		!strings.Contains(err.Error(), "not indexed") {
+		t.Fatalf("private repository lookup error = %v", err)
+	}
+
+	if err := storage.SetRepositoryAccess(ctx, RepositoryAccess{
+		RepositoryID: repositoryID,
+		OwnerID:      "saml:owner",
+		Visibility:   access.VisibilityPrivate,
+		Users:        []string{"saml:alice"},
+		Groups:       []string{"engineering"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if repositories, err := storage.ListRepositories(alice); err != nil || len(repositories) != 1 {
+		t.Fatalf("user grant visibility = %#v, error = %v", repositories, err)
+	}
+	bob := access.WithViewer(ctx, access.Viewer{ID: "saml:bob", Groups: []string{"engineering"}})
+	if repositories, err := storage.ListRepositories(bob); err != nil || len(repositories) != 1 {
+		t.Fatalf("group grant visibility = %#v, error = %v", repositories, err)
+	}
+	outsider := access.WithViewer(ctx, access.Viewer{ID: "saml:outsider"})
+	if repositories, err := storage.ListRepositories(outsider); err != nil || len(repositories) != 0 {
+		t.Fatalf("outsider visibility = %#v, error = %v", repositories, err)
+	}
+	if err := storage.SetRepositoryAccess(ctx, RepositoryAccess{
+		RepositoryID: repositoryID,
+		OwnerID:      "saml:owner",
+		Visibility:   access.VisibilityShared,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if repositories, err := storage.ListRepositories(outsider); err != nil || len(repositories) != 1 {
+		t.Fatalf("shared visibility = %#v, error = %v", repositories, err)
+	}
+	admin := access.WithViewer(ctx, access.Viewer{ID: "local:admin", Admin: true})
+	if repositories, err := storage.ListRepositories(admin); err != nil || len(repositories) != 1 {
+		t.Fatalf("administrator visibility = %#v, error = %v", repositories, err)
 	}
 }
 

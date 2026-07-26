@@ -97,6 +97,36 @@
         <div class="flex justify-end"><button class="search-button" type="submit">Save and activate</button></div>
       </form>
 
+      <section class="mt-8 rounded-2xl border border-white/[0.08] bg-white/[0.025] p-6">
+        <h2 class="text-lg font-semibold text-white">Repository and artifact access</h2>
+        <p class="mt-2 text-sm leading-6 text-ink-soft">A private repository is visible only to its owner and explicit user or identity-provider group grants. Shared visibility is an explicit instance-wide grant. Maps, Wiki pages, dependency facts, source exports, and MCP reads inherit the same policy.</p>
+        {{if .RepositoryAccessError}}
+        <p class="mt-4 rounded-lg border border-red-400/30 bg-red-400/10 px-4 py-3 text-sm text-red-200">{{.RepositoryAccessError}}</p>
+        {{else if not .RepositoryAccess}}
+        <p class="mt-4 text-sm text-ink-faint">No repositories are currently registered.</p>
+        {{else}}
+        <div class="mt-5 grid gap-4">
+          {{range .RepositoryAccess}}
+          <form action="/admin/repositories/access" method="post" class="rounded-xl border border-white/[0.08] bg-black/10 p-4">
+            <input type="hidden" name="csrf" value="{{$.CSRFToken}}">
+            <input type="hidden" name="repository_id" value="{{.RepositoryID}}">
+            <div class="flex flex-wrap items-center justify-between gap-3">
+              <div><h3 class="font-semibold text-white">{{.Repository}}</h3><p class="mt-1 break-all font-mono text-xs text-ink-faint">{{.RepositoryPath}}</p></div>
+              <span class="font-mono text-xs text-ink-faint">repository {{.RepositoryID}}</span>
+            </div>
+            <div class="mt-4 grid gap-4 md:grid-cols-2">
+              <label class="filter-field"><span>Owner identity</span><input name="owner_id" value="{{.OwnerID}}" required></label>
+              <label class="filter-field"><span>Visibility</span><select name="visibility"><option value="private" {{if eq .Visibility "private"}}selected{{end}}>Private</option><option value="shared" {{if eq .Visibility "shared"}}selected{{end}}>Shared with all application users</option></select></label>
+              <label class="filter-field"><span>User grants</span><textarea name="users" rows="3" placeholder="provider:stable-subject-id">{{range $index, $value := .Users}}{{if $index}}, {{end}}{{$value}}{{end}}</textarea></label>
+              <label class="filter-field"><span>Group grants</span><textarea name="groups" rows="3" placeholder="engineering">{{range $index, $value := .Groups}}{{if $index}}, {{end}}{{$value}}{{end}}</textarea></label>
+            </div>
+            <div class="mt-4 flex justify-end"><button class="secondary-button" type="submit">Save access</button></div>
+          </form>
+          {{end}}
+        </div>
+        {{end}}
+      </section>
+
       {{if .MaintenanceAvailable}}
       <section class="mt-12 border-t border-white/[0.08] pt-10" aria-labelledby="storage-title">
         <div class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">

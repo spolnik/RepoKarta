@@ -11,27 +11,75 @@ import (
 	"github.com/spolnik/RepoKarta/internal/agent"
 	"github.com/spolnik/RepoKarta/internal/maintenance"
 	"github.com/spolnik/RepoKarta/internal/security"
+	"github.com/spolnik/RepoKarta/internal/store"
 )
 
 type adminPageData struct {
-	Version              string
-	Authenticated        bool
-	CSRFToken            string
-	Error                string
-	Notice               string
-	ProviderError        string
-	AllowOpen            bool
-	AdminEnabled         bool
-	Mode                 string
-	PublicURL            string
-	TeamDomain           string
-	Audience             string
-	MetadataURL          string
-	EntityID             string
-	MaintenanceAvailable bool
-	Storage              maintenance.Inventory
-	StorageError         string
-	CleanupPlan          *maintenance.CleanupPlan
+	Version               string
+	Authenticated         bool
+	CSRFToken             string
+	Error                 string
+	Notice                string
+	ProviderError         string
+	AllowOpen             bool
+	AdminEnabled          bool
+	Mode                  string
+	PublicURL             string
+	TeamDomain            string
+	Audience              string
+	MetadataURL           string
+	EntityID              string
+	MaintenanceAvailable  bool
+	Storage               maintenance.Inventory
+	StorageError          string
+	CleanupPlan           *maintenance.CleanupPlan
+	RepositoryAccess      []store.RepositoryAccess
+	RepositoryAccessError string
+}
+
+func (s *Server) updateRepositoryAccess(response http.ResponseWriter, request *http.Request) {
+	request.Body = http.MaxBytesReader(response, request.Body, 64<<10)
+	if err := request.ParseForm(); err != nil {
+		http.Error(response, "Invalid repository access request", http.StatusBadRequest)
+		return
+	}
+	csrf, ok := s.security.AdminSession(request)
+	if !ok {
+		http.Redirect(response, request, "/admin/login", http.StatusSeeOther)
+		return
+	}
+	if !s.security.ValidAdminCSRF(request, request.FormValue("csrf")) {
+		http.Error(response, "Invalid administrator CSRF token", http.StatusForbidden)
+		return
+	}
+	repositoryID, err := strconv.ParseInt(request.FormValue("repository_id"), 10, 64)
+	if err != nil || repositoryID <= 0 {
+		http.Error(response, "Invalid repository", http.StatusBadRequest)
+		return
+	}
+	policy := store.RepositoryAccess{
+		RepositoryID: repositoryID,
+		OwnerID:      request.FormValue("owner_id"),
+		Visibility:   request.FormValue("visibility"),
+		Users:        splitAccessSubjects(request.FormValue("users")),
+		Groups:       splitAccessSubjects(request.FormValue("groups")),
+	}
+	if err := s.repositoryAccess.SetRepositoryAccess(request.Context(), policy); err != nil {
+		data := s.adminData(request.Context(), csrf)
+		data.Error = err.Error()
+		response.WriteHeader(http.StatusBadRequest)
+		s.renderAdmin(response, data)
+		return
+	}
+	data := s.adminData(request.Context(), csrf)
+	data.Notice = "Repository access saved. Source and every derived artifact now use this policy."
+	s.renderAdmin(response, data)
+}
+
+func splitAccessSubjects(value string) []string {
+	return strings.FieldsFunc(value, func(character rune) bool {
+		return character == ',' || character == '\r' || character == '\n'
+	})
 }
 
 func (s *Server) adminLoginPage(response http.ResponseWriter, request *http.Request) {
@@ -247,6 +295,14 @@ func (s *Server) adminData(ctx context.Context, csrf string) adminPageData {
 			data.StorageError = err.Error()
 		} else {
 			data.Storage = inventory
+		}
+	}
+	if s.repositoryAccess != nil {
+		policies, err := s.repositoryAccess.ListRepositoryAccess(ctx)
+		if err != nil {
+			data.RepositoryAccessError = err.Error()
+		} else {
+			data.RepositoryAccess = policies
 		}
 	}
 	return data

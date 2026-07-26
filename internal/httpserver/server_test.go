@@ -22,6 +22,7 @@ import (
 	"github.com/spolnik/RepoKarta/internal/maintenance"
 	"github.com/spolnik/RepoKarta/internal/search"
 	"github.com/spolnik/RepoKarta/internal/security"
+	"github.com/spolnik/RepoKarta/internal/store"
 )
 
 func TestAdministratorCanPreviewCleanupAndExportDiagnostics(t *testing.T) {
@@ -39,6 +40,13 @@ func TestAdministratorCanPreviewCleanupAndExportDiagnostics(t *testing.T) {
 		t.Fatal(err)
 	}
 	operationsStore := maintenanceTestStore{}
+	accessStore := &accessTestStore{policies: []store.RepositoryAccess{{
+		RepositoryID:   7,
+		Repository:     "private-repository",
+		RepositoryPath: `C:\repositories\private-repository`,
+		OwnerID:        "local:admin",
+		Visibility:     "private",
+	}}}
 	operations, err := maintenance.New(maintenance.Config{
 		DataDirectory:   dataDirectory,
 		RepositoryRoot:  repositoryRoot,
@@ -64,10 +72,11 @@ func TestAdministratorCanPreviewCleanupAndExportDiagnostics(t *testing.T) {
 	}
 	server, err := New(
 		Config{
-			Address:     "127.0.0.1:7331",
-			Version:     "test",
-			Security:    securityManager,
-			Maintenance: operations,
+			Address:          "127.0.0.1:7331",
+			Version:          "test",
+			Security:         securityManager,
+			Maintenance:      operations,
+			RepositoryAccess: accessStore,
 		},
 		codeintel.New(testStore{}, testSearcher{}, "http://127.0.0.1:7331"),
 		testRefresher{},
@@ -92,6 +101,7 @@ func TestAdministratorCanPreviewCleanupAndExportDiagnostics(t *testing.T) {
 	server.server.Handler.ServeHTTP(response, request)
 	if response.Code != http.StatusOK ||
 		!strings.Contains(response.Body.String(), "Storage and diagnostics") ||
+		!strings.Contains(response.Body.String(), "private-repository") ||
 		!strings.Contains(response.Body.String(), "logs/repokarta.log") {
 		t.Fatalf("admin storage response = %d, body %q", response.Code, response.Body.String())
 	}
@@ -99,6 +109,25 @@ func TestAdministratorCanPreviewCleanupAndExportDiagnostics(t *testing.T) {
 	targetMatch := regexp.MustCompile(`name="target" value="([^"]+)"`).FindStringSubmatch(response.Body.String())
 	if len(csrfMatch) != 2 || len(targetMatch) != 2 {
 		t.Fatalf("storage controls missing: %q", response.Body.String())
+	}
+
+	accessForm := url.Values{
+		"csrf":          {csrfMatch[1]},
+		"repository_id": {"7"},
+		"owner_id":      {"saml:owner"},
+		"visibility":    {"private"},
+		"users":         {"saml:alice"},
+		"groups":        {"engineering"},
+	}
+	request = httptest.NewRequest(http.MethodPost, "http://127.0.0.1:7331/admin/repositories/access", strings.NewReader(accessForm.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(adminCookie)
+	response = httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK ||
+		accessStore.policies[0].OwnerID != "saml:owner" ||
+		len(accessStore.policies[0].Groups) != 1 {
+		t.Fatalf("repository access response = %d, policy = %#v", response.Code, accessStore.policies)
 	}
 
 	previewForm := url.Values{"csrf": {csrfMatch[1]}, "target": {targetMatch[1]}}
@@ -145,6 +174,26 @@ func TestAdministratorCanPreviewCleanupAndExportDiagnostics(t *testing.T) {
 }
 
 type maintenanceTestStore struct{}
+
+type accessTestStore struct {
+	policies []store.RepositoryAccess
+}
+
+func (s *accessTestStore) ListRepositoryAccess(context.Context) ([]store.RepositoryAccess, error) {
+	return append([]store.RepositoryAccess(nil), s.policies...), nil
+}
+
+func (s *accessTestStore) SetRepositoryAccess(_ context.Context, policy store.RepositoryAccess) error {
+	for index := range s.policies {
+		if s.policies[index].RepositoryID == policy.RepositoryID {
+			policy.Repository = s.policies[index].Repository
+			policy.RepositoryPath = s.policies[index].RepositoryPath
+			s.policies[index] = policy
+			return nil
+		}
+	}
+	return context.Canceled
+}
 
 func (maintenanceTestStore) ListRepositories(context.Context) ([]catalog.Repository, error) {
 	return []catalog.Repository{}, nil
@@ -231,6 +280,16 @@ func TestAdministratorCanEnableAllowedOpenMode(t *testing.T) {
 	}
 	if securityManager.Mode() != security.ModeOpen {
 		t.Fatalf("mode = %q, want %q", securityManager.Mode(), security.ModeOpen)
+	}
+	request = httptest.NewRequest(http.MethodGet, "https://repo.example.com/api/whoami", nil)
+	request.Host = "repo.example.com"
+	request.Header.Set("Origin", "https://repo.example.com")
+	response = httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK ||
+		!strings.Contains(response.Body.String(), `"id":"open:anonymous"`) ||
+		!strings.Contains(response.Body.String(), `"groups":[]`) {
+		t.Fatalf("open whoami response = %d, body %q", response.Code, response.Body.String())
 	}
 }
 

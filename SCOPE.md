@@ -508,7 +508,7 @@ changes.
 - [x] Upgrade and database/artifact migration tests, including idempotent retry
   and unsupported-future-format rejection.
 
-### M6: shared deployment (in progress)
+### M6: shared deployment
 
 The executable now has a tested shared-deployment authentication boundary while
 remaining loopback-only by default. Non-secret provider settings persist in
@@ -520,8 +520,23 @@ SQLite; bootstrap administrator credentials and SAML private keys do not.
 - [x] Startup-credential-protected administration for authentication settings.
 - [x] Per-user ownership and access enforcement for durable conversations,
   with administrator own/all and author filters.
-- [ ] Per-user separation of generated artifacts on a shared instance.
-- [ ] Shared or team deployment packaging and operations.
+- [x] Per-user separation of generated artifacts on a shared instance.
+- [x] Shared or team deployment packaging and operations.
+
+Repository authorization is deny-by-default on shared instances. Each
+repository has a private owner plus explicit user and identity-provider group
+grants, or an explicit instance-shared scope. Source, search, maps, Wiki
+plans/pages, dependency facts, exports, conversation-scoped MCP reads, and
+repository pickers enforce the same policy. Existing and newly discovered
+repositories default to private `local:admin`, while loopback-local behavior
+remains unchanged. Release archives carry service templates and a shared
+deployment runbook covering TLS, identity bootstrap, backup, upgrades,
+rollback, authorization smoke tests, and deprovisioning.
+
+Exit condition: two users sharing an instance cannot discover or retrieve one
+another's repositories or derived artifacts unless an explicit user, group, or
+shared scope allows it, and the release bundle contains the operational
+material needed to deploy and recover the service.
 
 ### Future: enterprise identity and administration
 
@@ -842,31 +857,11 @@ completion criteria include:
 
 ## Current implementation version
 
-`0.38.0-dev`. M0 through M5 are complete. M6 is in progress.
+`0.39.0-dev`. M0 through M6 are complete.
 
 ## Recommended next session
 
-Complete the **M6 shared-artifact authorization boundary** before adding more
-shared-deployment surface area.
-
-1. Define repository and artifact visibility for users, teams, and
-   administrators without changing loopback-local behavior.
-2. Enforce the same policy on maps, Wiki plans/pages, exports, conversation
-   attachments, dependency facts, and MCP tools. An API, UI, export, or MCP
-   response must never reveal an artifact the caller cannot access.
-3. Migrate existing artifacts to an explicit owner/scope without silently
-   granting broader access, and keep the migration idempotent and recoverable.
-4. Test cross-user isolation, administrator own/all views, stale sessions, and
-   all four authentication modes.
-5. Finish shared/team deployment packaging and operational guidance only after
-   the artifact boundary is proven.
-
-Exit condition: two users sharing an instance cannot discover or retrieve one
-another's repositories or derived artifacts unless an explicit shared scope
-allows it, and administrators can diagnose access decisions without exposing
-source or secrets.
-
-Then implement structured `@repository` and `@file` search contexts with
+Implement structured `@repository` and `@file` search contexts with
 permission-aware chips and typed deterministic results. Follow with the
 Dependency Management MVP; defer the full agentic Deep Search loop until
 structured contexts, completeness metadata, and artifact permissions are all

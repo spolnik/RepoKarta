@@ -24,10 +24,14 @@
             <span class="mcp-live-dot" aria-hidden="true"></span>
             Streamable HTTP · online
           </div>
-          <h1 id="mcp-heading">Connect RepoKarta to any MCP client.</h1>
+          <h1 id="mcp-heading">{{if .MCP.Shared}}MCP access follows repository permissions.{{else}}Connect RepoKarta to any MCP client.{{end}}</h1>
           <p>
+            {{if .MCP.Shared}}
+            Provider agents started from Chat use a conversation-scoped MCP identity. Direct bearer-token and stdio connections are disabled in shared mode so they cannot bypass repository grants.
+            {{else}}
             Give external agents grounded, read-only access to indexed code, Git history,
             architecture maps, and generated Deep Wiki pages.
+            {{end}}
           </p>
         </div>
         <dl class="mcp-hero-meta">
@@ -46,6 +50,12 @@
         </dl>
       </section>
 
+      {{if .MCP.Shared}}
+      <section class="mcp-card mcp-card-primary" id="mcp-connection">
+        <header class="mcp-card-header"><div><p>Shared deployment</p><h2>Conversation-scoped access</h2></div><span class="mcp-status">Enforced</span></header>
+        <p class="mcp-card-intro">Start grounded work from Chat. RepoKarta binds each internal MCP call to the conversation author and captured identity-provider groups, then applies the same repository policy used by the browser, JSON API, Maps, Wiki, dependencies, and exports.</p>
+      </section>
+      {{else}}
       <section class="mcp-connection-grid" id="mcp-connection" aria-label="MCP connection methods">
         <article class="mcp-card mcp-card-primary">
           <header class="mcp-card-header">
@@ -145,6 +155,7 @@
           </p>
         </article>
       </section>
+      {{end}}
 
       <section class="mcp-tools" aria-labelledby="mcp-tools-heading">
         <div class="mcp-section-heading">

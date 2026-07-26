@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/spolnik/RepoKarta/internal/access"
 )
 
 type fakeAdapter struct {
@@ -564,10 +566,24 @@ func TestManagerRunEphemeralReturnsOnlyFinalProviderMessage(t *testing.T) {
 	manager := NewManager("", "", "", &segmentedAdapter{}).UsePersistence(store)
 	defer manager.Close()
 
-	result, err := manager.RunEphemeral(context.Background(), TurnRequest{
+	ctx := access.WithViewer(context.Background(), access.Viewer{
+		ID: "saml:alice", Groups: []string{"engineering"},
+	})
+	ephemeralID := ""
+	result, err := manager.RunEphemeral(ctx, TurnRequest{
 		Provider: "segmented",
 		Message:  "Generate repository documentation",
-	}, nil)
+	}, func(event Event) error {
+		if event.Type == EventMeta {
+			ephemeralID = event.ConversationID
+			author, ok := manager.AuthorForMCP(ephemeralID)
+			if !ok || author.ID != "saml:alice" ||
+				len(author.Groups) != 1 || author.Groups[0] != "engineering" {
+				t.Fatalf("ephemeral MCP author = %#v, present = %t", author, ok)
+			}
+		}
+		return nil
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -576,6 +592,9 @@ func TestManagerRunEphemeralReturnsOnlyFinalProviderMessage(t *testing.T) {
 	}
 	if len(store.conversations) != 0 {
 		t.Fatalf("ephemeral generation created durable conversations: %#v", store.conversations)
+	}
+	if _, ok := manager.AuthorForMCP(ephemeralID); ok {
+		t.Fatal("ephemeral MCP author remained after the provider turn")
 	}
 }
 
@@ -632,6 +651,23 @@ func TestManagerEnforcesConversationAuthorWhenContinuing(t *testing.T) {
 	}
 
 	err = manager.Send(context.Background(), TurnRequest{
+		ConversationID: "saved",
+		Message:        "Continue with current groups",
+		Author: ConversationAuthor{
+			ID:       "saml:alice",
+			Name:     "Alice",
+			Provider: "saml",
+			Groups:   []string{"current-team"},
+		},
+	}, func(Event) error { return nil })
+	if err != nil {
+		t.Fatalf("owner continuation failed: %v", err)
+	}
+	if got := store.conversations["saved"].Author.Groups; len(got) != 1 || got[0] != "current-team" {
+		t.Fatalf("refreshed author groups = %#v", got)
+	}
+
+	err = manager.Send(context.Background(), TurnRequest{
 		ConversationID:   "saved",
 		Message:          "Continue as administrator",
 		Author:           ConversationAuthor{ID: "local:admin", Provider: "local"},
@@ -680,6 +716,17 @@ func (s *memoryConversationStore) UpdateConversationCursor(_ context.Context, id
 		return ErrConversationNotFound
 	}
 	conversation.ResumeCursor = cursor
+	s.conversations[id] = conversation
+	return nil
+}
+
+func (s *memoryConversationStore) UpdateConversationAuthor(_ context.Context, id string, author ConversationAuthor) error {
+	conversation, ok := s.conversations[id]
+	current := normalizeConversationAuthor(conversation.Author)
+	if !ok || current.ID != author.ID {
+		return ErrConversationNotFound
+	}
+	conversation.Author = author
 	s.conversations[id] = conversation
 	return nil
 }

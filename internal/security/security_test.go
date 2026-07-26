@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/spolnik/RepoKarta/internal/access"
 )
 
 type memorySettingsStore struct {
@@ -104,6 +106,14 @@ func TestMiddlewareEnforcesLocalAndSharedBoundaries(t *testing.T) {
 		} else if manager.Mode() == ModeLocal &&
 			(principal.ID != "admin" || principal.Name != "Local administrator" || !principal.Admin) {
 			t.Errorf("local-mode principal = %#v, want local administrator", principal)
+		}
+		viewer, ok := access.ViewerFromContext(request.Context())
+		if !ok {
+			t.Error("authenticated request does not carry an access viewer")
+		} else if manager.Mode() == ModeLocal && (viewer.ID != "local:admin" || !viewer.Admin) {
+			t.Errorf("local access viewer = %#v", viewer)
+		} else if manager.Mode() == ModeOpen && (viewer.ID != "open:anonymous" || viewer.Admin) {
+			t.Errorf("open access viewer = %#v", viewer)
 		}
 		response.WriteHeader(http.StatusNoContent)
 	}))

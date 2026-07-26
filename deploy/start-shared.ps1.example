@@ -1,0 +1,12 @@
+$ErrorActionPreference = "Stop"
+
+# Run this foreground command as a dedicated Windows service account through
+# the service manager approved by your organization. Restrict the password file
+# ACL to that account and keep the listener behind the HTTPS reverse proxy.
+& "C:\Program Files\RepoKarta\repokarta.exe" serve `
+    -listen "127.0.0.1:7331" `
+    -open=false `
+    -data-dir "C:\ProgramData\RepoKarta" `
+    -admin-user "repokarta-admin" `
+    -admin-password-file "C:\ProgramData\RepoKarta-Secrets\admin-password.txt" `
+    "D:\Repositories"

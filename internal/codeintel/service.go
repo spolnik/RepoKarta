@@ -11,6 +11,8 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -18,6 +20,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/spolnik/RepoKarta/internal/access"
 	"github.com/spolnik/RepoKarta/internal/catalog"
 	"github.com/spolnik/RepoKarta/internal/graph"
 	"github.com/spolnik/RepoKarta/internal/search"
@@ -347,21 +350,45 @@ func (s *Service) Search(ctx context.Context, request SearchRequest) (SearchResp
 	}
 	limit := normalizeLimit(request.Limit, DefaultSearchLimit, MaximumSearchLimit)
 	repositoryFilter := strings.TrimSpace(request.Repository)
+	var repositoryAllowList []string
 	if request.RepositoryID > 0 {
 		repository, err := s.store.RepositoryByID(ctx, request.RepositoryID)
 		if err != nil {
 			return SearchResponse{}, err
 		}
-		repositoryFilter = repository.Name
+		repositoryFilter = filepath.ToSlash(repository.Path)
+	} else if repositoryFilter != "" {
+		repository, err := s.namedRepository(ctx, repositoryFilter)
+		if err != nil {
+			return SearchResponse{}, err
+		}
+		repositoryFilter = filepath.ToSlash(repository.Path)
+	} else if _, restricted := access.ViewerFromContext(ctx); restricted {
+		repositories, err := s.store.ListRepositories(ctx)
+		if err != nil {
+			return SearchResponse{}, err
+		}
+		for _, repository := range repositories {
+			repositoryAllowList = append(repositoryAllowList, filepath.ToSlash(repository.Path))
+		}
+		if len(repositoryAllowList) == 0 {
+			return SearchResponse{
+				Limit:           limit,
+				Matches:         []SearchMatch{},
+				TotalFilesExact: true,
+				Warnings:        []search.Warning{},
+			}, nil
+		}
 	}
 	result, err := s.searcher.Search(ctx, search.Query{
-		Text:       strings.TrimSpace(request.Query),
-		Repository: repositoryFilter,
-		Language:   strings.TrimSpace(request.Language),
-		Path:       strings.TrimSpace(request.Path),
-		File:       strings.TrimSpace(request.File),
-		Mode:       strings.TrimSpace(request.Mode),
-		Limit:      limit,
+		Text:         strings.TrimSpace(request.Query),
+		Repository:   repositoryFilter,
+		Repositories: repositoryAllowList,
+		Language:     strings.TrimSpace(request.Language),
+		Path:         strings.TrimSpace(request.Path),
+		File:         strings.TrimSpace(request.File),
+		Mode:         strings.TrimSpace(request.Mode),
+		Limit:        limit,
 	})
 	if err != nil {
 		return SearchResponse{}, err
@@ -399,6 +426,13 @@ func (s *Service) searchResponse(ctx context.Context, result search.Result, limi
 		output.EstimatedTotalFiles = len(result.Matches)
 		output.TotalFilesExact = !result.Truncated
 	}
+	restricted := false
+	if _, ok := access.ViewerFromContext(ctx); ok {
+		restricted = true
+	}
+	visibleMatches := 0
+	visibleMatchCount := 0
+	droppedMatches := false
 	for _, match := range result.Matches {
 		outputMatch := SearchMatch{
 			Repository: match.Repository,
@@ -421,13 +455,32 @@ func (s *Service) searchResponse(ctx context.Context, result search.Result, limi
 				ReferenceConfidence: line.ReferenceConfidence,
 			})
 		}
-		if repository, ok := resolveRepository(repositories, match.Repository, match.Revision); ok {
+		repository, visible := resolveRepository(repositories, match.Repository, match.Revision, restricted)
+		if restricted && !visible {
+			droppedMatches = true
+			continue
+		}
+		if visible {
 			start, end := lineRange(match.Lines)
 			outputMatch.Repository = repository.Name
 			outputMatch.Citation = Citation(repository.Name, match.Revision, match.Path, start, end)
 			outputMatch.SourceURL = s.SourceURL(repository.ID, match.Revision, match.Path, start, end)
 		}
 		output.Matches = append(output.Matches, outputMatch)
+		visibleMatches++
+		visibleMatchCount += len(match.Lines)
+	}
+	if restricted && droppedMatches {
+		// Search may scan shared shards internally, but authorization metadata
+		// and inaccessible match counts never cross the response boundary.
+		output.MatchCount = visibleMatchCount
+		output.MatchingFiles = visibleMatches
+		output.EstimatedTotalFiles = visibleMatches
+		output.ReturnedFiles = visibleMatches
+		output.FilesSkipped = 0
+		output.ShardsSkipped = 0
+		output.Truncated = visibleMatches >= limit
+		output.TotalFilesExact = !output.Truncated
 	}
 	return output, nil
 }
@@ -997,13 +1050,20 @@ func (s *Service) namedRepository(ctx context.Context, name string) (catalog.Rep
 	return catalog.Repository{}, fmt.Errorf("repository %q is not indexed", name)
 }
 
-func resolveRepository(repositories []catalog.Repository, searchName, revision string) (catalog.Repository, bool) {
+func resolveRepository(repositories []catalog.Repository, searchName, revision string, requireExactIdentity bool) (catalog.Repository, bool) {
 	normalized := strings.ReplaceAll(searchName, "\\", "/")
 	for _, repository := range repositories {
 		if repository.IndexedCommit != revision && repository.HeadCommit != revision {
 			continue
 		}
-		if normalized == repository.Name || strings.HasSuffix(strings.ToLower(normalized), "/"+strings.ToLower(repository.Name)) {
+		repositoryPath := filepath.ToSlash(filepath.Clean(repository.Path))
+		pathMatches := normalized == repositoryPath
+		if runtime.GOOS == "windows" {
+			pathMatches = strings.EqualFold(normalized, repositoryPath)
+		}
+		if pathMatches || (!requireExactIdentity &&
+			(normalized == repository.Name ||
+				strings.HasSuffix(strings.ToLower(normalized), "/"+strings.ToLower(repository.Name)))) {
 			return repository, true
 		}
 	}

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/crewjam/saml/samlsp"
+	"github.com/spolnik/RepoKarta/internal/access"
 )
 
 // Middleware validates Host and Origin, then applies the selected authentication mode.
@@ -24,18 +25,18 @@ func (m *Manager) Middleware(next http.Handler) http.Handler {
 		}
 		switch settings.Mode {
 		case ModeLocal:
-			next.ServeHTTP(response, request.WithContext(withPrincipal(request.Context(), Principal{
+			m.servePrincipal(next, response, request, Principal{
 				ID:       "admin",
 				Name:     "Local administrator",
 				Provider: string(ModeLocal),
 				Admin:    true,
-			})))
+			})
 		case ModeOpen:
-			next.ServeHTTP(response, request.WithContext(withPrincipal(request.Context(), Principal{
+			m.servePrincipal(next, response, request, Principal{
 				ID:       "anonymous",
 				Name:     "Anonymous",
 				Provider: string(ModeOpen),
-			})))
+			})
 		case ModeCloudflareAccess:
 			m.mu.RLock()
 			validator := m.cloudflare
@@ -55,7 +56,7 @@ func (m *Manager) Middleware(next http.Handler) http.Handler {
 				http.Error(response, "Cloudflare Access authentication failed", http.StatusUnauthorized)
 				return
 			}
-			next.ServeHTTP(response, request.WithContext(withPrincipal(request.Context(), principal)))
+			m.servePrincipal(next, response, request, principal)
 		case ModeSAML:
 			m.mu.RLock()
 			middleware := m.samlMiddleware
@@ -71,12 +72,22 @@ func (m *Manager) Middleware(next http.Handler) http.Handler {
 					http.Error(response, "SAML identity did not include a stable user identifier", http.StatusUnauthorized)
 					return
 				}
-				next.ServeHTTP(response, request.WithContext(withPrincipal(request.Context(), principal)))
+				m.servePrincipal(next, response, request, principal)
 			})).ServeHTTP(response, request)
 		default:
 			http.Error(response, "Authentication mode is not configured", http.StatusServiceUnavailable)
 		}
 	})
+}
+
+func (m *Manager) servePrincipal(next http.Handler, response http.ResponseWriter, request *http.Request, principal Principal) {
+	ctx := withPrincipal(request.Context(), principal)
+	ctx = access.WithViewer(ctx, access.Viewer{
+		ID:     access.IdentityID(principal.Provider, principal.ID),
+		Groups: principal.Groups,
+		Admin:  principal.Admin,
+	})
+	next.ServeHTTP(response, request.WithContext(ctx))
 }
 
 func isPublicSecurityPath(path string) bool {

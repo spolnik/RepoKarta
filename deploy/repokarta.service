@@ -1,0 +1,23 @@
+[Unit]
+Description=RepoKarta shared code intelligence
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=repokarta
+Group=repokarta
+EnvironmentFile=/etc/repokarta/repokarta.env
+ExecStart=/opt/repokarta/repokarta serve -listen 127.0.0.1:7331 -open=false -data-dir /var/lib/repokarta -admin-user ${REPOKARTA_ADMIN_USER} -admin-password-file ${REPOKARTA_ADMIN_PASSWORD_FILE} /srv/repositories
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/repokarta
+ReadOnlyPaths=/srv/repositories
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

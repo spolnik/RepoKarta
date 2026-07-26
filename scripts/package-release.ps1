@@ -98,6 +98,10 @@ try {
     }
 
     Copy-Item -LiteralPath (Join-Path $repositoryRoot "README.md") -Destination (Join-Path $stageDirectory "README.md") -Force
+    New-Item -ItemType Directory -Force -Path (Join-Path $stageDirectory "docs") | Out-Null
+    New-Item -ItemType Directory -Force -Path (Join-Path $stageDirectory "deploy") | Out-Null
+    Copy-Item -LiteralPath (Join-Path $repositoryRoot "docs\shared-deployment.md") -Destination (Join-Path $stageDirectory "docs\shared-deployment.md") -Force
+    Copy-Item -Path (Join-Path $repositoryRoot "deploy\*") -Destination (Join-Path $stageDirectory "deploy") -Recurse -Force
     Copy-ThirdPartyLicenses -Destination (Join-Path $stageDirectory "licenses")
 
     $reportedVersion = & (Join-Path $stageDirectory "repokarta.exe") version
@@ -106,6 +110,12 @@ try {
     }
     if (-not (Test-Path -LiteralPath (Join-Path $stageDirectory "licenses\zoekt-Apache-2.0.txt"))) {
         throw "packaged executable is missing the full Zoekt Apache-2.0 license"
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $stageDirectory "docs\shared-deployment.md"))) {
+        throw "package is missing the shared-deployment runbook"
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $stageDirectory "deploy\repokarta.env.example"))) {
+        throw "package is missing the shared-deployment environment template"
     }
 
     if (Test-Path -LiteralPath $archivePath) {

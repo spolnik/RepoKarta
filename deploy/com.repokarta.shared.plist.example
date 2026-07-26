@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.repokarta.shared</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/repokarta/repokarta</string>
+    <string>serve</string>
+    <string>-listen</string><string>127.0.0.1:7331</string>
+    <string>-open=false</string>
+    <string>-data-dir</string><string>/Library/Application Support/RepoKarta</string>
+    <string>-admin-user</string><string>repokarta-admin</string>
+    <string>-admin-password-file</string><string>/Library/Application Support/RepoKarta-Secrets/admin-password</string>
+    <string>/srv/repositories</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ProcessType</key><string>Background</string>
+  <key>StandardOutPath</key><string>/Library/Logs/RepoKarta/service.log</string>
+  <key>StandardErrorPath</key><string>/Library/Logs/RepoKarta/service-error.log</string>
+</dict>
+</plist>

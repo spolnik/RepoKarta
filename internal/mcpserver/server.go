@@ -10,10 +10,12 @@ import (
 	"io"
 	"net/http"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/spolnik/RepoKarta/internal/access"
 	"github.com/spolnik/RepoKarta/internal/agent"
 	"github.com/spolnik/RepoKarta/internal/codeintel"
 	"github.com/spolnik/RepoKarta/internal/docs"
@@ -26,10 +28,12 @@ const (
 
 // Config controls the local MCP endpoint.
 type Config struct {
-	Version   string
-	BaseURL   string
-	Token     string
-	Artifacts ArtifactReader
+	Version       string
+	BaseURL       string
+	Token         string
+	Artifacts     ArtifactReader
+	ResolveViewer func(context.Context, string) (access.Viewer, error)
+	AllowUnscoped func() bool
 }
 
 // Intelligence is the shared surface implemented by both the in-process
@@ -156,7 +160,7 @@ func NewHandler(config Config, intelligence Intelligence, trackers ...*CitationT
 	handler := mcp.NewStreamableHTTPHandler(func(request *http.Request) *mcp.Server {
 		return newServer(config, intelligence, tracker, request.URL.Query().Get("conversation_id"))
 	}, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true})
-	return bearerAuth(config.Token, handler)
+	return bearerAuth(config, handler)
 }
 
 func newServer(config Config, intelligence Intelligence, tracker *CitationTracker, conversationID string) *mcp.Server {
@@ -688,16 +692,34 @@ func recordEvidence(tracker *CitationTracker, conversationID string, evidence gr
 	})
 }
 
-func bearerAuth(token string, next http.Handler) http.Handler {
+func bearerAuth(config Config, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		expected := "Bearer " + token
+		expected := "Bearer " + config.Token
 		actual := request.Header.Get("Authorization")
-		if token == "" || len(actual) != len(expected) || subtle.ConstantTimeCompare([]byte(actual), []byte(expected)) != 1 {
+		if config.Token == "" || len(actual) != len(expected) || subtle.ConstantTimeCompare([]byte(actual), []byte(expected)) != 1 {
 			response.Header().Set("WWW-Authenticate", "Bearer")
 			http.Error(response, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
-		next.ServeHTTP(response, request)
+		ctx := request.Context()
+		if config.ResolveViewer != nil {
+			conversationID := strings.TrimSpace(request.URL.Query().Get("conversation_id"))
+			if conversationID == "" {
+				if config.AllowUnscoped == nil || !config.AllowUnscoped() {
+					http.Error(response, "A conversation-scoped MCP endpoint is required in shared mode", http.StatusForbidden)
+					return
+				}
+				ctx = access.WithViewer(ctx, access.Viewer{ID: "local:admin", Admin: true})
+			} else {
+				viewer, err := config.ResolveViewer(ctx, conversationID)
+				if err != nil {
+					http.Error(response, "Conversation-scoped MCP authorization failed", http.StatusForbidden)
+					return
+				}
+				ctx = access.WithViewer(ctx, viewer)
+			}
+		}
+		next.ServeHTTP(response, request.WithContext(ctx))
 	})
 }
 

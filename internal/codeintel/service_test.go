@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spolnik/RepoKarta/internal/access"
 	"github.com/spolnik/RepoKarta/internal/analysis"
 	"github.com/spolnik/RepoKarta/internal/catalog"
 	"github.com/spolnik/RepoKarta/internal/graph"
@@ -38,18 +39,74 @@ func TestSourceWindowKeepsFocusInsideUsefulContext(t *testing.T) {
 	}
 }
 
-type symbolTestStore struct{}
-
-func (symbolTestStore) ListRepositories(context.Context) ([]catalog.Repository, error) {
-	return []catalog.Repository{}, nil
+type symbolTestStore struct {
+	repository catalog.Repository
 }
 
-func (symbolTestStore) RepositoryByID(context.Context, int64) (catalog.Repository, error) {
-	return catalog.Repository{}, nil
+func (s symbolTestStore) ListRepositories(context.Context) ([]catalog.Repository, error) {
+	if s.repository.ID == 0 {
+		return []catalog.Repository{}, nil
+	}
+	return []catalog.Repository{s.repository}, nil
+}
+
+func (s symbolTestStore) RepositoryByID(context.Context, int64) (catalog.Repository, error) {
+	return s.repository, nil
 }
 
 type capturingSearcher struct {
 	query search.Query
+}
+
+type fixedResultSearcher struct {
+	result search.Result
+}
+
+func (s fixedResultSearcher) Search(context.Context, search.Query) (search.Result, error) {
+	return s.result, nil
+}
+
+type visibleRepositoryStore struct {
+	repository catalog.Repository
+}
+
+func (s visibleRepositoryStore) ListRepositories(context.Context) ([]catalog.Repository, error) {
+	return []catalog.Repository{s.repository}, nil
+}
+
+func (s visibleRepositoryStore) RepositoryByID(_ context.Context, id int64) (catalog.Repository, error) {
+	if id == s.repository.ID {
+		return s.repository, nil
+	}
+	return catalog.Repository{}, context.Canceled
+}
+
+func TestSearchDropsMatchesWithoutAnExactAuthorizedRepositoryIdentity(t *testing.T) {
+	revision := strings.Repeat("a", 40)
+	visible := catalog.Repository{
+		ID: 1, Name: "same-name", Path: filepath.Join(t.TempDir(), "allowed", "same-name"),
+		IndexedCommit: revision,
+	}
+	privatePath := filepath.Join(t.TempDir(), "private", "same-name")
+	service := New(visibleRepositoryStore{repository: visible}, fixedResultSearcher{result: search.Result{
+		Matches: []search.FileMatch{{
+			Repository: privatePath,
+			Revision:   revision,
+			Path:       "secret.go",
+			Lines:      []search.LineMatch{{Number: 1, Text: "private content"}},
+		}},
+		MatchCount: 1, FileCount: 1, EstimatedFiles: 1, ReturnedFiles: 1,
+		TotalFilesExact: true,
+	}}, "http://localhost")
+	ctx := access.WithViewer(context.Background(), access.Viewer{ID: "saml:alice"})
+	result, err := service.Search(ctx, SearchRequest{Query: "private"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Matches) != 0 || result.MatchCount != 0 || result.MatchingFiles != 0 ||
+		result.EstimatedTotalFiles != 0 {
+		t.Fatalf("unauthorized search metadata leaked: %#v", result)
+	}
 }
 
 func (s *capturingSearcher) Search(_ context.Context, query search.Query) (search.Result, error) {
@@ -59,7 +116,9 @@ func (s *capturingSearcher) Search(_ context.Context, query search.Query) (searc
 
 func TestFindSymbolUsesBoundedZoektSymbolQuery(t *testing.T) {
 	searcher := &capturingSearcher{}
-	service := New(symbolTestStore{}, searcher, "http://localhost")
+	service := New(symbolTestStore{repository: catalog.Repository{
+		ID: 1, Name: "api", Path: filepath.Join(t.TempDir(), "api"),
+	}}, searcher, "http://localhost")
 	if _, err := service.FindSymbol(context.Background(), SymbolRequest{
 		Symbol:     `Handle"Request`,
 		Repository: "api",
@@ -70,7 +129,7 @@ func TestFindSymbolUsesBoundedZoektSymbolQuery(t *testing.T) {
 	}
 	if searcher.query.Text != `sym:"Handle\"Request"` ||
 		searcher.query.Mode != "zoekt" ||
-		searcher.query.Repository != "api" ||
+		searcher.query.Repository != filepath.ToSlash(service.store.(symbolTestStore).repository.Path) ||
 		searcher.query.Language != "Go" ||
 		searcher.query.Limit != 17 {
 		t.Fatalf("symbol query = %#v", searcher.query)

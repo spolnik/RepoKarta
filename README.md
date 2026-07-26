@@ -56,6 +56,9 @@ questions, M3 evidence-backed repository maps, and M4 living documentation:
 - locally persisted, author-owned conversations with reopen, rename, delete,
   administrator-visible own/all history filters, native provider resume, and
   bounded transcript-replay fallback;
+- deny-by-default shared repository ownership with explicit user, identity
+  provider group, and instance-shared grants inherited by source, Search,
+  Maps, Wiki, dependencies, exports, and conversation-scoped MCP tools;
 - visible token usage plus per-turn cancellation, timeout, and output-token
   budget controls;
 - adversarial coverage that keeps instructions found in repository content
@@ -198,8 +201,15 @@ supplied on first startup with `-auth-mode`, `-public-url`,
 Authentication establishes a stable conversation author. Shared users can
 list, open, continue, rename, interrupt, and delete only their own
 conversations; administrators can inspect all authors. Loopback-local mode
-always acts as the local administrator. Generated Wiki artifacts remain shared
-deployment data rather than per-user content.
+always acts as the local administrator. Repositories and every derived
+artifact default to private `local:admin` ownership after an upgrade or new
+discovery. Use the administrator panel to grant a stable user ID, an IdP group,
+or explicit instance-wide shared visibility.
+
+Release archives include service templates and the complete
+[shared-deployment runbook](./docs/shared-deployment.md), including reverse
+proxy, backup, restore, upgrade, rollback, authorization verification, and
+deprovisioning guidance.
 
 ## Documentation steering
 
@@ -231,6 +241,7 @@ The JSON API is the capability boundary used by non-browser clients:
 GET /api/search?q=OpenFile&mode=literal&repo=RepoKarta&lang=Go&limit=100
 GET /api/symbol?symbol=OpenFile&repo=RepoKarta&lang=Go&limit=100
 GET /api/repositories
+GET /api/whoami
 GET /api/file/{repository}?rev={commit}&path={path}&lines=1-200
 GET /api/tree/{repository}?rev={commit}&path={directory}
 GET /api/git/log/{repository}?rev={commit}&path={path}&limit=50
@@ -250,6 +261,10 @@ DELETE /api/conversations/{conversation-id}
 Conversation list responses include the current viewer, effective scope, and
 `can_view_all`. Asking for `scope=all` without administrator access safely
 falls back to `own`.
+
+`GET /api/whoami` returns the caller's exact stable RepoKarta identity and
+current IdP groups. Use those values verbatim when configuring private
+repository grants in the administrator panel.
 
 Search responses always include `returned_files`, `matching_files`,
 `estimated_total_files`, `total_files_exact`, `truncated`, `files_skipped`,
@@ -419,7 +434,7 @@ third-party license texts under `dist/licenses/`:
 
 ## Releases and package verification
 
-Pushing a semantic-version tag such as `v0.38.0` runs the release matrix for
+Pushing a semantic-version tag such as `v0.39.0` runs the release matrix for
 Windows amd64 and Apple Silicon macOS. The workflow:
 
 1. validates the frontend and Go application;
@@ -433,11 +448,11 @@ Windows amd64 and Apple Silicon macOS. The workflow:
 Run the same packagers locally:
 
 ```powershell
-.\scripts\package-release.ps1 -Version 0.38.0-dev
+.\scripts\package-release.ps1 -Version 0.39.0-dev
 ```
 
 ```sh
-./scripts/package-release.sh 0.38.0-dev
+./scripts/package-release.sh 0.39.0-dev
 ```
 
 macOS packages are signed with the hardened runtime when

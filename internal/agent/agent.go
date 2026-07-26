@@ -14,6 +14,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/spolnik/RepoKarta/internal/access"
 )
 
 // EventType identifies one streamed conversation event.
@@ -223,14 +225,15 @@ func (c *managedConversation) replaceSession(session Session) {
 // transcripts. Provider-native session identifiers are opaque resume cursors
 // stored separately from user-visible messages.
 type Manager struct {
-	mu             sync.RWMutex
-	adapters       map[string]Adapter
-	conversations  map[string]*managedConversation
-	repositoryRoot string
-	mcpURL         string
-	mcpToken       string
-	citations      CitationSource
-	persistence    ConversationStore
+	mu               sync.RWMutex
+	adapters         map[string]Adapter
+	conversations    map[string]*managedConversation
+	ephemeralAuthors map[string]ConversationAuthor
+	repositoryRoot   string
+	mcpURL           string
+	mcpToken         string
+	citations        CitationSource
+	persistence      ConversationStore
 }
 
 // CitationSource records the exact source URLs returned to provider tools.
@@ -246,11 +249,12 @@ func NewManager(repositoryRoot, mcpURL, mcpToken string, adapters ...Adapter) *M
 		byID[adapter.ID()] = adapter
 	}
 	return &Manager{
-		adapters:       byID,
-		conversations:  make(map[string]*managedConversation),
-		repositoryRoot: repositoryRoot,
-		mcpURL:         mcpURL,
-		mcpToken:       mcpToken,
+		adapters:         byID,
+		conversations:    make(map[string]*managedConversation),
+		ephemeralAuthors: make(map[string]ConversationAuthor),
+		repositoryRoot:   repositoryRoot,
+		mcpURL:           mcpURL,
+		mcpToken:         mcpToken,
 	}
 }
 
@@ -266,6 +270,18 @@ func (m *Manager) UseCitations(source CitationSource) *Manager {
 func (m *Manager) UsePersistence(store ConversationStore) *Manager {
 	m.persistence = store
 	return m
+}
+
+// AuthorForMCP resolves the identity bound to an active provider tool session.
+// Ephemeral Wiki generation is intentionally absent from durable history, so
+// its short-lived authorization lives only for the duration of the turn.
+func (m *Manager) AuthorForMCP(conversationID string) (ConversationAuthor, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if author, ok := m.ephemeralAuthors[conversationID]; ok {
+		return author, true
+	}
+	return ConversationAuthor{}, false
 }
 
 // Statuses checks all configured adapters.
@@ -576,10 +592,23 @@ func (m *Manager) RunEphemeral(
 	if emit == nil {
 		emit = func(Event) error { return nil }
 	}
+	if viewer, ok := access.ViewerFromContext(ctx); ok {
+		request.Author.ID = viewer.ID
+		request.Author.Groups = append([]string(nil), viewer.Groups...)
+	}
+	request.Author = normalizeConversationAuthor(request.Author)
 	conversationID, err := randomID()
 	if err != nil {
 		return EphemeralResult{}, fmt.Errorf("create ephemeral turn id: %w", err)
 	}
+	m.mu.Lock()
+	m.ephemeralAuthors[conversationID] = request.Author
+	m.mu.Unlock()
+	defer func() {
+		m.mu.Lock()
+		delete(m.ephemeralAuthors, conversationID)
+		m.mu.Unlock()
+	}()
 	conversation, err := m.startConversation(ctx, request, conversationID)
 	if err != nil {
 		return EphemeralResult{}, err
@@ -724,6 +753,17 @@ func (m *Manager) conversation(ctx context.Context, request TurnRequest) (*manag
 		}
 		if len(request.Images) > 0 && !conversation.imageInput {
 			return nil, "", errors.New("this provider does not support image input")
+		}
+		// Refresh IdP groups from the newly authenticated browser request before
+		// the provider can make conversation-scoped MCP calls. This prevents a
+		// resumed conversation from retaining stale group membership.
+		if conversation.author.ID == request.Author.ID {
+			conversation.author = request.Author
+			if m.persistence != nil {
+				if err := m.persistence.UpdateConversationAuthor(ctx, request.ConversationID, request.Author); err != nil {
+					return nil, "", fmt.Errorf("refresh conversation author: %w", err)
+				}
+			}
 		}
 		return conversation, request.ConversationID, nil
 	}

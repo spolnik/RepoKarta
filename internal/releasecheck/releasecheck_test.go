@@ -85,6 +85,13 @@ func TestEveryPackagePathCarriesRequiredLicensesAndVerification(t *testing.T) {
 			t.Fatalf("macOS packager is missing %q", expected)
 		}
 	}
+	for _, script := range []string{powerShell, shell} {
+		for _, expected := range []string{"shared-deployment.md", "repokarta.env.example"} {
+			if !strings.Contains(script, expected) {
+				t.Fatalf("release packager is missing shared operations artifact %q", expected)
+			}
+		}
+	}
 }
 
 func TestHomebrewCIUsesRegisteredTap(t *testing.T) {

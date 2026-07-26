@@ -32,6 +32,7 @@ import (
 	"github.com/spolnik/RepoKarta/internal/search"
 	"github.com/spolnik/RepoKarta/internal/security"
 	"github.com/spolnik/RepoKarta/internal/source"
+	"github.com/spolnik/RepoKarta/internal/store"
 	"github.com/spolnik/RepoKarta/web"
 )
 
@@ -74,36 +75,44 @@ type DocumentationService interface {
 	Export(context.Context, int64) ([]byte, string, error)
 }
 
+// RepositoryAccessService owns administrator-managed repository visibility.
+type RepositoryAccessService interface {
+	ListRepositoryAccess(context.Context) ([]store.RepositoryAccess, error)
+	SetRepositoryAccess(context.Context, store.RepositoryAccess) error
+}
+
 // Config controls the local HTTP server.
 type Config struct {
-	Address        string
-	RepositoryRoot string
-	Version        string
-	OpenBrowser    bool
-	MCPHandler     http.Handler
-	MCPToken       string
-	MCPBaseURL     string
-	MCPCommand     string
-	Conversations  ConversationService
-	Maps           MapService
-	Docs           DocumentationService
-	Security       *security.Manager
-	Maintenance    *maintenance.Service
+	Address          string
+	RepositoryRoot   string
+	Version          string
+	OpenBrowser      bool
+	MCPHandler       http.Handler
+	MCPToken         string
+	MCPBaseURL       string
+	MCPCommand       string
+	Conversations    ConversationService
+	Maps             MapService
+	Docs             DocumentationService
+	Security         *security.Manager
+	Maintenance      *maintenance.Service
+	RepositoryAccess RepositoryAccessService
 }
 
 // Server hosts RepoKarta's loopback interface.
 type Server struct {
-	config       Config
-	server       *http.Server
-	templates    *template.Template
-	intelligence *codeintel.Service
-	refresher    CatalogueRefresher
-	agents       ConversationService
-	history      ConversationHistoryService
-	maps         MapService
-	docs         DocumentationService
-	security     *security.Manager
-	maintenance  *maintenance.Service
+	config           Config
+	server           *http.Server
+	templates        *template.Template
+	intelligence     *codeintel.Service
+	refresher        CatalogueRefresher
+	agents           ConversationService
+	history          ConversationHistoryService
+	maps             MapService
+	docs             DocumentationService
+	security         *security.Manager
+	maintenance      *maintenance.Service
+	repositoryAccess RepositoryAccessService
 }
 
 type pageData struct {
@@ -135,6 +144,7 @@ type mcpPageData struct {
 	HTTPConfigView string
 	StdioConfig    string
 	Tools          []mcpToolView
+	Shared         bool
 }
 
 type mcpToolView struct {
@@ -222,15 +232,16 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 	}
 
 	server := &Server{
-		config:       config,
-		templates:    templates,
-		intelligence: intelligence,
-		refresher:    refresher,
-		agents:       config.Conversations,
-		maps:         config.Maps,
-		docs:         config.Docs,
-		security:     config.Security,
-		maintenance:  config.Maintenance,
+		config:           config,
+		templates:        templates,
+		intelligence:     intelligence,
+		refresher:        refresher,
+		agents:           config.Conversations,
+		maps:             config.Maps,
+		docs:             config.Docs,
+		security:         config.Security,
+		maintenance:      config.Maintenance,
+		repositoryAccess: config.RepositoryAccess,
 	}
 	server.history, _ = config.Conversations.(ConversationHistoryService)
 
@@ -244,6 +255,7 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 	mux.HandleFunc("GET /api/search", server.apiSearch)
 	mux.HandleFunc("GET /api/symbol", server.apiSymbol)
 	mux.HandleFunc("GET /api/repositories", server.apiRepositories)
+	mux.HandleFunc("GET /api/whoami", server.apiWhoAmI)
 	mux.HandleFunc("GET /api/file/{repository}", server.apiFile)
 	mux.HandleFunc("GET /api/tree/{repository}", server.apiTree)
 	mux.HandleFunc("GET /api/git/log/{repository}", server.apiGitLog)
@@ -255,6 +267,9 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 		mux.HandleFunc("POST /admin/login", server.adminLogin)
 		mux.HandleFunc("GET /admin", server.adminPage)
 		mux.HandleFunc("POST /admin/security", server.updateSecurity)
+		if server.repositoryAccess != nil {
+			mux.HandleFunc("POST /admin/repositories/access", server.updateRepositoryAccess)
+		}
 		if server.maintenance != nil {
 			mux.HandleFunc("POST /admin/storage/preview", server.previewCleanup)
 			mux.HandleFunc("POST /admin/storage/cleanup", server.executeCleanup)
@@ -543,6 +558,7 @@ func (s *Server) conversationViewer(ctx context.Context) conversationViewer {
 			Name:     name,
 			Email:    strings.TrimSpace(principal.Email),
 			Provider: provider,
+			Groups:   append([]string(nil), principal.Groups...),
 		},
 		Admin: principal.Admin,
 	}
@@ -608,6 +624,24 @@ func (s *Server) apiRepositories(response http.ResponseWriter, request *http.Req
 		return
 	}
 	writeJSON(response, http.StatusOK, repositories)
+}
+
+func (s *Server) apiWhoAmI(response http.ResponseWriter, request *http.Request) {
+	principal, ok := security.PrincipalFromContext(request.Context())
+	if !ok {
+		writeAPIError(response, http.StatusUnauthorized, errors.New("authenticated identity is unavailable"))
+		return
+	}
+	viewer := s.conversationViewer(request.Context())
+	groups := append([]string{}, principal.Groups...)
+	writeJSON(response, http.StatusOK, map[string]any{
+		"id":       viewer.Author.ID,
+		"name":     viewer.Author.Name,
+		"email":    viewer.Author.Email,
+		"provider": viewer.Author.Provider,
+		"groups":   groups,
+		"admin":    viewer.Admin,
+	})
 }
 
 func (s *Server) apiFile(response http.ResponseWriter, request *http.Request) {
@@ -796,6 +830,7 @@ func (s *Server) mcpPage(response http.ResponseWriter, request *http.Request) {
 		s.config.MCPCommand,
 		strings.TrimRight(strings.TrimSpace(s.config.MCPBaseURL), "/"),
 	)
+	data.MCP.Shared = data.AuthMode != "" && data.AuthMode != string(security.ModeLocal)
 	response.Header().Set("Cache-Control", "no-store")
 	response.Header().Set("Referrer-Policy", "no-referrer")
 	response.Header().Set("X-Robots-Tag", "noindex, nofollow")

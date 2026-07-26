@@ -16,11 +16,14 @@ import (
 type Query struct {
 	Text       string
 	Repository string
-	Language   string
-	Path       string
-	File       string
-	Mode       string
-	Limit      int
+	// Repositories is an internal exact allow-list of canonical repository
+	// identities. External query syntax never populates it.
+	Repositories []string
+	Language     string
+	Path         string
+	File         string
+	Mode         string
+	Limit        int
 }
 
 // Result contains source matches tied to exact repository revisions.

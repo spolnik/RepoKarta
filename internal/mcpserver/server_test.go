@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/spolnik/RepoKarta/internal/access"
 	"github.com/spolnik/RepoKarta/internal/catalog"
 	"github.com/spolnik/RepoKarta/internal/codeintel"
 	"github.com/spolnik/RepoKarta/internal/docs"
@@ -20,6 +22,42 @@ import (
 
 type fakeStore struct {
 	repositories []catalog.Repository
+}
+
+func TestBearerAuthRequiresConversationScopeInSharedMode(t *testing.T) {
+	next := http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		viewer, ok := access.ViewerFromContext(request.Context())
+		if !ok || viewer.ID != "saml:alice" || !slices.Equal(viewer.Groups, []string{"engineering"}) {
+			t.Fatalf("MCP viewer = %#v, present = %t", viewer, ok)
+		}
+		response.WriteHeader(http.StatusNoContent)
+	})
+	handler := bearerAuth(Config{
+		Token: "secret",
+		ResolveViewer: func(_ context.Context, conversationID string) (access.Viewer, error) {
+			if conversationID != "conversation-1" {
+				return access.Viewer{}, context.Canceled
+			}
+			return access.Viewer{ID: "saml:alice", Groups: []string{"engineering"}}, nil
+		},
+		AllowUnscoped: func() bool { return false },
+	}, next)
+
+	request := httptest.NewRequest(http.MethodPost, "http://localhost/mcp", nil)
+	request.Header.Set("Authorization", "Bearer secret")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("unscoped shared MCP status = %d", response.Code)
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "http://localhost/mcp?conversation_id=conversation-1", nil)
+	request.Header.Set("Authorization", "Bearer secret")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("conversation-scoped MCP status = %d", response.Code)
+	}
 }
 
 func (s fakeStore) ListRepositories(context.Context) ([]catalog.Repository, error) {
@@ -466,14 +504,15 @@ func TestMCPToolsSelectRepositoriesByIDOnly(t *testing.T) {
 		}
 	}
 
-	// A repository-scoped search must reach the engine as the resolved name.
+	// A repository-scoped search must reach the engine as the canonical
+	// collision-safe repository identity.
 	if _, err := session.CallTool(context.Background(), &mcp.CallToolParams{
 		Name:      "search_code",
 		Arguments: map[string]any{"query": "OpenFile", "repository_id": 42},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if searcher.query.Repository != "RepoKarta" {
+	if searcher.query.Repository != filepath.ToSlash(store.repositories[0].Path) {
 		t.Fatalf("search repository filter = %q", searcher.query.Repository)
 	}
 

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/spolnik/RepoKarta/internal/access"
 	"github.com/spolnik/RepoKarta/internal/agent"
 	anthropicprovider "github.com/spolnik/RepoKarta/internal/agent/anthropic"
 	"github.com/spolnik/RepoKarta/internal/agent/claude"
@@ -187,6 +188,25 @@ func Run(ctx context.Context, cfg Config) error {
 		BaseURL:   baseURL,
 		Token:     mcpToken,
 		Artifacts: mcpserver.Artifacts{Maps: maps, Documents: documents},
+		ResolveViewer: func(ctx context.Context, conversationID string) (access.Viewer, error) {
+			if author, ok := conversations.AuthorForMCP(conversationID); ok {
+				return access.Viewer{
+					ID:     author.ID,
+					Groups: append([]string(nil), author.Groups...),
+				}, nil
+			}
+			conversation, err := database.GetConversation(ctx, conversationID)
+			if err != nil {
+				return access.Viewer{}, err
+			}
+			return access.Viewer{
+				ID:     conversation.Author.ID,
+				Groups: append([]string(nil), conversation.Author.Groups...),
+			}, nil
+		},
+		AllowUnscoped: func() bool {
+			return securityManager.Mode() == security.ModeLocal
+		},
 	}, intelligence, citations)
 	mcpCommand, executableError := os.Executable()
 	if executableError != nil {
@@ -196,19 +216,20 @@ func Run(ctx context.Context, cfg Config) error {
 	defer conversations.Close()
 
 	server, err := httpserver.New(httpserver.Config{
-		Address:        cfg.ListenAddress,
-		RepositoryRoot: cfg.RepositoryRoot,
-		Version:        cfg.Version,
-		OpenBrowser:    cfg.OpenBrowser,
-		MCPHandler:     mcpHandler,
-		MCPToken:       mcpToken,
-		MCPBaseURL:     internalBaseURL,
-		MCPCommand:     mcpCommand,
-		Conversations:  conversations,
-		Maps:           maps,
-		Docs:           documents,
-		Security:       securityManager,
-		Maintenance:    operations,
+		Address:          cfg.ListenAddress,
+		RepositoryRoot:   cfg.RepositoryRoot,
+		Version:          cfg.Version,
+		OpenBrowser:      cfg.OpenBrowser,
+		MCPHandler:       mcpHandler,
+		MCPToken:         mcpToken,
+		MCPBaseURL:       internalBaseURL,
+		MCPCommand:       mcpCommand,
+		Conversations:    conversations,
+		Maps:             maps,
+		Docs:             documents,
+		Security:         securityManager,
+		Maintenance:      operations,
+		RepositoryAccess: database,
 	}, intelligence, coordinator)
 	if err != nil {
 		return err

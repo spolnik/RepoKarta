@@ -34,10 +34,11 @@ type Conversation struct {
 // ConversationAuthor is the stable authenticated identity that owns a chat.
 // Provider is retained so identical upstream subject IDs cannot collide.
 type ConversationAuthor struct {
-	ID       string `json:"id"`
-	Name     string `json:"name,omitempty"`
-	Email    string `json:"email,omitempty"`
-	Provider string `json:"provider"`
+	ID       string   `json:"id"`
+	Name     string   `json:"name,omitempty"`
+	Email    string   `json:"email,omitempty"`
+	Provider string   `json:"provider"`
+	Groups   []string `json:"-"`
 }
 
 // ConversationFilter bounds durable history to the current author unless an
@@ -70,6 +71,7 @@ type ConversationStore interface {
 	GetConversation(context.Context, string) (Conversation, error)
 	AppendMessage(context.Context, Message) (Message, error)
 	RenameConversation(context.Context, string, string) error
+	UpdateConversationAuthor(context.Context, string, ConversationAuthor) error
 	UpdateConversationCursor(context.Context, string, string) error
 	DeleteConversation(context.Context, string) error
 }
