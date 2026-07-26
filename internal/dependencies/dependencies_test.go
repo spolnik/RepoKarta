@@ -19,10 +19,13 @@ func TestBuildPreservesNormalizedDeclarationEvidence(t *testing.T) {
 			Kind:         "npm package",
 			Path:         "web/package.json",
 			Declarations: []graph.DependencyDeclaration{{
-				Ecosystem:  "npm",
-				Package:    "marked",
-				Declared:   "^16.4.1",
-				Resolution: "constraint",
+				Ecosystem:     "npm",
+				Package:       "marked",
+				Declared:      "^16.4.1",
+				Resolution:    "constraint",
+				Usage:         "production",
+				Relationship:  "required",
+				DeclaredScope: "dependencies",
 				Evidence: graph.Evidence{
 					RepositoryID: 7,
 					Repository:   "service",
@@ -43,6 +46,7 @@ func TestBuildPreservesNormalizedDeclarationEvidence(t *testing.T) {
 	declaration := inventory.Declarations[0]
 	if declaration.Package != "marked" || declaration.Declared != "^16.4.1" ||
 		declaration.Resolution != "constraint" || declaration.CheckStatus != "unchecked" ||
+		declaration.Usage != "production" || declaration.Relationship != "required" ||
 		declaration.Revision != "abcdef" || declaration.Evidence.Line != 14 {
 		t.Fatalf("declaration = %#v", declaration)
 	}
@@ -77,9 +81,9 @@ func TestBuildPageFiltersAndBoundsDeclarations(t *testing.T) {
 			Kind:         "npm package",
 			Path:         "package.json",
 			Declarations: []graph.DependencyDeclaration{
-				{Ecosystem: "npm", Package: "alpha", Declared: "^1", Resolution: "constraint"},
-				{Ecosystem: "npm", Package: "beta", Declared: "2.0.0", Resolution: "exact"},
-				{Ecosystem: "npm", Package: "gamma", Declared: "^3", Resolution: "constraint"},
+				{Ecosystem: "npm", Package: "alpha", Declared: "^1", Resolution: "constraint", Usage: "production"},
+				{Ecosystem: "npm", Package: "beta", Declared: "2.0.0", Resolution: "exact", Usage: "development"},
+				{Ecosystem: "npm", Package: "gamma", Declared: "^3", Resolution: "constraint", Usage: "production"},
 			},
 		}},
 	}
@@ -93,5 +97,9 @@ func TestBuildPageFiltersAndBoundsDeclarations(t *testing.T) {
 	if inventory.ReturnedCount != 1 || inventory.HasMore ||
 		inventory.Declarations[0].Package != "gamma" {
 		t.Fatalf("second dependency page = %#v", inventory)
+	}
+	inventory = BuildPage(snapshot, Options{Usage: "development"})
+	if inventory.DependencyCount != 1 || inventory.Declarations[0].Package != "beta" {
+		t.Fatalf("development dependency page = %#v", inventory)
 	}
 }

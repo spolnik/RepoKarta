@@ -186,6 +186,15 @@ func Run() {}
   "name": "@acme/web",
   "dependencies": {
     "htmx.org": "2.0.10"
+  },
+  "devDependencies": {
+    "vitest": "^4.0.0"
+  },
+  "optionalDependencies": {
+    "fsevents": "2.3.3"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0"
   }
 }
 `)
@@ -239,7 +248,26 @@ func Run() {}
 					declaration.Package == "htmx.org" &&
 					declaration.Declared == "2.0.10" &&
 					declaration.Resolution == "exact" &&
+					declaration.Usage == "production" &&
+					declaration.Relationship == "required" &&
+					declaration.DeclaredScope == "dependencies" &&
 					declaration.Evidence.Line == 4
+			}) &&
+			slices.ContainsFunc(manifest.Declarations, func(declaration DependencyDeclaration) bool {
+				return declaration.Package == "vitest" &&
+					declaration.Usage == "development" &&
+					declaration.Relationship == "required" &&
+					declaration.DeclaredScope == "devDependencies"
+			}) &&
+			slices.ContainsFunc(manifest.Declarations, func(declaration DependencyDeclaration) bool {
+				return declaration.Package == "fsevents" &&
+					declaration.Usage == "production" &&
+					declaration.Relationship == "optional"
+			}) &&
+			slices.ContainsFunc(manifest.Declarations, func(declaration DependencyDeclaration) bool {
+				return declaration.Package == "react" &&
+					declaration.Usage == "production" &&
+					declaration.Relationship == "peer"
 			})
 	}) {
 		t.Fatalf("normalized declarations = %#v", snapshot.Manifests)
@@ -352,7 +380,7 @@ func TestSnapshotRegeneratesUnsupportedCachedArtifact(t *testing.T) {
 	}
 	content := mustReadGraphFile(t, files[0])
 	if bytes.Contains(content, []byte("unsupported-marker")) ||
-		!bytes.Contains(content, []byte(`"version": 7`)) {
+		!bytes.Contains(content, []byte(`"version": 8`)) {
 		t.Fatalf("unsupported cache was not regenerated: %s", content)
 	}
 }
@@ -701,6 +729,20 @@ dependencies {
 			t.Fatalf("Kotlin coordinates %v do not contain %q", coordinates, wanted)
 		}
 	}
+	for _, dependency := range dependencies {
+		switch dependency.coordinate {
+		case "project:contract-tests":
+			if dependency.configuration != "testImplementation" ||
+				gradleDependencyUsage(dependency.configuration) != "test" {
+				t.Fatalf("test dependency metadata = %#v", dependency)
+			}
+		case "com.squareup.moshi:moshi-kotlin-codegen:1.15.2":
+			if dependency.configuration != "ksp" ||
+				gradleDependencyUsage(dependency.configuration) != "build" {
+				t.Fatalf("build dependency metadata = %#v", dependency)
+			}
+		}
+	}
 }
 
 func TestParseGradleVersionCatalogResolvesAccessorForms(t *testing.T) {
@@ -739,6 +781,49 @@ shedlock = "6.3.0"
 	}
 	if len(declared) != 5 {
 		t.Fatalf("declared catalog libraries = %#v", declared)
+	}
+}
+
+func TestParseMavenDeclarationsPreservesUsageAndProperties(t *testing.T) {
+	declarations := parseMavenDeclarations([]byte(`<project>
+  <properties><junit.version>5.12.2</junit.version></properties>
+  <dependencies>
+    <dependency>
+      <groupId>org.springframework</groupId>
+      <artifactId>spring-context</artifactId>
+      <version>6.2.1</version>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <version>${junit.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>com.example</groupId>
+      <artifactId>optional-agent</artifactId>
+      <version>1.0.0</version>
+      <optional>true</optional>
+    </dependency>
+  </dependencies>
+</project>`))
+	if len(declarations) != 3 {
+		t.Fatalf("Maven declarations = %#v", declarations)
+	}
+	if !slices.ContainsFunc(declarations, func(declaration DependencyDeclaration) bool {
+		return declaration.Package == "org.junit.jupiter:junit-jupiter" &&
+			declaration.Declared == "5.12.2" &&
+			declaration.Usage == "test" &&
+			declaration.DeclaredScope == "test"
+	}) {
+		t.Fatalf("Maven test declaration missing from %#v", declarations)
+	}
+	if !slices.ContainsFunc(declarations, func(declaration DependencyDeclaration) bool {
+		return declaration.Package == "com.example:optional-agent" &&
+			declaration.Usage == "production" &&
+			declaration.Relationship == "optional"
+	}) {
+		t.Fatalf("Maven optional declaration missing from %#v", declarations)
 	}
 }
 

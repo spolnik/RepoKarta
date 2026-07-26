@@ -75,6 +75,13 @@ type MapService interface {
 	StructureProgress(context.Context, int64) (graph.ArtifactProgress, error)
 }
 
+// DependencyService owns cached registry observations and refresh work.
+type DependencyService interface {
+	Inventory(context.Context, graph.Snapshot, dependencies.Options) (dependencies.Inventory, error)
+	StartRefresh(graph.Snapshot, dependencies.Options, bool) (dependencies.RefreshProgress, error)
+	Progress() dependencies.RefreshProgress
+}
+
 // DocumentationService supplies durable, commit-aware repository pages.
 type DocumentationService interface {
 	Plan(context.Context, int64) (docs.Site, error)
@@ -141,6 +148,7 @@ type Config struct {
 	Enterprise            EnterpriseStore
 	SCIMHandler           http.Handler
 	Insights              InsightService
+	Dependencies          DependencyService
 }
 
 // Server hosts RepoKarta's loopback interface.
@@ -160,6 +168,7 @@ type Server struct {
 	repositoryAcquisition RepositoryAcquisitionService
 	enterprise            EnterpriseStore
 	insights              InsightService
+	dependencies          DependencyService
 }
 
 type pageData struct {
@@ -184,6 +193,7 @@ type pageData struct {
 	UserLabel           string
 	AdminEnabled        bool
 	CanAdminister       bool
+	CanManageArtifacts  bool
 	MCP                 mcpPageData
 }
 
@@ -254,8 +264,10 @@ type dependencyPageData struct {
 	PreviousURL          string
 	NextURL              string
 	APIURL               string
+	RefreshURL           string
 	FirstRow             int
 	LastRow              int
+	RefreshProgress      dependencies.RefreshProgress
 }
 
 // New builds the local HTTP server and parses embedded templates.
@@ -313,6 +325,7 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 		repositoryAcquisition: config.RepositoryAcquisition,
 		enterprise:            config.Enterprise,
 		insights:              config.Insights,
+		dependencies:          config.Dependencies,
 	}
 	server.history, _ = config.Conversations.(ConversationHistoryService)
 
@@ -413,6 +426,15 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 		))
 		mux.HandleFunc("GET /dependencies", server.dependencyPage)
 		mux.HandleFunc("GET /api/dependencies", server.apiDependencies)
+		if server.dependencies != nil {
+			mux.HandleFunc("POST /api/dependencies/refresh", server.controlled(
+				identity.PermissionManageArtifacts,
+				"dependency.refresh",
+				"dependency-registry",
+				server.refreshDependencies,
+			))
+			mux.HandleFunc("GET /api/dependencies/progress", server.dependencyRefreshProgress)
+		}
 	}
 	if server.docs != nil {
 		mux.HandleFunc("GET /wiki", server.wikiPage)
@@ -1065,7 +1087,12 @@ func (s *Server) dependencyPage(response http.ResponseWriter, request *http.Requ
 		return
 	}
 	data.ActivePage = "dependencies"
-	inventory := dependencies.BuildPage(snapshot, options)
+	inventory, err := s.dependencyInventory(request.Context(), snapshot, options)
+	if err != nil {
+		slog.Error("load dependency registry observations", "error", err)
+		http.Error(response, "Dependency inventory could not be built", http.StatusInternalServerError)
+		return
+	}
 	inventory.BuildProgress = progress
 	previousURL := ""
 	if inventory.Offset > 0 {
@@ -1087,8 +1114,15 @@ func (s *Server) dependencyPage(response http.ResponseWriter, request *http.Requ
 		PreviousURL:          previousURL,
 		NextURL:              nextURL,
 		APIURL:               dependencyURL("/api/dependencies", repositoryID, options, inventory.Offset),
+		RefreshURL:           dependencyURL("/api/dependencies/refresh", repositoryID, options, 0),
 		FirstRow:             firstRow,
 		LastRow:              lastRow,
+		RefreshProgress: func() dependencies.RefreshProgress {
+			if s.dependencies == nil {
+				return dependencies.RefreshProgress{State: "unavailable"}
+			}
+			return s.dependencies.Progress()
+		}(),
 	})
 }
 
@@ -1267,7 +1301,11 @@ func (s *Server) apiDependencies(response http.ResponseWriter, request *http.Req
 		writeAPIError(response, http.StatusInternalServerError, errors.New("dependency inventory could not be built"))
 		return
 	}
-	inventory := dependencies.BuildPage(snapshot, options)
+	inventory, err := s.dependencyInventory(request.Context(), snapshot, options)
+	if err != nil {
+		writeAPIError(response, http.StatusInternalServerError, errors.New("dependency observations could not be loaded"))
+		return
+	}
 	inventory.BuildProgress = progress
 	status := http.StatusOK
 	if progress.State == "building" {
@@ -1275,6 +1313,50 @@ func (s *Server) apiDependencies(response http.ResponseWriter, request *http.Req
 		response.Header().Set("Retry-After", "2")
 	}
 	writeJSON(response, status, inventory)
+}
+
+func (s *Server) dependencyInventory(
+	ctx context.Context,
+	snapshot graph.Snapshot,
+	options dependencies.Options,
+) (dependencies.Inventory, error) {
+	if s.dependencies == nil {
+		return dependencies.BuildPage(snapshot, options), nil
+	}
+	return s.dependencies.Inventory(ctx, snapshot, options)
+}
+
+func (s *Server) refreshDependencies(response http.ResponseWriter, request *http.Request) {
+	repositoryID, err := optionalRepositoryID(request.URL.Query().Get("repository"))
+	if err != nil {
+		writeAPIError(response, http.StatusBadRequest, err)
+		return
+	}
+	options, err := dependencyOptions(request)
+	if err != nil {
+		writeAPIError(response, http.StatusBadRequest, err)
+		return
+	}
+	snapshot, _, err := s.maps.ReadDependencySnapshot(request.Context(), repositoryID)
+	if err != nil {
+		writeAPIError(response, http.StatusInternalServerError, errors.New("dependency inventory could not be built"))
+		return
+	}
+	force, err := optionalBool(request.URL.Query().Get("force"))
+	if err != nil {
+		writeAPIError(response, http.StatusBadRequest, errors.New("force must be true or false"))
+		return
+	}
+	progress, err := s.dependencies.StartRefresh(snapshot, options, force)
+	if err != nil {
+		writeAPIError(response, http.StatusInternalServerError, errors.New("dependency refresh could not be started"))
+		return
+	}
+	writeJSON(response, http.StatusAccepted, progress)
+}
+
+func (s *Server) dependencyRefreshProgress(response http.ResponseWriter, _ *http.Request) {
+	writeJSON(response, http.StatusOK, s.dependencies.Progress())
 }
 
 func (s *Server) apiArtifactProgress(response http.ResponseWriter, request *http.Request) {
@@ -1289,12 +1371,15 @@ func (s *Server) apiArtifactProgress(response http.ResponseWriter, request *http
 func dependencyOptions(request *http.Request) (dependencies.Options, error) {
 	query := request.URL.Query()
 	options := dependencies.Options{
-		Query:      query.Get("query"),
-		Ecosystem:  query.Get("ecosystem"),
-		Resolution: query.Get("resolution"),
-		Limit:      dependencies.DefaultPageLimit,
+		Query:        query.Get("query"),
+		Ecosystem:    query.Get("ecosystem"),
+		Usage:        query.Get("usage"),
+		Relationship: query.Get("relationship"),
+		Resolution:   query.Get("resolution"),
+		Limit:        dependencies.DefaultPageLimit,
 	}
-	if len(options.Query) > 200 || len(options.Ecosystem) > 50 || len(options.Resolution) > 50 {
+	if len(options.Query) > 200 || len(options.Ecosystem) > 50 || len(options.Usage) > 50 ||
+		len(options.Relationship) > 50 || len(options.Resolution) > 50 {
 		return dependencies.Options{}, errors.New("dependency filters are too long")
 	}
 	if value := strings.TrimSpace(query.Get("offset")); value != "" {
@@ -1324,6 +1409,12 @@ func dependencyURL(base string, repositoryID int64, options dependencies.Options
 	}
 	if value := strings.TrimSpace(options.Ecosystem); value != "" {
 		query.Set("ecosystem", value)
+	}
+	if value := strings.TrimSpace(options.Usage); value != "" {
+		query.Set("usage", value)
+	}
+	if value := strings.TrimSpace(options.Relationship); value != "" {
+		query.Set("relationship", value)
 	}
 	if value := strings.TrimSpace(options.Resolution); value != "" {
 		query.Set("resolution", value)
@@ -1579,6 +1670,7 @@ func (s *Server) pageData(ctx context.Context) (pageData, error) {
 		DependenciesEnabled: s.maps != nil,
 		MCPEnabled:          s.config.MCPHandler != nil,
 		InsightsEnabled:     s.insights != nil,
+		CanManageArtifacts:  s.security == nil,
 		Search: searchData{
 			Query: search.Query{Limit: codeintel.DefaultSearchLimit},
 		},
@@ -1588,6 +1680,7 @@ func (s *Server) pageData(ctx context.Context) (pageData, error) {
 		data.AdminEnabled = s.security.AdminEnabled()
 		if principal, ok := security.PrincipalFromContext(ctx); ok {
 			data.CanAdminister = principal.Admin
+			data.CanManageArtifacts = identity.Allows(principal.Role, identity.PermissionManageArtifacts)
 			data.UserLabel = principal.Name
 			if data.UserLabel == "" {
 				data.UserLabel = principal.Email
@@ -1697,6 +1790,14 @@ func optionalRepositoryID(value string) (int64, error) {
 		return 0, errors.New("repository must be a positive integer")
 	}
 	return repositoryID, nil
+}
+
+func optionalBool(value string) (bool, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false, nil
+	}
+	return strconv.ParseBool(value)
 }
 
 // repositorySelector accepts either the stable numeric repository ID returned

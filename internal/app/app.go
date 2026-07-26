@@ -18,6 +18,7 @@ import (
 	"github.com/spolnik/RepoKarta/internal/agent/claude"
 	"github.com/spolnik/RepoKarta/internal/agent/codex"
 	"github.com/spolnik/RepoKarta/internal/codeintel"
+	"github.com/spolnik/RepoKarta/internal/dependencies"
 	"github.com/spolnik/RepoKarta/internal/docs"
 	"github.com/spolnik/RepoKarta/internal/graph"
 	"github.com/spolnik/RepoKarta/internal/httpserver"
@@ -198,6 +199,7 @@ func Run(ctx context.Context, cfg Config) error {
 	documents.UseGenerator(conversations)
 	codeInsights := insights.New(database, baseURL)
 	codeInsights.StartPolling(ctx)
+	dependencyRegistry := dependencies.NewService(ctx, database, nil)
 	operations, err := maintenance.New(maintenance.Config{
 		DataDirectory:   cfg.DataDirectory,
 		RepositoryRoot:  cfg.RepositoryRoot,
@@ -275,7 +277,8 @@ func Run(ctx context.Context, cfg Config) error {
 			}
 			return scimService.Handler()
 		}(),
-		Insights: codeInsights,
+		Insights:     codeInsights,
+		Dependencies: dependencyRegistry,
 	}, intelligence, coordinator)
 	if err != nil {
 		return err

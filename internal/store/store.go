@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	currentSchemaVersion = 15
+	currentSchemaVersion = 16
 
 	schemaV1 = `
 CREATE TABLE IF NOT EXISTS repositories (
@@ -429,6 +429,26 @@ CREATE TABLE IF NOT EXISTS repository_acquisition_events (
 );
 CREATE INDEX IF NOT EXISTS repository_acquisition_events_created_index
 ON repository_acquisition_events(created_at DESC);`
+
+	// Version 16 caches public dependency-registry observations independently
+	// from commit-pinned declarations. Conditional-request validators and expiry
+	// timestamps keep refreshes cheap without treating cached data as source.
+	schemaV16 = `
+CREATE TABLE IF NOT EXISTS dependency_registry_observations (
+    ecosystem TEXT NOT NULL,
+    registry TEXT NOT NULL,
+    package TEXT NOT NULL,
+    latest_stable TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL CHECK(status IN ('ok', 'error')),
+    error TEXT NOT NULL DEFAULT '',
+    etag TEXT NOT NULL DEFAULT '',
+    last_modified TEXT NOT NULL DEFAULT '',
+    observed_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    PRIMARY KEY(ecosystem, registry, package)
+);
+CREATE INDEX IF NOT EXISTS dependency_registry_observations_expiry_index
+ON dependency_registry_observations(expires_at);`
 )
 
 // SchemaVersion is the current durable SQLite format. Diagnostics and upgrade
@@ -509,6 +529,8 @@ func migrate(db *sql.DB) error {
 			migration = schemaV14
 		case 15:
 			migration = schemaV15
+		case 16:
+			migration = schemaV16
 		default:
 			return fmt.Errorf("missing migration for schema version %d", next)
 		}

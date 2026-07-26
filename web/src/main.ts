@@ -5518,8 +5518,88 @@ function enableArtifactProgress(): void {
   void poll();
 }
 
+function enableDependencyRefresh(): void {
+  const button = document.querySelector<HTMLButtonElement>("[data-dependency-refresh]");
+  const status = document.querySelector<HTMLElement>("[data-dependency-refresh-status]");
+  if (!button || !status) {
+    return;
+  }
+  let polling = false;
+  let watching = false;
+  const poll = async (): Promise<void> => {
+    if (polling) {
+      return;
+    }
+    polling = true;
+    try {
+      const response = await fetch("/api/dependencies/progress", {
+        cache: "no-store",
+        headers: { Accept: "application/json" }
+      });
+      if (!response.ok) {
+        throw new Error(`Progress request failed (${response.status})`);
+      }
+      const progress = await response.json() as {
+        state: string;
+        total: number;
+        completed: number;
+        failed: number;
+        skipped: number;
+      };
+      if (progress.state === "running") {
+        watching = true;
+        button.disabled = true;
+        status.textContent = `Checking ${progress.completed} of ${progress.total} unique packages` +
+          (progress.failed > 0 ? ` · ${progress.failed} failed` : "");
+        window.setTimeout(() => {
+          polling = false;
+          void poll();
+        }, 750);
+        return;
+      }
+      button.disabled = false;
+      if (progress.state === "complete" && watching) {
+        status.textContent = `Checked ${progress.completed} packages` +
+          (progress.failed > 0 ? ` · ${progress.failed} failed` : "") +
+          ` · ${progress.skipped} cached or unsupported`;
+        window.location.reload();
+      }
+    } catch (error) {
+      button.disabled = false;
+      status.textContent = error instanceof Error ? error.message : "Dependency refresh failed";
+    } finally {
+      polling = false;
+    }
+  };
+  button.addEventListener("click", async () => {
+    watching = true;
+    button.disabled = true;
+    status.textContent = "Preparing dependency checks…";
+    try {
+      const endpoint = button.dataset.dependencyRefreshUrl;
+      if (!endpoint) {
+        throw new Error("Dependency refresh URL is missing");
+      }
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: { Accept: "application/json" }
+      });
+      if (!response.ok) {
+        throw new Error(await responseErrorMessage(response, `Refresh failed (${response.status})`));
+      }
+      status.textContent = "Dependency checks started";
+      void poll();
+    } catch (error) {
+      button.disabled = false;
+      status.textContent = error instanceof Error ? error.message : "Dependency refresh failed";
+    }
+  });
+  void poll();
+}
+
 connectIndexEvents();
 enableArtifactProgress();
+enableDependencyRefresh();
 enableRepositoryDrawer();
 enableQueryChips();
 enableSearchFeedback();

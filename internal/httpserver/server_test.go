@@ -22,6 +22,7 @@ import (
 	"github.com/spolnik/RepoKarta/internal/catalog"
 	"github.com/spolnik/RepoKarta/internal/codeintel"
 	"github.com/spolnik/RepoKarta/internal/contextscope"
+	"github.com/spolnik/RepoKarta/internal/dependencies"
 	"github.com/spolnik/RepoKarta/internal/docs"
 	"github.com/spolnik/RepoKarta/internal/graph"
 	"github.com/spolnik/RepoKarta/internal/identity"
@@ -754,6 +755,39 @@ type testMapService struct {
 	progress     graph.ArtifactProgress
 }
 
+type testDependencyService struct {
+	inventory dependencies.Inventory
+	progress  dependencies.RefreshProgress
+	options   dependencies.Options
+	started   bool
+	force     bool
+}
+
+func (s *testDependencyService) Inventory(
+	_ context.Context,
+	_ graph.Snapshot,
+	options dependencies.Options,
+) (dependencies.Inventory, error) {
+	s.options = options
+	return s.inventory, nil
+}
+
+func (s *testDependencyService) StartRefresh(
+	_ graph.Snapshot,
+	options dependencies.Options,
+	force bool,
+) (dependencies.RefreshProgress, error) {
+	s.started = true
+	s.force = force
+	s.options = options
+	s.progress = dependencies.RefreshProgress{State: "running", Total: 2}
+	return s.progress, nil
+}
+
+func (s *testDependencyService) Progress() dependencies.RefreshProgress {
+	return s.progress
+}
+
 func (s *testMapService) Snapshot(_ context.Context, repositoryID int64, refresh bool) (graph.Snapshot, error) {
 	s.repositoryID = repositoryID
 	s.refresh = refresh
@@ -1088,10 +1122,13 @@ func TestDependencyWorkspaceAndAPIExposeNormalizedDeclarations(t *testing.T) {
 			Kind:         "npm package",
 			Path:         "web/package.json",
 			Declarations: []graph.DependencyDeclaration{{
-				Ecosystem:  "npm",
-				Package:    "marked",
-				Declared:   "^16.4.1",
-				Resolution: "constraint",
+				Ecosystem:     "npm",
+				Package:       "marked",
+				Declared:      "^16.4.1",
+				Resolution:    "constraint",
+				Usage:         "production",
+				Relationship:  "required",
+				DeclaredScope: "dependencies",
 				Evidence: graph.Evidence{
 					RepositoryID: repository.ID,
 					Repository:   repository.Name,
@@ -1127,6 +1164,8 @@ func TestDependencyWorkspaceAndAPIExposeNormalizedDeclarations(t *testing.T) {
 		`Dependency management`,
 		`marked`,
 		`^16.4.1`,
+		`production`,
+		`required · dependencies`,
 		`Not checked`,
 		`web/package.json:14`,
 		`Rows per page`,
@@ -1151,6 +1190,9 @@ func TestDependencyWorkspaceAndAPIExposeNormalizedDeclarations(t *testing.T) {
 		`"package":"marked"`,
 		`"declared":"^16.4.1"`,
 		`"resolution":"constraint"`,
+		`"usage":"production"`,
+		`"relationship":"required"`,
+		`"declared_scope":"dependencies"`,
 		`"check_status":"unchecked"`,
 	} {
 		if !strings.Contains(apiResponse.Body.String(), expected) {
@@ -1199,6 +1241,43 @@ func TestDependencyAPIReportsColdArtifactProgressWithoutSynchronousBuild(t *test
 	}
 	if maps.repositoryID != 0 {
 		t.Fatalf("cold dependency read used repository %d", maps.repositoryID)
+	}
+}
+
+func TestDependencyRefreshAPIStartsFilteredBackgroundWork(t *testing.T) {
+	maps := &testMapService{snapshot: graph.Snapshot{
+		Manifests: []graph.Manifest{{Kind: "npm package", Path: "package.json"}},
+	}}
+	registry := &testDependencyService{progress: dependencies.RefreshProgress{State: "idle"}}
+	server, err := New(
+		Config{Address: "127.0.0.1:7331", Maps: maps, Dependencies: registry},
+		codeintel.New(testStore{}, testSearcher{}, "http://127.0.0.1:7331"),
+		testRefresher{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"http://127.0.0.1:7331/api/dependencies/refresh?repository=4&ecosystem=npm&usage=production&force=true",
+		nil,
+	)
+	response := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusAccepted || !registry.started || !registry.force ||
+		registry.options.Ecosystem != "npm" || registry.options.Usage != "production" ||
+		maps.repositoryID != 4 {
+		t.Fatalf(
+			"refresh status = %d, registry = %#v, repository = %d, body = %s",
+			response.Code,
+			registry,
+			maps.repositoryID,
+			response.Body.String(),
+		)
+	}
+	if !strings.Contains(response.Body.String(), `"state":"running"`) ||
+		!strings.Contains(response.Body.String(), `"total":2`) {
+		t.Fatalf("refresh body = %s", response.Body.String())
 	}
 }
 
@@ -1768,6 +1847,32 @@ func TestSearchRendersSafeHighlightedCommitPinnedResult(t *testing.T) {
 	}
 	if strings.Contains(body, "<tag>") {
 		t.Fatal("source line was not HTML escaped")
+	}
+}
+
+func TestDependencyOptionsAndURLsPreserveUsageFilters(t *testing.T) {
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"https://repo.example.com/dependencies?query=junit&ecosystem=maven&usage=test&relationship=optional&resolution=exact&limit=50",
+		nil,
+	)
+	options, err := dependencyOptions(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.Query != "junit" || options.Ecosystem != "maven" ||
+		options.Usage != "test" || options.Relationship != "optional" ||
+		options.Resolution != "exact" || options.Limit != 50 {
+		t.Fatalf("dependency options = %#v", options)
+	}
+	target := dependencyURL("/api/dependencies", 42, options, 100)
+	for _, expected := range []string{
+		"repository=42", "query=junit", "ecosystem=maven", "usage=test",
+		"relationship=optional", "resolution=exact", "limit=50", "offset=100",
+	} {
+		if !strings.Contains(target, expected) {
+			t.Fatalf("dependency URL %q does not contain %q", target, expected)
+		}
 	}
 }
 

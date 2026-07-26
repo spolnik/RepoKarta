@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"go/parser"
@@ -32,7 +33,7 @@ import (
 )
 
 const (
-	snapshotVersion       = 7
+	snapshotVersion       = 8
 	maximumFiles          = 20_000
 	maximumSourceFiles    = 5_000
 	maximumSourceFileSize = 1 << 20
@@ -99,11 +100,14 @@ type Manifest struct {
 // Resolution reports whether the declared value is exact, a constraint, or
 // unresolved; it never implies that a registry or lockfile was consulted.
 type DependencyDeclaration struct {
-	Ecosystem  string   `json:"ecosystem"`
-	Package    string   `json:"package"`
-	Declared   string   `json:"declared,omitempty"`
-	Resolution string   `json:"resolution"`
-	Evidence   Evidence `json:"evidence"`
+	Ecosystem     string   `json:"ecosystem"`
+	Package       string   `json:"package"`
+	Declared      string   `json:"declared,omitempty"`
+	Resolution    string   `json:"resolution"`
+	Usage         string   `json:"usage,omitempty"`
+	Relationship  string   `json:"relationship,omitempty"`
+	DeclaredScope string   `json:"declared_scope,omitempty"`
+	Evidence      Evidence `json:"evidence"`
 }
 
 // Repository describes one mapped commit.
@@ -1079,9 +1083,11 @@ func (b *builder) addPackages(
 	sort.Strings(packageManifests)
 	for _, manifestPath := range packageManifests {
 		var manifest struct {
-			Name            string            `json:"name"`
-			Dependencies    map[string]string `json:"dependencies"`
-			DevDependencies map[string]string `json:"devDependencies"`
+			Name                 string            `json:"name"`
+			Dependencies         map[string]string `json:"dependencies"`
+			DevDependencies      map[string]string `json:"devDependencies"`
+			OptionalDependencies map[string]string `json:"optionalDependencies"`
+			PeerDependencies     map[string]string `json:"peerDependencies"`
 		}
 		content := contents[manifestPath]
 		if json.Unmarshal(content, &manifest) != nil {
@@ -1114,18 +1120,40 @@ func (b *builder) addPackages(
 			Label:    "contains",
 			Evidence: []Evidence{evidence},
 		})
-		dependencies := sortedKeys(manifest.Dependencies, manifest.DevDependencies)
+		dependencies := sortedKeys(
+			manifest.Dependencies,
+			manifest.DevDependencies,
+			manifest.OptionalDependencies,
+			manifest.PeerDependencies,
+		)
 		declarations := make([]DependencyDeclaration, 0, len(dependencies))
 		for _, dependency := range dependencies {
-			declared := manifest.Dependencies[dependency]
-			if declared == "" {
-				declared = manifest.DevDependencies[dependency]
+			declared, usage, relationship, declaredScope := npmDependencyMetadata(
+				manifest.OptionalDependencies, dependency, "optionalDependencies",
+			)
+			if declaredScope == "" {
+				declared, usage, relationship, declaredScope = npmDependencyMetadata(
+					manifest.Dependencies, dependency, "dependencies",
+				)
+			}
+			if declaredScope == "" {
+				declared, usage, relationship, declaredScope = npmDependencyMetadata(
+					manifest.PeerDependencies, dependency, "peerDependencies",
+				)
+			}
+			if declaredScope == "" {
+				declared, usage, relationship, declaredScope = npmDependencyMetadata(
+					manifest.DevDependencies, dependency, "devDependencies",
+				)
 			}
 			declarations = append(declarations, DependencyDeclaration{
-				Ecosystem:  "npm",
-				Package:    dependency,
-				Declared:   declared,
-				Resolution: versionResolution(declared),
+				Ecosystem:     "npm",
+				Package:       dependency,
+				Declared:      declared,
+				Resolution:    versionResolution(declared),
+				Usage:         usage,
+				Relationship:  relationship,
+				DeclaredScope: declaredScope,
 				Evidence: b.evidence(
 					repository,
 					revision,
@@ -1167,6 +1195,28 @@ func (b *builder) addPackages(
 		}
 	}
 	return packageIDs
+}
+
+func npmDependencyMetadata(
+	dependencies map[string]string,
+	name string,
+	scope string,
+) (declared, usage, relationship, declaredScope string) {
+	declared, ok := dependencies[name]
+	if !ok {
+		return "", "", "", ""
+	}
+	usage = "production"
+	relationship = "required"
+	switch scope {
+	case "devDependencies":
+		usage = "development"
+	case "optionalDependencies":
+		relationship = "optional"
+	case "peerDependencies":
+		relationship = "peer"
+	}
+	return declared, usage, relationship, scope
 }
 
 func (b *builder) addGoImportsAndRoutes(
@@ -1242,8 +1292,9 @@ func (b *builder) addGoImportsAndRoutes(
 }
 
 type gradleDependency struct {
-	coordinate string
-	line       int
+	coordinate    string
+	line          int
+	configuration string
 }
 
 // gradleConfigurations lists the dependency configurations RepoKarta reads from
@@ -1406,10 +1457,13 @@ func (b *builder) addGradleManifests(
 			labels = append(labels, dependency.coordinate)
 			label, version := gradleCoordinateParts(dependency.coordinate)
 			declarations = append(declarations, DependencyDeclaration{
-				Ecosystem:  "maven",
-				Package:    label,
-				Declared:   version,
-				Resolution: versionResolution(version),
+				Ecosystem:     "maven",
+				Package:       label,
+				Declared:      version,
+				Resolution:    versionResolution(version),
+				Usage:         gradleDependencyUsage(dependency.configuration),
+				Relationship:  "required",
+				DeclaredScope: dependency.configuration,
 				Evidence: b.evidence(
 					repository,
 					revision,
@@ -1503,9 +1557,11 @@ func parseGradleDependencies(
 		if !validGradleCoordinate(coordinate) {
 			continue
 		}
-		byCoordinate[coordinate] = gradleDependency{
-			coordinate: coordinate,
-			line:       lineAtOffset(content, match[0]),
+		configuration := gradleConfigurationAt(content[match[0]:match[1]])
+		byCoordinate[coordinate+"\x00"+configuration] = gradleDependency{
+			coordinate:    coordinate,
+			line:          lineAtOffset(content, match[0]),
+			configuration: configuration,
 		}
 	}
 	for _, match := range gradleNamedDependency.FindAllSubmatchIndex(content, -1) {
@@ -1516,17 +1572,21 @@ func parseGradleDependencies(
 		if !validGradleCoordinate(coordinate) {
 			continue
 		}
-		byCoordinate[coordinate] = gradleDependency{
-			coordinate: coordinate,
-			line:       lineAtOffset(content, match[0]),
+		configuration := gradleConfigurationAt(content[match[0]:match[1]])
+		byCoordinate[coordinate+"\x00"+configuration] = gradleDependency{
+			coordinate:    coordinate,
+			line:          lineAtOffset(content, match[0]),
+			configuration: configuration,
 		}
 	}
 	for _, match := range gradleProjectDependency.FindAllSubmatchIndex(content, -1) {
 		projectName := strings.TrimPrefix(strings.TrimSpace(string(content[match[2]:match[3]])), ":")
 		coordinate := "project:" + strings.ReplaceAll(projectName, ":", "/")
-		byCoordinate[coordinate] = gradleDependency{
-			coordinate: coordinate,
-			line:       lineAtOffset(content, match[0]),
+		configuration := gradleConfigurationAt(content[match[0]:match[1]])
+		byCoordinate[coordinate+"\x00"+configuration] = gradleDependency{
+			coordinate:    coordinate,
+			line:          lineAtOffset(content, match[0]),
+			configuration: configuration,
 		}
 	}
 	for _, match := range gradleCatalogDependency.FindAllSubmatchIndex(content, -1) {
@@ -1535,9 +1595,11 @@ func parseGradleDependencies(
 		if coordinate == "" {
 			continue
 		}
-		byCoordinate[coordinate] = gradleDependency{
-			coordinate: coordinate,
-			line:       lineAtOffset(content, match[0]),
+		configuration := gradleConfigurationAt(content[match[0]:match[1]])
+		byCoordinate[coordinate+"\x00"+configuration] = gradleDependency{
+			coordinate:    coordinate,
+			line:          lineAtOffset(content, match[0]),
+			configuration: configuration,
 		}
 	}
 	output := make([]gradleDependency, 0, len(byCoordinate))
@@ -1545,9 +1607,41 @@ func parseGradleDependencies(
 		output = append(output, dependency)
 	}
 	slices.SortFunc(output, func(left, right gradleDependency) int {
-		return strings.Compare(left.coordinate, right.coordinate)
+		if comparison := strings.Compare(left.coordinate, right.coordinate); comparison != 0 {
+			return comparison
+		}
+		return strings.Compare(left.configuration, right.configuration)
 	})
 	return output
+}
+
+func gradleConfigurationAt(content []byte) string {
+	fields := strings.Fields(strings.TrimSpace(string(content)))
+	if len(fields) == 0 {
+		return ""
+	}
+	configuration := fields[0]
+	if index := strings.IndexAny(configuration, "( \t"); index >= 0 {
+		configuration = configuration[:index]
+	}
+	return strings.TrimSpace(configuration)
+}
+
+func gradleDependencyUsage(configuration string) string {
+	lower := strings.ToLower(strings.TrimSpace(configuration))
+	switch {
+	case lower == "", lower == "versioncatalog":
+		return "unknown"
+	case strings.Contains(lower, "test"), strings.Contains(lower, "e2e"):
+		return "test"
+	case strings.Contains(lower, "annotationprocessor"), strings.HasPrefix(lower, "kapt"),
+		strings.HasPrefix(lower, "ksp"), lower == "classpath":
+		return "build"
+	case lower == "developmentonly":
+		return "development"
+	default:
+		return "production"
+	}
 }
 
 // parseGradleVersionVariables resolves the common repository-local sources
@@ -1722,8 +1816,9 @@ func catalogDependencies(content []byte) []gradleDependency {
 	output := make([]gradleDependency, 0, len(entries))
 	for _, entry := range entries {
 		output = append(output, gradleDependency{
-			coordinate: entry.value,
-			line:       entry.line,
+			coordinate:    entry.value,
+			line:          entry.line,
+			configuration: "versionCatalog",
 		})
 	}
 	slices.SortFunc(output, func(left, right gradleDependency) int {
@@ -2456,6 +2551,21 @@ func (b *builder) addOtherManifests(
 			continue
 		}
 		evidence := b.evidence(repository, revision, filePath, 1, kind)
+		declarations := make([]DependencyDeclaration, 0)
+		dependencyLabels := make([]string, 0)
+		if kind == "Maven project" {
+			declarations = parseMavenDeclarations(contents[filePath])
+			for index := range declarations {
+				declarations[index].Evidence = b.evidence(
+					repository,
+					revision,
+					filePath,
+					lineContaining(contents[filePath], "<artifactId>"+strings.Split(declarations[index].Package, ":")[1]),
+					declarations[index].Package,
+				)
+				dependencyLabels = append(dependencyLabels, declarations[index].Package)
+			}
+		}
 		manifestID := fmt.Sprintf("manifest:%d:%s", repository.ID, normalizeID(filePath))
 		b.addNode(Node{
 			ID:           manifestID,
@@ -2482,9 +2592,116 @@ func (b *builder) addOtherManifests(
 			Kind:         kind,
 			Path:         filePath,
 			Name:         path.Base(filePath),
+			Dependencies: dependencyLabels,
+			Declarations: declarations,
 			Evidence:     evidence,
 		})
+		for _, declaration := range declarations {
+			dependencyNodeID := "dependency:maven:" + normalizeID(declaration.Package)
+			b.addNode(Node{
+				ID:       dependencyNodeID,
+				Kind:     "dependency",
+				Label:    declaration.Package,
+				Subtitle: "Maven · " + declaration.Declared,
+				Layer:    "Dependencies",
+				Evidence: []Evidence{declaration.Evidence},
+			})
+			b.addEdge(Edge{
+				ID:       edgeID(manifestID, dependencyNodeID, "depends"),
+				Source:   manifestID,
+				Target:   dependencyNodeID,
+				Kind:     "dependency",
+				Label:    "declares",
+				Evidence: []Evidence{declaration.Evidence},
+			})
+		}
 	}
+}
+
+type mavenDependencyXML struct {
+	GroupID    string `xml:"groupId"`
+	ArtifactID string `xml:"artifactId"`
+	Version    string `xml:"version"`
+	Scope      string `xml:"scope"`
+	Optional   bool   `xml:"optional"`
+}
+
+func parseMavenDeclarations(content []byte) []DependencyDeclaration {
+	var project struct {
+		Properties struct {
+			InnerXML []byte `xml:",innerxml"`
+		} `xml:"properties"`
+		Dependencies []mavenDependencyXML `xml:"dependencies>dependency"`
+	}
+	if xml.Unmarshal(content, &project) != nil {
+		return nil
+	}
+	properties := parseMavenProperties(project.Properties.InnerXML)
+	declarations := make([]DependencyDeclaration, 0, len(project.Dependencies))
+	for _, dependency := range project.Dependencies {
+		groupID := resolveMavenProperty(strings.TrimSpace(dependency.GroupID), properties)
+		artifactID := resolveMavenProperty(strings.TrimSpace(dependency.ArtifactID), properties)
+		if groupID == "" || artifactID == "" {
+			continue
+		}
+		version := resolveMavenProperty(strings.TrimSpace(dependency.Version), properties)
+		scope := strings.ToLower(strings.TrimSpace(dependency.Scope))
+		if scope == "" {
+			scope = "compile"
+		}
+		usage := "production"
+		if scope == "test" {
+			usage = "test"
+		} else if scope == "import" {
+			usage = "build"
+		}
+		relationship := "required"
+		if dependency.Optional {
+			relationship = "optional"
+		}
+		declarations = append(declarations, DependencyDeclaration{
+			Ecosystem:     "maven",
+			Package:       groupID + ":" + artifactID,
+			Declared:      version,
+			Resolution:    versionResolution(version),
+			Usage:         usage,
+			Relationship:  relationship,
+			DeclaredScope: scope,
+		})
+	}
+	slices.SortFunc(declarations, func(left, right DependencyDeclaration) int {
+		return strings.Compare(left.Package+"\x00"+left.DeclaredScope, right.Package+"\x00"+right.DeclaredScope)
+	})
+	return declarations
+}
+
+func parseMavenProperties(content []byte) map[string]string {
+	properties := make(map[string]string)
+	decoder := xml.NewDecoder(bytes.NewReader(content))
+	for {
+		token, err := decoder.Token()
+		if err != nil {
+			break
+		}
+		start, ok := token.(xml.StartElement)
+		if !ok {
+			continue
+		}
+		var value string
+		if decoder.DecodeElement(&value, &start) == nil {
+			properties[start.Name.Local] = strings.TrimSpace(value)
+		}
+	}
+	return properties
+}
+
+func resolveMavenProperty(value string, properties map[string]string) string {
+	if strings.HasPrefix(value, "${") && strings.HasSuffix(value, "}") {
+		if resolved := properties[strings.TrimSuffix(strings.TrimPrefix(value, "${"), "}")]; resolved != "" {
+			return resolved
+		}
+	}
+	return value
 }
 
 func (b *builder) evidence(
@@ -2780,10 +2997,13 @@ func parseGoModDeclarations(content []byte) []DependencyDeclaration {
 			declared = fields[1]
 		}
 		declarations = append(declarations, DependencyDeclaration{
-			Ecosystem:  "go",
-			Package:    fields[0],
-			Declared:   declared,
-			Resolution: versionResolution(declared),
+			Ecosystem:     "go",
+			Package:       fields[0],
+			Declared:      declared,
+			Resolution:    versionResolution(declared),
+			Usage:         "unknown",
+			Relationship:  "required",
+			DeclaredScope: "require",
 		})
 	}
 	slices.SortFunc(declarations, func(left, right DependencyDeclaration) int {

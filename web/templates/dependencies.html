@@ -27,7 +27,7 @@
               Declared packages are extracted from committed manifests. Registry freshness is kept separate and remains visibly unchecked until observed.
             </p>
           </div>
-          <form action="/dependencies" method="get" class="grid min-w-72 gap-3 sm:grid-cols-2 lg:grid-cols-5">
+          <form action="/dependencies" method="get" class="grid min-w-72 gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <label class="filter-field min-w-64 flex-1">
               <span>Repository scope</span>
               <select name="repository">
@@ -39,13 +39,15 @@
             </label>
             <label class="filter-field lg:col-span-2"><span>Package, manifest, or repository</span><input name="query" value="{{.Inventory.Query}}" placeholder="Search declarations"></label>
             <label class="filter-field"><span>Ecosystem</span><select name="ecosystem"><option value="">All ecosystems</option><option value="go" {{if eq .Inventory.Ecosystem "go"}}selected{{end}}>Go</option><option value="npm" {{if eq .Inventory.Ecosystem "npm"}}selected{{end}}>npm</option><option value="maven" {{if eq .Inventory.Ecosystem "maven"}}selected{{end}}>Maven</option><option value="cargo" {{if eq .Inventory.Ecosystem "cargo"}}selected{{end}}>Cargo</option><option value="pypi" {{if eq .Inventory.Ecosystem "pypi"}}selected{{end}}>PyPI</option></select></label>
+            <label class="filter-field"><span>Usage</span><select name="usage"><option value="">All usage</option><option value="production" {{if eq .Inventory.Usage "production"}}selected{{end}}>Production</option><option value="test" {{if eq .Inventory.Usage "test"}}selected{{end}}>Test</option><option value="development" {{if eq .Inventory.Usage "development"}}selected{{end}}>Development</option><option value="build" {{if eq .Inventory.Usage "build"}}selected{{end}}>Build</option><option value="unknown" {{if eq .Inventory.Usage "unknown"}}selected{{end}}>Unknown</option></select></label>
+            <label class="filter-field"><span>Relationship</span><select name="relationship"><option value="">All relationships</option><option value="required" {{if eq .Inventory.Relationship "required"}}selected{{end}}>Required</option><option value="optional" {{if eq .Inventory.Relationship "optional"}}selected{{end}}>Optional</option><option value="peer" {{if eq .Inventory.Relationship "peer"}}selected{{end}}>Peer</option><option value="unknown" {{if eq .Inventory.Relationship "unknown"}}selected{{end}}>Unknown</option></select></label>
             <label class="filter-field"><span>Resolution</span><select name="resolution"><option value="">All resolutions</option><option value="exact" {{if eq .Inventory.Resolution "exact"}}selected{{end}}>Exact</option><option value="constraint" {{if eq .Inventory.Resolution "constraint"}}selected{{end}}>Constraint</option><option value="variable" {{if eq .Inventory.Resolution "variable"}}selected{{end}}>Variable</option><option value="unresolved" {{if eq .Inventory.Resolution "unresolved"}}selected{{end}}>Unresolved</option></select></label>
             <label class="filter-field"><span>Rows per page</span><select name="limit"><option value="50" {{if eq .Inventory.Limit 50}}selected{{end}}>50</option><option value="100" {{if eq .Inventory.Limit 100}}selected{{end}}>100</option><option value="250" {{if eq .Inventory.Limit 250}}selected{{end}}>250</option><option value="500" {{if eq .Inventory.Limit 500}}selected{{end}}>500</option></select></label>
             <button class="search-button px-5 py-3" type="submit">Apply filters</button>
           </form>
         </div>
 
-        <dl class="mt-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <dl class="mt-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
           <div class="rounded-xl border border-white/[0.08] bg-surface-raised p-4">
             <dt class="text-xs uppercase tracking-[0.16em] text-ink-faint">Repositories</dt>
             <dd class="mt-2 text-2xl font-semibold text-white">{{.Inventory.RepositoryCount}}</dd>
@@ -62,7 +64,30 @@
             <dt class="text-xs uppercase tracking-[0.16em] text-amber-200">Registry unchecked</dt>
             <dd class="mt-2 text-2xl font-semibold text-amber-100">{{.Inventory.UncheckedCount}}</dd>
           </div>
+          <div class="rounded-xl border border-emerald-300/20 bg-emerald-400/[0.06] p-4">
+            <dt class="text-xs uppercase tracking-[0.16em] text-emerald-200">Current</dt>
+            <dd class="mt-2 text-2xl font-semibold text-emerald-100">{{.Inventory.CurrentCount}}</dd>
+          </div>
+          <div class="rounded-xl border border-rose-300/20 bg-rose-400/[0.06] p-4">
+            <dt class="text-xs uppercase tracking-[0.16em] text-rose-200">Updates</dt>
+            <dd class="mt-2 text-2xl font-semibold text-rose-100">{{.Inventory.UpdateCount}}</dd>
+          </div>
         </dl>
+
+        {{if and .CanManageArtifacts (ne .RefreshProgress.State "unavailable")}}
+        <div class="mt-5 flex flex-wrap items-center gap-3">
+          <button
+            class="search-button px-5 py-3"
+            type="button"
+            data-dependency-refresh
+            data-dependency-refresh-url="{{.RefreshURL}}"
+          >Refresh stale npm and Maven versions</button>
+          <span class="text-sm text-ink-soft" role="status" data-dependency-refresh-status>
+            {{if eq .RefreshProgress.State "running"}}Checking {{.RefreshProgress.Completed}} of {{.RefreshProgress.Total}} unique packages.{{else}}Registry results are cached for 24 hours.{{end}}
+          </span>
+          <span class="w-full text-xs text-ink-faint">Starting a refresh sends matching package names and Maven coordinates to the public npm Registry and Maven Central.</span>
+        </div>
+        {{end}}
 
         {{if .Inventory.BuildProgress.PendingRepositories}}
         <p
@@ -92,12 +117,13 @@
           </div>
           {{if .Inventory.Declarations}}
           <div class="overflow-x-auto">
-            <table class="w-full min-w-[980px] border-collapse text-left text-sm">
+            <table class="w-full min-w-[1180px] border-collapse text-left text-sm">
               <thead class="bg-white/[0.025] text-xs uppercase tracking-[0.12em] text-ink-faint">
                 <tr>
                   <th class="px-5 py-3 font-medium">Package</th>
                   <th class="px-4 py-3 font-medium">Declared</th>
                   <th class="px-4 py-3 font-medium">Resolution</th>
+                  <th class="px-4 py-3 font-medium">Usage</th>
                   <th class="px-4 py-3 font-medium">Freshness</th>
                   <th class="px-4 py-3 font-medium">Repository</th>
                   <th class="px-4 py-3 font-medium">Evidence</th>
@@ -112,7 +138,20 @@
                   </td>
                   <td class="px-4 py-4 font-mono text-ink">{{if .Declared}}{{.Declared}}{{else}}—{{end}}</td>
                   <td class="px-4 py-4"><span class="rounded-full border border-white/10 px-2 py-1 text-xs text-ink-soft">{{.Resolution}}</span></td>
-                  <td class="px-4 py-4"><span class="rounded-full border border-amber-300/20 bg-amber-400/[0.06] px-2 py-1 text-xs text-amber-100">Not checked</span></td>
+                  <td class="px-4 py-4">
+                    <span class="rounded-full border border-sky-300/20 bg-sky-400/[0.06] px-2 py-1 text-xs text-sky-100">{{.Usage}}</span>
+                    <span class="mt-2 block text-xs text-ink-faint">{{.Relationship}}{{if .DeclaredScope}} · {{.DeclaredScope}}{{end}}</span>
+                  </td>
+                  <td class="px-4 py-4">
+                    {{if eq .CheckStatus "current"}}<span class="rounded-full border border-emerald-300/20 bg-emerald-400/[0.06] px-2 py-1 text-xs text-emerald-100">Current · {{.LatestStable}}</span>
+                    {{else if eq .CheckStatus "update_available"}}<span class="rounded-full border border-rose-300/20 bg-rose-400/[0.06] px-2 py-1 text-xs text-rose-100">Update · {{.LatestStable}}</span>
+                    {{else if eq .CheckStatus "latest_known"}}<span class="rounded-full border border-sky-300/20 bg-sky-400/[0.06] px-2 py-1 text-xs text-sky-100">Latest · {{.LatestStable}}</span>
+                    {{else if eq .CheckStatus "stale"}}<span class="rounded-full border border-amber-300/20 bg-amber-400/[0.06] px-2 py-1 text-xs text-amber-100">Cached result stale</span>
+                    {{else if eq .CheckStatus "error"}}<span class="rounded-full border border-rose-300/20 bg-rose-400/[0.06] px-2 py-1 text-xs text-rose-100">Check failed</span>
+                    {{else if eq .CheckStatus "not_comparable"}}<span class="rounded-full border border-white/10 px-2 py-1 text-xs text-ink-soft">Not comparable</span>
+                    {{else}}<span class="rounded-full border border-amber-300/20 bg-amber-400/[0.06] px-2 py-1 text-xs text-amber-100">Not checked</span>{{end}}
+                    {{if .ObservedAt}}<span class="mt-2 block text-xs text-ink-faint">{{.ObservedAt}}</span>{{end}}
+                  </td>
                   <td class="px-4 py-4">
                     <span class="block text-ink-strong">{{.Repository}}</span>
                     <span class="mt-1 block font-mono text-xs text-ink-faint">{{shortCommit .Revision}}</span>
