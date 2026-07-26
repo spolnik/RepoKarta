@@ -339,21 +339,21 @@ func (s *session) executeTool(ctx context.Context, name string, input json.RawMe
 		return result, err
 	case "get_file":
 		var request struct {
-			Repository string `json:"repository"`
-			Revision   string `json:"revision"`
-			Path       string `json:"path"`
-			StartLine  int    `json:"start_line"`
-			EndLine    int    `json:"end_line"`
+			RepositoryID int64  `json:"repository_id"`
+			Revision     string `json:"revision"`
+			Path         string `json:"path"`
+			StartLine    int    `json:"start_line"`
+			EndLine      int    `json:"end_line"`
 		}
 		if err := json.Unmarshal(input, &request); err != nil {
 			return nil, err
 		}
 		result, err := s.intelligence.GetFile(ctx, codeintel.FileRequest{
-			Repository: request.Repository,
-			Revision:   request.Revision,
-			Path:       request.Path,
-			StartLine:  request.StartLine,
-			EndLine:    request.EndLine,
+			RepositoryID: request.RepositoryID,
+			Revision:     request.Revision,
+			Path:         request.Path,
+			StartLine:    request.StartLine,
+			EndLine:      request.EndLine,
 		})
 		if err == nil && s.citations != nil {
 			s.citations.Record(s.conversationID, agent.Citation{
@@ -364,37 +364,37 @@ func (s *session) executeTool(ctx context.Context, name string, input json.RawMe
 		return result, err
 	case "list_tree":
 		var request struct {
-			Repository string `json:"repository"`
-			Revision   string `json:"revision"`
-			Path       string `json:"path"`
+			RepositoryID int64  `json:"repository_id"`
+			Revision     string `json:"revision"`
+			Path         string `json:"path"`
 		}
 		if err := json.Unmarshal(input, &request); err != nil {
 			return nil, err
 		}
 		return s.intelligence.ListTree(ctx, codeintel.TreeRequest{
-			Repository: request.Repository,
-			Revision:   request.Revision,
-			Path:       request.Path,
+			RepositoryID: request.RepositoryID,
+			Revision:     request.Revision,
+			Path:         request.Path,
 		})
 	case "git_log":
 		var request struct {
-			Repository string `json:"repository"`
-			Revision   string `json:"revision"`
-			Path       string `json:"path"`
-			Limit      int    `json:"limit"`
+			RepositoryID int64  `json:"repository_id"`
+			Revision     string `json:"revision"`
+			Path         string `json:"path"`
+			Limit        int    `json:"limit"`
 		}
 		if err := json.Unmarshal(input, &request); err != nil {
 			return nil, err
 		}
 		return s.intelligence.GitLog(ctx, codeintel.GitLogRequest{
-			Repository: request.Repository,
-			Revision:   request.Revision,
-			Path:       request.Path,
-			Limit:      request.Limit,
+			RepositoryID: request.RepositoryID,
+			Revision:     request.Revision,
+			Path:         request.Path,
+			Limit:        request.Limit,
 		})
 	case "git_diff":
 		var request struct {
-			Repository   string `json:"repository"`
+			RepositoryID int64  `json:"repository_id"`
 			FromRevision string `json:"from_revision"`
 			ToRevision   string `json:"to_revision"`
 			Path         string `json:"path"`
@@ -404,7 +404,7 @@ func (s *session) executeTool(ctx context.Context, name string, input json.RawMe
 			return nil, err
 		}
 		return s.intelligence.GitDiff(ctx, codeintel.GitDiffRequest{
-			Repository:   request.Repository,
+			RepositoryID: request.RepositoryID,
 			FromRevision: request.FromRevision,
 			ToRevision:   request.ToRevision,
 			Path:         request.Path,
@@ -431,53 +431,53 @@ func toolDefinitions() []anthropicapi.ToolUnionParam {
 	return []anthropicapi.ToolUnionParam{
 		tool("list_repositories", "List every indexed repository and its exact indexed commit.", nil, nil),
 		tool("search_code", "Search committed source with explicit completeness and commit-pinned source URLs.", map[string]any{
-			"query":      stringProperty("Source text or Zoekt expression."),
-			"repository": stringProperty("Optional exact repository name."),
-			"language":   stringProperty("Optional language filter."),
-			"path":       stringProperty("Optional path substring."),
-			"file":       stringProperty("Optional file-name substring."),
-			"mode":       enumProperty("literal", "regex", "zoekt", "references"),
-			"limit":      integerProperty("Maximum files, 1 to 500."),
+			"query":         stringProperty("Source text or Zoekt expression."),
+			"repository_id": integerProperty("Optional repository ID returned by list_repositories."),
+			"language":      stringProperty("Optional language filter."),
+			"path":          stringProperty("Optional path substring."),
+			"file":          stringProperty("Optional file-name substring."),
+			"mode":          enumProperty("literal", "regex", "zoekt", "references"),
+			"limit":         integerProperty("Maximum files, 1 to 500."),
 		}, []string{"query"}),
 		tool("find_symbol", "Find indexed symbol definitions by exact name, with commit-pinned citations.", map[string]any{
-			"symbol":     stringProperty("Exact symbol name."),
-			"repository": stringProperty("Optional exact repository name."),
-			"language":   stringProperty("Optional language filter."),
-			"limit":      integerProperty("Maximum files, 1 to 500."),
+			"symbol":        stringProperty("Exact symbol name."),
+			"repository_id": integerProperty("Optional repository ID returned by list_repositories."),
+			"language":      stringProperty("Optional language filter."),
+			"limit":         integerProperty("Maximum files, 1 to 500."),
 		}, []string{"symbol"}),
 		tool("find_references", "Find syntax-backed call, type-usage, import, extends, and implements sites by exact source-level target name. Results report AST relation kind, receiver, confidence, index progress, coverage, and commit-pinned citations; overloads and dynamic dispatch are not type-resolved.", map[string]any{
-			"symbol":     stringProperty("Exact source-level symbol name."),
-			"repository": stringProperty("Optional exact repository name."),
-			"language":   stringProperty("Optional parser language filter."),
-			"path":       stringProperty("Optional path substring."),
-			"file":       stringProperty("Optional file-name substring."),
-			"limit":      integerProperty("Maximum files, 1 to 500."),
+			"symbol":        stringProperty("Exact source-level symbol name."),
+			"repository_id": integerProperty("Optional repository ID returned by list_repositories."),
+			"language":      stringProperty("Optional parser language filter."),
+			"path":          stringProperty("Optional path substring."),
+			"file":          stringProperty("Optional file-name substring."),
+			"limit":         integerProperty("Maximum files, 1 to 500."),
 		}, []string{"symbol"}),
 		tool("get_file", "Read a bounded line range from committed source at an exact reachable revision.", map[string]any{
-			"repository": stringProperty("Exact repository name."),
-			"revision":   stringProperty("Exact reachable commit; omit for indexed commit."),
-			"path":       stringProperty("Repository-relative file path."),
-			"start_line": integerProperty("First one-based line."),
-			"end_line":   integerProperty("Last one-based line, at most 500 lines."),
-		}, []string{"repository", "path"}),
+			"repository_id": integerProperty("Repository ID returned by list_repositories."),
+			"revision":      stringProperty("Exact reachable commit; omit for indexed commit."),
+			"path":          stringProperty("Repository-relative file path."),
+			"start_line":    integerProperty("First one-based line."),
+			"end_line":      integerProperty("Last one-based line, at most 500 lines."),
+		}, []string{"repository_id", "path"}),
 		tool("list_tree", "List a bounded committed repository directory without reading the worktree.", map[string]any{
-			"repository": stringProperty("Exact repository name."),
-			"revision":   stringProperty("Exact reachable commit; omit for indexed commit."),
-			"path":       stringProperty("Optional repository-relative directory."),
-		}, []string{"repository"}),
+			"repository_id": integerProperty("Repository ID returned by list_repositories."),
+			"revision":      stringProperty("Exact reachable commit; omit for indexed commit."),
+			"path":          stringProperty("Optional repository-relative directory."),
+		}, []string{"repository_id"}),
 		tool("git_log", "Read bounded newest-first history from a recorded commit.", map[string]any{
-			"repository": stringProperty("Exact repository name."),
-			"revision":   stringProperty("Exact reachable commit; omit for indexed commit."),
-			"path":       stringProperty("Optional repository-relative path."),
-			"limit":      integerProperty("Maximum commits, 1 to 200."),
-		}, []string{"repository"}),
+			"repository_id": integerProperty("Repository ID returned by list_repositories."),
+			"revision":      stringProperty("Exact reachable commit; omit for indexed commit."),
+			"path":          stringProperty("Optional repository-relative path."),
+			"limit":         integerProperty("Maximum commits, 1 to 200."),
+		}, []string{"repository_id"}),
 		tool("git_diff", "Read a bounded exact unified diff between reachable commits.", map[string]any{
-			"repository":    stringProperty("Exact repository name."),
+			"repository_id": integerProperty("Repository ID returned by list_repositories."),
 			"from_revision": stringProperty("Base commit; omit for first parent."),
 			"to_revision":   stringProperty("Target commit; omit for indexed commit."),
 			"path":          stringProperty("Optional repository-relative path."),
 			"context_lines": integerProperty("Context lines, 1 to 20."),
-		}, []string{"repository"}),
+		}, []string{"repository_id"}),
 	}
 }
 

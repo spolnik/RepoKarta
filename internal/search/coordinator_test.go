@@ -111,6 +111,35 @@ func TestDerivedStructuralIndexQueueDoesNotDropLargeFleets(t *testing.T) {
 	}
 }
 
+func TestDerivedStructuralIndexQueueDrainsConcurrently(t *testing.T) {
+	started := make(chan int64, maximumDerivedIndexConcurrency)
+	release := make(chan struct{})
+	coordinator := NewCoordinator("", nil, &observerStore{}, observerEngine{}).
+		UseIndexedObserver(func(_ context.Context, repositoryID int64) error {
+			started <- repositoryID
+			<-release
+			return nil
+		})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	for repositoryID := int64(1); repositoryID <= maximumDerivedIndexConcurrency; repositoryID++ {
+		coordinator.queueIndexed(ctx, repositoryID)
+	}
+	go coordinator.observeIndexed(ctx)
+
+	seen := make(map[int64]struct{}, maximumDerivedIndexConcurrency)
+	timeout := time.After(2 * time.Second)
+	for len(seen) < maximumDerivedIndexConcurrency {
+		select {
+		case repositoryID := <-started:
+			seen[repositoryID] = struct{}{}
+		case <-timeout:
+			t.Fatalf("only %d of %d derived builds started concurrently", len(seen), maximumDerivedIndexConcurrency)
+		}
+	}
+	close(release)
+}
+
 type providerStore struct {
 	repositories []catalog.Repository
 }

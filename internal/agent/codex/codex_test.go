@@ -20,7 +20,7 @@ func TestContextUsageFromNotificationUsesCurrentRequestTokens(t *testing.T) {
 		"turnId":"turn",
 		"tokenUsage":{
 			"total":{"totalTokens":350000},
-			"last":{"totalTokens":50000},
+			"last":{"inputTokens":42000,"outputTokens":8000,"totalTokens":50000},
 			"modelContextWindow":200000
 		}
 	}`)
@@ -30,6 +30,27 @@ func TestContextUsageFromNotificationUsesCurrentRequestTokens(t *testing.T) {
 	}
 	if usage.UsedTokens != 50000 || usage.MaxTokens != 200000 || usage.Percentage != 25 {
 		t.Fatalf("unexpected context usage: %#v", usage)
+	}
+}
+
+func TestTokenUsageFromNotificationReportsProviderBreakdown(t *testing.T) {
+	raw := json.RawMessage(`{
+		"threadId":"thread",
+		"turnId":"turn",
+		"tokenUsage":{
+			"last":{"inputTokens":42000,"cachedInputTokens":12000,"outputTokens":8000,"reasoningOutputTokens":3000,"totalTokens":50000},
+			"modelContextWindow":200000
+		}
+	}`)
+	usage, ok := tokenUsageFromNotification(raw, "thread", "turn")
+	if !ok {
+		t.Fatal("token usage was not parsed")
+	}
+	if usage.InputTokens != 42000 || usage.OutputTokens != 8000 || usage.TotalTokens != 50000 {
+		t.Fatalf("unexpected token usage: %#v", usage)
+	}
+	if _, ok := tokenUsageFromNotification(raw, "another-thread", "turn"); ok {
+		t.Fatal("usage from another thread was accepted")
 	}
 }
 

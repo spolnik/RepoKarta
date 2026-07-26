@@ -93,6 +93,25 @@ func TestRepositoryPromptInjectionCannotExpandToolPermissions(t *testing.T) {
 	}
 }
 
+func TestNativeToolSchemasUseMCPRepositoryIDContract(t *testing.T) {
+	encoded, err := json.Marshal(toolDefinitions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema := string(encoded)
+	if strings.Contains(schema, `"repository":{`) {
+		t.Fatalf("native tool schema still exposes repository name selector: %s", schema)
+	}
+	if count := strings.Count(schema, `"repository_id":{`); count != 7 {
+		t.Fatalf("repository_id schema count = %d, want 7: %s", count, schema)
+	}
+	for _, required := range []string{"get_file", "list_tree", "git_log", "git_diff"} {
+		if !strings.Contains(schema, `"name":"`+required+`"`) {
+			t.Fatalf("missing native tool %q", required)
+		}
+	}
+}
+
 func TestAnthropicProviderReadsKeyOnlyFromLaunchEnvironment(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "")
 	adapter := &Adapter{Intelligence: adversarialIntelligence{}}

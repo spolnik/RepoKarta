@@ -3,6 +3,7 @@ package codeintel
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -454,6 +455,90 @@ func TestReferenceSearchReportsPartialASTCoverage(t *testing.T) {
 		result.ReferenceIndex.ReadyRepositories != 4 ||
 		result.ReferenceIndex.PendingRepositories != 6 {
 		t.Fatalf("partial index progress = %#v", result.ReferenceIndex)
+	}
+}
+
+func TestReferenceSearchPreservesTypedRecallAcrossTwoThousandJavaFiles(t *testing.T) {
+	const (
+		fileCount     = 2_000
+		consumerCount = 6
+	)
+	root := t.TempDir()
+	sourceDirectory := filepath.Join(root, "src", "main", "java", "com", "acme")
+	if err := os.MkdirAll(sourceDirectory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for index := 0; index < fileCount-consumerCount-1; index++ {
+		fields := strings.Builder{}
+		for relation := 0; relation < 16; relation++ {
+			fmt.Fprintf(&fields, "    Type%02d field%02d;\n", relation, relation)
+		}
+		content := fmt.Sprintf("package com.acme;\nclass Filler%04d {\n%s}\n", index, fields.String())
+		name := filepath.Join(sourceDirectory, fmt.Sprintf("A%04d.java", index))
+		if err := os.WriteFile(name, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(
+		filepath.Join(sourceDirectory, "MJobTimeGuard.java"),
+		[]byte("package com.acme;\npublic class JobTimeGuard {}\n"),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	expected := make(map[string]struct{}, consumerCount)
+	for index := 0; index < consumerCount; index++ {
+		base := fmt.Sprintf("ZConsumer%02d.java", index)
+		expected["src/main/java/com/acme/"+base] = struct{}{}
+		content := fmt.Sprintf(
+			"package com.acme;\nclass Consumer%02d {\n    JobTimeGuard guard;\n    void run(JobTimeGuard input) {}\n}\n",
+			index,
+		)
+		if err := os.WriteFile(filepath.Join(sourceDirectory, base), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runGit(t, root, "init", "-q")
+	runGit(t, root, "add", ".")
+	runGit(t, root, "-c", "user.name=RepoKarta Test", "-c", "user.email=test@repokarta.local", "commit", "-qm", "fixture")
+	revision := strings.TrimSpace(runGit(t, root, "rev-parse", "HEAD"))
+	repository := catalog.Repository{
+		ID:            27,
+		Name:          "payment-service",
+		Path:          root,
+		HeadCommit:    revision,
+		IndexedCommit: revision,
+		IndexState:    "ready",
+	}
+	store := symbolTestStore{repository: repository}
+	structure, err := graph.New(store, filepath.Join(t.TempDir(), "maps"), "http://localhost")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := structure.PrepareStructure(t.Context(), repository.ID); err != nil {
+		t.Fatal(err)
+	}
+	service := New(store, &capturingSearcher{}, "http://localhost").UseStructure(structure)
+	result, err := service.FindReferences(t.Context(), ReferenceRequest{
+		Symbol:       "JobTimeGuard",
+		RepositoryID: repository.ID,
+		Limit:        100,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.MatchingFiles != consumerCount || len(result.Matches) != consumerCount {
+		t.Fatalf("typed reference recall = %d files (%d returned), want %d: %#v",
+			result.MatchingFiles, len(result.Matches), consumerCount, result.Warnings)
+	}
+	for _, match := range result.Matches {
+		if _, ok := expected[match.Path]; !ok {
+			t.Fatalf("unexpected typed reference file %q", match.Path)
+		}
+		delete(expected, match.Path)
+	}
+	if len(expected) != 0 {
+		t.Fatalf("missing typed reference consumers: %#v", expected)
 	}
 }
 

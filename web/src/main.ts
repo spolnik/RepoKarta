@@ -5470,7 +5470,56 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
   }
 }
 
+function enableArtifactProgress(): void {
+  const health = document.querySelector<HTMLElement>("[data-index-health]");
+  const dependencyPending = document.querySelector<HTMLElement>("[data-dependency-build-pending]");
+  const dependencyValue = dependencyPending?.querySelector<HTMLElement>("[data-dependency-build-progress]");
+  if (!health) {
+    return;
+  }
+  let previousPending = -1;
+  const poll = async (): Promise<void> => {
+    try {
+      const response = await fetch("/api/artifacts/progress", {
+        cache: "no-store",
+        headers: { Accept: "application/json" }
+      });
+      if (!response.ok) {
+        return;
+      }
+      const progress = await response.json() as {
+        state: string;
+        requested_repositories: number;
+        ready_repositories: number;
+        pending_repositories: number;
+      };
+      const value = health.querySelector<HTMLElement>("[data-artifact-progress]");
+      if (value) {
+        value.textContent = progress.pending_repositories > 0
+          ? `References ${progress.ready_repositories}/${progress.requested_repositories}`
+          : `${progress.ready_repositories} ready`;
+      }
+      if (dependencyValue) {
+        dependencyValue.textContent = `${progress.ready_repositories} of ${progress.requested_repositories}`;
+      }
+      if (dependencyPending && previousPending > 0 && progress.pending_repositories === 0) {
+        window.location.reload();
+        return;
+      }
+      previousPending = progress.pending_repositories;
+      if (progress.pending_repositories > 0) {
+        window.setTimeout(() => void poll(), 2000);
+      }
+    } catch {
+      // The normal index status remains visible if the progress endpoint is
+      // briefly unavailable during startup or shutdown.
+    }
+  };
+  void poll();
+}
+
 connectIndexEvents();
+enableArtifactProgress();
 enableRepositoryDrawer();
 enableQueryChips();
 enableSearchFeedback();

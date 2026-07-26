@@ -27,21 +27,22 @@ type Options struct {
 // Registry freshness is deliberately represented as unchecked until a later
 // observation is recorded; declaration facts never masquerade as live data.
 type Inventory struct {
-	RepositoryCount int           `json:"repository_count"`
-	ManifestCount   int           `json:"manifest_count"`
-	TotalCount      int           `json:"total_count"`
-	DependencyCount int           `json:"dependency_count"`
-	UncheckedCount  int           `json:"unchecked_count"`
-	ReturnedCount   int           `json:"returned_count"`
-	Declarations    []Declaration `json:"declarations"`
-	Truncated       bool          `json:"truncated"`
-	HasMore         bool          `json:"has_more"`
-	Offset          int           `json:"offset"`
-	Limit           int           `json:"limit"`
-	Query           string        `json:"query,omitempty"`
-	Ecosystem       string        `json:"ecosystem_filter,omitempty"`
-	Resolution      string        `json:"resolution_filter,omitempty"`
-	Scope           graph.Scope   `json:"scope"`
+	RepositoryCount int                    `json:"repository_count"`
+	ManifestCount   int                    `json:"manifest_count"`
+	TotalCount      int                    `json:"total_count"`
+	DependencyCount int                    `json:"dependency_count"`
+	UncheckedCount  int                    `json:"unchecked_count"`
+	ReturnedCount   int                    `json:"returned_count"`
+	Declarations    []Declaration          `json:"declarations"`
+	Truncated       bool                   `json:"truncated"`
+	HasMore         bool                   `json:"has_more"`
+	Offset          int                    `json:"offset"`
+	Limit           int                    `json:"limit"`
+	Query           string                 `json:"query,omitempty"`
+	Ecosystem       string                 `json:"ecosystem_filter,omitempty"`
+	Resolution      string                 `json:"resolution_filter,omitempty"`
+	Scope           graph.Scope            `json:"scope"`
+	BuildProgress   graph.ArtifactProgress `json:"build_progress"`
 }
 
 // Declaration is one package declaration in one manifest at one revision.

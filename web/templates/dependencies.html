@@ -64,6 +64,18 @@
           </div>
         </dl>
 
+        {{if .Inventory.BuildProgress.PendingRepositories}}
+        <p
+          class="mt-5 rounded-lg border border-sky-300/20 bg-sky-400/[0.06] px-4 py-3 text-sm text-sky-100"
+          role="status"
+          data-dependency-build-pending
+        >
+          Building dependency artifacts in parallel:
+          <strong data-dependency-build-progress>{{.Inventory.BuildProgress.ReadyRepositories}} of {{.Inventory.BuildProgress.RequestedRepositories}}</strong>
+          repositories ready. This page will refresh as the background build completes.
+        </p>
+        {{end}}
+
         {{if .Inventory.Truncated}}
         <p class="mt-5 rounded-lg border border-amber-300/20 bg-amber-400/[0.06] px-4 py-3 text-sm text-amber-100">
           This inventory is partial because the underlying repository-map scope was truncated.

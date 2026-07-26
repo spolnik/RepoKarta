@@ -71,6 +71,8 @@ type ConversationHistoryService interface {
 // MapService supplies deterministic, commit-pinned repository maps.
 type MapService interface {
 	Snapshot(context.Context, int64, bool) (graph.Snapshot, error)
+	ReadDependencySnapshot(context.Context, int64) (graph.Snapshot, graph.ArtifactProgress, error)
+	StructureProgress(context.Context, int64) (graph.ArtifactProgress, error)
 }
 
 // DocumentationService supplies durable, commit-aware repository pages.
@@ -170,6 +172,7 @@ type pageData struct {
 	ReadyCount          int
 	PendingCount        int
 	ErrorCount          int
+	ArtifactProgress    graph.ArtifactProgress
 	ActivePage          string
 	ChatEnabled         bool
 	WikiEnabled         bool
@@ -404,6 +407,7 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 	if server.maps != nil {
 		mux.HandleFunc("GET /maps", server.mapPage)
 		mux.HandleFunc("GET /api/maps", server.apiMap)
+		mux.HandleFunc("GET /api/artifacts/progress", server.apiArtifactProgress)
 		mux.HandleFunc("GET /api/maps/export", server.controlled(
 			identity.PermissionExportArtifacts, "artifact.export", "map", server.exportMap,
 		))
@@ -1054,7 +1058,7 @@ func (s *Server) dependencyPage(response http.ResponseWriter, request *http.Requ
 		http.Error(response, err.Error(), http.StatusBadRequest)
 		return
 	}
-	snapshot, err := s.maps.Snapshot(request.Context(), repositoryID, false)
+	snapshot, progress, err := s.maps.ReadDependencySnapshot(request.Context(), repositoryID)
 	if err != nil {
 		slog.Error("build dependency inventory", "repository_id", repositoryID, "error", err)
 		http.Error(response, "Dependency inventory could not be built", http.StatusInternalServerError)
@@ -1062,6 +1066,7 @@ func (s *Server) dependencyPage(response http.ResponseWriter, request *http.Requ
 	}
 	data.ActivePage = "dependencies"
 	inventory := dependencies.BuildPage(snapshot, options)
+	inventory.BuildProgress = progress
 	previousURL := ""
 	if inventory.Offset > 0 {
 		previousURL = dependencyURL("/dependencies", repositoryID, options, max(0, inventory.Offset-inventory.Limit))
@@ -1256,13 +1261,29 @@ func (s *Server) apiDependencies(response http.ResponseWriter, request *http.Req
 		writeAPIError(response, http.StatusBadRequest, err)
 		return
 	}
-	snapshot, err := s.maps.Snapshot(request.Context(), repositoryID, false)
+	snapshot, progress, err := s.maps.ReadDependencySnapshot(request.Context(), repositoryID)
 	if err != nil {
 		slog.Error("build dependency inventory", "repository_id", repositoryID, "error", err)
 		writeAPIError(response, http.StatusInternalServerError, errors.New("dependency inventory could not be built"))
 		return
 	}
-	writeJSON(response, http.StatusOK, dependencies.BuildPage(snapshot, options))
+	inventory := dependencies.BuildPage(snapshot, options)
+	inventory.BuildProgress = progress
+	status := http.StatusOK
+	if progress.State == "building" {
+		status = http.StatusAccepted
+		response.Header().Set("Retry-After", "2")
+	}
+	writeJSON(response, status, inventory)
+}
+
+func (s *Server) apiArtifactProgress(response http.ResponseWriter, request *http.Request) {
+	progress, err := s.maps.StructureProgress(request.Context(), 0)
+	if err != nil {
+		writeAPIError(response, http.StatusInternalServerError, errors.New("artifact progress could not be loaded"))
+		return
+	}
+	writeJSON(response, http.StatusOK, progress)
 }
 
 func dependencyOptions(request *http.Request) (dependencies.Options, error) {
@@ -1584,6 +1605,12 @@ func (s *Server) pageData(ctx context.Context) (pageData, error) {
 			data.ErrorCount++
 		default:
 			data.PendingCount++
+		}
+	}
+	if s.maps != nil {
+		progress, progressErr := s.maps.StructureProgress(ctx, 0)
+		if progressErr == nil {
+			data.ArtifactProgress = progress
 		}
 	}
 	return data, nil

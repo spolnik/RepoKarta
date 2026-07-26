@@ -10,6 +10,8 @@ import (
 	"github.com/spolnik/RepoKarta/internal/catalog"
 )
 
+const maximumDerivedIndexConcurrency = 8
+
 // CatalogueStore is the metadata surface needed by the indexing coordinator.
 type CatalogueStore interface {
 	SyncRepositories(context.Context, []catalog.Repository) error
@@ -52,13 +54,14 @@ func NewCoordinator(root string, excludes []string, store CatalogueStore, engine
 	}
 }
 
-// UseIndexedObserver schedules one bounded, sequential background callback for
-// every repository that is already ready or becomes ready after indexing. It
-// is intended for deterministic derived indexes such as structural maps.
+// UseIndexedObserver schedules one bounded background callback for every
+// repository that is already ready or becomes ready after indexing. Derived
+// indexes are CPU and disk bounded independently, so a small worker pool keeps
+// a large fleet from being paced by the slowest repository.
 func (c *Coordinator) UseIndexedObserver(observer func(context.Context, int64) error) *Coordinator {
 	c.indexedObserver = observer
 	if observer != nil {
-		c.indexedSignal = make(chan struct{}, 1)
+		c.indexedSignal = make(chan struct{}, maximumDerivedIndexConcurrency)
 		c.indexedQueued = make(map[int64]struct{})
 	}
 	return c
@@ -200,6 +203,18 @@ func (c *Coordinator) queueIndexed(ctx context.Context, repositoryID int64) {
 }
 
 func (c *Coordinator) observeIndexed(ctx context.Context) {
+	var workers sync.WaitGroup
+	workers.Add(maximumDerivedIndexConcurrency)
+	for range maximumDerivedIndexConcurrency {
+		go func() {
+			defer workers.Done()
+			c.observeIndexedWorker(ctx)
+		}()
+	}
+	workers.Wait()
+}
+
+func (c *Coordinator) observeIndexedWorker(ctx context.Context) {
 	for {
 		repositoryID, ok := c.nextIndexed()
 		if ok {

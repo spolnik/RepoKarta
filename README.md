@@ -212,7 +212,11 @@ RepoKarta does not include a local test or scanner execution endpoint.
 Open `/dependencies` for the commit-pinned declaration inventory. Package,
 manifest, repository, ecosystem, and resolution filters are evaluated before
 returning a bounded page. Both the HTML workspace and `/api/dependencies`
-default to 100 declarations per page and reject limits above 500.
+default to 100 declarations per page and reject limits above 500. Cold reads
+compose only already-prepared per-repository artifacts: the API returns
+`202 Accepted` with ready and pending repository counts while the eight-worker
+background pool completes the fleet, and the HTML workspace shows the same
+progress instead of blocking on source analysis.
 
 ## Deployment authentication
 
@@ -595,11 +599,11 @@ Windows amd64 and Apple Silicon macOS. The workflow:
 Run the same packagers locally:
 
 ```powershell
-.\scripts\package-release.ps1 -Version 0.46.0-dev
+.\scripts\package-release.ps1 -Version 0.47.0-dev
 ```
 
 ```sh
-./scripts/package-release.sh 0.46.0-dev
+./scripts/package-release.sh 0.47.0-dev
 ```
 
 macOS packages are signed with the hardened runtime when

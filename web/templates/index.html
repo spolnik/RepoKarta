@@ -163,9 +163,12 @@
 {{else if .PendingCount}}
 <span class="index-health-dot" data-state="pending" aria-hidden="true"></span>
 <span>Indexing {{.PendingCount}}</span>
+{{else if .ArtifactProgress.PendingRepositories}}
+<span class="index-health-dot" data-state="pending" aria-hidden="true"></span>
+<span data-artifact-progress>References {{.ArtifactProgress.ReadyRepositories}}/{{.ArtifactProgress.RequestedRepositories}}</span>
 {{else}}
 <span class="index-health-dot" data-state="ready" aria-hidden="true"></span>
-<span>{{.ReadyCount}} indexed</span>
+<span data-artifact-progress>{{.ReadyCount}} indexed</span>
 {{end}}
 <span class="index-health-scope">· {{if eq .AuthMode "local"}}local only{{else}}{{.AuthMode}}{{end}}</span>
 {{end}}

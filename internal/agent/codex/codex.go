@@ -50,6 +50,7 @@ func (a *Adapter) Status(ctx context.Context) agent.Status {
 		ImageOutput:  true,
 		Interrupt:    true,
 		ContextUsage: true,
+		TokenUsage:   true,
 	}
 	command, err := localcommand.Resolve(a.Command, "codex")
 	if err != nil {
@@ -322,6 +323,12 @@ func (s *session) Send(ctx context.Context, turn agent.Turn, emit func(agent.Eve
 						return err
 					}
 				}
+				tokenUsage, ok := tokenUsageFromNotification(message.Params, s.threadID, turnID)
+				if ok {
+					if err := emit(agent.Event{Type: agent.EventUsage, Usage: &tokenUsage}); err != nil {
+						return err
+					}
+				}
 			case "turn/completed":
 				var completed struct {
 					Turn struct {
@@ -346,6 +353,39 @@ func (s *session) Send(ctx context.Context, turn agent.Turn, emit func(agent.Eve
 			}
 		}
 	}
+}
+
+func tokenUsageFromNotification(raw json.RawMessage, threadID, turnID string) (agent.Usage, bool) {
+	var update struct {
+		ThreadID   string `json:"threadId"`
+		TurnID     string `json:"turnId"`
+		TokenUsage struct {
+			Last struct {
+				InputTokens  int64 `json:"inputTokens"`
+				OutputTokens int64 `json:"outputTokens"`
+				TotalTokens  int64 `json:"totalTokens"`
+			} `json:"last"`
+		} `json:"tokenUsage"`
+	}
+	if json.Unmarshal(raw, &update) != nil ||
+		update.ThreadID != threadID ||
+		update.TurnID != turnID {
+		return agent.Usage{}, false
+	}
+	input := max(int64(0), update.TokenUsage.Last.InputTokens)
+	output := max(int64(0), update.TokenUsage.Last.OutputTokens)
+	total := max(int64(0), update.TokenUsage.Last.TotalTokens)
+	if input == 0 && output == 0 {
+		return agent.Usage{}, false
+	}
+	if total == 0 {
+		total = input + output
+	}
+	return agent.Usage{
+		InputTokens:  input,
+		OutputTokens: output,
+		TotalTokens:  total,
+	}, true
 }
 
 func contextUsageFromNotification(raw json.RawMessage, threadID, turnID string) (agent.ContextUsage, bool) {

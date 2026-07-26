@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"go/parser"
 	"go/token"
+	"io"
 	"net/url"
 	"os"
 	"os/exec"
@@ -31,18 +32,19 @@ import (
 )
 
 const (
-	snapshotVersion       = 6
+	snapshotVersion       = 7
 	maximumFiles          = 20_000
 	maximumSourceFiles    = 5_000
 	maximumSourceFileSize = 1 << 20
 	// Structural budgets keep syntax-backed inventories useful without turning
 	// a repository map into an unbounded dump of every call site.
-	maximumStructuralDocuments           = 3_000
-	maximumStructuralSymbols             = 12_000
-	maximumStructuralNavigationRelations = 24_000
-	maximumStructuralCallRelations       = 24_000
-	maximumStructuralBuildFacts          = 4_000
-	maximumStructuralReadConcurrency     = 8
+	maximumStructuralDocuments       = 3_000
+	maximumStructuralSymbols         = 12_000
+	maximumStructuralTypedRelations  = 96_000
+	maximumStructuralImportRelations = 24_000
+	maximumStructuralCallRelations   = 24_000
+	maximumStructuralBuildFacts      = 4_000
+	maximumStructuralReadConcurrency = 8
 	// Curated layer budgets keep large Java and Kotlin services legible.
 	maximumComponentsPerRepository = 300
 	maximumRoutesPerRepository     = 900
@@ -148,6 +150,15 @@ type Scope struct {
 	OmittedRepositories   int    `json:"omitted_repositories"`
 	RepositoryLimit       int    `json:"repository_limit,omitempty"`
 	RequestedRepositoryID int64  `json:"requested_repository_id,omitempty"`
+}
+
+// ArtifactProgress reports fleet readiness for commit-keyed structural
+// artifacts without loading their potentially large JSON payloads.
+type ArtifactProgress struct {
+	State                 string `json:"state"`
+	RequestedRepositories int    `json:"requested_repositories"`
+	ReadyRepositories     int    `json:"ready_repositories"`
+	PendingRepositories   int    `json:"pending_repositories"`
 }
 
 // StructuralDocument is a bounded syntax-tree index for one immutable source
@@ -278,20 +289,8 @@ func (s *Service) Snapshot(ctx context.Context, repositoryID int64, refresh bool
 		fileName = fmt.Sprintf("repository-%d-%s.json", repositoryID, signature)
 	}
 	snapshotPath := filepath.Join(s.directory, fileName)
-	readCached := func() (Snapshot, bool) {
-		content, readErr := os.ReadFile(snapshotPath)
-		if readErr != nil {
-			return Snapshot{}, false
-		}
-		var cached Snapshot
-		if json.Unmarshal(content, &cached) != nil || cached.Version != snapshotVersion {
-			return Snapshot{}, false
-		}
-		rebaseSnapshotEvidence(&cached, s.currentBaseURL())
-		return cached, true
-	}
 	if !refresh {
-		if cached, ok := readCached(); ok {
+		if cached, ok := s.readCachedSnapshot(snapshotPath); ok {
 			return cached, nil
 		}
 	}
@@ -299,7 +298,7 @@ func (s *Service) Snapshot(ctx context.Context, repositoryID int64, refresh bool
 	snapshotLock.Lock()
 	defer snapshotLock.Unlock()
 	if !refresh {
-		if cached, ok := readCached(); ok {
+		if cached, ok := s.readCachedSnapshot(snapshotPath); ok {
 			return cached, nil
 		}
 	}
@@ -359,6 +358,123 @@ func (s *Service) Snapshot(ctx context.Context, repositoryID int64, refresh bool
 		}
 	}
 	return snapshot, nil
+}
+
+func (s *Service) readCachedSnapshot(snapshotPath string) (Snapshot, bool) {
+	content, err := os.ReadFile(snapshotPath)
+	if err != nil {
+		return Snapshot{}, false
+	}
+	var cached Snapshot
+	if json.Unmarshal(content, &cached) != nil || cached.Version != snapshotVersion {
+		return Snapshot{}, false
+	}
+	rebaseSnapshotEvidence(&cached, s.currentBaseURL())
+	return cached, true
+}
+
+func (s *Service) repositorySnapshotPath(repository catalog.Repository) string {
+	signature := snapshotSignature([]catalog.Repository{repository})
+	return filepath.Join(s.directory, fmt.Sprintf("repository-%d-%s.json", repository.ID, signature))
+}
+
+// ReadDependencySnapshot composes dependency facts from already-prepared
+// per-repository artifacts. It never performs source analysis in an HTTP
+// request, so a cold fleet returns immediately with explicit progress.
+func (s *Service) ReadDependencySnapshot(
+	ctx context.Context,
+	repositoryID int64,
+) (Snapshot, ArtifactProgress, error) {
+	repositories, err := s.repositories(ctx, repositoryID)
+	if err != nil {
+		return Snapshot{}, ArtifactProgress{}, err
+	}
+	type result struct {
+		snapshot Snapshot
+		ok       bool
+	}
+	results := make([]result, len(repositories))
+	workers := make(chan struct{}, maximumStructuralReadConcurrency)
+	var wait sync.WaitGroup
+	for index, repository := range repositories {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			select {
+			case workers <- struct{}{}:
+				defer func() { <-workers }()
+			case <-ctx.Done():
+				return
+			}
+			snapshot, ok := s.readCachedSnapshot(s.repositorySnapshotPath(repository))
+			results[index] = result{snapshot: snapshot, ok: ok}
+		}()
+	}
+	wait.Wait()
+	if err := ctx.Err(); err != nil {
+		return Snapshot{}, ArtifactProgress{}, err
+	}
+
+	output := Snapshot{
+		Version:      snapshotVersion,
+		ID:           snapshotSignature(repositories),
+		GeneratedAt:  time.Now().UTC(),
+		Repositories: []Repository{},
+		Manifests:    []Manifest{},
+		Scope: Scope{
+			Kind:                  "repository",
+			TotalRepositories:     len(repositories),
+			RequestedRepositoryID: repositoryID,
+		},
+	}
+	if repositoryID == 0 {
+		output.Scope.Kind = "collection"
+	}
+	for _, result := range results {
+		if !result.ok {
+			continue
+		}
+		output.Repositories = append(output.Repositories, result.snapshot.Repositories...)
+		output.Manifests = append(output.Manifests, result.snapshot.Manifests...)
+		output.Truncated = output.Truncated || result.snapshot.Truncated
+		output.StructureTruncated = output.StructureTruncated || result.snapshot.StructureTruncated
+		output.Scope.AnalyzedRepositories++
+	}
+	output.Scope.OmittedRepositories = output.Scope.TotalRepositories - output.Scope.AnalyzedRepositories
+	output.Scope.Complete = output.Scope.OmittedRepositories == 0
+	output.Truncated = output.Truncated || !output.Scope.Complete
+	progress := artifactProgress(output.Scope.TotalRepositories, output.Scope.AnalyzedRepositories)
+	return output, progress, nil
+}
+
+// StructureProgress checks exact commit-keyed artifact paths without reading
+// the structural documents themselves.
+func (s *Service) StructureProgress(ctx context.Context, repositoryID int64) (ArtifactProgress, error) {
+	repositories, err := s.repositories(ctx, repositoryID)
+	if err != nil {
+		return ArtifactProgress{}, err
+	}
+	ready := 0
+	for _, repository := range repositories {
+		signature := snapshotSignature([]catalog.Repository{repository})
+		if _, err := os.Stat(s.structuralIndexPath(repository.ID, signature)); err == nil {
+			ready++
+		}
+	}
+	return artifactProgress(len(repositories), ready), nil
+}
+
+func artifactProgress(requested, ready int) ArtifactProgress {
+	progress := ArtifactProgress{
+		State:                 "ready",
+		RequestedRepositories: requested,
+		ReadyRepositories:     ready,
+		PendingRepositories:   max(0, requested-ready),
+	}
+	if progress.PendingRepositories > 0 {
+		progress.State = "building"
+	}
+	return progress
 }
 
 // PrepareStructure builds or projects the compact structural artifact in the
@@ -562,22 +678,23 @@ func snapshotSignature(repositories []catalog.Repository) string {
 }
 
 type builder struct {
-	baseURL                       string
-	repositories                  []Repository
-	languages                     map[string]int
-	manifests                     []Manifest
-	nodes                         map[string]Node
-	edges                         map[string]Edge
-	serviceTargets                map[string]string
-	clientReferences              []clientReference
-	structure                     []StructuralDocument
-	structuralSymbols             int
-	structuralNavigationRelations int
-	structuralCallRelations       int
-	structuralBuildFacts          int
-	structureTruncated            bool
-	fileCount                     int
-	truncated                     bool
+	baseURL                   string
+	repositories              []Repository
+	languages                 map[string]int
+	manifests                 []Manifest
+	nodes                     map[string]Node
+	edges                     map[string]Edge
+	serviceTargets            map[string]string
+	clientReferences          []clientReference
+	structure                 []StructuralDocument
+	structuralSymbols         int
+	structuralTypedRelations  int
+	structuralImportRelations int
+	structuralCallRelations   int
+	structuralBuildFacts      int
+	structureTruncated        bool
+	fileCount                 int
+	truncated                 bool
 }
 
 type clientReference struct {
@@ -688,7 +805,7 @@ func (b *builder) analyzeRepository(ctx context.Context, repository catalog.Repo
 		Evidence:     []Evidence{repositoryEvidence},
 	})
 
-	contents := make(map[string][]byte)
+	candidates := make([]string, 0)
 	sourceCount := 0
 	for _, filePath := range files {
 		if !isManifest(filePath) && !isAnalyzedSource(filePath) &&
@@ -702,11 +819,19 @@ func (b *builder) analyzeRepository(ctx context.Context, repository catalog.Repo
 			}
 			sourceCount++
 		}
-		content, readErr := readFile(ctx, repository, revision, filePath)
-		if readErr != nil {
-			continue
+		candidates = append(candidates, filePath)
+	}
+	contents, batchErr := readFiles(ctx, repository, revision, candidates)
+	if batchErr != nil {
+		// Preserve the older per-file recovery path for unusual Git versions or
+		// malformed paths; one failed batch must not discard the whole map.
+		contents = make(map[string][]byte)
+		for _, filePath := range candidates {
+			content, readErr := readFile(ctx, repository, revision, filePath)
+			if readErr == nil {
+				contents[filePath] = content
+			}
 		}
-		contents[filePath] = content
 	}
 
 	goModule := ""
@@ -744,7 +869,8 @@ func (b *builder) addStructuralAnalysis(
 			return
 		}
 		symbolBudget := maximumStructuralSymbols - b.structuralSymbols
-		navigationRelationBudget := maximumStructuralNavigationRelations - b.structuralNavigationRelations
+		typedRelationBudget := maximumStructuralTypedRelations - b.structuralTypedRelations
+		importRelationBudget := maximumStructuralImportRelations - b.structuralImportRelations
 		callRelationBudget := maximumStructuralCallRelations - b.structuralCallRelations
 		buildFactBudget := maximumStructuralBuildFacts - b.structuralBuildFacts
 		if len(document.Symbols) > symbolBudget ||
@@ -753,20 +879,28 @@ func (b *builder) addStructuralAnalysis(
 		}
 		relations := make([]analysis.Relation, 0, len(document.Relations))
 		for _, relation := range document.Relations {
-			if relation.Kind == "call" {
+			switch relation.Kind {
+			case "call":
 				if callRelationBudget <= 0 {
 					b.structureTruncated = true
 					continue
 				}
 				callRelationBudget--
 				b.structuralCallRelations++
-			} else {
-				if navigationRelationBudget <= 0 {
+			case "import":
+				if importRelationBudget <= 0 {
 					b.structureTruncated = true
 					continue
 				}
-				navigationRelationBudget--
-				b.structuralNavigationRelations++
+				importRelationBudget--
+				b.structuralImportRelations++
+			default:
+				if typedRelationBudget <= 0 {
+					b.structureTruncated = true
+					continue
+				}
+				typedRelationBudget--
+				b.structuralTypedRelations++
 			}
 			relations = append(relations, relation)
 		}
@@ -791,7 +925,8 @@ func (b *builder) addStructuralAnalysis(
 			Diagnostics:   document.Diagnostics,
 		})
 		if b.structuralSymbols >= maximumStructuralSymbols &&
-			b.structuralNavigationRelations >= maximumStructuralNavigationRelations &&
+			b.structuralTypedRelations >= maximumStructuralTypedRelations &&
+			b.structuralImportRelations >= maximumStructuralImportRelations &&
 			b.structuralCallRelations >= maximumStructuralCallRelations &&
 			b.structuralBuildFacts >= maximumStructuralBuildFacts {
 			b.structureTruncated = true
@@ -2464,6 +2599,106 @@ func readFile(ctx context.Context, repository catalog.Repository, revision, file
 		return nil, errors.New("source file is outside graph analysis bounds")
 	}
 	return gitOutput(ctx, repository, "cat-file", "blob", revision+":"+filePath)
+}
+
+func readFiles(
+	ctx context.Context,
+	repository catalog.Repository,
+	revision string,
+	filePaths []string,
+) (map[string][]byte, error) {
+	output := make(map[string][]byte, len(filePaths))
+	if len(filePaths) == 0 {
+		return output, nil
+	}
+	bounded, cancel := context.WithTimeout(ctx, commandTimeout)
+	defer cancel()
+	commandArguments := make([]string, 0, 4)
+	if repository.Bare {
+		commandArguments = append(commandArguments, "--git-dir", repository.Path)
+	} else {
+		commandArguments = append(commandArguments, "-C", repository.Path)
+	}
+	commandArguments = append(commandArguments, "cat-file", "--batch")
+	command := exec.CommandContext(bounded, "git", commandArguments...)
+	command.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0", "GIT_EXTERNAL_DIFF=", "LC_ALL=C")
+	stdin, err := command.StdinPipe()
+	if err != nil {
+		return nil, fmt.Errorf("open git cat-file input: %w", err)
+	}
+	stdout, err := command.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("open git cat-file output: %w", err)
+	}
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
+	if err := command.Start(); err != nil {
+		return nil, fmt.Errorf("start git cat-file batch: %w", err)
+	}
+	writer := bufio.NewWriter(stdin)
+	reader := bufio.NewReader(stdout)
+	var batchErr error
+	for _, filePath := range filePaths {
+		if _, err := fmt.Fprintf(writer, "%s:%s\n", revision, filePath); err != nil {
+			batchErr = err
+			break
+		}
+		if err := writer.Flush(); err != nil {
+			batchErr = err
+			break
+		}
+		header, err := reader.ReadString('\n')
+		if err != nil {
+			batchErr = err
+			break
+		}
+		fields := strings.Fields(header)
+		if len(fields) == 2 && fields[1] == "missing" {
+			continue
+		}
+		if len(fields) != 3 || fields[1] != "blob" {
+			batchErr = fmt.Errorf("unexpected git cat-file header %q", strings.TrimSpace(header))
+			break
+		}
+		size, err := strconv.ParseInt(fields[2], 10, 64)
+		if err != nil || size < 0 {
+			batchErr = fmt.Errorf("invalid git cat-file size %q", fields[2])
+			break
+		}
+		if size > maximumSourceFileSize {
+			_, err = io.CopyN(io.Discard, reader, size)
+		} else {
+			content := make([]byte, size)
+			_, err = io.ReadFull(reader, content)
+			if err == nil {
+				output[filePath] = content
+			}
+		}
+		if err != nil {
+			batchErr = err
+			break
+		}
+		delimiter, err := reader.ReadByte()
+		if err != nil || delimiter != '\n' {
+			if err == nil {
+				err = errors.New("git cat-file response is missing its delimiter")
+			}
+			batchErr = err
+			break
+		}
+	}
+	_ = stdin.Close()
+	if batchErr != nil && command.Process != nil {
+		_ = command.Process.Kill()
+	}
+	waitErr := command.Wait()
+	if batchErr != nil {
+		return nil, fmt.Errorf("read git cat-file batch: %w", batchErr)
+	}
+	if waitErr != nil {
+		return nil, fmt.Errorf("git cat-file batch: %s", firstNonEmpty(strings.TrimSpace(stderr.String()), waitErr.Error()))
+	}
+	return output, nil
 }
 
 func gitOutput(ctx context.Context, repository catalog.Repository, arguments ...string) ([]byte, error) {

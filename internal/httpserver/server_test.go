@@ -523,12 +523,36 @@ type testMapService struct {
 	snapshot     graph.Snapshot
 	repositoryID int64
 	refresh      bool
+	progress     graph.ArtifactProgress
 }
 
 func (s *testMapService) Snapshot(_ context.Context, repositoryID int64, refresh bool) (graph.Snapshot, error) {
 	s.repositoryID = repositoryID
 	s.refresh = refresh
 	return s.snapshot, nil
+}
+
+func (s *testMapService) ReadDependencySnapshot(
+	_ context.Context,
+	repositoryID int64,
+) (graph.Snapshot, graph.ArtifactProgress, error) {
+	s.repositoryID = repositoryID
+	progress := s.progress
+	if progress.State == "" {
+		progress = graph.ArtifactProgress{
+			State:                 "ready",
+			RequestedRepositories: 1,
+			ReadyRepositories:     1,
+		}
+	}
+	return s.snapshot, progress, nil
+}
+
+func (s *testMapService) StructureProgress(context.Context, int64) (graph.ArtifactProgress, error) {
+	if s.progress.State != "" {
+		return s.progress, nil
+	}
+	return graph.ArtifactProgress{State: "ready", RequestedRepositories: 1, ReadyRepositories: 1}, nil
 }
 
 type testDocumentationService struct {
@@ -910,6 +934,43 @@ func TestDependencyWorkspaceAndAPIExposeNormalizedDeclarations(t *testing.T) {
 	server.server.Handler.ServeHTTP(invalidResponse, invalidRequest)
 	if invalidResponse.Code != http.StatusBadRequest {
 		t.Fatalf("oversized dependency page status = %d, body = %s", invalidResponse.Code, invalidResponse.Body.String())
+	}
+}
+
+func TestDependencyAPIReportsColdArtifactProgressWithoutSynchronousBuild(t *testing.T) {
+	maps := &testMapService{progress: graph.ArtifactProgress{
+		State:                 "building",
+		RequestedRepositories: 12,
+		ReadyRepositories:     5,
+		PendingRepositories:   7,
+	}}
+	server, err := New(
+		Config{Address: "127.0.0.1:7331", Maps: maps},
+		codeintel.New(testStore{}, testSearcher{}, "http://127.0.0.1:7331"),
+		testRefresher{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7331/api/dependencies", nil)
+	response := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusAccepted || response.Header().Get("Retry-After") != "2" {
+		t.Fatalf("cold dependency status = %d, retry = %q, body = %s",
+			response.Code, response.Header().Get("Retry-After"), response.Body.String())
+	}
+	for _, expected := range []string{
+		`"state":"building"`,
+		`"requested_repositories":12`,
+		`"ready_repositories":5`,
+		`"pending_repositories":7`,
+	} {
+		if !strings.Contains(response.Body.String(), expected) {
+			t.Fatalf("cold dependency response does not contain %q: %s", expected, response.Body.String())
+		}
+	}
+	if maps.repositoryID != 0 {
+		t.Fatalf("cold dependency read used repository %d", maps.repositoryID)
 	}
 }
 
