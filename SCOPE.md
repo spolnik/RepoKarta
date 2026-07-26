@@ -589,6 +589,106 @@ Exit condition: an administrator can discover, approve, acquire, synchronize,
 and safely remove a bounded repository fleet while every indexed revision has
 clear acquisition provenance and failures never silently shrink coverage.
 
+### Future: advanced search and deep exploration
+
+Extend deterministic code search with structured context, reusable scopes,
+graph-aware navigation, and an optional agentic Deep Search experience. Normal
+search must remain fast and AI-free.
+
+#### Structured mentions and scopes
+
+- [ ] Add permission-aware autocomplete for `@repository`, `@file`,
+  `@directory`, and `@symbol` in the Chat and Deep Search composers, including
+  keyboard navigation and useful matching across names containing spaces.
+- [ ] Render mentions as removable context chips and transmit them as structured
+  repository IDs, indexed revisions, paths, and symbol identities; never rely
+  on parsing display labels back out of prompt text.
+- [ ] Resolve every mention against the same commit-pinned catalogue used by
+  search. Show stale, missing, ambiguous, unauthorized, and unindexed mentions
+  as actionable errors instead of silently widening the scope.
+- [ ] Support pasting a RepoKarta source, map, Wiki, repository, or search URL
+  into a composer and converting it into an equivalent structured context chip.
+- [ ] Add named search contexts representing repositories and revisions for a
+  team, product, service fleet, release, or personal task, with personal and
+  administrator-managed defaults.
+- [ ] Make every effective context visible, URL-addressable, copyable, and
+  reusable through the JSON API and MCP surface.
+
+#### Query and result experience
+
+- [ ] Add one documented query grammar with autocomplete for repository,
+  revision, language, path, filename, symbol kind, result type, ownership, and
+  positive or negative filters while retaining the existing simple form.
+- [ ] Provide explicit result types for content, file path, repository, symbol
+  definition, reference, implementation, dependency, route, commit, diff,
+  generated Wiki page, and captured code insight.
+- [ ] Add qualified programming-element search by package, type, method, member,
+  and full name, with exact, prefix, case-sensitive, and case-insensitive modes.
+- [ ] Add result facets and “search within these results” refinement without
+  discarding the original query, scope, revision, or completeness metadata.
+- [ ] Rank exact symbol and path matches ahead of fuzzy content matches and
+  explain important ranking signals; never let personalization hide complete
+  deterministic results.
+- [ ] Add one-click actions from a result to open source, focus the element in
+  Maps, inspect dependencies, find references or implementations, start a
+  scoped conversation, or add the result to the current context.
+- [ ] Import optional SCIP indexes for compiler-accurate cross-repository
+  definitions, references, implementations, type signatures, and hover
+  documentation while retaining syntax-backed results and confidence labels
+  when precise data is unavailable.
+- [ ] Add graph queries for upstream and downstream impact, shortest evidenced
+  connection paths between two repositories, files, or symbols, and bounded
+  traversal by relation type and depth.
+- [ ] Search commits and diffs by author, message, path, added or removed text,
+  date range, branch, and revision range without pretending unindexed history is
+  part of the default-branch content index.
+- [ ] Ingest CODEOWNERS as commit-pinned metadata for owner display and filters,
+  including explicit owned, unowned, unresolved-owner, and unavailable states.
+
+#### Saved searches, monitoring, and Deep Search
+
+- [ ] Persist per-author recent and saved searches with title, query, context,
+  filters, result type, and revision policy; allow administrators to publish
+  shared read-only search templates.
+- [ ] Turn a saved deterministic query into a monitor that reports newly added
+  or removed matches between comparable indexed revisions, with bounded history
+  and explicit notification-delivery status.
+- [ ] Add an optional Deep Search mode that answers natural-language questions
+  through the existing read-only search, symbol, reference, file, tree, Git,
+  map, dependency, and Wiki tools rather than introducing an ungrounded
+  retrieval path.
+- [ ] Stream a concise exploration trace showing current stage, searches
+  executed, files read, contexts used, elapsed time, coverage warnings, and
+  sources; do not expose hidden model reasoning.
+- [ ] Preserve structured mentions and named contexts across follow-up
+  questions, while allowing the user to add, remove, or replace scope without
+  restarting the conversation.
+- [ ] Provide cancellation, retry from persisted deterministic evidence,
+  time/token/tool-call budgets, and a visible “search more broadly” action when
+  the first bounded exploration is incomplete.
+- [ ] Make every Deep Search answer addressable by URL and shareable only after
+  rechecking repository permissions for every viewer; never expose cited source
+  through a shared answer when that viewer cannot access it.
+- [ ] Keep optional semantic retrieval or reranking clearly labeled and bounded.
+  Literal, regex, symbol, AST, SCIP, and graph evidence remain authoritative,
+  and semantic similarity must not turn a partial negative answer into a
+  complete one.
+
+Initial delivery order:
+
+1. Structured `@repository` and `@file` mentions with context chips.
+2. Named search contexts, typed result categories, facets, and result actions.
+3. Qualified element search plus graph connection and impact queries.
+4. Optional SCIP precision and commit/diff/ownership search.
+5. Saved searches and deterministic monitors.
+6. Agentic Deep Search with transparent trace, budgets, follow-ups, and
+   permission-safe sharing.
+
+Exit condition: users can precisely scope, refine, save, navigate, and monitor
+deterministic searches, then optionally ask a deeper natural-language question
+whose complete exploration path, sources, limits, and permissions remain
+visible and enforceable.
+
 ### Future: code insights and monitoring
 
 Add a commit-aware Code Insights workspace for test coverage, static-analysis
