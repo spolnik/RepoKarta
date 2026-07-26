@@ -548,6 +548,16 @@ function describeError(error: unknown): Record<string, unknown> {
   return { value: String(error) };
 }
 
+async function responseErrorMessage(response: Response, fallback: string): Promise<string> {
+  const body = await response.text();
+  try {
+    const parsed = JSON.parse(body) as { error?: { message?: string } };
+    return parsed.error?.message?.trim() || body.trim() || fallback;
+  } catch {
+    return body.trim() || fallback;
+  }
+}
+
 function formatDebugDetails(value: unknown): string {
   const seen = new WeakSet<object>();
   try {
@@ -3880,6 +3890,7 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
   let runStartedAt: number | undefined;
   let generationAbort: AbortController | undefined;
   let generationRepository = "";
+  let repositoryLoadFailed = false;
 
   const visibleRepositoryOptions = (): HTMLButtonElement[] =>
     repositoryOptions.filter((option) => !option.hidden);
@@ -4582,18 +4593,7 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
         })
       });
       if (!response.ok) {
-        // The API answers with {"error":{"message":"..."}}; showing that raw
-        // envelope put JSON punctuation in front of the reader instead of the
-        // reason.
-        const body = await response.text();
-        let message = body;
-        try {
-          const parsed = JSON.parse(body) as { error?: { message?: string } };
-          message = parsed.error?.message ?? body;
-        } catch {
-          // Not JSON; the raw body is the best available detail.
-        }
-        throw new Error(message.trim() || `Generation failed (${response.status})`);
+        throw new Error(await responseErrorMessage(response, `Generation failed (${response.status})`));
       }
       return await response.json() as WikiSite;
     };
@@ -4728,6 +4728,7 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
 
   const renderSite = (value: WikiSite): void => {
     site = value;
+    repositoryLoadFailed = false;
     planHeading.textContent = value.plan_ready
       ? `${value.pages.length} code knowledge pages`
       : value.survey_ready
@@ -4836,6 +4837,51 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
     updatePageSelection();
   };
 
+  const beginRepositoryLoad = (): void => {
+    site = undefined;
+    repositoryLoadFailed = false;
+    activeSlug = "";
+    const selectedRepository = repository.selectedOptions[0]?.textContent?.trim() || "repository";
+    repositoryName.textContent = selectedRepository;
+    pageTitle.textContent = "Loading Deep Wiki";
+    pageStatus.textContent = "Loading";
+    pageStatus.dataset.state = "pending";
+    planHeading.textContent = `Loading ${selectedRepository}`;
+    commit.textContent = "—";
+    commit.removeAttribute("title");
+    ready.textContent = "0";
+    stale.textContent = "0";
+    pending.textContent = "0";
+    failed.textContent = "0";
+    pageCount.textContent = "0";
+    pages.replaceChildren();
+    generateAll.disabled = true;
+    generateAll.dataset.state = "generate";
+    generateAll.querySelector<HTMLElement>("span")!.textContent = "Loading repository…";
+    refreshPage.textContent = "Refresh page";
+    refreshPage.disabled = true;
+    exportLink.href = "#";
+    exportLink.setAttribute("aria-disabled", "true");
+    steering.querySelector("strong")!.textContent = "Loading repository knowledge";
+    steering.querySelector("p")!.textContent =
+      "Checking the selected revision and its saved documentation state.";
+    resetProvenance();
+    setStage("loading");
+  };
+
+  const showRepositoryLoadFailure = (message: string): void => {
+    repositoryLoadFailed = true;
+    planHeading.textContent = "Repository could not be loaded";
+    steering.querySelector("strong")!.textContent = "Wiki state unavailable";
+    steering.querySelector("p")!.textContent =
+      "Retry the repository load. Previously opened Wiki pages were cleared to avoid showing stale content.";
+    errorMessage.textContent = message;
+    generateAll.disabled = false;
+    generateAll.dataset.state = "retry";
+    generateAll.querySelector<HTMLElement>("span")!.textContent = "Retry repository";
+    setStage("error");
+  };
+
   const loadSite = async (): Promise<void> => {
     if (generating) {
       if (generationRepository) {
@@ -4850,11 +4896,7 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
       return;
     }
     const revision = ++requestRevision;
-    activeSlug = "";
-    generateAll.disabled = true;
-    refreshPage.disabled = true;
-    resetProvenance();
-    setStage("loading");
+    beginRepositoryLoad();
     loading.querySelector("strong")!.textContent = "Planning documentation";
     loading.querySelector("p")!.textContent = "Reading the current structural snapshot and repository steering.";
     try {
@@ -4863,7 +4905,7 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
         headers: { Accept: "application/json" }
       });
       if (!response.ok) {
-        throw new Error(await response.text() || `Documentation plan failed (${response.status})`);
+        throw new Error(await responseErrorMessage(response, `Documentation plan failed (${response.status})`));
       }
       const loaded = await response.json() as WikiSite;
       if (revision !== requestRevision) {
@@ -4886,8 +4928,7 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
       if (revision !== requestRevision) {
         return;
       }
-      errorMessage.textContent = planError instanceof Error ? planError.message : String(planError);
-      setStage("error");
+      showRepositoryLoadFailure(planError instanceof Error ? planError.message : String(planError));
       debug?.add("error", "wiki.plan.failed", describeError(planError));
     }
   };
@@ -5003,6 +5044,10 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
   generateAll.addEventListener("click", () => {
     if (generating) {
       showGenerationProgress();
+      return;
+    }
+    if (!site && repositoryLoadFailed) {
+      void loadSite();
       return;
     }
     void generate();
