@@ -639,6 +639,97 @@ func TestRepositoryMapPageAPIAndExport(t *testing.T) {
 	}
 }
 
+func TestDependencyWorkspaceAndAPIExposeNormalizedDeclarations(t *testing.T) {
+	repository := catalog.Repository{
+		ID:         4,
+		Name:       "acme/service",
+		IndexState: "ready",
+	}
+	maps := &testMapService{snapshot: graph.Snapshot{
+		Scope: graph.Scope{
+			Kind:                 "repository",
+			Complete:             true,
+			TotalRepositories:    1,
+			AnalyzedRepositories: 1,
+		},
+		Repositories: []graph.Repository{{
+			ID:       repository.ID,
+			Name:     repository.Name,
+			Revision: strings.Repeat("a", 40),
+		}},
+		Manifests: []graph.Manifest{{
+			RepositoryID: repository.ID,
+			Repository:   repository.Name,
+			Kind:         "npm package",
+			Path:         "web/package.json",
+			Declarations: []graph.DependencyDeclaration{{
+				Ecosystem:  "npm",
+				Package:    "marked",
+				Declared:   "^16.4.1",
+				Resolution: "constraint",
+				Evidence: graph.Evidence{
+					RepositoryID: repository.ID,
+					Repository:   repository.Name,
+					Revision:     strings.Repeat("a", 40),
+					Path:         "web/package.json",
+					Line:         14,
+					URL:          "http://127.0.0.1:7331/source/4#L14",
+				},
+			}},
+		}},
+	}}
+	server, err := New(
+		Config{Address: "127.0.0.1:7331", Maps: maps},
+		codeintel.New(
+			testStore{repositories: []catalog.Repository{repository}},
+			testSearcher{},
+			"http://127.0.0.1:7331",
+		),
+		testRefresher{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pageRequest := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7331/dependencies?repository=4", nil)
+	pageResponse := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(pageResponse, pageRequest)
+	if pageResponse.Code != http.StatusOK || maps.repositoryID != 4 {
+		t.Fatalf("dependency page status = %d, repository = %d", pageResponse.Code, maps.repositoryID)
+	}
+	for _, expected := range []string{
+		`aria-current="page">Dependencies`,
+		`Dependency management`,
+		`marked`,
+		`^16.4.1`,
+		`Not checked`,
+		`web/package.json:14`,
+	} {
+		if !strings.Contains(pageResponse.Body.String(), expected) {
+			t.Fatalf("dependency page does not contain %q: %s", expected, pageResponse.Body.String())
+		}
+	}
+
+	apiRequest := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7331/api/dependencies?repository=4", nil)
+	apiResponse := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(apiResponse, apiRequest)
+	if apiResponse.Code != http.StatusOK {
+		t.Fatalf("dependency API status = %d, body = %s", apiResponse.Code, apiResponse.Body.String())
+	}
+	for _, expected := range []string{
+		`"dependency_count":1`,
+		`"ecosystem":"npm"`,
+		`"package":"marked"`,
+		`"declared":"^16.4.1"`,
+		`"resolution":"constraint"`,
+		`"check_status":"unchecked"`,
+	} {
+		if !strings.Contains(apiResponse.Body.String(), expected) {
+			t.Fatalf("dependency API does not contain %q: %s", expected, apiResponse.Body.String())
+		}
+	}
+}
+
 func TestAPISearchReturnsCompletenessAndPinnedEvidence(t *testing.T) {
 	repository := catalog.Repository{
 		ID:            1,

@@ -26,6 +26,7 @@ import (
 	"github.com/spolnik/RepoKarta/internal/agent"
 	"github.com/spolnik/RepoKarta/internal/catalog"
 	"github.com/spolnik/RepoKarta/internal/codeintel"
+	"github.com/spolnik/RepoKarta/internal/dependencies"
 	"github.com/spolnik/RepoKarta/internal/docs"
 	"github.com/spolnik/RepoKarta/internal/graph"
 	"github.com/spolnik/RepoKarta/internal/maintenance"
@@ -121,19 +122,20 @@ type pageData struct {
 	Repositories   []catalog.Repository
 	// RepositoryLabels disambiguates repositories that share a name so every
 	// picker identifies exactly one repository.
-	RepositoryLabels map[int64]string
-	ReadyCount       int
-	PendingCount     int
-	ErrorCount       int
-	ActivePage       string
-	ChatEnabled      bool
-	WikiEnabled      bool
-	MCPEnabled       bool
-	Search           searchData
-	AuthMode         string
-	UserLabel        string
-	AdminEnabled     bool
-	MCP              mcpPageData
+	RepositoryLabels    map[int64]string
+	ReadyCount          int
+	PendingCount        int
+	ErrorCount          int
+	ActivePage          string
+	ChatEnabled         bool
+	WikiEnabled         bool
+	DependenciesEnabled bool
+	MCPEnabled          bool
+	Search              searchData
+	AuthMode            string
+	UserLabel           string
+	AdminEnabled        bool
+	MCP                 mcpPageData
 }
 
 type mcpPageData struct {
@@ -194,6 +196,12 @@ type sourcePageData struct {
 	NextEnd       int
 	FocusStart    int
 	FocusEnd      int
+}
+
+type dependencyPageData struct {
+	pageData
+	Inventory            dependencies.Inventory
+	SelectedRepositoryID int64
 }
 
 // New builds the local HTTP server and parses embedded templates.
@@ -283,6 +291,8 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 		mux.HandleFunc("GET /maps", server.mapPage)
 		mux.HandleFunc("GET /api/maps", server.apiMap)
 		mux.HandleFunc("GET /api/maps/export", server.exportMap)
+		mux.HandleFunc("GET /dependencies", server.dependencyPage)
+		mux.HandleFunc("GET /api/dependencies", server.apiDependencies)
 	}
 	if server.docs != nil {
 		mux.HandleFunc("GET /wiki", server.wikiPage)
@@ -803,6 +813,31 @@ func (s *Server) mapPage(response http.ResponseWriter, request *http.Request) {
 	s.render(response, "maps", data)
 }
 
+func (s *Server) dependencyPage(response http.ResponseWriter, request *http.Request) {
+	data, err := s.pageData(request.Context())
+	if err != nil {
+		http.Error(response, "Could not load repositories", http.StatusInternalServerError)
+		return
+	}
+	repositoryID, err := optionalRepositoryID(request.URL.Query().Get("repository"))
+	if err != nil {
+		http.Error(response, "Invalid repository", http.StatusBadRequest)
+		return
+	}
+	snapshot, err := s.maps.Snapshot(request.Context(), repositoryID, false)
+	if err != nil {
+		slog.Error("build dependency inventory", "repository_id", repositoryID, "error", err)
+		http.Error(response, "Dependency inventory could not be built", http.StatusInternalServerError)
+		return
+	}
+	data.ActivePage = "dependencies"
+	s.render(response, "dependencies", dependencyPageData{
+		pageData:             data,
+		Inventory:            dependencies.Build(snapshot),
+		SelectedRepositoryID: repositoryID,
+	})
+}
+
 func (s *Server) wikiPage(response http.ResponseWriter, request *http.Request) {
 	data, err := s.pageData(request.Context())
 	if err != nil {
@@ -946,6 +981,21 @@ func (s *Server) apiMap(response http.ResponseWriter, request *http.Request) {
 		return
 	}
 	writeJSON(response, http.StatusOK, snapshot)
+}
+
+func (s *Server) apiDependencies(response http.ResponseWriter, request *http.Request) {
+	repositoryID, err := optionalRepositoryID(request.URL.Query().Get("repository"))
+	if err != nil {
+		writeAPIError(response, http.StatusBadRequest, err)
+		return
+	}
+	snapshot, err := s.maps.Snapshot(request.Context(), repositoryID, false)
+	if err != nil {
+		slog.Error("build dependency inventory", "repository_id", repositoryID, "error", err)
+		writeAPIError(response, http.StatusInternalServerError, errors.New("dependency inventory could not be built"))
+		return
+	}
+	writeJSON(response, http.StatusOK, dependencies.Build(snapshot))
 }
 
 func (s *Server) exportMap(response http.ResponseWriter, request *http.Request) {
@@ -1182,14 +1232,15 @@ func (s *Server) pageData(ctx context.Context) (pageData, error) {
 		return pageData{}, err
 	}
 	data := pageData{
-		Version:          s.config.Version,
-		RepositoryRoot:   s.config.RepositoryRoot,
-		Repositories:     repositories,
-		RepositoryLabels: catalog.DisplayNames(repositories),
-		ActivePage:       "search",
-		ChatEnabled:      s.agents != nil,
-		WikiEnabled:      s.docs != nil,
-		MCPEnabled:       s.config.MCPHandler != nil,
+		Version:             s.config.Version,
+		RepositoryRoot:      s.config.RepositoryRoot,
+		Repositories:        repositories,
+		RepositoryLabels:    catalog.DisplayNames(repositories),
+		ActivePage:          "search",
+		ChatEnabled:         s.agents != nil,
+		WikiEnabled:         s.docs != nil,
+		DependenciesEnabled: s.maps != nil,
+		MCPEnabled:          s.config.MCPHandler != nil,
 		Search: searchData{
 			Query: search.Query{Limit: codeintel.DefaultSearchLimit},
 		},

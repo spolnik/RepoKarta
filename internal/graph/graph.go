@@ -31,7 +31,7 @@ import (
 )
 
 const (
-	snapshotVersion       = 5
+	snapshotVersion       = 6
 	maximumFiles          = 20_000
 	maximumSourceFiles    = 5_000
 	maximumSourceFileSize = 1 << 20
@@ -82,13 +82,26 @@ type Language struct {
 
 // Manifest records one package or workspace boundary.
 type Manifest struct {
-	RepositoryID int64    `json:"repository_id"`
-	Repository   string   `json:"repository"`
-	Kind         string   `json:"kind"`
-	Path         string   `json:"path"`
-	Name         string   `json:"name"`
-	Dependencies []string `json:"dependencies,omitempty"`
-	Evidence     Evidence `json:"evidence"`
+	RepositoryID int64                   `json:"repository_id"`
+	Repository   string                  `json:"repository"`
+	Kind         string                  `json:"kind"`
+	Path         string                  `json:"path"`
+	Name         string                  `json:"name"`
+	Dependencies []string                `json:"dependencies,omitempty"`
+	Declarations []DependencyDeclaration `json:"declarations,omitempty"`
+	Evidence     Evidence                `json:"evidence"`
+}
+
+// DependencyDeclaration preserves the version text and exact committed source
+// evidence that the older flattened dependency list intentionally omitted.
+// Resolution reports whether the declared value is exact, a constraint, or
+// unresolved; it never implies that a registry or lockfile was consulted.
+type DependencyDeclaration struct {
+	Ecosystem  string   `json:"ecosystem"`
+	Package    string   `json:"package"`
+	Declared   string   `json:"declared,omitempty"`
+	Resolution string   `json:"resolution"`
+	Evidence   Evidence `json:"evidence"`
 }
 
 // Repository describes one mapped commit.
@@ -797,6 +810,16 @@ func (b *builder) addGoManifest(
 		module = repository.Name
 	}
 	evidence := b.evidence(repository, revision, filePath, lineContaining(content, "module "), module)
+	declarations := parseGoModDeclarations(content)
+	for index := range declarations {
+		declarations[index].Evidence = b.evidence(
+			repository,
+			revision,
+			filePath,
+			lineContaining(content, declarations[index].Package),
+			declarations[index].Package,
+		)
+	}
 	b.manifests = append(b.manifests, Manifest{
 		RepositoryID: repository.ID,
 		Repository:   repository.Name,
@@ -804,6 +827,7 @@ func (b *builder) addGoManifest(
 		Path:         filePath,
 		Name:         module,
 		Dependencies: dependencies,
+		Declarations: declarations,
 		Evidence:     evidence,
 	})
 	for _, dependency := range dependencies {
@@ -956,6 +980,26 @@ func (b *builder) addPackages(
 			Evidence: []Evidence{evidence},
 		})
 		dependencies := sortedKeys(manifest.Dependencies, manifest.DevDependencies)
+		declarations := make([]DependencyDeclaration, 0, len(dependencies))
+		for _, dependency := range dependencies {
+			declared := manifest.Dependencies[dependency]
+			if declared == "" {
+				declared = manifest.DevDependencies[dependency]
+			}
+			declarations = append(declarations, DependencyDeclaration{
+				Ecosystem:  "npm",
+				Package:    dependency,
+				Declared:   declared,
+				Resolution: versionResolution(declared),
+				Evidence: b.evidence(
+					repository,
+					revision,
+					manifestPath,
+					lineContaining(content, `"`+dependency+`"`),
+					dependency,
+				),
+			})
+		}
 		b.manifests = append(b.manifests, Manifest{
 			RepositoryID: repository.ID,
 			Repository:   repository.Name,
@@ -963,6 +1007,7 @@ func (b *builder) addPackages(
 			Path:         manifestPath,
 			Name:         label,
 			Dependencies: dependencies,
+			Declarations: declarations,
 			Evidence:     evidence,
 		})
 		for _, dependency := range dependencies {
@@ -1221,8 +1266,23 @@ func (b *builder) addGradleManifests(
 			dependencies = catalogDependencies(content)
 		}
 		labels := make([]string, 0, len(dependencies))
+		declarations := make([]DependencyDeclaration, 0, len(dependencies))
 		for _, dependency := range dependencies {
 			labels = append(labels, dependency.coordinate)
+			label, version := gradleCoordinateParts(dependency.coordinate)
+			declarations = append(declarations, DependencyDeclaration{
+				Ecosystem:  "maven",
+				Package:    label,
+				Declared:   version,
+				Resolution: versionResolution(version),
+				Evidence: b.evidence(
+					repository,
+					revision,
+					filePath,
+					dependency.line,
+					dependency.coordinate,
+				),
+			})
 		}
 		kind := manifestKind(filePath)
 		projectName := repository.Name
@@ -1257,6 +1317,7 @@ func (b *builder) addGradleManifests(
 			Path:         filePath,
 			Name:         projectName,
 			Dependencies: labels,
+			Declarations: declarations,
 			Evidence:     evidence,
 		})
 		for _, dependency := range dependencies {
@@ -2454,6 +2515,80 @@ func parseGoMod(content []byte) (string, []string) {
 	}
 	dependencies = uniqueSorted(dependencies)
 	return module, dependencies
+}
+
+func parseGoModDeclarations(content []byte) []DependencyDeclaration {
+	declarations := make([]DependencyDeclaration, 0)
+	inRequire := false
+	scanner := bufio.NewScanner(bytes.NewReader(content))
+	for scanner.Scan() {
+		line := strings.TrimSpace(strings.SplitN(scanner.Text(), "//", 2)[0])
+		switch {
+		case line == "require (":
+			inRequire = true
+			continue
+		case inRequire && line == ")":
+			inRequire = false
+			continue
+		}
+		if strings.HasPrefix(line, "require ") {
+			line = strings.TrimSpace(strings.TrimPrefix(line, "require "))
+		} else if !inRequire {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		declared := ""
+		if len(fields) > 1 {
+			declared = fields[1]
+		}
+		declarations = append(declarations, DependencyDeclaration{
+			Ecosystem:  "go",
+			Package:    fields[0],
+			Declared:   declared,
+			Resolution: versionResolution(declared),
+		})
+	}
+	slices.SortFunc(declarations, func(left, right DependencyDeclaration) int {
+		return strings.Compare(left.Package, right.Package)
+	})
+	return declarations
+}
+
+func versionResolution(declared string) string {
+	declared = strings.TrimSpace(declared)
+	if declared == "" || strings.ContainsAny(declared, "$*+") {
+		return "unresolved"
+	}
+	if strings.HasPrefix(declared, "v") {
+		declared = strings.TrimPrefix(declared, "v")
+	}
+	for _, prefix := range []string{"^", "~", ">", "<", "=", "workspace:", "file:", "link:", "git+", "http:", "https:"} {
+		if strings.HasPrefix(declared, prefix) {
+			return "constraint"
+		}
+	}
+	if strings.ContainsAny(declared, " |,") {
+		return "constraint"
+	}
+	parts := strings.SplitN(declared, "-", 2)
+	numbers := strings.Split(parts[0], ".")
+	if len(numbers) >= 2 {
+		for _, number := range numbers {
+			if number == "" {
+				return "constraint"
+			}
+			for _, character := range number {
+				if character < '0' || character > '9' {
+					return "constraint"
+				}
+			}
+		}
+		return "exact"
+	}
+	return "constraint"
 }
 
 func languageForPath(filePath string) string {

@@ -223,6 +223,27 @@ func Run() {}
 	if len(snapshot.Manifests) != 2 {
 		t.Fatalf("manifests = %#v", snapshot.Manifests)
 	}
+	if !slices.ContainsFunc(snapshot.Manifests, func(manifest Manifest) bool {
+		return manifest.Path == "go.mod" &&
+			slices.ContainsFunc(manifest.Declarations, func(declaration DependencyDeclaration) bool {
+				return declaration.Ecosystem == "go" &&
+					declaration.Package == "github.com/google/uuid" &&
+					declaration.Declared == "v1.6.0" &&
+					declaration.Resolution == "exact" &&
+					declaration.Evidence.Line == 5
+			})
+	}) || !slices.ContainsFunc(snapshot.Manifests, func(manifest Manifest) bool {
+		return manifest.Path == "web/package.json" &&
+			slices.ContainsFunc(manifest.Declarations, func(declaration DependencyDeclaration) bool {
+				return declaration.Ecosystem == "npm" &&
+					declaration.Package == "htmx.org" &&
+					declaration.Declared == "2.0.10" &&
+					declaration.Resolution == "exact" &&
+					declaration.Evidence.Line == 4
+			})
+	}) {
+		t.Fatalf("normalized declarations = %#v", snapshot.Manifests)
+	}
 	assertGraphNode(t, snapshot, "repository", "acme")
 	assertGraphNode(t, snapshot, "package", "server")
 	assertGraphNode(t, snapshot, "package", "service")
@@ -315,7 +336,7 @@ func TestSnapshotRegeneratesUnsupportedCachedArtifact(t *testing.T) {
 	}
 	unsupported := bytes.ReplaceAll(
 		mustReadGraphFile(t, files[0]),
-		[]byte(`"version": 5`),
+		[]byte(`"version": 6`),
 		[]byte(`"version": 999`),
 	)
 	unsupported = append(unsupported, []byte("\nunsupported-marker")...)
@@ -331,7 +352,7 @@ func TestSnapshotRegeneratesUnsupportedCachedArtifact(t *testing.T) {
 	}
 	content := mustReadGraphFile(t, files[0])
 	if bytes.Contains(content, []byte("unsupported-marker")) ||
-		!bytes.Contains(content, []byte(`"version": 5`)) {
+		!bytes.Contains(content, []byte(`"version": 6`)) {
 		t.Fatalf("unsupported cache was not regenerated: %s", content)
 	}
 }
