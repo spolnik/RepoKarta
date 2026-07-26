@@ -38,6 +38,7 @@ type Intelligence interface {
 	Repositories(context.Context) (codeintel.RepositoryList, error)
 	Search(context.Context, codeintel.SearchRequest) (codeintel.SearchResponse, error)
 	FindSymbol(context.Context, codeintel.SymbolRequest) (codeintel.SymbolResponse, error)
+	FindReferences(context.Context, codeintel.ReferenceRequest) (codeintel.ReferenceResponse, error)
 	GetFile(context.Context, codeintel.FileRequest) (codeintel.FileResponse, error)
 	ListTree(context.Context, codeintel.TreeRequest) (codeintel.TreeResponse, error)
 	GitLog(context.Context, codeintel.GitLogRequest) (codeintel.GitLogResponse, error)
@@ -230,7 +231,7 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "find_symbol",
 		Title:       "Find indexed symbols",
-		Description: "Find definitions and other indexed symbol occurrences by exact symbol name. Results are bounded, commit-pinned, and include explicit warnings when Universal Ctags symbol indexing is unavailable.",
+		Description: "Find symbol definitions by exact name through the Zoekt/ctags index. Results are bounded, commit-pinned, and include explicit warnings when Universal Ctags symbol indexing is unavailable. Use find_references for syntax-backed call, import, and heritage sites.",
 		Annotations: readOnly,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input findSymbolInput) (*mcp.CallToolResult, findSymbolOutput, error) {
 		result, err := intelligence.FindSymbol(ctx, codeintel.SymbolRequest{
@@ -241,6 +242,29 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 		})
 		if err != nil {
 			return nil, findSymbolOutput{}, err
+		}
+		for _, match := range result.Matches {
+			tracker.Record(conversationID, agent.Citation{Label: match.Citation, URL: match.SourceURL})
+		}
+		return nil, result, nil
+	})
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "find_references",
+		Title:       "Find AST references",
+		Description: "Find commit-pinned call, import, extends, and implements sites from RepoKarta's persisted AST relations. Matches are exact source-level target names with relation kind, receiver, syntax confidence, and explicit coverage warnings; this does not pretend to resolve overloads or dynamic dispatch.",
+		Annotations: readOnly,
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input findReferencesInput) (*mcp.CallToolResult, findReferencesOutput, error) {
+		result, err := intelligence.FindReferences(ctx, codeintel.ReferenceRequest{
+			Symbol:       input.Symbol,
+			RepositoryID: input.RepositoryID,
+			Language:     input.Language,
+			Path:         input.Path,
+			File:         input.File,
+			Limit:        input.Limit,
+		})
+		if err != nil {
+			return nil, findReferencesOutput{}, err
 		}
 		for _, match := range result.Matches {
 			tracker.Record(conversationID, agent.Citation{Label: match.Citation, URL: match.SourceURL})
@@ -403,7 +427,7 @@ type searchCodeInput struct {
 	Language     string `json:"language,omitempty" jsonschema:"Optional programming language filter."`
 	Path         string `json:"path,omitempty" jsonschema:"Optional substring required in the path."`
 	File         string `json:"file,omitempty" jsonschema:"Optional substring required in the filename."`
-	Mode         string `json:"mode,omitempty" jsonschema:"Search mode: literal regex or zoekt."`
+	Mode         string `json:"mode,omitempty" jsonschema:"Search mode: literal regex zoekt or references. References uses persisted AST relations."`
 	Limit        int    `json:"limit,omitempty" jsonschema:"Maximum files to return from 1 to 500. Defaults to 100."`
 }
 type searchCodeOutput = codeintel.SearchResponse
@@ -496,6 +520,17 @@ type findSymbolInput struct {
 }
 
 type findSymbolOutput = codeintel.SymbolResponse
+
+type findReferencesInput struct {
+	Symbol       string `json:"symbol" jsonschema:"required,Exact source-level symbol name to find in persisted AST relations."`
+	RepositoryID int64  `json:"repository_id,omitempty" jsonschema:"Optional repository ID returned by list_repositories. Omit to search every repository covered by the bounded structural snapshot."`
+	Language     string `json:"language,omitempty" jsonschema:"Optional parser language filter."`
+	Path         string `json:"path,omitempty" jsonschema:"Optional substring required in the repository-relative path."`
+	File         string `json:"file,omitempty" jsonschema:"Optional substring required in the filename."`
+	Limit        int    `json:"limit,omitempty" jsonschema:"Maximum files to return from 1 to 500. Defaults to 100."`
+}
+
+type findReferencesOutput = codeintel.ReferenceResponse
 
 type openFileInput struct {
 	RepositoryID int64  `json:"repository_id" jsonschema:"required,Repository ID returned by list_repositories."`

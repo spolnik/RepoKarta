@@ -40,6 +40,10 @@ func (adversarialIntelligence) FindSymbol(context.Context, codeintel.SymbolReque
 	return codeintel.SymbolResponse{}, nil
 }
 
+func (adversarialIntelligence) FindReferences(context.Context, codeintel.ReferenceRequest) (codeintel.ReferenceResponse, error) {
+	return codeintel.ReferenceResponse{}, nil
+}
+
 func (adversarialIntelligence) GetFile(context.Context, codeintel.FileRequest) (codeintel.FileResponse, error) {
 	return codeintel.FileResponse{}, nil
 }

@@ -69,6 +69,20 @@ func (c *Client) FindSymbol(ctx context.Context, request SymbolRequest) (SymbolR
 	return output, err
 }
 
+// FindReferences searches persisted AST relations through the shared search API.
+func (c *Client) FindReferences(ctx context.Context, request ReferenceRequest) (ReferenceResponse, error) {
+	return c.Search(ctx, SearchRequest{
+		Query:        request.Symbol,
+		RepositoryID: request.RepositoryID,
+		Repository:   request.Repository,
+		Language:     request.Language,
+		Path:         request.Path,
+		File:         request.File,
+		Mode:         "references",
+		Limit:        request.Limit,
+	})
+}
+
 // GetFile calls GET /api/file/{repository}.
 func (c *Client) GetFile(ctx context.Context, request FileRequest) (FileResponse, error) {
 	values := url.Values{

@@ -15,6 +15,9 @@ questions, M3 evidence-backed repository maps, and M4 living documentation:
 - native Zoekt indexing on Windows amd64, macOS arm64, and Linux;
 - incremental reindexing when a repository HEAD changes;
 - literal, regular-expression, and native Zoekt query modes;
+- syntax-backed reference search over persisted AST call, import, extends, and
+  implements relations, with relation metadata, explicit coverage limits, and
+  background structural-index warming after repositories become search-ready;
 - repository, language, path, and file filters;
 - caller-controlled file limits up to 500, with explicit matched, returned,
   skipped, truncated, and exact/estimated completeness metadata;
@@ -42,9 +45,10 @@ questions, M3 evidence-backed repository maps, and M4 living documentation:
 - one provider-neutral Go conversation interface;
 - a JSON code-intelligence API used by the UI and protocol adapters;
 - authenticated loopback HTTP MCP plus a stdio MCP adapter with read-only
-  `list_repositories`, `search_code`, `find_symbol`, `get_file`, `list_tree`,
-  `git_log`, `git_diff`, `read_repository_map`, `read_dependency_inventory`,
-  `list_deep_wiki_pages`, and `read_generated_document` tools;
+  `list_repositories`, `search_code`, `find_symbol`, `find_references`,
+  `get_file`, `list_tree`, `git_log`, `git_diff`, `read_repository_map`,
+  `read_dependency_inventory`, `list_deep_wiki_pages`, and
+  `read_generated_document` tools;
 - read-only Codex sandboxes, Claude plan mode, and disabled mutation/shell
   tools;
 - authoritative citation chips recorded from the exact MCP tool results rather
@@ -250,10 +254,11 @@ Open the **MCP** tab or `/mcp/setup` for the current Streamable HTTP endpoint,
 masked bearer token, copyable client configuration, and the exact read-only
 tool catalog. The page is never cached. Its process-scoped token rotates when
 RepoKarta restarts, so refresh the configuration after a restart. Streamable
-HTTP exposes all eleven tools. The artifact tools return deterministic
-repository maps, a focused dependency/version and HTTP-call inventory, the
-persisted Deep Wiki page index, and generated page content without starting an
-AI run.
+HTTP exposes all twelve tools. `find_references` searches persisted,
+commit-pinned AST relations without invoking AI. The artifact tools return
+deterministic repository maps, a focused dependency/version and HTTP-call
+inventory, the persisted Deep Wiki page index, and generated page content
+without starting an AI run.
 
 For MCP clients that launch a stdio process, keep RepoKarta running and add:
 

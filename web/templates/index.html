@@ -85,6 +85,7 @@
                 <span>Query mode</span>
                 <select name="mode">
                   <option value="" {{if eq .Search.Query.Mode ""}}selected{{end}}>Literal</option>
+                  <option value="references" {{if eq .Search.Query.Mode "references"}}selected{{end}}>AST references</option>
                   <option value="regex" {{if eq .Search.Query.Mode "regex"}}selected{{end}}>Regular expression</option>
                   <option value="zoekt" {{if eq .Search.Query.Mode "zoekt"}}selected{{end}}>Zoekt syntax</option>
                 </select>
@@ -203,6 +204,12 @@
     <p class="mt-2 font-mono text-xs text-rose-200/60">{{.Search.Error}}</p>
   </div>
   {{else if .Search.Performed}}
+    {{if eq .Search.Query.Mode "references"}}
+    <div class="reference-search-note">
+      <strong>AST reference search</strong>
+      <span>Exact syntax target-name matches at the indexed commit. Relation kinds and receivers are parser-backed; overloads and dynamic dispatch are not type-resolved.</span>
+    </div>
+    {{end}}
     <div class="mb-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 text-sm text-ink-faint">
       {{/* Only the summary announces. The results list itself is not a live
            region: announcing every card on every search made a screen reader
@@ -210,14 +217,18 @@
       <p role="status"><span class="font-medium text-ink">{{.Search.ReturnedFiles}} files shown</span> · {{.Search.MatchCount}} matches · {{.Search.Duration}}</p>
       {{if .Search.Truncated}}
       <p class="flex items-center gap-2 text-right text-amber-300">
+        {{if lt .Search.ReturnedFiles .Search.FileCount}}
         <span>
           Showing {{.Search.ReturnedFiles}} of
           {{if .Search.TotalFilesExact}}{{.Search.FileCount}}{{else}}~{{.Search.EstimatedFiles}}{{end}}
           files
         </span>
+        {{else}}
+        <span>Search coverage is partial</span>
+        {{end}}
         {{/* Truncation used to be a dead end: recovering meant scrolling back
              up and hand-editing the numeric limit field. */}}
-        {{if lt .Search.Limit 500}}
+        {{if and (lt .Search.Limit 500) (lt .Search.ReturnedFiles .Search.FileCount)}}
         <button type="button" class="search-more-button" data-search-more="{{nextSearchLimit .Search.Limit}}">
           Show {{nextSearchLimit .Search.Limit}}
         </button>
@@ -291,7 +302,17 @@
             data-source-line="{{.Number}}"
           >
             <span class="select-none border-r border-white/[0.05] px-3 py-2.5 text-right font-mono text-xs text-ink-faint group-hover:text-emerald-400/70">{{.Number}}</span>
-            <code class="overflow-x-auto whitespace-pre px-3 py-2.5 font-mono text-xs leading-5 text-ink" data-search-highlight-language="{{$match.Language}}" data-match-ranges="{{fragmentRanges .}}">{{highlightLine .}}</code>
+            <div class="min-w-0 overflow-x-auto px-3 py-2.5">
+              {{if .ReferenceKind}}
+              <div class="reference-hit-meta">
+                <span>{{.ReferenceKind}}</span>
+                <code>{{.ReferenceTarget}}</code>
+                {{if .ReferenceReceiver}}<span>receiver</span><code>{{.ReferenceReceiver}}</code>{{end}}
+                <span>{{.ReferenceConfidence}}</span>
+              </div>
+              {{end}}
+              <code class="block whitespace-pre font-mono text-xs leading-5 text-ink" data-search-highlight-language="{{$match.Language}}" data-match-ranges="{{fragmentRanges .}}">{{highlightLine .}}</code>
+            </div>
           </a>
           {{if .After}}
           <a
@@ -314,7 +335,11 @@
     {{else}}
     <div class="result-state">
       <p class="font-medium text-ink">No matches found</p>
+      {{if eq .Search.Query.Mode "references"}}
+      <p class="mt-2 text-sm text-ink-faint">No captured call, import, extends, or implements relation targets this exact name. Check the spelling or broaden the repository, language, and path filters.</p>
+      {{else}}
       <p class="mt-2 text-sm text-ink-faint">Try a shorter term, remove a filter, or switch off regular expressions.</p>
+      {{end}}
     </div>
     {{end}}
   {{else if .PendingCount}}

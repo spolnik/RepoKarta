@@ -57,11 +57,15 @@ type FileMatch struct {
 
 // LineMatch is one cited line and its exact matching byte ranges.
 type LineMatch struct {
-	Number    int
-	Text      string
-	Before    string
-	After     string
-	Fragments []Fragment
+	Number              int
+	Text                string
+	Before              string
+	After               string
+	Fragments           []Fragment
+	ReferenceKind       string
+	ReferenceTarget     string
+	ReferenceReceiver   string
+	ReferenceConfidence string
 }
 
 // Fragment is a half-open byte range within LineMatch.Text.

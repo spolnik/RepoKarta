@@ -232,10 +232,11 @@ func TestMCPSetupPageProvidesCopyableReadOnlyConfiguration(t *testing.T) {
 		`Bearer ` + token,
 		`C:\\Tools\\RepoKarta\\repokarta.exe`,
 		`read_repository_map`,
+		`find_references`,
 		`read_dependency_inventory`,
 		`list_deep_wiki_pages`,
 		`read_generated_document`,
-		`11 tools · no writes`,
+		`12 tools · no writes`,
 	} {
 		if !strings.Contains(response.Body.String(), expected) {
 			t.Fatalf("MCP setup page does not contain %q", expected)
@@ -693,6 +694,8 @@ func TestSearchRendersSafeHighlightedCommitPinnedResult(t *testing.T) {
 		`if &lt;tag&gt; `,
 		`/assets/repokarta-mark-192.png`,
 		`/assets/favicon.ico`,
+		`<option value="references"`,
+		`>AST references</option>`,
 		`/source/1?rev=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`,
 		`lines=1-200&focus=7-7#L7`,
 		`internal%2Fexample.go`,

@@ -584,6 +584,52 @@ select {
   background: rgb(252 211 77 / 0.16);
 }
 
+.reference-search-note {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.75rem;
+  margin-bottom: 0.75rem;
+  border: 1px solid rgb(52 211 153 / 0.16);
+  border-radius: var(--r-md);
+  padding: 0.7rem 0.85rem;
+  background: rgb(52 211 153 / 0.035);
+  color: var(--color-ink-soft);
+  font-size: var(--fs-caption);
+  line-height: 1.45;
+}
+
+.reference-search-note strong {
+  flex-shrink: 0;
+  color: var(--color-accent-soft);
+}
+
+.reference-hit-meta {
+  display: flex;
+  min-width: max-content;
+  align-items: center;
+  gap: 0.35rem;
+  margin-bottom: 0.35rem;
+  color: var(--color-ink-faint);
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
+}
+
+.reference-hit-meta span:first-child {
+  border: 1px solid rgb(52 211 153 / 0.22);
+  border-radius: 999px;
+  padding: 0.08rem 0.4rem;
+  background: rgb(52 211 153 / 0.07);
+  color: var(--color-accent-soft);
+}
+
+.reference-hit-meta code {
+  color: var(--color-ink-soft);
+  letter-spacing: 0;
+  text-transform: none;
+}
+
 /*
  * Stale results read as stale while a search is in flight. Deliberately no
  * pointer-events:none — blocking interaction turns any missed "finished" event

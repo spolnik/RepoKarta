@@ -1109,8 +1109,9 @@ func buildMCPPageData(endpoint, token, command, stdioBaseURL string) mcpPageData
 		StdioConfig:    string(stdioConfiguration),
 		Tools: []mcpToolView{
 			{Name: "list_repositories", Description: "Indexed repositories, stable IDs, and pinned commits."},
-			{Name: "search_code", Description: "Literal, regex, or Zoekt search with explicit completeness metadata."},
-			{Name: "find_symbol", Description: "Commit-pinned symbol definitions across indexed code."},
+			{Name: "search_code", Description: "Literal, regex, Zoekt, or AST-reference search with explicit completeness metadata."},
+			{Name: "find_symbol", Description: "Commit-pinned symbol definitions from the Zoekt/ctags index."},
+			{Name: "find_references", Description: "Syntax-backed calls, imports, and heritage sites from persisted AST relations."},
 			{Name: "get_file", Description: "Bounded source reads with exact revision and citation URLs."},
 			{Name: "list_tree", Description: "Bounded repository trees at an exact indexed commit."},
 			{Name: "git_log", Description: "Newest-first commit history with truncation metadata."},
@@ -1223,11 +1224,15 @@ func resolveSearchViews(matches []codeintel.SearchMatch, repositories []catalog.
 		}
 		for _, line := range match.Lines {
 			view.Lines = append(view.Lines, search.LineMatch{
-				Number:    line.Number,
-				Text:      line.Text,
-				Before:    line.Before,
-				After:     line.After,
-				Fragments: line.Fragments,
+				Number:              line.Number,
+				Text:                line.Text,
+				Before:              line.Before,
+				After:               line.After,
+				Fragments:           line.Fragments,
+				ReferenceKind:       line.ReferenceKind,
+				ReferenceTarget:     line.ReferenceTarget,
+				ReferenceReceiver:   line.ReferenceReceiver,
+				ReferenceConfidence: line.ReferenceConfidence,
 			})
 		}
 		for _, repository := range repositories {

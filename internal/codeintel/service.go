@@ -16,25 +16,28 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/spolnik/RepoKarta/internal/catalog"
+	"github.com/spolnik/RepoKarta/internal/graph"
 	"github.com/spolnik/RepoKarta/internal/search"
 	"github.com/spolnik/RepoKarta/internal/source"
 )
 
 const (
-	DefaultSearchLimit  = 100
-	MaximumSearchLimit  = 500
-	DefaultGitLogLimit  = 50
-	MaximumGitLogLimit  = 200
-	MaximumGitLogBytes  = 1 << 20
-	MaximumSourceLines  = 500
-	MaximumTreeEntries  = 500
-	MaximumDiffBytes    = 1 << 20
-	DefaultDiffContext  = 3
-	MaximumDiffContext  = 20
-	sourceWindowLines   = 200
-	sourceContextBefore = 80
+	DefaultSearchLimit       = 100
+	MaximumSearchLimit       = 500
+	DefaultGitLogLimit       = 50
+	MaximumGitLogLimit       = 200
+	MaximumGitLogBytes       = 1 << 20
+	MaximumSourceLines       = 500
+	MaximumTreeEntries       = 500
+	MaximumDiffBytes         = 1 << 20
+	DefaultDiffContext       = 3
+	MaximumDiffContext       = 20
+	sourceWindowLines        = 200
+	sourceContextBefore      = 80
+	maxReferenceLinesPerFile = 50
 )
 
 // RepositoryStore supplies repository metadata.
@@ -48,12 +51,19 @@ type CodeSearcher interface {
 	Search(context.Context, search.Query) (search.Result, error)
 }
 
+// StructuralReader supplies the cached, commit-pinned syntax inventory used by
+// reference search. Implementations must not execute repository code.
+type StructuralReader interface {
+	Snapshot(context.Context, int64, bool) (graph.Snapshot, error)
+}
+
 // Service owns the shared behavior exposed by all external adapters.
 type Service struct {
-	store    RepositoryStore
-	searcher CodeSearcher
-	mu       sync.RWMutex
-	baseURL  string
+	store     RepositoryStore
+	searcher  CodeSearcher
+	structure StructuralReader
+	mu        sync.RWMutex
+	baseURL   string
 }
 
 // SetBaseURL changes the absolute URL used for newly returned source evidence.
@@ -70,6 +80,12 @@ func New(store RepositoryStore, searcher CodeSearcher, baseURL string) *Service 
 		searcher: searcher,
 		baseURL:  strings.TrimRight(baseURL, "/"),
 	}
+}
+
+// UseStructure enables syntax-backed reference search over persisted maps.
+func (s *Service) UseStructure(structure StructuralReader) *Service {
+	s.structure = structure
+	return s
 }
 
 // Repository describes one indexed repository without exposing its local path.
@@ -115,6 +131,8 @@ type SearchResponse struct {
 	DurationMS          float64          `json:"duration_ms"`
 	Warnings            []search.Warning `json:"warnings,omitempty"`
 	Matches             []SearchMatch    `json:"matches"`
+	SearchKind          string           `json:"search_kind,omitempty"`
+	ReferenceResolution string           `json:"reference_resolution,omitempty"`
 }
 
 // SymbolRequest selects bounded symbol-index matches.
@@ -130,6 +148,20 @@ type SymbolRequest struct {
 // deterministic code search.
 type SymbolResponse = SearchResponse
 
+// ReferenceRequest selects bounded syntax-backed target-name matches.
+type ReferenceRequest struct {
+	Symbol       string `json:"symbol"`
+	RepositoryID int64  `json:"repository_id,omitempty"`
+	Repository   string `json:"repository,omitempty"`
+	Language     string `json:"language,omitempty"`
+	Path         string `json:"path,omitempty"`
+	File         string `json:"file,omitempty"`
+	Limit        int    `json:"limit,omitempty"`
+}
+
+// ReferenceResponse uses the normal search evidence and completeness contract.
+type ReferenceResponse = SearchResponse
+
 // SearchMatch is one commit-pinned matched file.
 type SearchMatch struct {
 	Repository string       `json:"repository"`
@@ -144,11 +176,15 @@ type SearchMatch struct {
 
 // SearchLine is one line of source evidence.
 type SearchLine struct {
-	Number    int               `json:"number"`
-	Text      string            `json:"text"`
-	Before    string            `json:"before,omitempty"`
-	After     string            `json:"after,omitempty"`
-	Fragments []search.Fragment `json:"fragments,omitempty"`
+	Number              int               `json:"number"`
+	Text                string            `json:"text"`
+	Before              string            `json:"before,omitempty"`
+	After               string            `json:"after,omitempty"`
+	Fragments           []search.Fragment `json:"fragments,omitempty"`
+	ReferenceKind       string            `json:"reference_kind,omitempty"`
+	ReferenceTarget     string            `json:"reference_target,omitempty"`
+	ReferenceReceiver   string            `json:"reference_receiver,omitempty"`
+	ReferenceConfidence string            `json:"reference_confidence,omitempty"`
 }
 
 // FileRequest selects a bounded, commit-pinned file range.
@@ -298,6 +334,17 @@ func (s *Service) RepositoryByID(ctx context.Context, id int64) (catalog.Reposit
 
 // Search performs a bounded search and resolves every match to a citation.
 func (s *Service) Search(ctx context.Context, request SearchRequest) (SearchResponse, error) {
+	if strings.EqualFold(strings.TrimSpace(request.Mode), "references") {
+		return s.FindReferences(ctx, ReferenceRequest{
+			Symbol:       request.Query,
+			RepositoryID: request.RepositoryID,
+			Repository:   request.Repository,
+			Language:     request.Language,
+			Path:         request.Path,
+			File:         request.File,
+			Limit:        request.Limit,
+		})
+	}
 	limit := normalizeLimit(request.Limit, DefaultSearchLimit, MaximumSearchLimit)
 	repositoryFilter := strings.TrimSpace(request.Repository)
 	if request.RepositoryID > 0 {
@@ -319,6 +366,10 @@ func (s *Service) Search(ctx context.Context, request SearchRequest) (SearchResp
 	if err != nil {
 		return SearchResponse{}, err
 	}
+	return s.searchResponse(ctx, result, limit)
+}
+
+func (s *Service) searchResponse(ctx context.Context, result search.Result, limit int) (SearchResponse, error) {
 	repositories, err := s.store.ListRepositories(ctx)
 	if err != nil {
 		return SearchResponse{}, err
@@ -359,11 +410,15 @@ func (s *Service) Search(ctx context.Context, request SearchRequest) (SearchResp
 		}
 		for _, line := range match.Lines {
 			outputMatch.Lines = append(outputMatch.Lines, SearchLine{
-				Number:    line.Number,
-				Text:      line.Text,
-				Before:    line.Before,
-				After:     line.After,
-				Fragments: line.Fragments,
+				Number:              line.Number,
+				Text:                line.Text,
+				Before:              line.Before,
+				After:               line.After,
+				Fragments:           line.Fragments,
+				ReferenceKind:       line.ReferenceKind,
+				ReferenceTarget:     line.ReferenceTarget,
+				ReferenceReceiver:   line.ReferenceReceiver,
+				ReferenceConfidence: line.ReferenceConfidence,
 			})
 		}
 		if repository, ok := resolveRepository(repositories, match.Repository, match.Revision); ok {
@@ -380,12 +435,9 @@ func (s *Service) Search(ctx context.Context, request SearchRequest) (SearchResp
 // FindSymbol performs an explicit Zoekt symbol query. When Universal Ctags was
 // unavailable at index time, the normal machine-readable warning is returned.
 func (s *Service) FindSymbol(ctx context.Context, request SymbolRequest) (SymbolResponse, error) {
-	symbol := strings.TrimSpace(request.Symbol)
-	if symbol == "" {
-		return SymbolResponse{}, errors.New("symbol is required")
-	}
-	if len([]rune(symbol)) > 200 || strings.ContainsAny(symbol, "\r\n\x00") {
-		return SymbolResponse{}, errors.New("symbol is invalid")
+	symbol, err := validSymbol(request.Symbol)
+	if err != nil {
+		return SymbolResponse{}, err
 	}
 	escaped := strings.ReplaceAll(symbol, `\`, `\\`)
 	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
@@ -397,6 +449,328 @@ func (s *Service) FindSymbol(ctx context.Context, request SymbolRequest) (Symbol
 		Mode:         "zoekt",
 		Limit:        request.Limit,
 	})
+}
+
+// FindReferences searches the cached structural index for syntax-backed
+// target-name matches. It deliberately does not pretend to perform type or
+// overload resolution: each result reports the parser relation and confidence.
+func (s *Service) FindReferences(ctx context.Context, request ReferenceRequest) (ReferenceResponse, error) {
+	started := time.Now()
+	symbol, err := validSymbol(request.Symbol)
+	if err != nil {
+		return ReferenceResponse{}, err
+	}
+	if s.structure == nil {
+		return ReferenceResponse{}, errors.New("AST reference search is not configured")
+	}
+	repositoryID := request.RepositoryID
+	if repositoryID <= 0 && strings.TrimSpace(request.Repository) != "" {
+		repository, resolveErr := s.namedRepository(ctx, request.Repository)
+		if resolveErr != nil {
+			return ReferenceResponse{}, resolveErr
+		}
+		repositoryID = repository.ID
+	}
+	snapshot, err := s.structure.Snapshot(ctx, repositoryID, false)
+	if err != nil {
+		return ReferenceResponse{}, fmt.Errorf("load AST reference index: %w", err)
+	}
+	result, err := s.referenceResult(ctx, snapshot, symbol, request)
+	if err != nil {
+		return ReferenceResponse{}, err
+	}
+	result.Duration = time.Since(started)
+	output, err := s.searchResponse(ctx, result, normalizeLimit(request.Limit, DefaultSearchLimit, MaximumSearchLimit))
+	if err != nil {
+		return ReferenceResponse{}, err
+	}
+	output.SearchKind = "references"
+	output.ReferenceResolution = "syntax-target-name"
+	return output, nil
+}
+
+type structuralReference struct {
+	kind       string
+	target     string
+	receiver   string
+	confidence string
+	line       int
+}
+
+type structuralReferenceFile struct {
+	repositoryID int64
+	repository   string
+	revision     string
+	path         string
+	language     string
+	references   []structuralReference
+}
+
+func (s *Service) referenceResult(
+	ctx context.Context,
+	snapshot graph.Snapshot,
+	symbol string,
+	request ReferenceRequest,
+) (search.Result, error) {
+	limit := normalizeLimit(request.Limit, DefaultSearchLimit, MaximumSearchLimit)
+	files := make(map[string]*structuralReferenceFile)
+	matchCount := 0
+	parsePartial := 0
+	for _, document := range snapshot.Structure {
+		if request.RepositoryID > 0 && document.RepositoryID != request.RepositoryID {
+			continue
+		}
+		if request.Language != "" && !strings.EqualFold(document.Language, strings.TrimSpace(request.Language)) {
+			continue
+		}
+		if request.Path != "" && !strings.Contains(strings.ToLower(document.Path), strings.ToLower(strings.TrimSpace(request.Path))) {
+			continue
+		}
+		if request.File != "" && !strings.Contains(strings.ToLower(path.Base(document.Path)), strings.ToLower(strings.TrimSpace(request.File))) {
+			continue
+		}
+		if !document.ParseComplete || document.Truncated {
+			parsePartial++
+		}
+		for _, relation := range document.Relations {
+			if !relationMatchesSymbol(relation.Target, symbol) {
+				continue
+			}
+			key := strconv.FormatInt(document.RepositoryID, 10) + "\x00" + document.Path
+			file := files[key]
+			if file == nil {
+				file = &structuralReferenceFile{
+					repositoryID: document.RepositoryID,
+					repository:   document.Repository,
+					revision:     document.Revision,
+					path:         document.Path,
+					language:     document.Language,
+					references:   []structuralReference{},
+				}
+				files[key] = file
+			}
+			file.references = append(file.references, structuralReference{
+				kind:       relation.Kind,
+				target:     relation.Target,
+				receiver:   relation.Receiver,
+				confidence: relation.Confidence,
+				line:       max(1, relation.Range.StartLine),
+			})
+			matchCount++
+		}
+	}
+
+	ordered := make([]*structuralReferenceFile, 0, len(files))
+	for _, file := range files {
+		sort.Slice(file.references, func(left, right int) bool {
+			if file.references[left].line != file.references[right].line {
+				return file.references[left].line < file.references[right].line
+			}
+			if file.references[left].kind != file.references[right].kind {
+				return file.references[left].kind < file.references[right].kind
+			}
+			return file.references[left].target < file.references[right].target
+		})
+		ordered = append(ordered, file)
+	}
+	sort.Slice(ordered, func(left, right int) bool {
+		if ordered[left].repository != ordered[right].repository {
+			return strings.ToLower(ordered[left].repository) < strings.ToLower(ordered[right].repository)
+		}
+		return ordered[left].path < ordered[right].path
+	})
+
+	repositories, err := s.store.ListRepositories(ctx)
+	if err != nil {
+		return search.Result{}, err
+	}
+	repositoryByID := make(map[int64]catalog.Repository, len(repositories))
+	for _, repository := range repositories {
+		repositoryByID[repository.ID] = repository
+	}
+
+	result := search.Result{
+		Matches:         []search.FileMatch{},
+		MatchCount:      matchCount,
+		FileCount:       len(ordered),
+		EstimatedFiles:  len(ordered),
+		Limit:           limit,
+		TotalFilesExact: true,
+		Warnings:        []search.Warning{},
+	}
+	if snapshot.Truncated || snapshot.StructureTruncated {
+		result.Truncated = true
+		result.TotalFilesExact = false
+		result.Warnings = append(result.Warnings, search.Warning{
+			Code:    "ast_structure_truncated",
+			Message: "The persisted structural index is bounded; additional references may exist outside captured AST documents or relations.",
+		})
+	}
+	if snapshot.Scope.TotalRepositories > 0 && !snapshot.Scope.Complete {
+		result.Truncated = true
+		result.TotalFilesExact = false
+		result.Warnings = append(result.Warnings, search.Warning{
+			Code: "ast_scope_truncated",
+			Message: fmt.Sprintf(
+				"AST reference search analyzed %d of %d requested repositories; %d were omitted.",
+				snapshot.Scope.AnalyzedRepositories,
+				snapshot.Scope.TotalRepositories,
+				snapshot.Scope.OmittedRepositories,
+			),
+		})
+	}
+	if parsePartial > 0 {
+		result.Truncated = true
+		result.TotalFilesExact = false
+		result.Warnings = append(result.Warnings, search.Warning{
+			Code:    "ast_parse_partial",
+			Message: fmt.Sprintf("%d filtered AST documents were partial or individually truncated.", parsePartial),
+		})
+	}
+	if len(ordered) > limit {
+		result.Truncated = true
+		ordered = ordered[:limit]
+	}
+
+	linesTruncated := false
+	sourceSkipped := false
+	for _, indexedFile := range ordered {
+		repository, ok := repositoryByID[indexedFile.repositoryID]
+		if !ok {
+			result.FilesSkipped++
+			sourceSkipped = true
+			continue
+		}
+		references := deduplicateReferences(indexedFile.references)
+		if len(references) > maxReferenceLinesPerFile {
+			references = references[:maxReferenceLinesPerFile]
+			result.Truncated = true
+			linesTruncated = true
+		}
+		minimumLine := references[0].line
+		maximumLine := references[len(references)-1].line
+		file, openErr := source.OpenFile(
+			ctx,
+			repository,
+			indexedFile.revision,
+			indexedFile.path,
+			max(1, minimumLine-1),
+			maximumLine+1,
+		)
+		if openErr != nil {
+			result.FilesSkipped++
+			sourceSkipped = true
+			continue
+		}
+		sourceLines := make(map[int]string, len(file.Lines))
+		for _, line := range file.Lines {
+			sourceLines[line.Number] = line.Text
+		}
+		match := search.FileMatch{
+			Repository: indexedFile.repository,
+			Revision:   indexedFile.revision,
+			Path:       indexedFile.path,
+			Language:   indexedFile.language,
+			Score:      1,
+			Lines:      make([]search.LineMatch, 0, len(references)),
+		}
+		for _, reference := range references {
+			text := sourceLines[reference.line]
+			if text == "" {
+				text = reference.target
+			}
+			match.Lines = append(match.Lines, search.LineMatch{
+				Number:              reference.line,
+				Text:                text,
+				Before:              sourceLines[reference.line-1],
+				After:               sourceLines[reference.line+1],
+				Fragments:           literalFragments(text, symbol),
+				ReferenceKind:       reference.kind,
+				ReferenceTarget:     reference.target,
+				ReferenceReceiver:   reference.receiver,
+				ReferenceConfidence: reference.confidence,
+			})
+		}
+		result.Matches = append(result.Matches, match)
+	}
+	if linesTruncated {
+		result.Warnings = append(result.Warnings, search.Warning{
+			Code:    "reference_lines_truncated",
+			Message: fmt.Sprintf("At most %d distinct AST reference lines are returned per file.", maxReferenceLinesPerFile),
+		})
+	}
+	if sourceSkipped {
+		result.Warnings = append(result.Warnings, search.Warning{
+			Code:    "reference_source_unavailable",
+			Message: "One or more AST matches could not be reopened at the pinned revision and were skipped.",
+		})
+	}
+	result.ReturnedFiles = len(result.Matches)
+	return result, nil
+}
+
+func deduplicateReferences(references []structuralReference) []structuralReference {
+	output := make([]structuralReference, 0, len(references))
+	seen := make(map[string]struct{}, len(references))
+	for _, reference := range references {
+		key := fmt.Sprintf(
+			"%d\x00%s\x00%s\x00%s",
+			reference.line,
+			reference.kind,
+			reference.target,
+			reference.receiver,
+		)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		output = append(output, reference)
+	}
+	return output
+}
+
+func relationMatchesSymbol(target, symbol string) bool {
+	target = strings.TrimSpace(target)
+	if target == symbol {
+		return true
+	}
+	for _, candidate := range strings.FieldsFunc(target, func(character rune) bool {
+		return character != '_' && character != '$' &&
+			!unicode.IsLetter(character) && !unicode.IsDigit(character)
+	}) {
+		if candidate == symbol {
+			return true
+		}
+	}
+	return false
+}
+
+func literalFragments(text, query string) []search.Fragment {
+	if query == "" {
+		return nil
+	}
+	fragments := make([]search.Fragment, 0)
+	for offset := 0; offset <= len(text)-len(query); {
+		index := strings.Index(text[offset:], query)
+		if index < 0 {
+			break
+		}
+		start := offset + index
+		fragments = append(fragments, search.Fragment{Start: start, End: start + len(query)})
+		offset = start + len(query)
+	}
+	return fragments
+}
+
+func validSymbol(value string) (string, error) {
+	symbol := strings.TrimSpace(value)
+	if symbol == "" {
+		return "", errors.New("symbol is required")
+	}
+	if len([]rune(symbol)) > 200 || strings.ContainsAny(symbol, "\r\n\x00") {
+		return "", errors.New("symbol is invalid")
+	}
+	return symbol, nil
 }
 
 // GetFile reads a commit-pinned source range.

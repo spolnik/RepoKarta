@@ -24,9 +24,11 @@ type Coordinator struct {
 	store    CatalogueStore
 	engine   Engine
 
-	startOnce sync.Once
-	baseCtx   context.Context
-	indexing  atomic.Bool
+	startOnce       sync.Once
+	baseCtx         context.Context
+	indexing        atomic.Bool
+	indexedObserver func(context.Context, int64) error
+	indexedQueue    chan int64
 }
 
 // NewCoordinator creates an indexing coordinator.
@@ -39,13 +41,40 @@ func NewCoordinator(root string, excludes []string, store CatalogueStore, engine
 	}
 }
 
+// UseIndexedObserver schedules one bounded, sequential background callback for
+// every repository that is already ready or becomes ready after indexing. It
+// is intended for deterministic derived indexes such as structural maps.
+func (c *Coordinator) UseIndexedObserver(observer func(context.Context, int64) error) *Coordinator {
+	c.indexedObserver = observer
+	if observer != nil {
+		c.indexedQueue = make(chan int64, 128)
+	}
+	return c
+}
+
 // Start performs the initial scan and starts incremental indexing in the
 // background. Calling Start more than once is harmless.
 func (c *Coordinator) Start(ctx context.Context) error {
 	var startError error
 	c.startOnce.Do(func() {
 		c.baseCtx = ctx
+		if c.indexedObserver != nil {
+			go c.observeIndexed(ctx)
+		}
 		startError = c.Refresh(ctx)
+		if startError != nil || c.indexedObserver == nil {
+			return
+		}
+		repositories, err := c.store.ListRepositories(ctx)
+		if err != nil {
+			startError = fmt.Errorf("load repositories for derived indexes: %w", err)
+			return
+		}
+		for _, repository := range repositories {
+			if repository.IndexState == "ready" && repository.IndexedCommit != "" {
+				c.queueIndexed(ctx, repository.ID)
+			}
+		}
 	})
 	return startError
 }
@@ -121,11 +150,38 @@ func (c *Coordinator) indexPending(ctx context.Context) {
 			}
 			if err := c.store.UpdateIndexState(ctx, repository.ID, "ready", repository.HeadCommit, ""); err != nil {
 				slog.Error("record indexing completion", "repository", repository.Name, "error", err)
+				continue
 			}
+			c.queueIndexed(ctx, repository.ID)
 		}
 
 		if !indexedAny {
 			return
+		}
+	}
+}
+
+func (c *Coordinator) queueIndexed(ctx context.Context, repositoryID int64) {
+	if c.indexedObserver == nil || c.indexedQueue == nil || repositoryID <= 0 {
+		return
+	}
+	select {
+	case c.indexedQueue <- repositoryID:
+	case <-ctx.Done():
+	default:
+		slog.Warn("derived structural index queue is full", "repository_id", repositoryID)
+	}
+}
+
+func (c *Coordinator) observeIndexed(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case repositoryID := <-c.indexedQueue:
+			if err := c.indexedObserver(ctx, repositoryID); err != nil && ctx.Err() == nil {
+				slog.Warn("build derived structural index", "repository_id", repositoryID, "error", err)
+			}
 		}
 	}
 }

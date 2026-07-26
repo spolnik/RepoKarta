@@ -202,10 +202,12 @@ func rebaseSnapshotEvidence(snapshot *Snapshot, baseURL string) {
 
 // Service caches graph snapshots outside source repositories.
 type Service struct {
-	store     RepositoryStore
-	directory string
-	mu        sync.RWMutex
-	baseURL   string
+	store         RepositoryStore
+	directory     string
+	mu            sync.RWMutex
+	baseURL       string
+	snapshotMu    sync.Mutex
+	snapshotLocks map[string]*sync.Mutex
 }
 
 // SetBaseURL changes the absolute URL used for source evidence.
@@ -227,9 +229,10 @@ func New(store RepositoryStore, directory, baseURL string) (*Service, error) {
 		return nil, fmt.Errorf("create graph snapshot directory: %w", err)
 	}
 	return &Service{
-		store:     store,
-		directory: directory,
-		baseURL:   strings.TrimRight(baseURL, "/"),
+		store:         store,
+		directory:     directory,
+		baseURL:       strings.TrimRight(baseURL, "/"),
+		snapshotLocks: make(map[string]*sync.Mutex),
 	}, nil
 }
 
@@ -245,13 +248,29 @@ func (s *Service) Snapshot(ctx context.Context, repositoryID int64, refresh bool
 		fileName = fmt.Sprintf("repository-%d-%s.json", repositoryID, signature)
 	}
 	snapshotPath := filepath.Join(s.directory, fileName)
+	readCached := func() (Snapshot, bool) {
+		content, readErr := os.ReadFile(snapshotPath)
+		if readErr != nil {
+			return Snapshot{}, false
+		}
+		var cached Snapshot
+		if json.Unmarshal(content, &cached) != nil || cached.Version != snapshotVersion {
+			return Snapshot{}, false
+		}
+		rebaseSnapshotEvidence(&cached, s.currentBaseURL())
+		return cached, true
+	}
 	if !refresh {
-		if content, readErr := os.ReadFile(snapshotPath); readErr == nil {
-			var cached Snapshot
-			if json.Unmarshal(content, &cached) == nil && cached.Version == snapshotVersion {
-				rebaseSnapshotEvidence(&cached, s.currentBaseURL())
-				return cached, nil
-			}
+		if cached, ok := readCached(); ok {
+			return cached, nil
+		}
+	}
+	snapshotLock := s.snapshotLock(fileName)
+	snapshotLock.Lock()
+	defer snapshotLock.Unlock()
+	if !refresh {
+		if cached, ok := readCached(); ok {
+			return cached, nil
 		}
 	}
 
@@ -305,6 +324,17 @@ func (s *Service) Snapshot(ctx context.Context, repositoryID int64, refresh bool
 		return Snapshot{}, fmt.Errorf("publish graph snapshot: %w", err)
 	}
 	return snapshot, nil
+}
+
+func (s *Service) snapshotLock(key string) *sync.Mutex {
+	s.snapshotMu.Lock()
+	defer s.snapshotMu.Unlock()
+	lock := s.snapshotLocks[key]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		s.snapshotLocks[key] = lock
+	}
+	return lock
 }
 
 func (s *Service) repositories(ctx context.Context, repositoryID int64) ([]catalog.Repository, error) {

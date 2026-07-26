@@ -130,6 +130,7 @@ repositories on managed Windows and Apple Silicon macOS laptops.
   - `get_file`
   - `list_tree`
   - `find_symbol`
+  - `find_references`
   - `git_log`
   - `git_diff`
   - `read_repository_map`
@@ -604,7 +605,7 @@ completion criteria include:
 
 ## Current implementation version
 
-`0.35.0-dev`. M0 through M4 are complete. M5 and M6 are in progress.
+`0.36.0-dev`. M0 through M4 are complete. M5 and M6 are in progress.
 
 ## Recommended next session
 

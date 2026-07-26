@@ -39,6 +39,7 @@ type Intelligence interface {
 	Repositories(context.Context) (codeintel.RepositoryList, error)
 	Search(context.Context, codeintel.SearchRequest) (codeintel.SearchResponse, error)
 	FindSymbol(context.Context, codeintel.SymbolRequest) (codeintel.SymbolResponse, error)
+	FindReferences(context.Context, codeintel.ReferenceRequest) (codeintel.ReferenceResponse, error)
 	GetFile(context.Context, codeintel.FileRequest) (codeintel.FileResponse, error)
 	ListTree(context.Context, codeintel.TreeRequest) (codeintel.TreeResponse, error)
 	GitLog(context.Context, codeintel.GitLogRequest) (codeintel.GitLogResponse, error)
@@ -323,6 +324,16 @@ func (s *session) executeTool(ctx context.Context, name string, input json.RawMe
 			s.recordSearchCitations(result)
 		}
 		return result, err
+	case "find_references":
+		var request codeintel.ReferenceRequest
+		if err := json.Unmarshal(input, &request); err != nil {
+			return nil, err
+		}
+		result, err := s.intelligence.FindReferences(ctx, request)
+		if err == nil {
+			s.recordSearchCitations(result)
+		}
+		return result, err
 	case "get_file":
 		var request struct {
 			Repository string `json:"repository"`
@@ -422,13 +433,21 @@ func toolDefinitions() []anthropicapi.ToolUnionParam {
 			"language":   stringProperty("Optional language filter."),
 			"path":       stringProperty("Optional path substring."),
 			"file":       stringProperty("Optional file-name substring."),
-			"mode":       enumProperty("literal", "regex", "zoekt"),
+			"mode":       enumProperty("literal", "regex", "zoekt", "references"),
 			"limit":      integerProperty("Maximum files, 1 to 500."),
 		}, []string{"query"}),
-		tool("find_symbol", "Find indexed symbol definitions or occurrences by exact name, with commit-pinned citations.", map[string]any{
+		tool("find_symbol", "Find indexed symbol definitions by exact name, with commit-pinned citations.", map[string]any{
 			"symbol":     stringProperty("Exact symbol name."),
 			"repository": stringProperty("Optional exact repository name."),
 			"language":   stringProperty("Optional language filter."),
+			"limit":      integerProperty("Maximum files, 1 to 500."),
+		}, []string{"symbol"}),
+		tool("find_references", "Find syntax-backed call, import, extends, and implements sites by exact source-level target name. Results report AST relation kind, receiver, confidence, coverage, and commit-pinned citations; overloads and dynamic dispatch are not type-resolved.", map[string]any{
+			"symbol":     stringProperty("Exact source-level symbol name."),
+			"repository": stringProperty("Optional exact repository name."),
+			"language":   stringProperty("Optional parser language filter."),
+			"path":       stringProperty("Optional path substring."),
+			"file":       stringProperty("Optional file-name substring."),
 			"limit":      integerProperty("Maximum files, 1 to 500."),
 		}, []string{"symbol"}),
 		tool("get_file", "Read a bounded line range from committed source at an exact reachable revision.", map[string]any{

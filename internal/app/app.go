@@ -110,7 +110,23 @@ func Run(ctx context.Context, cfg Config) error {
 		slog.Info("index capabilities changed; queued repositories for rebuild", "configuration", engine.IndexConfiguration())
 	}
 
-	coordinator := search.NewCoordinator(cfg.RepositoryRoot, cfg.Excludes, database, engine)
+	internalBaseURL := "http://" + cfg.ListenAddress
+	baseURL := internalBaseURL
+	if configured := securityManager.Settings().PublicURL; configured != "" {
+		baseURL = configured
+	}
+	intelligence := codeintel.New(database, engine, baseURL)
+	maps, err := graph.New(database, filepath.Join(cfg.DataDirectory, "maps"), baseURL)
+	if err != nil {
+		return err
+	}
+	intelligence.UseStructure(maps)
+
+	coordinator := search.NewCoordinator(cfg.RepositoryRoot, cfg.Excludes, database, engine).
+		UseIndexedObserver(func(observerContext context.Context, repositoryID int64) error {
+			_, snapshotError := maps.Snapshot(observerContext, repositoryID, false)
+			return snapshotError
+		})
 	if err := coordinator.Start(ctx); err != nil {
 		return err
 	}
@@ -130,16 +146,6 @@ func Run(ctx context.Context, cfg Config) error {
 	mcpToken, err := mcpserver.NewToken()
 	if err != nil {
 		return fmt.Errorf("create MCP bearer token: %w", err)
-	}
-	internalBaseURL := "http://" + cfg.ListenAddress
-	baseURL := internalBaseURL
-	if configured := securityManager.Settings().PublicURL; configured != "" {
-		baseURL = configured
-	}
-	intelligence := codeintel.New(database, engine, baseURL)
-	maps, err := graph.New(database, filepath.Join(cfg.DataDirectory, "maps"), baseURL)
-	if err != nil {
-		return err
 	}
 	citations := mcpserver.NewCitationTracker()
 	conversations := agent.NewManager(

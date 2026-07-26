@@ -250,8 +250,8 @@ func TestMCPSearchReturnsPinnedCitation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tools.Tools) != 11 {
-		t.Fatalf("got %d tools, want 11", len(tools.Tools))
+	if len(tools.Tools) != 12 {
+		t.Fatalf("got %d tools, want 12", len(tools.Tools))
 	}
 	toolNames := make(map[string]bool, len(tools.Tools))
 	for _, tool := range tools.Tools {
@@ -261,6 +261,7 @@ func TestMCPSearchReturnsPinnedCitation(t *testing.T) {
 		"list_repositories",
 		"search_code",
 		"find_symbol",
+		"find_references",
 		"get_file",
 		"list_tree",
 		"git_log",
@@ -440,7 +441,7 @@ func TestMCPToolsSelectRepositoriesByIDOnly(t *testing.T) {
 		"list_deep_wiki_pages":      true,
 		"read_generated_document":   true,
 	}
-	optional := map[string]bool{"search_code": true, "find_symbol": true}
+	optional := map[string]bool{"search_code": true, "find_symbol": true, "find_references": true}
 	for _, tool := range tools.Tools {
 		encoded, err := json.Marshal(tool.InputSchema)
 		if err != nil {
