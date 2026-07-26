@@ -42,6 +42,80 @@ func TestSourceWindowKeepsFocusInsideUsefulContext(t *testing.T) {
 	}
 }
 
+func TestServiceCommittedFileTreeAndHistoryAPIs(t *testing.T) {
+	directory := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(directory, "internal"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, directory, "init", "-q")
+	runGit(t, directory, "config", "user.name", "RepoKarta Test")
+	runGit(t, directory, "config", "user.email", "test@repokarta.local")
+	filePath := filepath.Join(directory, "internal", "service.go")
+	if err := os.WriteFile(filePath, []byte("package internal\n\nfunc Service() int { return 1 }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, directory, "add", ".")
+	runGit(t, directory, "commit", "-qm", "first")
+	firstRevision := strings.TrimSpace(runGit(t, directory, "rev-parse", "HEAD"))
+	if err := os.WriteFile(filePath, []byte("package internal\n\nfunc Service() int { return 2 }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, directory, "add", ".")
+	runGit(t, directory, "commit", "-qm", "second")
+	secondRevision := strings.TrimSpace(runGit(t, directory, "rev-parse", "HEAD"))
+	repository := catalog.Repository{
+		ID: 19, Name: "service", Path: directory,
+		OriginURL:  "https://github.com/example/service.git",
+		HeadCommit: secondRevision, IndexedCommit: secondRevision, IndexState: "ready",
+	}
+	service := New(referenceTestStore{repository: repository}, fixedResultSearcher{}, "")
+	service.SetBaseURL("http://127.0.0.1:7331/")
+
+	repositories, err := service.Repositories(context.Background())
+	if err != nil || len(repositories.Repositories) != 1 || repositories.Repositories[0].ID != repository.ID {
+		t.Fatalf("repositories = %#v, %v", repositories, err)
+	}
+	catalogue, err := service.CatalogRepositories(context.Background())
+	if err != nil || len(catalogue) != 1 {
+		t.Fatalf("catalogue = %#v, %v", catalogue, err)
+	}
+	selected, err := service.RepositoryByID(context.Background(), repository.ID)
+	if err != nil || selected.Path != directory {
+		t.Fatalf("repository = %#v, %v", selected, err)
+	}
+	file, err := service.GetFile(context.Background(), FileRequest{
+		RepositoryID: repository.ID, Revision: secondRevision,
+		Path: "internal/service.go", StartLine: 1, EndLine: 3,
+	})
+	if err != nil || len(file.Lines) != 3 || !strings.Contains(file.Lines[2].Text, "return 2") || file.SourceURL == "" {
+		t.Fatalf("file = %#v, %v", file, err)
+	}
+	tree, err := service.ListTree(context.Background(), TreeRequest{
+		RepositoryID: repository.ID, Revision: secondRevision, Path: "internal",
+	})
+	if err != nil || len(tree.Entries) != 1 || tree.Entries[0].Path != "internal/service.go" {
+		t.Fatalf("tree = %#v, %v", tree, err)
+	}
+	log, err := service.GitLog(context.Background(), GitLogRequest{
+		RepositoryID: repository.ID, Revision: secondRevision, Path: "internal/service.go", Limit: 2,
+	})
+	if err != nil || len(log.Commits) != 2 {
+		t.Fatalf("log = %#v, %v", log, err)
+	}
+	diff, err := service.GitDiff(context.Background(), GitDiffRequest{
+		RepositoryID: repository.ID, FromRevision: firstRevision,
+		ToRevision: secondRevision, Path: "internal/service.go", ContextLines: 3,
+	})
+	if err != nil || !strings.Contains(diff.Patch, "return 2") {
+		t.Fatalf("diff = %#v, %v", diff, err)
+	}
+	if _, err := service.GetFile(context.Background(), FileRequest{
+		RepositoryID: repository.ID, Path: "../secret",
+	}); err == nil {
+		t.Fatal("unsafe file path was accepted")
+	}
+}
+
 type symbolTestStore struct {
 	repository catalog.Repository
 }

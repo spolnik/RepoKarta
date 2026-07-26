@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -142,5 +143,67 @@ func TestIdentityRolesAndDeprovisioningAreImmediatelyEffective(t *testing.T) {
 	stored, err := database.User(ctx, user.ID)
 	if err != nil || stored.Active {
 		t.Fatalf("historical identity = %#v, err = %v", stored, err)
+	}
+}
+
+func TestIdentityDirectoryListingAndRoleMappingLifecycle(t *testing.T) {
+	database, err := Open(filepath.Join(t.TempDir(), "repokarta.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	ctx := context.Background()
+	first, err := database.SaveUser(ctx, identity.User{
+		UserName: "alice@example.com", Active: true, Role: identity.RoleReader,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := database.SaveUser(ctx, identity.User{
+		UserName: "bob@example.com", Active: true, Role: identity.RoleMaintainer,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	group, err := database.SaveGroup(ctx, identity.Group{
+		DisplayName: "Platform", Role: identity.RoleMaintainer,
+		Members: []string{first.ID, second.ID, first.ID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	users, total, err := database.ListUsers(ctx, 0, 1)
+	if err != nil || total != 2 || len(users) != 1 {
+		t.Fatalf("users = %#v, total = %d, err = %v", users, total, err)
+	}
+	groups, total, err := database.ListGroups(ctx, -10, 5000)
+	if err != nil || total != 1 || len(groups) != 1 || len(groups[0].Members) != 2 {
+		t.Fatalf("groups = %#v, total = %d, err = %v", groups, total, err)
+	}
+	if err := database.SetRoleMapping(ctx, identity.RoleMapping{
+		Provider: "saml", GroupValue: "platform", Role: identity.RoleAdmin,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	mappings, err := database.ListRoleMappings(ctx)
+	if err != nil || len(mappings) != 1 {
+		t.Fatalf("mappings = %#v, err = %v", mappings, err)
+	}
+	mapping := mappings[0]
+	mapping.Role = identity.RoleReader
+	if err := database.SetRoleMapping(ctx, mapping); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.DeleteRoleMapping(ctx, mapping.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.DeleteRoleMapping(ctx, mapping.ID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("missing mapping delete = %v", err)
+	}
+	if err := database.DeleteGroup(ctx, group.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.DeleteGroup(ctx, group.ID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("missing group delete = %v", err)
 	}
 }

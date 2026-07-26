@@ -159,6 +159,85 @@ func TestReaderCannotMutateInsightsAndDoesNotSeeMutationControls(t *testing.T) {
 	}
 }
 
+func TestInsightMutationAndComparisonAPIs(t *testing.T) {
+	repository := catalog.Repository{
+		ID: 8, Name: "service", DefaultRevision: "main",
+		IndexedCommit: strings.Repeat("a", 40), IndexState: "ready",
+	}
+	evidence := &testInsightService{}
+	server, err := New(
+		Config{Address: "127.0.0.1:7331", Version: "test", Insights: evidence},
+		codeintel.New(testStore{repositories: []catalog.Repository{repository}}, testSearcher{}, "http://127.0.0.1:7331"),
+		testRefresher{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := func(method, target, body, contentType string) *httptest.ResponseRecorder {
+		t.Helper()
+		httpRequest := httptest.NewRequest(method, "http://127.0.0.1:7331"+target, strings.NewReader(body))
+		if contentType != "" {
+			httpRequest.Header.Set("Content-Type", contentType)
+		}
+		response := httptest.NewRecorder()
+		server.server.Handler.ServeHTTP(response, httpRequest)
+		return response
+	}
+
+	for _, testCase := range []struct {
+		method      string
+		target      string
+		body        string
+		contentType string
+		status      int
+		contains    string
+	}{
+		{http.MethodPost, "/api/insights/derive", `{"repository_id":8}`, "application/json", http.StatusCreated, `"tool":"derived"`},
+		{http.MethodGet, "/api/insights/compare?repository=8&from_revision=old&to_revision=new", "", "", http.StatusOK, `"repository_id":0`},
+		{http.MethodGet, "/api/insights/thresholds?repository=8", "", "", http.StatusOK, `"advisory":true`},
+		{http.MethodPut, "/api/insights/thresholds", `{"repository_id":8,"key":"coverage.line","operator":">=","value":80,"enabled":true}`, "application/json", http.StatusOK, `"coverage.line"`},
+		{http.MethodGet, "/api/insights/sonar", "", "", http.StatusOK, `"connections"`},
+		{http.MethodPut, "/api/insights/sonar", `{"repository_id":8,"base_url":"https://sonar.example.com","project_key":"service"}`, "application/json", http.StatusOK, `"project_key":"service"`},
+		{http.MethodPost, "/api/insights/sonar/sync", `{"repository_id":8}`, "application/json", http.StatusCreated, `"tool":"SonarQube"`},
+		{http.MethodPost, "/insights/derive", "repository_id=8", "application/x-www-form-urlencoded", http.StatusSeeOther, "Stored%20derived%20run"},
+		{http.MethodPost, "/insights/threshold", "repository_id=8&key=coverage.line&operator=%3E%3D&value=80&severity=warning", "application/x-www-form-urlencoded", http.StatusSeeOther, "Advisory%20threshold%20saved"},
+		{http.MethodPost, "/insights/sonar", "repository_id=8&base_url=https%3A%2F%2Fsonar.example.com&project_key=service&poll_interval_minutes=30&retention_runs=10", "application/x-www-form-urlencoded", http.StatusSeeOther, "SonarQube%20connection%20saved"},
+		{http.MethodPost, "/insights/sonar/sync", "repository_id=8", "application/x-www-form-urlencoded", http.StatusSeeOther, "Stored%20SonarQube%20run"},
+	} {
+		response := request(testCase.method, testCase.target, testCase.body, testCase.contentType)
+		if response.Code != testCase.status ||
+			(testCase.contains != "" &&
+				!strings.Contains(response.Body.String()+response.Header().Get("Location"), testCase.contains)) {
+			t.Fatalf("%s %s = %d, location %q, body %s",
+				testCase.method, testCase.target, response.Code,
+				response.Header().Get("Location"), response.Body.String())
+		}
+	}
+	if evidence.deriveCalls != 2 {
+		t.Fatalf("derive calls = %d", evidence.deriveCalls)
+	}
+
+	for _, testCase := range []struct {
+		method      string
+		target      string
+		body        string
+		contentType string
+	}{
+		{http.MethodPost, "/api/insights/derive", `{`, "application/json"},
+		{http.MethodGet, "/api/insights/compare?repository=bad", "", ""},
+		{http.MethodPut, "/api/insights/thresholds", `{`, "application/json"},
+		{http.MethodPut, "/api/insights/sonar", `{`, "application/json"},
+		{http.MethodGet, "/api/insights?repository=bad", "", ""},
+		{http.MethodGet, "/api/insights?limit=6000", "", ""},
+		{http.MethodGet, "/api/insights?since=yesterday", "", ""},
+	} {
+		response := request(testCase.method, testCase.target, testCase.body, testCase.contentType)
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("invalid %s = %d: %s", testCase.target, response.Code, response.Body.String())
+		}
+	}
+}
+
 type testInsightService struct {
 	response    insights.QueryResponse
 	lastFilter  insights.Filter

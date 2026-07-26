@@ -237,6 +237,118 @@ func TestSonarSyncImportsMeasuresIssuesAndOriginatingQualityGate(t *testing.T) {
 	}
 }
 
+func TestCompareThresholdsAndSemgrepLifecycle(t *testing.T) {
+	ctx := context.Background()
+	storage, repository, firstRevision := insightRepository(t)
+	defer storage.Close()
+	service := insights.New(storage, "http://127.0.0.1:7331")
+	if _, err := service.Import(ctx, insights.ImportRequest{
+		RepositoryID: repository.ID, Revision: firstRevision, Format: "lcov",
+		Content: []byte("SF:internal/service.go\nLF:10\nLH:8\nend_of_record\n"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	firstSemgrep := []byte(`{
+		"version":"1.0",
+		"results":[{
+			"check_id":"go.old",
+			"path":"internal/service.go",
+			"start":{"line":2,"col":1},
+			"end":{"line":2,"col":8},
+			"extra":{"message":"old finding","severity":"WARNING","fingerprint":"old-fingerprint","metadata":{"owner":"platform"}}
+		}],
+		"errors":[{"message":"non-fatal scanner warning"}]
+	}`)
+	if _, err := service.Import(ctx, insights.ImportRequest{
+		RepositoryID: repository.ID, Revision: firstRevision, Format: "semgrep-json",
+		Content: firstSemgrep,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(repository.Path, "internal", "service.go"), []byte(
+		"package internal\n\nfunc service(value bool) int {\n\tif value { return 2 }\n\treturn 0\n}\n",
+	), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repository.Path, "add", "internal/service.go")
+	runGit(t, repository.Path, "commit", "-m", "second revision")
+	secondRevision := strings.TrimSpace(runGit(t, repository.Path, "rev-parse", "HEAD"))
+	if err := storage.UpdateIndexState(ctx, repository.ID, "ready", secondRevision, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Import(ctx, insights.ImportRequest{
+		RepositoryID: repository.ID, Revision: secondRevision, Format: "lcov",
+		Content: []byte("SF:internal/service.go\nLF:10\nLH:9\nend_of_record\n"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	secondSemgrep := []byte(`{
+		"version":"1.1",
+		"results":[{
+			"check_id":"go.new",
+			"path":"internal/service.go",
+			"start":{"line":3,"col":1},
+			"end":{"line":3,"col":8},
+			"extra":{"message":"new finding","severity":"ERROR","fingerprint":"new-fingerprint","metadata":{}}
+		}]
+	}`)
+	if _, err := service.Import(ctx, insights.ImportRequest{
+		RepositoryID: repository.ID, Revision: secondRevision, Format: "semgrep",
+		Content: secondSemgrep,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	comparison, err := service.Compare(ctx, repository.ID, firstRevision, secondRevision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(comparison.MetricDeltas) == 0 || len(comparison.Introduced) != 1 || len(comparison.Resolved) != 1 {
+		t.Fatalf("comparison = %#v", comparison)
+	}
+	foundDelta := false
+	for _, delta := range comparison.MetricDeltas {
+		if delta.Key == "coverage.line" && delta.Delta != nil && *delta.Delta == 10 {
+			foundDelta = true
+		}
+	}
+	if !foundDelta {
+		t.Fatalf("coverage delta missing: %#v", comparison.MetricDeltas)
+	}
+	if _, err := service.Compare(ctx, repository.ID, firstRevision, firstRevision); err == nil {
+		t.Fatal("identical comparison revisions were accepted")
+	}
+
+	threshold, err := service.SetThreshold(ctx, insights.Threshold{
+		RepositoryID: repository.ID, Key: "coverage.line",
+		Operator: "lt", Value: 95, Severity: "warning", Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if threshold.ID == 0 {
+		t.Fatalf("threshold was not persisted: %#v", threshold)
+	}
+	thresholds, err := service.Thresholds(ctx, repository.ID)
+	if err != nil || len(thresholds) != 1 {
+		t.Fatalf("thresholds = %#v, %v", thresholds, err)
+	}
+	evaluations, err := service.EvaluateThresholds(ctx, repository.ID)
+	if err != nil || len(evaluations) != 1 || !evaluations[0].Violated || !evaluations[0].Advisory {
+		t.Fatalf("evaluations = %#v, %v", evaluations, err)
+	}
+	for _, invalid := range []insights.Threshold{
+		{RepositoryID: repository.ID, Operator: "lt"},
+		{RepositoryID: repository.ID, Key: "coverage.line", Operator: "equals"},
+	} {
+		if _, err := service.SetThreshold(ctx, invalid); err == nil {
+			t.Fatalf("invalid threshold accepted: %#v", invalid)
+		}
+	}
+	service.SetBaseURL("http://localhost:7331/")
+}
+
 func insightRepository(t *testing.T) (*store.Store, catalog.Repository, string) {
 	t.Helper()
 	root := t.TempDir()

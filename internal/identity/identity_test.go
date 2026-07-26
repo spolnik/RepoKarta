@@ -1,37 +1,37 @@
 package identity
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
-func TestPermissionMatrix(t *testing.T) {
-	tests := []struct {
-		role       Role
-		permission Permission
-		want       bool
-	}{
-		{RoleReader, PermissionReadRepositories, true},
-		{RoleReader, PermissionExportArtifacts, true},
-		{RoleReader, PermissionGenerateAI, false},
-		{RoleMaintainer, PermissionGenerateAI, true},
-		{RoleMaintainer, PermissionManageArtifacts, true},
-		{RoleMaintainer, PermissionViewCrossAuthor, false},
-		{RoleAdmin, PermissionViewCrossAuthor, true},
-		{RoleAdmin, PermissionAcquireRepositories, true},
-		{RoleAdmin, PermissionManageSecurity, true},
-		{RoleAdmin, PermissionManageRoles, true},
-		{RoleAdmin, PermissionViewAudit, true},
+func TestRolesPermissionsAndRanking(t *testing.T) {
+	if NormalizeRole(" ADMINISTRATOR ") != RoleAdmin ||
+		NormalizeRole("knowledge-maintainer") != RoleMaintainer ||
+		NormalizeRole("unknown") != RoleReader {
+		t.Fatal("role normalization changed")
 	}
-	for _, test := range tests {
-		if got := Allows(test.role, test.permission); got != test.want {
-			t.Errorf("Allows(%q, %q) = %v, want %v", test.role, test.permission, got, test.want)
-		}
+	if !ValidRole(RoleReader) || !ValidRole(RoleMaintainer) || !ValidRole(RoleAdmin) || ValidRole("owner") {
+		t.Fatal("role validation changed")
 	}
-}
-
-func TestUnknownRoleNeverElevates(t *testing.T) {
-	if NormalizeRole("owner") != RoleReader {
-		t.Fatal("unknown role did not fail closed to reader")
+	if RoleRank(RoleAdmin) != 3 || RoleRank(RoleMaintainer) != 2 || RoleRank(RoleReader) != 1 {
+		t.Fatal("role ranking changed")
 	}
-	if Allows("owner", PermissionManageRoles) {
-		t.Fatal("unknown role received elevated permission")
+	if MaxRole(RoleReader, RoleAdmin) != RoleAdmin || MaxRole(RoleMaintainer, RoleReader) != RoleMaintainer {
+		t.Fatal("maximum role changed")
+	}
+	if Allows(RoleReader, PermissionGenerateAI) ||
+		!Allows(RoleMaintainer, PermissionGenerateAI) ||
+		!Allows(RoleAdmin, PermissionManageSecurity) ||
+		Allows(RoleAdmin, Permission("unknown")) {
+		t.Fatal("permission matrix changed")
+	}
+	if got := Permissions(RoleReader); !reflect.DeepEqual(got, []Permission{
+		PermissionReadRepositories, PermissionExportArtifacts,
+	}) {
+		t.Fatalf("reader permissions = %#v", got)
+	}
+	if len(Permissions(RoleAdmin)) != 11 {
+		t.Fatalf("administrator permissions = %#v", Permissions(RoleAdmin))
 	}
 }

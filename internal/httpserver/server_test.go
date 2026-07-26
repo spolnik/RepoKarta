@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -23,9 +24,11 @@ import (
 	"github.com/spolnik/RepoKarta/internal/contextscope"
 	"github.com/spolnik/RepoKarta/internal/docs"
 	"github.com/spolnik/RepoKarta/internal/graph"
+	"github.com/spolnik/RepoKarta/internal/identity"
 	"github.com/spolnik/RepoKarta/internal/maintenance"
 	"github.com/spolnik/RepoKarta/internal/search"
 	"github.com/spolnik/RepoKarta/internal/security"
+	"github.com/spolnik/RepoKarta/internal/source"
 	"github.com/spolnik/RepoKarta/internal/store"
 )
 
@@ -354,6 +357,231 @@ func (maintenanceTestStore) ConversationImagePaths(context.Context) (map[string]
 
 type testStore struct {
 	repositories []catalog.Repository
+}
+
+func TestEnterpriseAdministrationAPILifecycle(t *testing.T) {
+	database, err := store.Open(filepath.Join(t.TempDir(), "repokarta.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	user, err := database.SaveUser(context.Background(), identity.User{
+		UserName: "alice@example.com", Email: "alice@example.com", Active: true,
+		Role: identity.RoleReader,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	group, err := database.SaveGroup(context.Background(), identity.Group{
+		DisplayName: "Developers", Role: identity.RoleReader, Members: []string{user.ID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	securityManager, err := security.New(context.Background(), database, security.Config{
+		Address: "127.0.0.1:7331", DataDirectory: t.TempDir(),
+		Initial: security.Settings{Mode: security.ModeLocal},
+		Audit:   database,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := New(
+		Config{
+			Address: "127.0.0.1:7331", Version: "test",
+			Security: securityManager, Enterprise: database,
+		},
+		codeintel.New(testStore{}, testSearcher{}, "http://127.0.0.1:7331"),
+		testRefresher{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := func(method, target, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		httpRequest := httptest.NewRequest(method, "http://127.0.0.1:7331"+target, strings.NewReader(body))
+		httpRequest.Header.Set("X-Request-ID", "enterprise-test")
+		if body != "" {
+			httpRequest.Header.Set("Content-Type", "application/json")
+		}
+		response := httptest.NewRecorder()
+		server.server.Handler.ServeHTTP(response, httpRequest)
+		return response
+	}
+
+	response := request(http.MethodGet, "/api/admin/identities", "")
+	if response.Code != http.StatusOK ||
+		!strings.Contains(response.Body.String(), "alice@example.com") ||
+		!strings.Contains(response.Body.String(), "Developers") {
+		t.Fatalf("identities = %d: %s", response.Code, response.Body.String())
+	}
+	response = request(http.MethodPatch, "/api/admin/identities/"+user.ID+"/role", `{"role":"knowledge-maintainer"}`)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "knowledge-maintainer") {
+		t.Fatalf("user role = %d: %s", response.Code, response.Body.String())
+	}
+	response = request(http.MethodPatch, "/api/admin/groups/"+group.ID+"/role", `{"role":"administrator"}`)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "administrator") {
+		t.Fatalf("group role = %d: %s", response.Code, response.Body.String())
+	}
+	response = request(http.MethodPost, "/api/admin/role-mappings", `{"provider":"saml","group":"platform","role":"administrator"}`)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("create mapping = %d: %s", response.Code, response.Body.String())
+	}
+	response = request(http.MethodGet, "/api/admin/role-mappings", "")
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"group":"platform"`) {
+		t.Fatalf("list mappings = %d: %s", response.Code, response.Body.String())
+	}
+	mappings, err := database.ListRoleMappings(context.Background())
+	if err != nil || len(mappings) != 1 {
+		t.Fatalf("stored mappings = %#v, %v", mappings, err)
+	}
+	response = request(http.MethodDelete, "/api/admin/role-mappings/"+strconv.FormatInt(mappings[0].ID, 10), "")
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("delete mapping = %d: %s", response.Code, response.Body.String())
+	}
+
+	response = request(http.MethodGet, "/api/admin/security", "")
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"mode":"local"`) {
+		t.Fatalf("security settings = %d: %s", response.Code, response.Body.String())
+	}
+	response = request(http.MethodPut, "/api/admin/security", `{"mode":"local"}`)
+	if response.Code != http.StatusOK {
+		t.Fatalf("update security = %d: %s", response.Code, response.Body.String())
+	}
+	response = request(http.MethodPut, "/api/admin/audit/retention", `{"days":30,"max_events":10000}`)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"removed_events"`) {
+		t.Fatalf("update retention = %d: %s", response.Code, response.Body.String())
+	}
+	response = request(http.MethodGet, "/api/admin/audit/retention", "")
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"days":30`) {
+		t.Fatalf("audit retention = %d: %s", response.Code, response.Body.String())
+	}
+	response = request(http.MethodGet, "/api/admin/audit?limit=20&action=role.user.assign", "")
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"events"`) {
+		t.Fatalf("audit search = %d: %s", response.Code, response.Body.String())
+	}
+	for _, target := range []string{"/api/admin/audit/export", "/api/admin/audit/export?format=csv"} {
+		response = request(http.MethodGet, target, "")
+		if response.Code != http.StatusOK ||
+			response.Header().Get("Content-Disposition") == "" ||
+			response.Header().Get("X-RepoKarta-Audit-Export-Truncated") != "false" {
+			t.Fatalf("audit export %s = %d: %s", target, response.Code, response.Body.String())
+		}
+	}
+
+	for _, target := range []string{
+		"/api/admin/audit?limit=nope",
+		"/api/admin/audit?before=nope",
+		"/api/admin/audit?since=yesterday",
+	} {
+		response = request(http.MethodGet, target, "")
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("invalid audit filter %s = %d: %s", target, response.Code, response.Body.String())
+		}
+	}
+}
+
+func TestBootstrapAdministratorFormLifecycle(t *testing.T) {
+	database, err := store.Open(filepath.Join(t.TempDir(), "repokarta.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	user, err := database.SaveUser(context.Background(), identity.User{
+		UserName: "form-user@example.com", Active: true, Role: identity.RoleReader,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	group, err := database.SaveGroup(context.Background(), identity.Group{
+		DisplayName: "Form group", Role: identity.RoleReader, Members: []string{user.ID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	securityManager, err := security.New(context.Background(), database, security.Config{
+		Address: "127.0.0.1:7331", DataDirectory: t.TempDir(),
+		Initial: security.Settings{Mode: security.ModeLocal}, Audit: database,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := New(
+		Config{
+			Address: "127.0.0.1:7331", Version: "test",
+			Security: securityManager, Enterprise: database,
+		},
+		codeintel.New(testStore{}, testSearcher{}, "http://127.0.0.1:7331"),
+		testRefresher{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pageRequest := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7331/admin", nil)
+	pageResponse := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(pageResponse, pageRequest)
+	if pageResponse.Code != http.StatusOK || len(pageResponse.Result().Cookies()) == 0 {
+		t.Fatalf("admin page = %d: %s", pageResponse.Code, pageResponse.Body.String())
+	}
+	adminCookie := pageResponse.Result().Cookies()[0]
+	match := regexp.MustCompile(`name="csrf" value="([^"]+)"`).FindStringSubmatch(pageResponse.Body.String())
+	if len(match) != 2 {
+		t.Fatalf("admin CSRF token missing: %s", pageResponse.Body.String())
+	}
+	csrf := match[1]
+	postForm := func(target string, values url.Values) *httptest.ResponseRecorder {
+		t.Helper()
+		values.Set("csrf", csrf)
+		request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:7331"+target, strings.NewReader(values.Encode()))
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		request.AddCookie(adminCookie)
+		response := httptest.NewRecorder()
+		server.server.Handler.ServeHTTP(response, request)
+		return response
+	}
+	for _, testCase := range []struct {
+		target   string
+		values   url.Values
+		contains string
+	}{
+		{"/admin/identities/role", url.Values{"user_id": {user.ID}, "role": {"knowledge-maintainer"}}, "User role saved"},
+		{"/admin/groups/role", url.Values{"group_id": {group.ID}, "role": {"administrator"}}, "SCIM group role saved"},
+		{"/admin/role-mappings", url.Values{"provider": {"saml"}, "group": {"operators"}, "role": {"administrator"}}, "group mapping saved"},
+		{"/admin/audit/retention", url.Values{"days": {"14"}, "max_events": {"5000"}}, "Audit retention saved"},
+	} {
+		response := postForm(testCase.target, testCase.values)
+		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), testCase.contains) {
+			t.Fatalf("%s = %d: %s", testCase.target, response.Code, response.Body.String())
+		}
+	}
+	mappings, err := database.ListRoleMappings(context.Background())
+	if err != nil || len(mappings) != 1 {
+		t.Fatalf("mappings = %#v, %v", mappings, err)
+	}
+	response := postForm("/admin/role-mappings/delete", url.Values{
+		"mapping_id": {strconv.FormatInt(mappings[0].ID, 10)},
+	})
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "mapping removed") {
+		t.Fatalf("delete mapping = %d: %s", response.Code, response.Body.String())
+	}
+
+	exportRequest := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7331/admin/audit/export?format=csv", nil)
+	exportRequest.AddCookie(adminCookie)
+	exportResponse := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(exportResponse, exportRequest)
+	if exportResponse.Code != http.StatusOK || !strings.Contains(exportResponse.Body.String(), "correlation_id") {
+		t.Fatalf("bootstrap export = %d: %s", exportResponse.Code, exportResponse.Body.String())
+	}
+	logoutResponse := postForm("/admin/logout", url.Values{})
+	if logoutResponse.Code != http.StatusSeeOther {
+		t.Fatalf("admin logout = %d: %s", logoutResponse.Code, logoutResponse.Body.String())
+	}
+	authLogout := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:7331/auth/logout", nil)
+	authLogoutResponse := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(authLogoutResponse, authLogout)
+	if authLogoutResponse.Code != http.StatusSeeOther {
+		t.Fatalf("auth logout = %d: %s", authLogoutResponse.Code, authLogoutResponse.Body.String())
+	}
 }
 
 func TestLocalAdministratorOpensAdminConsoleWithoutBootstrapCredentials(t *testing.T) {
@@ -1154,6 +1382,106 @@ func TestGitAPIRejectsInvalidBoundsBeforeRepositoryAccess(t *testing.T) {
 	}
 }
 
+func TestReadOnlyHTTPAPIsAgainstCommittedRepository(t *testing.T) {
+	repositoryDirectory := filepath.Join(t.TempDir(), "repository")
+	if err := os.MkdirAll(repositoryDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runHTTPGit(t, repositoryDirectory, "init")
+	runHTTPGit(t, repositoryDirectory, "config", "user.email", "tests@repokarta.local")
+	runHTTPGit(t, repositoryDirectory, "config", "user.name", "RepoKarta Tests")
+	sourcePath := filepath.Join(repositoryDirectory, "main.go")
+	if err := os.WriteFile(sourcePath, []byte("package main\n\nfunc main() {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runHTTPGit(t, repositoryDirectory, "add", "main.go")
+	runHTTPGit(t, repositoryDirectory, "commit", "-m", "first")
+	firstRevision := strings.TrimSpace(runHTTPGit(t, repositoryDirectory, "rev-parse", "HEAD"))
+	if err := os.WriteFile(sourcePath, []byte("package main\n\nfunc main() { println(\"ready\") }\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runHTTPGit(t, repositoryDirectory, "add", "main.go")
+	runHTTPGit(t, repositoryDirectory, "commit", "-m", "second")
+	secondRevision := strings.TrimSpace(runHTTPGit(t, repositoryDirectory, "rev-parse", "HEAD"))
+
+	repository := catalog.Repository{
+		ID: 12, Name: "example/repository", Path: repositoryDirectory,
+		OriginURL:       "https://github.com/example/repository.git",
+		DefaultRevision: "main", HeadCommit: secondRevision, IndexedCommit: secondRevision,
+		IndexState: "ready",
+	}
+	conversations := &testConversations{}
+	maps := &testMapService{progress: graph.ArtifactProgress{
+		State: "building", RequestedRepositories: 1, PendingRepositories: 1,
+	}}
+	server, err := New(
+		Config{
+			Address: "127.0.0.1:7331", Version: "coverage-test",
+			RepositoryRoot: repositoryDirectory, Conversations: conversations, Maps: maps,
+		},
+		codeintel.New(testStore{repositories: []catalog.Repository{repository}}, testSearcher{}, "http://127.0.0.1:7331"),
+		testRefresher{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testCases := []struct {
+		method   string
+		target   string
+		status   int
+		contains string
+	}{
+		{http.MethodGet, "/healthz", http.StatusOK, `"version":"coverage-test"`},
+		{http.MethodGet, "/api/repositories", http.StatusOK, `"example/repository"`},
+		{http.MethodGet, "/repositories", http.StatusOK, "example/repository"},
+		{http.MethodPost, "/repositories/refresh", http.StatusOK, "example/repository"},
+		{http.MethodGet, "/api/providers", http.StatusOK, `"id":"test"`},
+		{http.MethodGet, "/api/file/12?path=main.go&lines=1-3", http.StatusOK, `"package main"`},
+		{http.MethodGet, "/api/tree/12", http.StatusOK, `"main.go"`},
+		{http.MethodGet, "/api/git/log/12?limit=2", http.StatusOK, `"second"`},
+		{http.MethodGet, "/api/git/diff/12?from=" + firstRevision + "&to=" + secondRevision + "&path=main.go", http.StatusOK, `println`},
+		{http.MethodGet, "/source/12?path=main.go&lines=1-3&focus=3", http.StatusOK, "example/repository@"},
+		{http.MethodGet, "/api/artifacts/progress", http.StatusOK, `"state":"building"`},
+		{http.MethodGet, "/api/contexts/suggest?kind=repository&q=example", http.StatusOK, `"suggestions"`},
+		{http.MethodGet, "/api/symbol?symbol=main&repo=12", http.StatusOK, `"match_count":250`},
+	}
+	for _, testCase := range testCases {
+		request := httptest.NewRequest(testCase.method, "http://127.0.0.1:7331"+testCase.target, nil)
+		response := httptest.NewRecorder()
+		server.server.Handler.ServeHTTP(response, request)
+		if response.Code != testCase.status ||
+			(testCase.contains != "" && !strings.Contains(response.Body.String(), testCase.contains)) {
+			t.Fatalf("%s %s = %d: %s", testCase.method, testCase.target, response.Code, response.Body.String())
+		}
+		if response.Header().Get("X-Request-ID") == "" {
+			t.Fatalf("%s did not receive a correlation ID", testCase.target)
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	eventRequest := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7331/events", nil).WithContext(ctx)
+	eventResponse := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(eventResponse, eventRequest)
+	if eventResponse.Header().Get("Content-Type") != "text/event-stream" {
+		t.Fatalf("event content type = %q", eventResponse.Header().Get("Content-Type"))
+	}
+
+	runServer, err := New(
+		Config{Address: "127.0.0.1:0", Version: "coverage-test"},
+		codeintel.New(testStore{}, testSearcher{}, "http://127.0.0.1:7331"),
+		testRefresher{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runContext, stop := context.WithCancel(context.Background())
+	stop()
+	if err := runServer.Run(runContext); err != nil {
+		t.Fatalf("graceful run shutdown: %v", err)
+	}
+}
+
 type testRefresher struct{}
 
 func (testRefresher) Refresh(context.Context) error { return nil }
@@ -1690,6 +2018,102 @@ func TestFocusRangeParsing(t *testing.T) {
 		start, end := parseFocusRange(testCase.value)
 		if start != testCase.start || end != testCase.end {
 			t.Fatalf("parseFocusRange(%q) = %d-%d, want %d-%d", testCase.value, start, end, testCase.start, testCase.end)
+		}
+	}
+}
+
+func TestHTTPBoundaryAndFormattingHelpers(t *testing.T) {
+	if id, err := optionalRepositoryID(""); err != nil || id != 0 {
+		t.Fatalf("optional blank repository = %d, %v", id, err)
+	}
+	if id, err := optionalRepositoryID("42"); err != nil || id != 42 {
+		t.Fatalf("optional repository = %d, %v", id, err)
+	}
+	if _, err := optionalRepositoryID("bad"); err == nil {
+		t.Fatal("invalid optional repository accepted")
+	}
+	if _, err := requiredRepositoryID(""); err == nil {
+		t.Fatal("missing required repository accepted")
+	}
+	if id, name := repositorySelector("17"); id != 17 || name != "" {
+		t.Fatalf("numeric selector = %d, %q", id, name)
+	}
+	if id, name := repositorySelector("owner/repo"); id != 0 || name != "owner/repo" {
+		t.Fatalf("named selector = %d, %q", id, name)
+	}
+	for _, value := range []string{"", "../unsafe", `a\b:c?.zip`, strings.Repeat("x", 200)} {
+		if (value != "" && safeDownloadName(value) == "") || strings.Contains(safeDownloadName(value), "/") {
+			t.Fatalf("unsafe download name remained unsafe: %q", safeDownloadName(value))
+		}
+	}
+	if start, end := parseLineRange("5-8"); start != 5 || end != 8 {
+		t.Fatalf("line range = %d-%d", start, end)
+	}
+	if start, end := parseLineRange("900-100"); start != 900 || end != 900 {
+		t.Fatalf("invalid line range fallback = %d-%d", start, end)
+	}
+	if parseSearchLimit("5000") != codeintel.MaximumSearchLimit ||
+		parseSearchLimit("bad") != codeintel.DefaultSearchLimit {
+		t.Fatal("search limit bounds changed")
+	}
+	if _, err := apiSearchLimit("0"); err == nil {
+		t.Fatal("zero API search limit accepted")
+	}
+	if value, err := apiBoundedInteger("", "limit", 10, 20); err != nil || value != 10 {
+		t.Fatalf("bounded fallback = %d, %v", value, err)
+	}
+	if _, err := apiBoundedInteger("21", "limit", 10, 20); err == nil {
+		t.Fatal("oversized bounded integer accepted")
+	}
+	if formatDuration(1500*time.Millisecond) == "" || formatMilliseconds(2.25) == "" ||
+		formatTime(time.Time{}) == "" || shortCommit("abcdef") != "abcdef" {
+		t.Fatal("formatting helpers changed")
+	}
+	for _, state := range []string{"ready", "pending", "indexing", "error", "unknown"} {
+		if statusLabel(state) == "" {
+			t.Fatalf("empty status label for %q", state)
+		}
+	}
+	if nextSearchLimit(100) <= 100 || nextSearchLimit(codeintel.MaximumSearchLimit) != codeintel.MaximumSearchLimit {
+		t.Fatal("next search limit bounds changed")
+	}
+	if indexProgress(3, 4) != 75 || indexProgress(0, 0) != 0 {
+		t.Fatal("index progress changed")
+	}
+	repositories := []catalog.Repository{{ID: 2, IndexedCommit: "b", IndexState: "ready"}, {ID: 1, IndexedCommit: "a", IndexState: "pending"}}
+	if repositorySignature(repositories) == "" {
+		t.Fatal("repository signature is empty")
+	}
+	if remoteFileURL("https://github.com/example/repo.git", "abc", "main.go", 2, 4) !=
+		"https://github.com/example/repo/blob/abc/main.go#L2-L4" {
+		t.Fatal("GitHub remote URL changed")
+	}
+	if remoteFileURL("", "abc", "main.go", 1, 1) != "" ||
+		!isLoopbackHost("127.0.0.1") || !isLoopbackHost("[::1]") ||
+		isLoopbackHost("example.com") {
+		t.Fatal("request boundary helper changed")
+	}
+	request := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/dependencies?repository=7&ecosystem=go&limit=25&offset=5", nil)
+	options, err := dependencyOptions(request)
+	if err != nil || options.Ecosystem != "go" || options.Limit != 25 || options.Offset != 5 {
+		t.Fatalf("dependency options = %#v, %v", options, err)
+	}
+	if dependencyURL("/dependencies", 7, options, 30) == "" {
+		t.Fatal("dependency URL is empty")
+	}
+	if data := buildMCPPageData("http://localhost/mcp", "secret-token-value", "repokarta", "http://localhost"); len(data.Tools) != 14 {
+		t.Fatalf("MCP page tools = %d", len(data.Tools))
+	}
+
+	for _, write := range []func(http.ResponseWriter){
+		func(response http.ResponseWriter) { writeDocumentationError(response, docs.ErrPageNotFound) },
+		func(response http.ResponseWriter) { writeCodeIntelligenceError(response, source.ErrUnsafePath) },
+		func(response http.ResponseWriter) { writeContextError(response, &contextscope.ResolutionError{}) },
+	} {
+		response := httptest.NewRecorder()
+		write(response)
+		if response.Code < 400 {
+			t.Fatalf("error writer status = %d: %s", response.Code, response.Body.String())
 		}
 	}
 }

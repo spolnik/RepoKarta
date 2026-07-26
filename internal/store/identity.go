@@ -228,23 +228,35 @@ FROM identity_groups ORDER BY display_name COLLATE NOCASE LIMIT ? OFFSET ?`, cou
 	if err != nil {
 		return nil, 0, err
 	}
-	defer rows.Close()
 	groups := make([]identity.Group, 0)
 	for rows.Next() {
 		var group identity.Group
 		var created, updated string
 		if err := rows.Scan(&group.ID, &group.ExternalID, &group.DisplayName, &group.Role, &created, &updated); err != nil {
+			rows.Close()
 			return nil, 0, err
 		}
 		group.CreatedAt, group.UpdatedAt = parseTime(created), parseTime(updated)
-		members, err := s.groupMembers(ctx, group.ID)
+		groups = append(groups, group)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, 0, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, 0, err
+	}
+	// The store deliberately uses one SQLite connection. Finish consuming and
+	// close the group query before loading members to avoid waiting on the same
+	// connection from inside the row loop.
+	for index := range groups {
+		members, err := s.groupMembers(ctx, groups[index].ID)
 		if err != nil {
 			return nil, 0, err
 		}
-		group.Members = members
-		groups = append(groups, group)
+		groups[index].Members = members
 	}
-	return groups, total, rows.Err()
+	return groups, total, nil
 }
 
 func (s *Store) Group(ctx context.Context, id string) (identity.Group, error) {
