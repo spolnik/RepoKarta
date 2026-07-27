@@ -47,6 +47,7 @@ type Query struct {
 	File             string
 	Files            []string
 	ExcludeFiles     []string
+	FileNameOnly     bool
 	Mode             string
 	Limit            int
 }

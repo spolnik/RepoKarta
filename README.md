@@ -184,6 +184,9 @@ share a deterministic RepoKarta grammar:
 ```text
 ordinary text repository:RepoKarta revision:8f42c0a language:Go path:internal file:.go
 content:"exact phrase" -content:generated -path:vendor result_type:content
+Service result_type:file_path
+PaymentService result_type:symbol_definition
+BaseService result_type:implementation repository:RepoKarta
 ```
 
 The canonical fields are `content`, `repository`, `revision`, `language`,
@@ -198,9 +201,13 @@ parsed free text and filters.
 
 Autocomplete is available in the browser and from
 `GET /api/search/query-completions?q={query}&cursor={utf16-offset}`. It
-advertises the complete stable grammar. Filters whose evidence is not indexed
-yet—currently non-content result types, symbol kinds, and ownership—fail with
-an explicit error instead of silently widening or ignoring the request. The
+advertises the complete stable grammar. Unified search currently executes
+`content`, `file_path`, `symbol_definition`, `reference`, and `implementation`
+result types. Reference and implementation results use the persisted AST
+relation index and preserve its explicit syntax-confidence and partial-coverage
+metadata. The remaining result domains are advertised for a stable grammar but
+fail with an explicit error until their existing evidence stores are connected;
+symbol-kind and ownership filters likewise fail closed. The
 existing repository, language, path, filename, mode, and limit form fields
 remain supported and combine with grammar filters.
 
@@ -728,11 +735,11 @@ Windows amd64 and Apple Silicon macOS. The workflow:
 Run the same packagers locally:
 
 ```powershell
-.\scripts\package-release.ps1 -Version 0.55.0-dev
+.\scripts\package-release.ps1 -Version 0.56.0-dev
 ```
 
 ```sh
-./scripts/package-release.sh 0.55.0-dev
+./scripts/package-release.sh 0.56.0-dev
 ```
 
 macOS packages are signed with the hardened runtime when

@@ -672,6 +672,36 @@ public class PaymentService extends BaseService {
 			t.Fatalf("FindReferences(%q) = %#v", symbol, found)
 		}
 	}
+
+	implementations, err := service.Search(context.Background(), SearchRequest{
+		Query: "BaseService result_type:implementation repository:payments",
+		Limit: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if implementations.ResultType != "implementation" ||
+		implementations.SearchKind != "implementations" ||
+		implementations.MatchCount != 1 ||
+		len(implementations.Matches) != 1 ||
+		implementations.Matches[0].ResultType != "implementation" ||
+		implementations.Matches[0].Lines[0].ReferenceKind != "extends" {
+		t.Fatalf("implementation results = %#v", implementations)
+	}
+
+	references, err := service.Search(context.Background(), SearchRequest{
+		Query: "save result_type:reference repository:payments language:java",
+		Limit: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if references.ResultType != "reference" ||
+		references.MatchCount != 1 ||
+		len(references.Matches) != 1 ||
+		references.Matches[0].ResultType != "reference" {
+		t.Fatalf("typed reference results = %#v", references)
+	}
 }
 
 func TestReferenceSearchReportsPartialASTCoverage(t *testing.T) {

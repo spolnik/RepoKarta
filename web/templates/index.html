@@ -230,9 +230,9 @@
     <p class="mt-2 font-mono text-xs text-rose-200/60">{{.Search.Error}}</p>
   </div>
   {{else if .Search.Performed}}
-    {{if eq .Search.Query.Mode "references"}}
+    {{if or (eq .Search.Query.Mode "references") (eq .Search.ResultType "reference") (eq .Search.ResultType "implementation")}}
     <div class="reference-search-note">
-      <strong>AST reference search</strong>
+      <strong>{{if eq .Search.ResultType "implementation"}}AST implementation search{{else}}AST reference search{{end}}</strong>
       <span>Exact syntax target-name matches at the indexed commit. Relation kinds and receivers are parser-backed; overloads and dynamic dispatch are not type-resolved.</span>
     </div>
     {{end}}
@@ -290,6 +290,7 @@
             </div>
           </div>
           <div class="flex shrink-0 items-center gap-2 font-mono text-xs text-ink-faint">
+            {{if .ResultType}}<span class="rounded bg-emerald-400/[0.08] px-1.5 py-0.5 text-emerald-200">{{.ResultType}}</span><span>·</span>{{end}}
             {{if .Language}}<span>{{.Language}}</span><span>·</span>{{end}}
             <span>{{shortCommit .Revision}}</span>
             {{/* Four strong surfaces that previously did not link to each other. */}}
@@ -361,7 +362,7 @@
     {{else}}
     <div class="result-state">
       <p class="font-medium text-ink">No matches found</p>
-      {{if eq .Search.Query.Mode "references"}}
+      {{if or (eq .Search.Query.Mode "references") (eq .Search.ResultType "reference") (eq .Search.ResultType "implementation")}}
       <p class="mt-2 text-sm text-ink-faint">No captured call, import, extends, or implements relation targets this exact name. Check the spelling or broaden the repository, language, and path filters.</p>
       {{else}}
       <p class="mt-2 text-sm text-ink-faint">Try a shorter term, remove a filter, or switch off regular expressions.</p>

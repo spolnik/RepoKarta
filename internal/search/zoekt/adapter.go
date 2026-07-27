@@ -291,9 +291,15 @@ func buildQuery(request search.Query) (query.Q, error) {
 			if err != nil {
 				return nil, fmt.Errorf("invalid regular expression: %w", err)
 			}
-			children = append(children, &query.Regexp{Regexp: regularExpression})
+			children = append(children, &query.Regexp{
+				Regexp:   regularExpression,
+				FileName: request.FileNameOnly,
+			})
 		default:
-			children = append(children, &query.Substring{Pattern: request.Text})
+			children = append(children, &query.Substring{
+				Pattern:  request.Text,
+				FileName: request.FileNameOnly,
+			})
 		}
 	}
 	if textQuery := stringAlternatives(request.IncludeText, func(value string) query.Q {

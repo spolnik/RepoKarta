@@ -2,6 +2,7 @@ package codeintel
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -23,6 +24,141 @@ type compiledQueryFilters struct {
 	repositoryAllow   []uint32
 	repositoryLimited bool
 	repositoryDeny    []uint32
+}
+
+func requestedResultType(parsed querylang.Query) (string, error) {
+	resultType := "content"
+	explicit := false
+	for _, filter := range parsed.Filters {
+		if filter.Field != querylang.FieldResultType {
+			continue
+		}
+		if filter.Negative {
+			return "", fmt.Errorf("negative result_type filters are not supported")
+		}
+		value := strings.ToLower(strings.TrimSpace(filter.Value))
+		if explicit && value != resultType {
+			return "", fmt.Errorf("search accepts one result_type at a time")
+		}
+		resultType = value
+		explicit = true
+	}
+	switch resultType {
+	case "content", "file_path", "symbol_definition", "reference", "implementation":
+		return resultType, nil
+	case "repository", "dependency", "route", "commit", "diff", "wiki_page", "code_insight":
+		return "", fmt.Errorf("result_type %q is not connected to unified search yet", resultType)
+	default:
+		return "", fmt.Errorf("unknown result_type %q", resultType)
+	}
+}
+
+func (s *Service) referenceRequestForQuery(
+	ctx context.Context,
+	request SearchRequest,
+	parsed querylang.Query,
+) (ReferenceRequest, error) {
+	mode := strings.ToLower(strings.TrimSpace(request.Mode))
+	if mode != "" && mode != "literal" && mode != "references" {
+		return ReferenceRequest{}, errors.New(
+			"reference and implementation results cannot be combined with regex or Zoekt query mode",
+		)
+	}
+	output := ReferenceRequest{
+		Symbol:             parsed.Text,
+		RepositoryID:       request.RepositoryID,
+		Repository:         request.Repository,
+		Language:           request.Language,
+		Path:               request.Path,
+		File:               request.File,
+		Limit:              request.Limit,
+		Contexts:           request.Contexts,
+		NamedContextIDs:    request.NamedContextIDs,
+		UseDefaultContexts: request.UseDefaultContexts,
+	}
+	var repositories []string
+	var revisions []string
+	for _, filter := range parsed.Filters {
+		if filter.Field == querylang.FieldResultType {
+			continue
+		}
+		if filter.Negative {
+			return output, fmt.Errorf(
+				"negative %s filters are not supported for reference results yet",
+				filter.Field,
+			)
+		}
+		switch filter.Field {
+		case querylang.FieldRepository:
+			repositories = append(repositories, filter.Value)
+		case querylang.FieldRevision:
+			revisions = append(revisions, filter.Value)
+		case querylang.FieldLanguage:
+			if output.Language != "" && !strings.EqualFold(output.Language, filter.Value) {
+				return output, fmt.Errorf("reference results currently accept one language")
+			}
+			output.Language = filter.Value
+		case querylang.FieldPath:
+			if output.Path != "" && !strings.EqualFold(output.Path, filter.Value) {
+				return output, fmt.Errorf("reference results currently accept one path filter")
+			}
+			output.Path = filter.Value
+		case querylang.FieldFile:
+			if output.File != "" && !strings.EqualFold(output.File, filter.Value) {
+				return output, fmt.Errorf("reference results currently accept one filename filter")
+			}
+			output.File = filter.Value
+		case querylang.FieldContent:
+			return output, fmt.Errorf("content filters cannot be combined with reference results")
+		case querylang.FieldSymbolKind:
+			return output, fmt.Errorf("symbol_kind is not available in syntax-backed reference evidence")
+		case querylang.FieldOwner:
+			return output, fmt.Errorf("owner filters require ownership evidence that is not indexed yet")
+		}
+	}
+	if len(repositories)+len(revisions) == 0 {
+		return output, nil
+	}
+	visible, err := s.store.ListRepositories(ctx)
+	if err != nil {
+		return output, err
+	}
+	repositoryIDs, err := repositoryFilterIDs(visible, repositories)
+	if err != nil {
+		return output, err
+	}
+	revisionIDs, err := revisionFilterIDs(visible, revisions)
+	if err != nil {
+		return output, err
+	}
+	allowed := intersectOptionalIDs(repositoryIDs, revisionIDs)
+	if len(allowed) != 1 {
+		return output, errors.New("reference results currently require filters that resolve to one repository")
+	}
+	if output.RepositoryID > 0 && uint32(output.RepositoryID) != allowed[0] {
+		return output, errors.New("query repository filter conflicts with repository_id")
+	}
+	if output.Repository != "" {
+		legacy, resolveErr := s.namedRepository(ctx, output.Repository)
+		if resolveErr != nil {
+			return output, resolveErr
+		}
+		if uint32(legacy.ID) != allowed[0] {
+			return output, errors.New("query repository filter conflicts with repository")
+		}
+	}
+	output.RepositoryID = int64(allowed[0])
+	output.Repository = ""
+	return output, nil
+}
+
+func containsFold(values []string, candidate string) bool {
+	for _, value := range values {
+		if strings.EqualFold(strings.TrimSpace(value), strings.TrimSpace(candidate)) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Service) compileQueryFilters(
@@ -56,12 +192,7 @@ func (s *Service) compileQueryFilters(
 		case querylang.FieldFile:
 			target(&compiled.files, &compiled.excludeFiles)
 		case querylang.FieldResultType:
-			if filter.Negative || !strings.EqualFold(filter.Value, "content") {
-				return compiled, fmt.Errorf(
-					"result_type %q is not indexed by deterministic code search yet",
-					filter.Value,
-				)
-			}
+			// Validated and dispatched by requestedResultType.
 		case querylang.FieldSymbolKind:
 			return compiled, fmt.Errorf(
 				"symbol_kind requires a symbol, reference, or implementation result type",

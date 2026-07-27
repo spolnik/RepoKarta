@@ -234,9 +234,11 @@ type searchData struct {
 	Warnings             []search.Warning
 	Truncated            bool
 	Matches              []searchMatchView
+	ResultType           string
 }
 
 type searchMatchView struct {
+	ResultType   string
 	RepositoryID int64
 	Repository   string
 	Revision     string
@@ -1766,6 +1768,7 @@ func (s *Server) search(response http.ResponseWriter, request *http.Request) {
 			data.Search.ShardsSkipped = result.ShardsSkipped
 			data.Search.Warnings = result.Warnings
 			data.Search.Truncated = result.Truncated
+			data.Search.ResultType = result.ResultType
 			data.Search.Matches = resolveSearchViews(result.Matches, data.Repositories)
 		}
 	}
@@ -2119,6 +2122,7 @@ func resolveSearchViews(matches []codeintel.SearchMatch, repositories []catalog.
 	views := make([]searchMatchView, 0, len(matches))
 	for _, match := range matches {
 		view := searchMatchView{
+			ResultType: match.ResultType,
 			Repository: match.Repository,
 			Revision:   match.Revision,
 			Path:       match.Path,

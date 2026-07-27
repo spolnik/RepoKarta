@@ -43,6 +43,42 @@ func TestSearchCompilesDocumentedQueryFilters(t *testing.T) {
 		len(response.QueryLanguage.Filters) != 11 {
 		t.Fatalf("query provenance = %#v", response.QueryLanguage)
 	}
+	if response.ResultType != "content" {
+		t.Fatalf("result type = %q", response.ResultType)
+	}
+}
+
+func TestSearchDispatchesFilePathAndSymbolDefinitionResults(t *testing.T) {
+	repository := catalog.Repository{
+		ID:            7,
+		Name:          "payments",
+		IndexedCommit: strings.Repeat("a", 40),
+	}
+	searcher := &capturingSearcher{}
+	service := New(referenceTestStore{repository: repository}, searcher, "")
+
+	filePaths, err := service.Search(context.Background(), SearchRequest{
+		Query: "service result_type:file_path repository:payments",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !searcher.query.FileNameOnly || searcher.query.Text != "service" ||
+		filePaths.ResultType != "file_path" {
+		t.Fatalf("file path query = %#v, response = %#v", searcher.query, filePaths)
+	}
+
+	definitions, err := service.Search(context.Background(), SearchRequest{
+		Query: "PaymentService result_type:symbol_definition repository:payments",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if searcher.query.Mode != "zoekt" ||
+		searcher.query.Text != `sym:"PaymentService"` ||
+		definitions.ResultType != "symbol_definition" {
+		t.Fatalf("symbol query = %#v, response = %#v", searcher.query, definitions)
+	}
 }
 
 func TestSearchFailsClosedForUnindexedQueryEvidence(t *testing.T) {

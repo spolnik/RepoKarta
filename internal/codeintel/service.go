@@ -197,6 +197,7 @@ type SearchResponse struct {
 	Contexts            []contextscope.Context      `json:"contexts,omitempty"`
 	NamedContexts       []contextscope.NamedContext `json:"named_contexts,omitempty"`
 	QueryLanguage       *querylang.Query            `json:"query_language,omitempty"`
+	ResultType          string                      `json:"result_type"`
 }
 
 // ReferenceIndex reports whether every requested repository has a persisted
@@ -236,6 +237,7 @@ type ReferenceRequest struct {
 	Contexts           []contextscope.Selector `json:"contexts,omitempty"`
 	NamedContextIDs    []string                `json:"named_context_ids,omitempty"`
 	UseDefaultContexts *bool                   `json:"use_default_contexts,omitempty"`
+	RelationKinds      []string                `json:"-"`
 }
 
 // ReferenceResponse uses the normal search evidence and completeness contract.
@@ -243,6 +245,7 @@ type ReferenceResponse = SearchResponse
 
 // SearchMatch is one commit-pinned matched file.
 type SearchMatch struct {
+	ResultType string       `json:"result_type"`
 	Repository string       `json:"repository"`
 	Revision   string       `json:"revision"`
 	Path       string       `json:"path"`
@@ -806,22 +809,26 @@ func (s *Service) Search(ctx context.Context, request SearchRequest) (SearchResp
 	if err != nil {
 		return SearchResponse{}, err
 	}
-	if strings.EqualFold(strings.TrimSpace(request.Mode), "references") {
-		if len(parsedQuery.Filters) > 0 {
-			return SearchResponse{}, errors.New("query filters cannot be combined with references mode yet")
+	resultType, err := requestedResultType(parsedQuery)
+	if err != nil {
+		return SearchResponse{}, err
+	}
+	referenceMode := strings.EqualFold(strings.TrimSpace(request.Mode), "references")
+	if referenceMode || resultType == "reference" || resultType == "implementation" {
+		referenceRequest, referenceErr := s.referenceRequestForQuery(ctx, request, parsedQuery)
+		if referenceErr != nil {
+			return SearchResponse{}, referenceErr
 		}
-		response, referenceErr := s.FindReferences(ctx, ReferenceRequest{
-			Symbol:             parsedQuery.Text,
-			RepositoryID:       request.RepositoryID,
-			Repository:         request.Repository,
-			Language:           request.Language,
-			Path:               request.Path,
-			File:               request.File,
-			Limit:              request.Limit,
-			Contexts:           request.Contexts,
-			NamedContextIDs:    request.NamedContextIDs,
-			UseDefaultContexts: request.UseDefaultContexts,
-		})
+		if resultType == "implementation" {
+			referenceRequest.RelationKinds = []string{"extends", "implements"}
+		}
+		response, referenceErr := s.FindReferences(ctx, referenceRequest)
+		if resultType == "implementation" {
+			response.SearchKind = "implementations"
+			setSearchResultType(&response, "implementation")
+		} else {
+			setSearchResultType(&response, "reference")
+		}
 		response.QueryLanguage = &parsedQuery
 		return response, referenceErr
 	}
@@ -907,6 +914,8 @@ func (s *Service) Search(ctx context.Context, request SearchRequest) (SearchResp
 					Matches:         []SearchMatch{},
 					TotalFilesExact: true,
 					Warnings:        []search.Warning{},
+					QueryLanguage:   &parsedQuery,
+					ResultType:      resultType,
 				}, nil
 			}
 		}
@@ -927,11 +936,32 @@ func (s *Service) Search(ctx context.Context, request SearchRequest) (SearchResp
 			Contexts:        resolvedContexts,
 			NamedContexts:   effective.NamedContexts,
 			QueryLanguage:   &parsedQuery,
+			ResultType:      resultType,
 		}, nil
 	}
 	engineText := parsedQuery.Text
+	engineMode := strings.TrimSpace(request.Mode)
+	fileNameOnly := resultType == "file_path"
+	if fileNameOnly && engineMode != "" && !strings.EqualFold(engineMode, "literal") {
+		return SearchResponse{}, errors.New("file_path results currently support literal query mode")
+	}
+	if resultType == "symbol_definition" {
+		if engineMode != "" && !strings.EqualFold(engineMode, "literal") {
+			return SearchResponse{}, errors.New("symbol_definition results currently support literal query mode")
+		}
+		if len(queryFilters.includeText)+len(queryFilters.excludeText) > 0 {
+			return SearchResponse{}, errors.New("content filters cannot be combined with symbol_definition results")
+		}
+		symbol, symbolErr := validSymbol(parsedQuery.Text)
+		if symbolErr != nil {
+			return SearchResponse{}, symbolErr
+		}
+		escaped := strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(symbol)
+		engineText = `sym:"` + escaped + `"`
+		engineMode = "zoekt"
+	}
 	if len(parsedQuery.Filters) == 0 {
-		switch strings.ToLower(strings.TrimSpace(request.Mode)) {
+		switch strings.ToLower(engineMode) {
 		case "zoekt", "regex":
 			engineText = strings.TrimSpace(request.Query)
 		}
@@ -953,7 +983,8 @@ func (s *Service) Search(ctx context.Context, request SearchRequest) (SearchResp
 		File:                 strings.TrimSpace(request.File),
 		Files:                queryFilters.files,
 		ExcludeFiles:         queryFilters.excludeFiles,
-		Mode:                 strings.TrimSpace(request.Mode),
+		FileNameOnly:         fileNameOnly,
+		Mode:                 engineMode,
 		Limit:                limit,
 	})
 	if err != nil {
@@ -967,7 +998,15 @@ func (s *Service) Search(ctx context.Context, request SearchRequest) (SearchResp
 	response.Contexts = resolvedContexts
 	response.NamedContexts = effective.NamedContexts
 	response.QueryLanguage = &parsedQuery
+	setSearchResultType(&response, resultType)
 	return response, nil
+}
+
+func setSearchResultType(response *SearchResponse, resultType string) {
+	response.ResultType = resultType
+	for index := range response.Matches {
+		response.Matches[index].ResultType = resultType
+	}
 }
 
 func (s *Service) searchResponse(ctx context.Context, result search.Result, limit int) (SearchResponse, error) {
@@ -1068,7 +1107,7 @@ func (s *Service) FindSymbol(ctx context.Context, request SymbolRequest) (Symbol
 	}
 	escaped := strings.ReplaceAll(symbol, `\`, `\\`)
 	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
-	return s.Search(ctx, SearchRequest{
+	response, err := s.Search(ctx, SearchRequest{
 		Query:              `sym:"` + escaped + `"`,
 		RepositoryID:       request.RepositoryID,
 		Repository:         request.Repository,
@@ -1079,6 +1118,8 @@ func (s *Service) FindSymbol(ctx context.Context, request SymbolRequest) (Symbol
 		NamedContextIDs:    request.NamedContextIDs,
 		UseDefaultContexts: request.UseDefaultContexts,
 	})
+	setSearchResultType(&response, "symbol_definition")
+	return response, err
 }
 
 // FindReferences searches the cached structural index for syntax-backed
@@ -1158,6 +1199,7 @@ func (s *Service) FindReferences(ctx context.Context, request ReferenceRequest) 
 		return ReferenceResponse{}, err
 	}
 	output.SearchKind = "references"
+	setSearchResultType(&output, "reference")
 	output.ReferenceResolution = "syntax-target-name"
 	output.ReferenceIndex = &ReferenceIndex{
 		State:                 "ready",
@@ -1217,6 +1259,9 @@ func (s *Service) referenceResult(
 			parsePartial++
 		}
 		for _, relation := range document.Relations {
+			if len(request.RelationKinds) > 0 && !containsFold(request.RelationKinds, relation.Kind) {
+				continue
+			}
 			if !relationMatchesSymbol(relation.Target, symbol) {
 				continue
 			}

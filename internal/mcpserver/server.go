@@ -541,7 +541,7 @@ type resolveEffectiveContextsInput contextscope.EffectiveRequest
 type resolveEffectiveContextsOutput = contextscope.EffectiveResponse
 
 type searchCodeInput struct {
-	Query              string                  `json:"query" jsonschema:"required,Source text or shared query grammar. Fields include content repository revision language path file symbol_kind result_type and owner; prefix a field with minus to exclude it. Unsupported evidence domains fail explicitly."`
+	Query              string                  `json:"query" jsonschema:"required,Source text or shared query grammar. Fields include content repository revision language path file symbol_kind result_type and owner; prefix a field with minus to exclude it. Unified result types currently include content file_path symbol_definition reference and implementation; unsupported evidence domains fail explicitly."`
 	RepositoryID       int64                   `json:"repository_id,omitempty" jsonschema:"Optional repository ID returned by list_repositories. Omit to search every indexed repository."`
 	Language           string                  `json:"language,omitempty" jsonschema:"Optional programming language filter."`
 	Path               string                  `json:"path,omitempty" jsonschema:"Optional substring required in the path."`
