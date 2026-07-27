@@ -2,6 +2,9 @@ package app
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"net"
 	"path/filepath"
 	"testing"
 	"time"
@@ -39,20 +42,70 @@ func TestDefaultConfigReadsBoundedEnvironment(t *testing.T) {
 }
 
 func TestRunBuildsAndShutsDownLocalApplication(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserve application address: %v", err)
+	}
+	address := listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatalf("release application address: %v", err)
+	}
+	dataDirectory := filepath.Join(t.TempDir(), "data")
+	repositoryRoot := t.TempDir()
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	time.AfterFunc(250*time.Millisecond, cancel)
-	err := Run(ctx, Config{
-		ListenAddress:  "127.0.0.1:0",
-		DataDirectory:  filepath.Join(t.TempDir(), "data"),
-		RepositoryRoot: t.TempDir(),
-		Version:        "coverage-test",
-		OpenBrowser:    false,
-		CodexCommand:   "missing-codex-for-test",
-		ClaudeCommand:  "missing-claude-for-test",
-		Security:       security.Settings{Mode: security.ModeLocal},
-	})
-	if err != nil {
-		t.Fatalf("run with canceled context: %v", err)
+	runError := make(chan error, 1)
+	go func() {
+		runError <- Run(ctx, Config{
+			ListenAddress:  address,
+			DataDirectory:  dataDirectory,
+			RepositoryRoot: repositoryRoot,
+			Version:        "coverage-test",
+			OpenBrowser:    false,
+			CodexCommand:   "missing-codex-for-test",
+			ClaudeCommand:  "missing-claude-for-test",
+			Security:       security.Settings{Mode: security.ModeLocal},
+		})
+	}()
+
+	startupContext, stopWaiting := context.WithTimeout(context.Background(), 10*time.Second)
+	defer stopWaiting()
+	if err := waitForTCPServer(startupContext, address, runError); err != nil {
+		t.Fatal(err)
+	}
+
+	cancel()
+	select {
+	case err := <-runError:
+		if err != nil {
+			t.Fatalf("run with canceled context: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("application did not shut down after cancellation")
+	}
+}
+
+func waitForTCPServer(ctx context.Context, address string, runError <-chan error) error {
+	retry := time.NewTicker(25 * time.Millisecond)
+	defer retry.Stop()
+
+	for {
+		connection, err := net.DialTimeout("tcp", address, 100*time.Millisecond)
+		if err == nil {
+			_ = connection.Close()
+			return nil
+		}
+
+		select {
+		case err := <-runError:
+			if err == nil {
+				return errors.New("application stopped before listening")
+			}
+			return fmt.Errorf("application stopped before listening: %w", err)
+		case <-ctx.Done():
+			return fmt.Errorf("wait for application listener: %w", ctx.Err())
+		case <-retry.C:
+		}
 	}
 }

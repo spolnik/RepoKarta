@@ -870,7 +870,7 @@ completion criteria include:
 
 ## Current implementation version
 
-`0.50.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
+`0.51.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
 The M9 dependency inventory, public registry refresh, lockfile resolution, and
 explicit private-registry routing are implemented; discrepancy filtering and
 fail-closed classification of unconfigured internal package prefixes remain.
