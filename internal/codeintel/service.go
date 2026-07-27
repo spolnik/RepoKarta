@@ -27,6 +27,7 @@ import (
 	"github.com/spolnik/RepoKarta/internal/contextscope"
 	"github.com/spolnik/RepoKarta/internal/graph"
 	"github.com/spolnik/RepoKarta/internal/querylang"
+	"github.com/spolnik/RepoKarta/internal/scipindex"
 	"github.com/spolnik/RepoKarta/internal/search"
 	"github.com/spolnik/RepoKarta/internal/source"
 )
@@ -68,11 +69,18 @@ type StructuralReader interface {
 	ReadStructure(context.Context, int64) (graph.StructuralIndex, error)
 }
 
+// SCIPReader supplies compiler-produced semantic artifacts bound to an exact
+// repository revision. Missing artifacts are a normal fallback condition.
+type SCIPReader interface {
+	Read(context.Context, int64, string) (scipindex.Artifact, bool, error)
+}
+
 // Service owns the shared behavior exposed by all external adapters.
 type Service struct {
 	store         RepositoryStore
 	searcher      CodeSearcher
 	structure     StructuralReader
+	scip          SCIPReader
 	derived       DerivedEvidenceSearcher
 	namedContexts NamedContextStore
 	mu            sync.RWMutex
@@ -119,6 +127,13 @@ func New(store RepositoryStore, searcher CodeSearcher, baseURL string) *Service 
 // UseStructure enables syntax-backed reference search over persisted maps.
 func (s *Service) UseStructure(structure StructuralReader) *Service {
 	s.structure = structure
+	return s
+}
+
+// UseSCIP enables compiler-precise references when complete, commit-matched
+// semantic artifacts are available for the requested repository scope.
+func (s *Service) UseSCIP(reader SCIPReader) *Service {
+	s.scip = reader
 	return s
 }
 
@@ -272,6 +287,7 @@ type SearchAction struct {
 // ReferenceIndex reports whether every requested repository has a persisted
 // structural artifact. A building response is immediately usable but partial.
 type ReferenceIndex struct {
+	Provider              string `json:"provider"`
 	State                 string `json:"state"`
 	RequestedRepositories int    `json:"requested_repositories"`
 	ReadyRepositories     int    `json:"ready_repositories"`
@@ -295,7 +311,7 @@ type SymbolRequest struct {
 // deterministic code search.
 type SymbolResponse = SearchResponse
 
-// ReferenceRequest selects bounded syntax-backed target-name matches.
+// ReferenceRequest selects bounded semantic or syntax-backed references.
 type ReferenceRequest struct {
 	Symbol             string                  `json:"symbol"`
 	RepositoryID       int64                   `json:"repository_id,omitempty"`
@@ -1244,9 +1260,10 @@ func (s *Service) FindSymbol(ctx context.Context, request SymbolRequest) (Symbol
 	return response, err
 }
 
-// FindReferences searches the cached structural index for syntax-backed
-// target-name matches. It deliberately does not pretend to perform type or
-// overload resolution: each result reports the parser relation and confidence.
+// FindReferences prefers compiler-produced SCIP occurrences when exact-revision
+// artifacts cover the complete requested scope and the requested identity is
+// exact or unambiguous. Otherwise it searches the cached structural index and
+// reports the syntax-only resolution and confidence explicitly.
 func (s *Service) FindReferences(ctx context.Context, request ReferenceRequest) (ReferenceResponse, error) {
 	started := time.Now()
 	symbol, err := validSymbol(request.Symbol)
@@ -1310,7 +1327,23 @@ func (s *Service) FindReferences(ctx context.Context, request ReferenceRequest) 
 	if err != nil {
 		return ReferenceResponse{}, fmt.Errorf("load AST reference index: %w", err)
 	}
-	result, err := s.referenceResult(ctx, index, symbol, request)
+	referenceIndex := index
+	resolvedSymbol := symbol
+	resolution := "syntax-target-name"
+	provider := "tree-sitter"
+	if semanticIndex, semanticResolution, ok, semanticErr := s.scipReferenceIndex(
+		ctx,
+		repositoryID,
+		symbol,
+	); semanticErr != nil {
+		return ReferenceResponse{}, semanticErr
+	} else if ok {
+		referenceIndex = semanticIndex
+		resolvedSymbol = semanticResolution
+		resolution = "scip-" + semanticIndex.ID
+		provider = "scip"
+	}
+	result, err := s.referenceResult(ctx, referenceIndex, resolvedSymbol, request)
 	if err != nil {
 		return ReferenceResponse{}, err
 	}
@@ -1322,14 +1355,15 @@ func (s *Service) FindReferences(ctx context.Context, request ReferenceRequest) 
 	}
 	output.SearchKind = "references"
 	setSearchResultType(&output, "reference")
-	output.ReferenceResolution = "syntax-target-name"
+	output.ReferenceResolution = resolution
 	output.ReferenceIndex = &ReferenceIndex{
+		Provider:              provider,
 		State:                 "ready",
-		RequestedRepositories: index.Scope.TotalRepositories,
-		ReadyRepositories:     index.Scope.AnalyzedRepositories,
-		PendingRepositories:   index.Scope.OmittedRepositories,
+		RequestedRepositories: referenceIndex.Scope.TotalRepositories,
+		ReadyRepositories:     referenceIndex.Scope.AnalyzedRepositories,
+		PendingRepositories:   referenceIndex.Scope.OmittedRepositories,
 	}
-	if !index.Scope.Complete {
+	if !referenceIndex.Scope.Complete {
 		output.ReferenceIndex.State = "building"
 	}
 	output.Contexts = resolvedContexts
@@ -1337,6 +1371,111 @@ func (s *Service) FindReferences(ctx context.Context, request ReferenceRequest) 
 	output.Compact = request.Compact
 	finalizeSearchResponse(&output, querylang.Query{Text: symbol})
 	return output, nil
+}
+
+func (s *Service) scipReferenceIndex(
+	ctx context.Context,
+	repositoryID int64,
+	symbol string,
+) (graph.StructuralIndex, string, bool, error) {
+	if s.scip == nil {
+		return graph.StructuralIndex{}, "", false, nil
+	}
+	repositories, err := s.store.ListRepositories(ctx)
+	if err != nil {
+		return graph.StructuralIndex{}, "", false, err
+	}
+	selected := make([]catalog.Repository, 0, len(repositories))
+	for _, repository := range repositories {
+		if repositoryID > 0 && repository.ID != repositoryID {
+			continue
+		}
+		selected = append(selected, repository)
+	}
+	if len(selected) == 0 {
+		return graph.StructuralIndex{}, "", false, nil
+	}
+	artifacts := make([]scipindex.Artifact, 0, len(selected))
+	for _, repository := range selected {
+		revision := strings.TrimSpace(repository.IndexedCommit)
+		if revision == "" {
+			return graph.StructuralIndex{}, "", false, nil
+		}
+		artifact, ok, readErr := s.scip.Read(ctx, repository.ID, revision)
+		if readErr != nil {
+			return graph.StructuralIndex{}, "", false, fmt.Errorf(
+				"load SCIP artifact for %s: %w",
+				repository.Name,
+				readErr,
+			)
+		}
+		if !ok {
+			return graph.StructuralIndex{}, "", false, nil
+		}
+		artifacts = append(artifacts, artifact)
+	}
+	resolved := scipindex.ResolveReferences(artifacts, symbol)
+	if resolved.State != "exact" && resolved.State != "unique-name" {
+		return graph.StructuralIndex{}, "", false, nil
+	}
+	repositoryNames := make(map[int64]string, len(selected))
+	for _, repository := range selected {
+		repositoryNames[repository.ID] = repository.Name
+	}
+	documents := make(map[string]*graph.StructuralDocument)
+	for _, reference := range resolved.References {
+		key := strconv.FormatInt(reference.RepositoryID, 10) + "\x00" + reference.Path
+		document := documents[key]
+		if document == nil {
+			document = &graph.StructuralDocument{
+				RepositoryID:  reference.RepositoryID,
+				Repository:    repositoryNames[reference.RepositoryID],
+				Revision:      reference.Revision,
+				Path:          reference.Path,
+				Language:      reference.Language,
+				Parser:        "scip",
+				ParseComplete: true,
+				Relations:     []analysis.Relation{},
+			}
+			documents[key] = document
+		}
+		document.Relations = append(document.Relations, analysis.Relation{
+			Kind:       reference.Kind,
+			Target:     reference.Symbol,
+			Confidence: "compiler",
+			Range: analysis.Range{
+				StartLine: reference.Line,
+				EndLine:   reference.Line,
+			},
+		})
+	}
+	structure := make([]graph.StructuralDocument, 0, len(documents))
+	for _, document := range documents {
+		structure = append(structure, *document)
+	}
+	sort.Slice(structure, func(left, right int) bool {
+		if structure[left].Repository != structure[right].Repository {
+			return structure[left].Repository < structure[right].Repository
+		}
+		return structure[left].Path < structure[right].Path
+	})
+	scopeKind := "collection"
+	if repositoryID > 0 {
+		scopeKind = "repository"
+	}
+	return graph.StructuralIndex{
+		Version:     1,
+		ID:          resolved.State,
+		GeneratedAt: time.Now().UTC(),
+		Structure:   structure,
+		Scope: graph.Scope{
+			Kind:                  scopeKind,
+			Complete:              true,
+			TotalRepositories:     len(selected),
+			AnalyzedRepositories:  len(selected),
+			RequestedRepositoryID: repositoryID,
+		},
+	}, resolved.Symbol, true, nil
 }
 
 type structuralReference struct {
@@ -1552,7 +1691,7 @@ func (s *Service) referenceResult(
 				Text:                text,
 				Before:              sourceLines[reference.line-1],
 				After:               sourceLines[reference.line+1],
-				Fragments:           literalFragments(text, symbol),
+				Fragments:           literalFragments(text, request.Symbol),
 				ReferenceKind:       reference.kind,
 				ReferenceTarget:     reference.target,
 				ReferenceReceiver:   reference.receiver,
@@ -1635,7 +1774,8 @@ func validSymbol(value string) (string, error) {
 	if symbol == "" {
 		return "", errors.New("symbol is required")
 	}
-	if len([]rune(symbol)) > 200 || strings.ContainsAny(symbol, "\r\n\x00") {
+	if strings.ContainsAny(symbol, "\r\n\x00") ||
+		(len([]rune(symbol)) > 200 && !scipindex.IsSymbol(symbol)) {
 		return "", errors.New("symbol is invalid")
 	}
 	return symbol, nil

@@ -335,8 +335,8 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "find_references",
-		Title:       "Find AST references",
-		Description: "Find commit-pinned call, type-usage, import, extends, and implements sites from persisted AST relations. Use this for non-unique symbols or syntax precision; a unique literal is cheaper through compact search_code. Set compact for fleet discovery from cached relations without reopening every matched source blob, then use get_file selectively.",
+		Title:       "Find semantic or AST references",
+		Description: "Find commit-pinned references from compiler-produced SCIP when complete exact-revision coverage resolves one symbol, otherwise from labeled persisted AST relations. A unique literal is cheaper through compact search_code. Set compact for fleet discovery without reopening every matched source blob, then use get_file selectively.",
 		Annotations: readOnly,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input findReferencesInput) (*mcp.CallToolResult, findReferencesOutput, error) {
 		result, err := intelligence.FindReferences(ctx, codeintel.ReferenceRequest{
@@ -873,7 +873,7 @@ type findSymbolInput struct {
 type findSymbolOutput = codeintel.SymbolResponse
 
 type findReferencesInput struct {
-	Symbol             string                  `json:"symbol" jsonschema:"required,Exact source-level symbol name to find in persisted AST relations."`
+	Symbol             string                  `json:"symbol" jsonschema:"required,Full SCIP symbol identity or exact source-level name. Bare names use SCIP only when unambiguous and otherwise fall back to AST relations."`
 	RepositoryID       int64                   `json:"repository_id,omitempty" jsonschema:"Optional repository ID returned by list_repositories. Omit to search every repository covered by the bounded structural snapshot."`
 	Language           string                  `json:"language,omitempty" jsonschema:"Optional parser language filter."`
 	Path               string                  `json:"path,omitempty" jsonschema:"Optional substring required in the repository-relative path."`

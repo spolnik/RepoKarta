@@ -2645,7 +2645,7 @@ func buildMCPPageData(endpoint, token, command, stdioBaseURL string) mcpPageData
 			{Name: "resolve_effective_contexts", Description: "Exact explicit, named, and default contexts with provenance and canonical URLs."},
 			{Name: "search_code", Description: "Literal, regex, Zoekt, or AST-reference search with explicit completeness metadata."},
 			{Name: "find_symbol", Description: "Commit-pinned symbol definitions from the Zoekt/ctags index."},
-			{Name: "find_references", Description: "Syntax-backed calls, type usages, imports, and heritage sites from persisted AST relations."},
+			{Name: "find_references", Description: "Compiler-precise SCIP references when available, with labeled syntax-backed AST fallback."},
 			{Name: "get_file", Description: "Bounded source reads with exact revision and citation URLs."},
 			{Name: "list_tree", Description: "Bounded repository trees at an exact indexed commit."},
 			{Name: "git_log", Description: "Newest-first commit history with truncation metadata."},

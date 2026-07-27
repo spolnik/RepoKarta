@@ -608,6 +608,14 @@ search must remain fast and AI-free.
   definitions, references, implementations, type signatures, and hover
   documentation while retaining syntax-backed results and confidence labels
   when precise data is unavailable.
+  - [x] Import bounded standard `index.scip` protobufs into RepoKarta-owned
+    artifacts bound to an exact repository and indexed commit.
+  - [x] Prefer compiler-resolved reference occurrences when the requested
+    repository scope has complete, current SCIP coverage and the symbol
+    identity is exact or unambiguous; otherwise retain labeled Tree-sitter
+    fallback.
+  - [ ] Add precise definitions, implementations, signatures, hover
+    documentation, dependency indexes, and cross-repository symbol stitching.
 - [ ] Add graph queries for upstream and downstream impact, shortest evidenced
   connection paths between two repositories, files, or symbols, and bounded
   traversal by relation type and depth.
@@ -931,7 +939,7 @@ completion criteria include:
 
 ## Current implementation version
 
-`0.69.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
+`0.71.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
 The M9 dependency inventory, public registry refresh, lockfile resolution,
 explicit private-registry routing, reproducible OSV advisory snapshots,
 ecosystem-correct fleet CVE matching, scope-aware UI/JSON/MCP findings, and
@@ -990,8 +998,9 @@ files are opened explicitly.
 ## Recommended next session
 
 Continue M7 with directory/symbol autocomplete, the remaining symbol-kind and
-ownership grammar filters, qualified programming-element search, and optional
-SCIP-backed graph queries. Complete
+ownership grammar filters, qualified programming-element search, precise SCIP
+definitions/implementations/hover data, and framework-aware reachability roots
+for Spring, jobs, and dependency injection. Complete
 repository/file/directory/symbol parity when the Deep Search composer is
 introduced. Preserve the current fail-closed permission, revision, ambiguity,
 default-context, and completeness behavior before adding agentic Deep Search.

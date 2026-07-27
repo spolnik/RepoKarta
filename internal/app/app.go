@@ -28,6 +28,7 @@ import (
 	"github.com/spolnik/RepoKarta/internal/maintenance"
 	"github.com/spolnik/RepoKarta/internal/mcpserver"
 	"github.com/spolnik/RepoKarta/internal/scim"
+	"github.com/spolnik/RepoKarta/internal/scipindex"
 	"github.com/spolnik/RepoKarta/internal/search"
 	zoektadapter "github.com/spolnik/RepoKarta/internal/search/zoekt"
 	"github.com/spolnik/RepoKarta/internal/security"
@@ -154,6 +155,11 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 	intelligence.UseStructure(maps)
+	semanticIndexes, err := scipindex.New(filepath.Join(cfg.DataDirectory, "scip"))
+	if err != nil {
+		return err
+	}
+	intelligence.UseSCIP(semanticIndexes)
 
 	acquisitions, err := acquisition.New(acquisition.Config{
 		DataDirectory: cfg.DataDirectory,

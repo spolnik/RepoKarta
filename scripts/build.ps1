@@ -66,6 +66,14 @@ try {
         -Destination (Join-Path $licenseDirectory "zoekt-Apache-2.0.txt") `
         -Force
     Copy-Item `
+        -LiteralPath (Join-Path $repositoryRoot "third_party\zoekt\LICENSE") `
+        -Destination (Join-Path $licenseDirectory "scip-Apache-2.0.txt") `
+        -Force
+    Copy-Item `
+        -LiteralPath (Join-Path $repositoryRoot "third_party\zoekt\LICENSE") `
+        -Destination (Join-Path $licenseDirectory "sourcegraph-beaut-Apache-2.0.txt") `
+        -Force
+    Copy-Item `
         -LiteralPath (Join-Path $repositoryRoot "third_party\licenses\deps.dev-semver-Apache-2.0.txt") `
         -Destination (Join-Path $licenseDirectory "deps.dev-semver-Apache-2.0.txt") `
         -Force

@@ -54,6 +54,8 @@ func TestEveryPackagePathCarriesRequiredLicensesAndVerification(t *testing.T) {
 	required := []string{
 		"zoekt-Apache-2.0.txt",
 		"deps.dev-semver-Apache-2.0.txt",
+		"scip-Apache-2.0.txt",
+		"sourcegraph-beaut-Apache-2.0.txt",
 		"gotreesitter-MIT.txt",
 		"tree-sitter-grammars-MIT.txt",
 		"nvim-treesitter-Kotlin-query-NOTICE.txt",
