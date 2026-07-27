@@ -23,6 +23,7 @@ func TestRoadmapKeepsM7ScopeAndCompletedMilestones(t *testing.T) {
 		"- [x] Extend resolution to directory and symbol contexts",
 		"- [x] Add named search contexts",
 		"- [x] Make every effective context visible",
+		"- [x] Provide explicit result types",
 	} {
 		if !strings.Contains(m7, completed) {
 			t.Errorf("M7 completed scope is missing %q", completed)
@@ -32,7 +33,6 @@ func TestRoadmapKeepsM7ScopeAndCompletedMilestones(t *testing.T) {
 	for _, remaining := range []string{
 		"- [ ] Extend permission-aware autocomplete to `@directory` and `@symbol`",
 		"- [ ] Add one documented query grammar",
-		"- [ ] Provide explicit result types",
 		"- [ ] Import optional SCIP indexes",
 		"- [ ] Add graph queries",
 		"- [ ] Persist per-author recent and saved searches",

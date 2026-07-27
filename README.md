@@ -190,6 +190,10 @@ BaseService result_type:implementation repository:RepoKarta
 RepoKarta result_type:repository
 "Search Author" result_type:commit repository:RepoKarta path:internal
 needle result_type:diff repository:RepoKarta file:service.go
+mux result_type:dependency repository:RepoKarta
+"/api/search" result_type:route repository:RepoKarta
+architecture result_type:wiki_page repository:RepoKarta
+coverage result_type:code_insight repository:RepoKarta
 ```
 
 The canonical fields are `content`, `repository`, `revision`, `language`,
@@ -205,20 +209,24 @@ parsed free text and filters.
 Autocomplete is available in the browser and from
 `GET /api/search/query-completions?q={query}&cursor={utf16-offset}`. It
 advertises the complete stable grammar. Unified search currently executes
-`content`, `file_path`, `repository`, `symbol_definition`, `reference`,
-`implementation`, `commit`, and `diff` result types. Repository results come
-from the permission-filtered catalogue. Commit and diff results walk only
-history reachable from each recorded indexed or HEAD commit, accept one
+all twelve documented result types: `content`, `file_path`, `repository`,
+`symbol_definition`, `reference`, `implementation`, `dependency`, `route`,
+`commit`, `diff`, `wiki_page`, and `code_insight`. Repository results come from
+the permission-filtered catalogue. Commit and diff results walk only history
+reachable from each recorded indexed or HEAD commit, accept one
 repository-relative path or filename constraint, and report bounded or
 truncated coverage explicitly. Diff responses are capped at 25 patches and
-each displayed patch excerpt is bounded. Reference and implementation results
-use the persisted AST relation index and preserve its explicit
-syntax-confidence and partial-coverage metadata. The remaining result domains
-are advertised for a stable grammar but fail with an explicit error until
-their existing evidence stores are connected; symbol-kind and ownership
-filters likewise fail closed. The existing repository, language, path,
-filename, mode, and limit form fields remain supported and combine with
-grammar filters where they apply.
+each displayed patch excerpt is bounded. Dependency and route searches read
+only prepared commit-keyed map artifacts; a cold artifact returns immediately
+with a visible building/partial warning rather than analyzing source inside
+the request. Wiki results search generated ready or stale pages and their
+persisted Markdown. Insight results search current authorized observations
+already captured in SQLite. Reference and implementation results use the
+persisted AST relation index and preserve its explicit syntax-confidence and
+partial-coverage metadata. Symbol-kind and ownership filters still fail closed
+for result families that do not carry that evidence. The existing repository,
+language, path, filename, mode, and limit form fields remain supported and
+combine with grammar filters where they apply.
 
 RepoKarta enables symbol indexing automatically when `universal-ctags` is on
 `PATH`, or when `ctags`/`CTAGS_COMMAND` identifies itself as Universal Ctags via
@@ -744,11 +752,11 @@ Windows amd64 and Apple Silicon macOS. The workflow:
 Run the same packagers locally:
 
 ```powershell
-.\scripts\package-release.ps1 -Version 0.57.0-dev
+.\scripts\package-release.ps1 -Version 0.58.0-dev
 ```
 
 ```sh
-./scripts/package-release.sh 0.57.0-dev
+./scripts/package-release.sh 0.58.0-dev
 ```
 
 macOS packages are signed with the hardened runtime when

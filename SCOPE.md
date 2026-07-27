@@ -581,7 +581,7 @@ search must remain fast and AI-free.
 - [ ] Add one documented query grammar with autocomplete for repository,
   revision, language, path, filename, symbol kind, result type, ownership, and
   positive or negative filters while retaining the existing simple form.
-- [ ] Provide explicit result types for content, file path, repository, symbol
+- [x] Provide explicit result types for content, file path, repository, symbol
   definition, reference, implementation, dependency, route, commit, diff,
   generated Wiki page, and captured code insight.
 - [ ] Add qualified programming-element search by package, type, method, member,

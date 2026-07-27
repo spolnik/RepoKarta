@@ -341,6 +341,20 @@ func (s *Service) Plan(ctx context.Context, repositoryID int64) (Site, error) {
 	return s.plan(ctx, repositoryID)
 }
 
+// Pages returns only the persisted Wiki manifest for a visible repository.
+// Unlike Plan, it never prepares or reads a structural map, so unified search
+// cannot turn a user query into an interactive artifact build.
+func (s *Service) Pages(ctx context.Context, repositoryID int64) ([]Page, error) {
+	if _, err := s.store.RepositoryByID(ctx, repositoryID); err != nil {
+		return nil, err
+	}
+	manifest, err := s.loadManifest(repositoryID)
+	if err != nil {
+		return nil, err
+	}
+	return slices.Clone(manifest.Pages), nil
+}
+
 func (s *Service) plan(ctx context.Context, repositoryID int64) (Site, error) {
 	repository, err := s.store.RepositoryByID(ctx, repositoryID)
 	if err != nil {

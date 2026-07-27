@@ -229,7 +229,7 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "search_code",
 		Title:       "Search indexed code",
-		Description: "Search permission-filtered source, repositories, commits, and diffs. The query supports shared repository, revision, language, path, file, content, result type, and negative filters; completeness, parsed query provenance, warnings, and pinned evidence URLs are explicit.",
+		Description: "Search permission-filtered source, repositories, symbols, references, implementations, dependencies, routes, commits, diffs, generated Wiki pages, and captured code insights. Shared filters, completeness, parsed query provenance, warnings, and pinned evidence URLs are explicit.",
 		Annotations: readOnly,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input searchCodeInput) (*mcp.CallToolResult, searchCodeOutput, error) {
 		result, err := intelligence.Search(ctx, codeintel.SearchRequest{
@@ -546,7 +546,7 @@ type resolveEffectiveContextsInput contextscope.EffectiveRequest
 type resolveEffectiveContextsOutput = contextscope.EffectiveResponse
 
 type searchCodeInput struct {
-	Query              string                  `json:"query" jsonschema:"required,Source text or shared query grammar. Fields include content repository revision language path file symbol_kind result_type and owner; prefix a field with minus to exclude it. Unified result types currently include content file_path repository symbol_definition reference implementation commit and diff; unsupported evidence domains fail explicitly."`
+	Query              string                  `json:"query" jsonschema:"required,Source or deterministic evidence text using fields content repository revision language path file symbol_kind result_type and owner; prefix a field with minus to exclude it. Result types are content file_path repository symbol_definition reference implementation dependency route commit diff wiki_page and code_insight."`
 	RepositoryID       int64                   `json:"repository_id,omitempty" jsonschema:"Optional repository ID returned by list_repositories. Omit to search every indexed repository."`
 	Language           string                  `json:"language,omitempty" jsonschema:"Optional programming language filter."`
 	Path               string                  `json:"path,omitempty" jsonschema:"Optional substring required in the path."`

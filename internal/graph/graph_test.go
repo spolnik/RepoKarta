@@ -3,6 +3,7 @@ package graph
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -82,6 +83,67 @@ func TestEmptyRepositoryIsNotReportedAsPendingArtifactWork(t *testing.T) {
 	if dependencyProgress.RequestedRepositories != 0 ||
 		dependencyProgress.PendingRepositories != 0 {
 		t.Fatalf("empty repository dependency progress = %#v", dependencyProgress)
+	}
+	_, routeProgress, err := service.ReadRouteSnapshot(t.Context(), repository.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if routeProgress.RequestedRepositories != 0 ||
+		routeProgress.PendingRepositories != 0 {
+		t.Fatalf("empty repository route progress = %#v", routeProgress)
+	}
+}
+
+func TestReadRouteSnapshotUsesOnlyPreparedArtifacts(t *testing.T) {
+	revision := strings.Repeat("a", 40)
+	repository := catalog.Repository{
+		ID: 31, Name: "routes", Path: t.TempDir(),
+		HeadCommit: revision, IndexedCommit: revision, IndexState: "ready",
+	}
+	directory := filepath.Join(t.TempDir(), "maps")
+	service, err := New(graphStore{repository: repository}, directory, "http://127.0.0.1:7331")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, progress, err := service.ReadRouteSnapshot(t.Context(), repository.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending.Nodes) != 0 || progress.PendingRepositories != 1 {
+		t.Fatalf("unprepared route evidence = %#v, progress = %#v", pending, progress)
+	}
+	snapshot := Snapshot{
+		Version: snapshotVersion,
+		Repositories: []Repository{{
+			ID: repository.ID, Name: repository.Name, Revision: revision,
+		}},
+		Nodes: []Node{
+			{
+				Kind: "route", Label: "GET /ready", RepositoryID: repository.ID,
+				Evidence: []Evidence{{
+					RepositoryID: repository.ID, Repository: repository.Name,
+					Revision: revision, Path: "main.go", Line: 12,
+				}},
+			},
+			{Kind: "component", Label: "server", RepositoryID: repository.ID},
+		},
+		Scope: Scope{Complete: true, TotalRepositories: 1, AnalyzedRepositories: 1},
+	}
+	content, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(service.repositorySnapshotPath(repository), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ready, progress, err := service.ReadRouteSnapshot(t.Context(), repository.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ready.Nodes) != 1 || ready.Nodes[0].Kind != "route" ||
+		progress.State != "ready" || progress.PendingRepositories != 0 ||
+		ready.Nodes[0].Evidence[0].URL == "" {
+		t.Fatalf("prepared route evidence = %#v, progress = %#v", ready, progress)
 	}
 }
 

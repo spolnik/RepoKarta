@@ -20,6 +20,7 @@ import (
 	"github.com/spolnik/RepoKarta/internal/codeintel"
 	"github.com/spolnik/RepoKarta/internal/dependencies"
 	"github.com/spolnik/RepoKarta/internal/docs"
+	"github.com/spolnik/RepoKarta/internal/evidencesearch"
 	"github.com/spolnik/RepoKarta/internal/graph"
 	"github.com/spolnik/RepoKarta/internal/httpserver"
 	"github.com/spolnik/RepoKarta/internal/insights"
@@ -209,6 +210,14 @@ func Run(ctx context.Context, cfg Config) error {
 	codeInsights.StartPolling(ctx)
 	dependencyRegistry := dependencies.NewService(ctx, database, nil)
 	dependencyRegistry.UseRegistries(cfg.DependencyRegistries)
+	derivedEvidence := evidencesearch.New(
+		maps,
+		dependencyRegistry,
+		documents,
+		codeInsights,
+		baseURL,
+	)
+	intelligence.UseDerivedEvidence(derivedEvidence)
 	operations, err := maintenance.New(maintenance.Config{
 		DataDirectory:   cfg.DataDirectory,
 		RepositoryRoot:  cfg.RepositoryRoot,
@@ -229,6 +238,7 @@ func Run(ctx context.Context, cfg Config) error {
 		intelligence.SetBaseURL(updatedBaseURL)
 		maps.SetBaseURL(updatedBaseURL)
 		codeInsights.SetBaseURL(updatedBaseURL)
+		derivedEvidence.SetBaseURL(updatedBaseURL)
 	})
 	mcpHandler := mcpserver.NewHandler(mcpserver.Config{
 		Version:   cfg.Version,

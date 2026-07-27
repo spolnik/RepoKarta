@@ -504,6 +504,18 @@ func TestGenerationResumeSelectiveStalenessAndExport(t *testing.T) {
 			t.Fatalf("validate %s: %v", page.Slug, err)
 		}
 	}
+	persistedPages, err := service.Pages(ctx, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(persistedPages) != len(generated.Pages) {
+		t.Fatalf("persisted page index = %#v", persistedPages)
+	}
+	for _, page := range persistedPages {
+		if page.Markdown != "" {
+			t.Fatalf("page index exposed Markdown for %s", page.Slug)
+		}
+	}
 
 	architecture := pageBySlug(t, generated, "architecture")
 	architecture.Status = StatusGenerating

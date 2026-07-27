@@ -73,6 +73,7 @@ type Service struct {
 	store         RepositoryStore
 	searcher      CodeSearcher
 	structure     StructuralReader
+	derived       DerivedEvidenceSearcher
 	namedContexts NamedContextStore
 	mu            sync.RWMutex
 	baseURL       string
@@ -118,6 +119,13 @@ func New(store RepositoryStore, searcher CodeSearcher, baseURL string) *Service 
 // UseStructure enables syntax-backed reference search over persisted maps.
 func (s *Service) UseStructure(structure StructuralReader) *Service {
 	s.structure = structure
+	return s
+}
+
+// UseDerivedEvidence enables deterministic non-source result families backed
+// by existing permission-aware artifact services.
+func (s *Service) UseDerivedEvidence(searcher DerivedEvidenceSearcher) *Service {
+	s.derived = searcher
 	return s
 }
 
@@ -841,6 +849,8 @@ func (s *Service) Search(ctx context.Context, request SearchRequest) (SearchResp
 	switch resultType {
 	case "repository", "commit", "diff":
 		return s.searchEntityEvidence(ctx, request, parsedQuery, resultType)
+	case "dependency", "route", "wiki_page", "code_insight":
+		return s.searchDerivedEvidence(ctx, request, parsedQuery, resultType)
 	}
 	referenceMode := strings.EqualFold(strings.TrimSpace(request.Mode), "references")
 	if referenceMode || resultType == "reference" || resultType == "implementation" {

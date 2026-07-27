@@ -439,7 +439,7 @@ func (s *session) recordSearchCitations(result codeintel.SearchResponse) {
 func toolDefinitions() []anthropicapi.ToolUnionParam {
 	return []anthropicapi.ToolUnionParam{
 		tool("list_repositories", "List every indexed repository and its exact indexed commit.", nil, nil),
-		tool("search_code", "Search permission-filtered source, repositories, commits, and diffs with shared query filters, explicit completeness, parsed provenance, and pinned evidence URLs.", map[string]any{
+		tool("search_code", "Search every deterministic result family with permission-filtered repositories, shared query filters, explicit completeness, parsed provenance, and pinned evidence URLs.", map[string]any{
 			"query":         stringProperty("Source or evidence text and query fields such as repository:, revision:, language:, path:, file:, content:, result_type:, and negative -field:value filters."),
 			"repository_id": integerProperty("Optional repository ID returned by list_repositories."),
 			"language":      stringProperty("Optional language filter."),

@@ -455,6 +455,78 @@ func (s *Service) ReadDependencySnapshot(
 	return output, progress, nil
 }
 
+// ReadRouteSnapshot composes served-route nodes from already-prepared
+// per-repository artifacts. It never analyzes source in the caller's request.
+func (s *Service) ReadRouteSnapshot(
+	ctx context.Context,
+	repositoryID int64,
+) (Snapshot, ArtifactProgress, error) {
+	repositories, err := s.repositories(ctx, repositoryID)
+	if err != nil {
+		return Snapshot{}, ArtifactProgress{}, err
+	}
+	type result struct {
+		snapshot Snapshot
+		ok       bool
+	}
+	results := make([]result, len(repositories))
+	workers := make(chan struct{}, maximumStructuralReadConcurrency)
+	var wait sync.WaitGroup
+	for index, repository := range repositories {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			select {
+			case workers <- struct{}{}:
+				defer func() { <-workers }()
+			case <-ctx.Done():
+				return
+			}
+			snapshot, ok := s.readCachedSnapshot(s.repositorySnapshotPath(repository))
+			results[index] = result{snapshot: snapshot, ok: ok}
+		}()
+	}
+	wait.Wait()
+	if err := ctx.Err(); err != nil {
+		return Snapshot{}, ArtifactProgress{}, err
+	}
+
+	output := Snapshot{
+		Version:      snapshotVersion,
+		ID:           snapshotSignature(repositories),
+		GeneratedAt:  time.Now().UTC(),
+		Repositories: []Repository{},
+		Nodes:        []Node{},
+		Scope: Scope{
+			Kind:                  "repository",
+			TotalRepositories:     len(repositories),
+			RequestedRepositoryID: repositoryID,
+		},
+	}
+	if repositoryID == 0 {
+		output.Scope.Kind = "collection"
+	}
+	for _, result := range results {
+		if !result.ok {
+			continue
+		}
+		output.Repositories = append(output.Repositories, result.snapshot.Repositories...)
+		for _, node := range result.snapshot.Nodes {
+			if node.Kind == "route" {
+				output.Nodes = append(output.Nodes, node)
+			}
+		}
+		output.Truncated = output.Truncated || result.snapshot.Truncated
+		output.StructureTruncated = output.StructureTruncated || result.snapshot.StructureTruncated
+		output.Scope.AnalyzedRepositories++
+	}
+	output.Scope.OmittedRepositories = output.Scope.TotalRepositories - output.Scope.AnalyzedRepositories
+	output.Scope.Complete = output.Scope.OmittedRepositories == 0
+	output.Truncated = output.Truncated || !output.Scope.Complete
+	progress := artifactProgress(output.Scope.TotalRepositories, output.Scope.AnalyzedRepositories)
+	return output, progress, nil
+}
+
 // StructureProgress checks exact commit-keyed artifact paths without reading
 // the structural documents themselves.
 func (s *Service) StructureProgress(ctx context.Context, repositoryID int64) (ArtifactProgress, error) {
