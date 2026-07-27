@@ -30,6 +30,38 @@ func TestSearchPresentationRanksExactPathsAndExplainsEverySignal(t *testing.T) {
 	}
 }
 
+func TestSearchPresentationKeepsExactSymbolsAheadOfHighScoringFuzzyContent(t *testing.T) {
+	response := SearchResponse{
+		ResultType:      "mixed",
+		TotalFilesExact: true,
+		Matches: []SearchMatch{
+			{ResultType: "content", Repository: "repo", Path: "internal/search_worker.go", Score: 10000},
+			{ResultType: "symbol_definition", Repository: "repo", Path: "internal/service.go", Score: 1},
+		},
+	}
+	finalizeSearchResponse(&response, querylang.Query{Text: "Search"})
+	if response.Matches[0].ResultType != "symbol_definition" ||
+		response.Matches[0].Ranking[0].Name != "exact_symbol" {
+		t.Fatalf("ranked mixed matches = %#v", response.Matches)
+	}
+}
+
+func TestSearchPresentationPrefersTypedExactPathOverContentFromTheSameFile(t *testing.T) {
+	response := SearchResponse{
+		ResultType:      "mixed",
+		TotalFilesExact: true,
+		Matches: []SearchMatch{
+			{ResultType: "content", Repository: "repo", Path: "SCOPE.md", Score: 10000},
+			{ResultType: "file_path", Repository: "repo", Path: "SCOPE.md", Score: 1},
+		},
+	}
+	finalizeSearchResponse(&response, querylang.Query{Text: "SCOPE.md"})
+	if response.Matches[0].ResultType != "file_path" ||
+		response.Matches[0].Ranking[1].Name != "filename_only_match" {
+		t.Fatalf("typed exact path order = %#v", response.Matches)
+	}
+}
+
 func TestSearchPresentationBuildsGrammarCompatiblePartialFacets(t *testing.T) {
 	response := SearchResponse{
 		ResultType:      "dependency",

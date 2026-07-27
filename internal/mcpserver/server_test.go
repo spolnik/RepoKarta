@@ -381,7 +381,7 @@ func TestMCPSearchReturnsPinnedCitation(t *testing.T) {
 	if searcher.query.Limit != 100 {
 		t.Fatalf("search limit = %d, want %d", searcher.query.Limit, 100)
 	}
-	if len(output.Matches) != 1 {
+	if len(output.Matches) != 3 || output.Matches[0].ResultType != "symbol_definition" {
 		t.Fatalf("matches = %#v", output.Matches)
 	}
 	match := output.Matches[0]

@@ -40,13 +40,19 @@ func rankSearchResponse(response *SearchResponse, parsed querylang.Query) {
 				Detail: "The repository-relative path contains the free-text query.",
 			})
 		}
-		if response.ResultType == "symbol_definition" && needle != "" {
+		if match.ResultType == "file_path" && needle != "" {
+			match.Ranking = append(match.Ranking, RankingSignal{
+				Name: "filename_only_match", Weight: 10,
+				Detail: "The filename-only candidate set matched this path without relying on file content.",
+			})
+		}
+		if match.ResultType == "symbol_definition" && needle != "" {
 			match.Ranking = append(match.Ranking, RankingSignal{
 				Name: "exact_symbol", Weight: 90,
 				Detail: "The symbol index matched the exact requested definition name.",
 			})
 		}
-		if response.ResultType == "reference" || response.ResultType == "implementation" {
+		if match.ResultType == "reference" || match.ResultType == "implementation" {
 			match.Ranking = append(match.Ranking, RankingSignal{
 				Name: "exact_ast_target", Weight: 90,
 				Detail: "Persisted syntax evidence matched the exact target name.",
@@ -60,6 +66,16 @@ func rankSearchResponse(response *SearchResponse, parsed querylang.Query) {
 		}
 	}
 	sort.SliceStable(response.Matches, func(left, right int) bool {
+		leftClass := rankingClass(response.Matches[left].Ranking)
+		rightClass := rankingClass(response.Matches[right].Ranking)
+		if leftClass != rightClass {
+			return leftClass > rightClass
+		}
+		leftTyped := rankingTypedPriority(response.Matches[left].Ranking)
+		rightTyped := rankingTypedPriority(response.Matches[right].Ranking)
+		if leftTyped != rightTyped {
+			return leftTyped > rightTyped
+		}
 		leftWeight := rankingWeight(response.Matches[left].Ranking)
 		rightWeight := rankingWeight(response.Matches[right].Ranking)
 		if leftWeight != rightWeight {
@@ -94,6 +110,31 @@ func rankSearchResponse(response *SearchResponse, parsed querylang.Query) {
 	sort.SliceStable(response.Items, func(left, right int) bool {
 		return response.Items[left].Score > response.Items[right].Score
 	})
+}
+
+func rankingTypedPriority(signals []RankingSignal) int {
+	for _, signal := range signals {
+		switch signal.Name {
+		case "filename_only_match", "exact_symbol", "exact_ast_target":
+			return 1
+		}
+	}
+	return 0
+}
+
+func rankingClass(signals []RankingSignal) int {
+	class := 0
+	for _, signal := range signals {
+		switch signal.Name {
+		case "exact_path", "exact_symbol", "exact_ast_target":
+			class = max(class, 3)
+		case "filename_prefix":
+			class = max(class, 2)
+		case "path_contains":
+			class = max(class, 1)
+		}
+	}
+	return class
 }
 
 func rankingWeight(signals []RankingSignal) float64 {

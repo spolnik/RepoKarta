@@ -883,6 +883,9 @@ func (s *Service) Search(ctx context.Context, request SearchRequest) (SearchResp
 	if err != nil {
 		return SearchResponse{}, err
 	}
+	if resultType == "content" && mixedSourceSearchEligible(request, parsedQuery) {
+		return s.searchMixedSourceEvidence(ctx, request, parsedQuery)
+	}
 	switch resultType {
 	case "repository", "commit", "diff":
 		response, searchErr := s.searchEntityEvidence(ctx, request, parsedQuery, resultType)

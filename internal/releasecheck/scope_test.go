@@ -25,6 +25,7 @@ func TestRoadmapKeepsM7ScopeAndCompletedMilestones(t *testing.T) {
 		"- [x] Make every effective context visible",
 		"- [x] Provide explicit result types",
 		"- [x] Add result facets",
+		"- [x] Rank exact symbol and path matches",
 		"- [x] Add one-click actions",
 	} {
 		if !strings.Contains(m7, completed) {

@@ -588,7 +588,7 @@ search must remain fast and AI-free.
   and full name, with exact, prefix, case-sensitive, and case-insensitive modes.
 - [x] Add result facets and “search within these results” refinement without
   discarding the original query, scope, revision, or completeness metadata.
-- [ ] Rank exact symbol and path matches ahead of fuzzy content matches and
+- [x] Rank exact symbol and path matches ahead of fuzzy content matches and
   explain important ranking signals; never let personalization hide complete
   deterministic results.
 - [x] Add one-click actions from a result to open source, focus the element in
@@ -870,7 +870,7 @@ completion criteria include:
 
 ## Current implementation version
 
-`0.60.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
+`0.61.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
 The M9 dependency inventory, public registry refresh, lockfile resolution, and
 explicit private-registry routing are implemented; discrepancy filtering and
 fail-closed classification of unconfigured internal package prefixes remain.
@@ -884,7 +884,8 @@ release, and personal-task scopes with private personal and administrator-
 published defaults; Chat, JSON, and MCP expose every effective context,
 provenance source, and canonical copyable URL. The implemented slices also
 provide all twelve explicit search result types, grammar-compatible facets,
-deterministic ranking explanations, and permission-preserving result actions
+mixed exact-path and exact-symbol ranking ahead of fuzzy content with
+deterministic explanations, and permission-preserving result actions
 for source, Maps, dependencies, references, implementations, scoped Chat, and
 the last active conversation context. The implemented slices also
 enforce insight mutation permissions and revision staleness, paginate

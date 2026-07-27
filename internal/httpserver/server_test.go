@@ -1490,10 +1490,13 @@ func TestAPISearchReturnsCompletenessAndPinnedEvidence(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
 		t.Fatal(err)
 	}
-	if !result.Truncated || result.ReturnedFiles != 1 || result.MatchingFiles != 250 || !result.TotalFilesExact {
+	if !result.Truncated || result.ReturnedFiles != 3 || result.MatchingFiles != 750 || result.TotalFilesExact {
 		t.Fatalf("completeness = %#v", result)
 	}
-	if len(result.Matches) != 1 || result.Matches[0].Citation == "" || result.Matches[0].SourceURL == "" {
+	if len(result.Matches) != 3 ||
+		result.Matches[0].ResultType != "symbol_definition" ||
+		result.Matches[0].Citation == "" ||
+		result.Matches[0].SourceURL == "" {
 		t.Fatalf("evidence = %#v", result.Matches)
 	}
 }
