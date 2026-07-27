@@ -44,6 +44,27 @@ func TestBuildQueryUsesORWithinFieldsAndNOTForNegativeFilters(t *testing.T) {
 	}
 }
 
+func TestNormalizeLanguageFiltersCanonicalizesNamesAndWarnsOncePerUnknownValue(t *testing.T) {
+	normalized, warnings := normalizeLanguageFilters(search.Query{
+		Language:         "java",
+		Languages:        []string{"go", "TypeScript", "not-a-language"},
+		ExcludeLanguages: []string{"JAVA", " NOT-A-LANGUAGE "},
+	})
+	if normalized.Language != "Java" {
+		t.Fatalf("language = %q, want Java", normalized.Language)
+	}
+	if got := strings.Join(normalized.Languages, ","); got != "Go,TypeScript,not-a-language" {
+		t.Fatalf("languages = %q", got)
+	}
+	if got := strings.Join(normalized.ExcludeLanguages, ","); got != "Java,not-a-language" {
+		t.Fatalf("excluded languages = %q", got)
+	}
+	if len(warnings) != 1 || warnings[0].Code != "unknown_language" ||
+		!strings.Contains(warnings[0].Message, `"not-a-language"`) {
+		t.Fatalf("warnings = %#v", warnings)
+	}
+}
+
 func TestDiscoverCTagsAcceptsHomebrewNameOnlyWhenItIsUniversal(t *testing.T) {
 	paths := map[string]string{
 		"universal-ctags": "",
@@ -172,6 +193,28 @@ func TestAdapterIndexesAndSearchesRepositoryOnNativePlatform(t *testing.T) {
 	}
 	if len(match.Lines) != 1 || match.Lines[0].Number != 4 {
 		t.Fatalf("expected a cited line 4, got %#v", match.Lines)
+	}
+	lowercaseLanguage, err := adapter.Search(context.Background(), search.Query{
+		Text:     "needle from local code",
+		Language: "go",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lowercaseLanguage.Matches) != 2 || len(lowercaseLanguage.Warnings) != 0 {
+		t.Fatalf("lowercase language search = %#v", lowercaseLanguage)
+	}
+	unknownLanguage, err := adapter.Search(context.Background(), search.Query{
+		Text:     "needle from local code",
+		Language: "not-a-language",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(unknownLanguage.Matches) != 0 ||
+		len(unknownLanguage.Warnings) != 1 ||
+		unknownLanguage.Warnings[0].Code != "unknown_language" {
+		t.Fatalf("unknown language search = %#v", unknownLanguage)
 	}
 	scoped, err := adapter.Search(context.Background(), search.Query{
 		Text: "needle from local code",

@@ -1004,7 +1004,9 @@ query search with named captures, text and ancestor/parent predicates,
 persisted node-kind candidate pruning, artifact-bound pagination, and explicit
 coverage/truncation metadata through JSON and MCP. This is structural search
 infrastructure; framework reachability roots and dead-code classification
-remain deliberately unclaimed.
+remain deliberately unclaimed. Language filters now canonicalize
+case-insensitive names and aliases at the Zoekt boundary, while unknown values
+produce an explicit machine-readable warning instead of a silent empty result.
 
 ## Recommended next session
 

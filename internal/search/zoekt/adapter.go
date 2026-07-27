@@ -21,6 +21,7 @@ import (
 	upstream "github.com/sourcegraph/zoekt"
 	"github.com/sourcegraph/zoekt/gitindex"
 	"github.com/sourcegraph/zoekt/index"
+	"github.com/sourcegraph/zoekt/languages"
 	"github.com/sourcegraph/zoekt/query"
 	zoektsearch "github.com/sourcegraph/zoekt/search"
 	"github.com/spolnik/RepoKarta/internal/catalog"
@@ -169,6 +170,7 @@ func (a *Adapter) Search(ctx context.Context, request search.Query) (search.Resu
 		return search.Result{}, errors.New("search query is required")
 	}
 
+	request, languageWarnings := normalizeLanguageFilters(request)
 	parsed, err := buildQuery(request)
 	if err != nil {
 		return search.Result{}, err
@@ -214,6 +216,7 @@ func (a *Adapter) Search(ctx context.Context, request search.Query) (search.Resu
 		ShardsSkipped:   response.Stats.ShardsSkipped,
 		Limit:           limit,
 		TotalFilesExact: response.Stats.FilesSkipped == 0 && response.Stats.ShardsSkipped == 0 && response.Stats.Crashes == 0,
+		Warnings:        languageWarnings,
 	}
 	result.Truncated = result.ReturnedFiles < result.FileCount ||
 		result.FilesSkipped > 0 ||
@@ -253,6 +256,47 @@ func (a *Adapter) Search(ctx context.Context, request search.Query) (search.Resu
 		result.Matches = append(result.Matches, match)
 	}
 	return result, nil
+}
+
+func normalizeLanguageFilters(request search.Query) (search.Query, []search.Warning) {
+	var warnings []search.Warning
+	unknown := make(map[string]struct{})
+	canonicalize := func(value string) string {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return ""
+		}
+		if canonical, ok := languages.GetLanguageByNameOrAlias(value); ok {
+			return canonical
+		}
+		key := strings.ToLower(value)
+		if _, duplicate := unknown[key]; !duplicate {
+			unknown[key] = struct{}{}
+			warnings = append(warnings, search.Warning{
+				Code: "unknown_language",
+				Message: fmt.Sprintf(
+					"Unknown language filter %q; it cannot match indexed files. Use a supported language name or alias.",
+					value,
+				),
+			})
+		}
+		return key
+	}
+	canonicalizeAll := func(values []string) []string {
+		if len(values) == 0 {
+			return values
+		}
+		output := make([]string, len(values))
+		for index, value := range values {
+			output[index] = canonicalize(value)
+		}
+		return output
+	}
+
+	request.Language = canonicalize(request.Language)
+	request.Languages = canonicalizeAll(request.Languages)
+	request.ExcludeLanguages = canonicalizeAll(request.ExcludeLanguages)
+	return request, warnings
 }
 
 func (a *Adapter) acquireSearcher() (upstream.Streamer, func(), error) {
