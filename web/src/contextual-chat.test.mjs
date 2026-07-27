@@ -32,6 +32,7 @@ test("contextual chat URLs can start fleet-wide conversations without a reposito
 
 test("unknown modes are normalised to a generic context", () => {
   assert.equal(normaliseContextMode(" SOURCE "), "source");
+  assert.equal(normaliseContextMode("project"), "project");
   assert.equal(normaliseContextMode("admin"), "context");
   assert.equal(normaliseContextMode(""), "context");
 });

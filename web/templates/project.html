@@ -1,0 +1,68 @@
+{{define "project"}}
+<!doctype html>
+<html lang="en" class="h-full bg-surface-base">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Traverse every committed file in an indexed RepoKarta project.">
+    <meta name="theme-color" content="#090b0f">
+    <link rel="icon" href="/assets/favicon.ico" sizes="any">
+    <link rel="icon" type="image/png" href="/assets/favicon-32.png" sizes="32x32">
+    <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+    <title>{{.Repository.Name}} files · RepoKarta</title>
+    <link rel="stylesheet" href="/assets/app.css">
+    <script type="module" src="/assets/app.js"></script>
+  </head>
+  <body class="min-h-full bg-surface-base text-ink-strong antialiased">
+    {{template "app-header" .}}
+
+    <main class="project-browser">
+      <header class="project-browser-heading">
+        <div>
+          <p>Indexed project</p>
+          <h1>{{.Repository.Name}}</h1>
+          <span>Read-only tree pinned to <code>{{shortCommit .Revision}}</code></span>
+        </div>
+        {{if .Repository.OriginURL}}<a class="secondary-button" href="{{.Repository.OriginURL}}" target="_blank" rel="noreferrer">Open remote ↗</a>{{end}}
+      </header>
+
+      <nav class="project-breadcrumbs" aria-label="Project path">
+        {{range $index, $crumb := .Breadcrumbs}}
+          {{if $index}}<span aria-hidden="true">/</span>{{end}}
+          {{if $crumb.URL}}<a href="{{$crumb.URL}}">{{$crumb.Label}}</a>{{else}}<strong>{{$crumb.Label}}</strong>{{end}}
+        {{end}}
+      </nav>
+
+      <section class="project-tree-card" aria-label="Files in {{if .Path}}{{.Path}}{{else}}{{.Repository.Name}}{{end}}">
+        <header>
+          <span>Name</span>
+          {{if .FirstEntry}}<span>Entries {{.FirstEntry}}–{{.LastEntry}}</span>{{else}}<span>Empty directory</span>{{end}}
+        </header>
+        {{if .Entries}}
+        <ul class="project-tree-list">
+          {{range .Entries}}
+          <li>
+            <a href="{{.URL}}">
+              <span class="project-tree-icon" data-type="{{.Type}}" aria-hidden="true">{{if eq .Type "directory"}}▸{{else}}·{{end}}</span>
+              <span>{{.Name}}</span>
+              <small>{{if eq .Type "directory"}}Directory{{else}}File{{end}}</small>
+            </a>
+          </li>
+          {{end}}
+        </ul>
+        {{else}}
+        <div class="project-tree-empty">This committed directory contains no entries.</div>
+        {{end}}
+      </section>
+
+      {{if or .PreviousURL .NextURL}}
+      <nav class="project-pagination" aria-label="Directory pages">
+        <div>{{if .PreviousURL}}<a class="secondary-button" href="{{.PreviousURL}}">← Previous entries</a>{{end}}</div>
+        <span>Up to 500 entries per page</span>
+        <div>{{if .NextURL}}<a class="secondary-button" href="{{.NextURL}}">Next entries →</a>{{end}}</div>
+      </nav>
+      {{end}}
+    </main>
+  </body>
+</html>
+{{end}}

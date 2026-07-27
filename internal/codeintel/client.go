@@ -160,6 +160,9 @@ func (c *Client) ListTree(ctx context.Context, request TreeRequest) (TreeRespons
 		"rev":  []string{request.Revision},
 		"path": []string{request.Path},
 	}
+	if request.Offset > 0 {
+		values.Set("offset", strconv.Itoa(request.Offset))
+	}
 	var output TreeResponse
 	err := c.get(ctx, "/api/tree/"+url.PathEscape(repositorySelector(request.RepositoryID, request.Repository)), values, &output)
 	return output, err

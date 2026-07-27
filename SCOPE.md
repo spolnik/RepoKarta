@@ -870,7 +870,7 @@ completion criteria include:
 
 ## Current implementation version
 
-`0.65.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
+`0.66.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
 The M9 dependency inventory, public registry refresh, lockfile resolution, and
 explicit private-registry routing are implemented; discrepancy filtering and
 fail-closed classification of unconfigured internal package prefixes remain.
@@ -886,7 +886,12 @@ provenance source, and canonical copyable URL. The implemented slices also
 offer a contextual Chat launcher from Search, Maps, dependencies, Insights,
 Wiki, MCP, named-context, and source-file views; its shareable URL carries the
 originating mode, a permission-checked current-view context, and an explicitly
-submitted question into a new conversation. The implemented slices also
+submitted question into a new conversation. A commit-pinned project browser
+now traverses every directory through deterministic 500-entry pages, preserves
+breadcrumbs and sibling navigation while reading files, and deep-links exact
+lines without reading or mutating the worktree. The JSON and MCP tree contracts
+expose offsets so large directories remain completely traversable. The
+implemented slices also
 provide all twelve explicit search result types, grammar-compatible facets,
 mixed exact-path and exact-symbol ranking ahead of fuzzy content with
 deterministic explanations, and permission-preserving result actions

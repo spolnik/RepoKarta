@@ -258,6 +258,9 @@ type sourcePageData struct {
 	Version       string
 	ChatEnabled   bool
 	File          source.File
+	ProjectURL    string
+	Breadcrumbs   []projectBreadcrumbView
+	TreeEntries   []projectEntryView
 	RemoteURL     string
 	Citation      string
 	PreviousStart int
@@ -266,6 +269,32 @@ type sourcePageData struct {
 	NextEnd       int
 	FocusStart    int
 	FocusEnd      int
+}
+
+type projectPageData struct {
+	pageData
+	Repository  catalog.Repository
+	Revision    string
+	Path        string
+	Breadcrumbs []projectBreadcrumbView
+	Entries     []projectEntryView
+	PreviousURL string
+	NextURL     string
+	FirstEntry  int
+	LastEntry   int
+}
+
+type projectBreadcrumbView struct {
+	Label string
+	URL   string
+}
+
+type projectEntryView struct {
+	Name   string
+	Path   string
+	Type   string
+	URL    string
+	Active bool
 }
 
 type contextPageData struct {
@@ -362,6 +391,7 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 	mux.HandleFunc("GET /search", server.search)
 	mux.HandleFunc("GET /contexts", server.contextPage)
 	mux.HandleFunc("GET /contexts/{contextID}", server.namedContextPage)
+	mux.HandleFunc("GET /projects/{repositoryID}", server.project)
 	mux.HandleFunc("GET /source/{repositoryID}", server.source)
 	mux.HandleFunc("GET /api/search", server.apiSearch)
 	mux.HandleFunc("POST /api/search", server.apiSearchJSON)
@@ -1110,18 +1140,36 @@ func (s *Server) apiFile(response http.ResponseWriter, request *http.Request) {
 }
 
 func (s *Server) apiTree(response http.ResponseWriter, request *http.Request) {
+	offset, err := nonNegativeInteger(request.URL.Query().Get("offset"), "offset")
+	if err != nil {
+		writeAPIError(response, http.StatusBadRequest, err)
+		return
+	}
 	repositoryID, repositoryName := repositorySelector(request.PathValue("repository"))
 	tree, err := s.intelligence.ListTree(request.Context(), codeintel.TreeRequest{
 		RepositoryID: repositoryID,
 		Repository:   repositoryName,
 		Revision:     request.URL.Query().Get("rev"),
 		Path:         request.URL.Query().Get("path"),
+		Offset:       offset,
 	})
 	if err != nil {
 		writeCodeIntelligenceError(response, err)
 		return
 	}
 	writeJSON(response, http.StatusOK, tree)
+}
+
+func nonNegativeInteger(value, name string) (int, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, nil
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed < 0 {
+		return 0, fmt.Errorf("%s must be a non-negative integer", name)
+	}
+	return parsed, nil
 }
 
 func (s *Server) apiGitLog(response http.ResponseWriter, request *http.Request) {
@@ -1813,6 +1861,70 @@ func (s *Server) search(response http.ResponseWriter, request *http.Request) {
 	s.render(response, "index", data)
 }
 
+func (s *Server) project(response http.ResponseWriter, request *http.Request) {
+	repositoryID, err := strconv.ParseInt(request.PathValue("repositoryID"), 10, 64)
+	if err != nil || repositoryID <= 0 {
+		http.Error(response, "Invalid repository", http.StatusBadRequest)
+		return
+	}
+	offset, err := nonNegativeInteger(request.URL.Query().Get("offset"), "offset")
+	if err != nil {
+		http.Error(response, err.Error(), http.StatusBadRequest)
+		return
+	}
+	repository, err := s.intelligence.RepositoryByID(request.Context(), repositoryID)
+	if err != nil {
+		http.NotFound(response, request)
+		return
+	}
+	tree, err := s.intelligence.ListTree(request.Context(), codeintel.TreeRequest{
+		RepositoryID: repositoryID,
+		Revision:     request.URL.Query().Get("rev"),
+		Path:         request.URL.Query().Get("path"),
+		Offset:       offset,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, source.ErrUnsafePath), errors.Is(err, source.ErrUnknownRevision):
+			http.Error(response, "Invalid project path or revision", http.StatusBadRequest)
+		default:
+			http.Error(response, "Could not open project directory", http.StatusNotFound)
+		}
+		return
+	}
+	base, err := s.pageData(request.Context())
+	if err != nil {
+		http.Error(response, "Could not load project", http.StatusInternalServerError)
+		return
+	}
+	base.ActivePage = "project"
+	previousURL := ""
+	if tree.Offset > 0 {
+		previousURL = projectDirectoryURL(repositoryID, tree.Revision, tree.Path, max(0, tree.Offset-tree.Limit))
+	}
+	nextURL := ""
+	if tree.NextOffset > 0 {
+		nextURL = projectDirectoryURL(repositoryID, tree.Revision, tree.Path, tree.NextOffset)
+	}
+	firstEntry, lastEntry := 0, 0
+	if len(tree.Entries) > 0 {
+		firstEntry = tree.Offset + 1
+		lastEntry = tree.Offset + len(tree.Entries)
+	}
+	s.render(response, "project", projectPageData{
+		pageData:    base,
+		Repository:  repository,
+		Revision:    tree.Revision,
+		Path:        tree.Path,
+		Breadcrumbs: projectBreadcrumbs(repositoryID, repository.Name, tree.Revision, tree.Path, false),
+		Entries:     projectEntryViews(repositoryID, tree.Revision, tree.Entries, ""),
+		PreviousURL: previousURL,
+		NextURL:     nextURL,
+		FirstEntry:  firstEntry,
+		LastEntry:   lastEntry,
+	})
+}
+
 func (s *Server) source(response http.ResponseWriter, request *http.Request) {
 	repositoryID, err := strconv.ParseInt(request.PathValue("repositoryID"), 10, 64)
 	if err != nil || repositoryID <= 0 {
@@ -1870,11 +1982,27 @@ func (s *Server) source(response http.ResponseWriter, request *http.Request) {
 	if focusStart > 0 {
 		citationStart, citationEnd = focusStart, focusEnd
 	}
+	directory := path.Dir(file.Path)
+	if directory == "." {
+		directory = ""
+	}
+	tree, treeErr := s.intelligence.ListTree(request.Context(), codeintel.TreeRequest{
+		RepositoryID: repositoryID,
+		Revision:     file.Revision,
+		Path:         directory,
+	})
+	var treeEntries []projectEntryView
+	if treeErr == nil {
+		treeEntries = projectEntryViews(repositoryID, file.Revision, tree.Entries, file.Path)
+	}
 
 	data := sourcePageData{
 		Version:       s.config.Version,
 		ChatEnabled:   s.agents != nil,
 		File:          file,
+		ProjectURL:    projectDirectoryURL(repositoryID, file.Revision, directory, 0),
+		Breadcrumbs:   projectBreadcrumbs(repositoryID, repository.Name, file.Revision, file.Path, true),
+		TreeEntries:   treeEntries,
 		RemoteURL:     remoteFileURL(repository.OriginURL, file.Revision, file.Path, citationStart, citationEnd),
 		Citation:      fmt.Sprintf("%s@%s:%s#L%d-L%d", repository.Name, shortCommit(file.Revision), file.Path, citationStart, citationEnd),
 		PreviousStart: previousStart,
@@ -2520,6 +2648,86 @@ func repositorySignature(repositories []catalog.Repository) string {
 		)
 	}
 	return builder.String()
+}
+
+func projectDirectoryURL(repositoryID int64, revision, directory string, offset int) string {
+	values := url.Values{}
+	if revision != "" {
+		values.Set("rev", revision)
+	}
+	if directory != "" {
+		values.Set("path", directory)
+	}
+	if offset > 0 {
+		values.Set("offset", strconv.Itoa(offset))
+	}
+	target := "/projects/" + strconv.FormatInt(repositoryID, 10)
+	if encoded := values.Encode(); encoded != "" {
+		target += "?" + encoded
+	}
+	return target
+}
+
+func projectSourceURL(repositoryID int64, revision, filePath string) string {
+	values := url.Values{
+		"rev":   {revision},
+		"path":  {filePath},
+		"lines": {"1-200"},
+	}
+	return "/source/" + strconv.FormatInt(repositoryID, 10) + "?" + values.Encode()
+}
+
+func projectBreadcrumbs(
+	repositoryID int64,
+	repositoryName, revision, currentPath string,
+	includeFile bool,
+) []projectBreadcrumbView {
+	breadcrumbs := []projectBreadcrumbView{{
+		Label: repositoryName,
+		URL:   projectDirectoryURL(repositoryID, revision, "", 0),
+	}}
+	parts := strings.Split(strings.Trim(currentPath, "/"), "/")
+	if len(parts) == 1 && parts[0] == "" {
+		return breadcrumbs
+	}
+	directoryParts := parts
+	if includeFile {
+		directoryParts = parts[:len(parts)-1]
+	}
+	for index, part := range directoryParts {
+		directory := strings.Join(parts[:index+1], "/")
+		breadcrumbs = append(breadcrumbs, projectBreadcrumbView{
+			Label: part,
+			URL:   projectDirectoryURL(repositoryID, revision, directory, 0),
+		})
+	}
+	if includeFile {
+		breadcrumbs = append(breadcrumbs, projectBreadcrumbView{Label: parts[len(parts)-1]})
+	}
+	return breadcrumbs
+}
+
+func projectEntryViews(
+	repositoryID int64,
+	revision string,
+	entries []codeintel.TreeEntry,
+	activePath string,
+) []projectEntryView {
+	output := make([]projectEntryView, 0, len(entries))
+	for _, entry := range entries {
+		target := projectSourceURL(repositoryID, revision, entry.Path)
+		if entry.Type == "directory" {
+			target = projectDirectoryURL(repositoryID, revision, entry.Path, 0)
+		}
+		output = append(output, projectEntryView{
+			Name:   path.Base(entry.Path),
+			Path:   entry.Path,
+			Type:   entry.Type,
+			URL:    target,
+			Active: entry.Path == activePath,
+		})
+	}
+	return output
 }
 
 func remoteFileURL(origin, revision, filePath string, startLine, endLine int) string {

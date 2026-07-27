@@ -334,13 +334,14 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "list_tree",
 		Title:       "List repository tree",
-		Description: "List files and directories at a repository's pinned indexed commit. This never reads the worktree.",
+		Description: "List files and directories at a repository's pinned indexed commit. Follow next_offset to traverse directories larger than one page. This never reads the worktree.",
 		Annotations: readOnly,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input listTreeInput) (*mcp.CallToolResult, listTreeOutput, error) {
 		tree, err := intelligence.ListTree(ctx, codeintel.TreeRequest{
 			RepositoryID: input.RepositoryID,
 			Revision:     input.Revision,
 			Path:         input.Path,
+			Offset:       input.Offset,
 		})
 		if err != nil {
 			return nil, listTreeOutput{}, err
@@ -714,6 +715,7 @@ type listTreeInput struct {
 	RepositoryID int64  `json:"repository_id" jsonschema:"required,Repository ID returned by list_repositories."`
 	Path         string `json:"path,omitempty" jsonschema:"Optional repository-relative directory."`
 	Revision     string `json:"revision,omitempty" jsonschema:"Pinned indexed commit. Omit to use the current indexed commit."`
+	Offset       int    `json:"offset,omitempty" jsonschema:"Zero-based page offset. Use next_offset to traverse directories with more than 500 entries."`
 }
 
 type listTreeOutput = codeintel.TreeResponse

@@ -40,7 +40,9 @@ dependency-management workspace:
 - a Git CLI indexing fallback for repositories that go-git cannot open,
   including `extensions.worktreeConfig=true` repositories;
 - bounded, cancellable result sets with highlighted source matches;
-- commit-pinned source pages and copyable file-and-line citations;
+- a commit-pinned project browser with directory breadcrumbs, complete
+  paginated tree traversal, sibling-file navigation, stable line anchors, and
+  copyable file-and-line citations;
 - bounded Git history and exact commit-to-commit diffs without indexing every
   historical tree;
 - historical file and tree reads restricted to commits reachable from the
@@ -535,7 +537,7 @@ POST /api/symbol
 GET /api/repositories
 GET /api/whoami
 GET /api/file/{repository}?rev={commit}&path={path}&lines=1-200
-GET /api/tree/{repository}?rev={commit}&path={directory}
+GET /api/tree/{repository}?rev={commit}&path={directory}&offset=0
 GET /api/git/log/{repository}?rev={commit}&path={path}&limit=50
 GET /api/git/diff/{repository}?from={commit}&to={commit}&path={path}&context=3
 GET /api/maps?repository={repository-id}
@@ -552,6 +554,12 @@ GET /api/conversations/{conversation-id}
 PATCH /api/conversations/{conversation-id}
 DELETE /api/conversations/{conversation-id}
 ```
+
+Open `/projects/{repository-id}` to traverse the complete read-only tree at the
+indexed commit. Directories larger than 500 entries expose previous/next pages;
+opening a file retains the project breadcrumbs and sibling tree, and every
+`#L{line}` anchor is stable at the pinned revision. JSON and MCP tree consumers
+follow `next_offset` until it is absent.
 
 Conversation list responses include the current viewer, effective scope, and
 `can_view_all`. Asking for `scope=all` without administrator access safely

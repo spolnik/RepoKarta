@@ -88,6 +88,21 @@ export function parseRepoKartaContextURL(value, baseURL) {
       ...(path && line ? { line } : {})
     };
   }
+  const projectMatch = /^\/projects\/([1-9]\d*)$/.exec(pathname);
+  if (projectMatch) {
+    const repositoryID = positiveInteger(projectMatch[1]);
+    if (!repositoryID) {
+      return undefined;
+    }
+    const revision = candidate.searchParams.get("rev")?.trim() || "";
+    const directory = candidate.searchParams.get("path")?.trim() || "";
+    return {
+      kind: directory ? "directory" : "repository",
+      repository_id: repositoryID,
+      ...(revision ? { revision } : {}),
+      ...(directory ? { path: directory } : {})
+    };
+  }
 
   if (!repositoryScopedPaths.has(pathname)) {
     return undefined;

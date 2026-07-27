@@ -1804,6 +1804,7 @@ func TestGitAPIRejectsInvalidBoundsBeforeRepositoryAccess(t *testing.T) {
 	for _, target := range []string{
 		"http://127.0.0.1:7331/api/git/log/repo?limit=201",
 		"http://127.0.0.1:7331/api/git/diff/repo?context=21",
+		"http://127.0.0.1:7331/api/tree/repo?offset=-1",
 	} {
 		request := httptest.NewRequest(http.MethodGet, target, nil)
 		response := httptest.NewRecorder()
@@ -1870,9 +1871,10 @@ func TestReadOnlyHTTPAPIsAgainstCommittedRepository(t *testing.T) {
 		{http.MethodGet, "/api/providers", http.StatusOK, `"id":"test"`},
 		{http.MethodGet, "/api/file/12?path=main.go&lines=1-3", http.StatusOK, `"package main"`},
 		{http.MethodGet, "/api/tree/12", http.StatusOK, `"main.go"`},
+		{http.MethodGet, "/projects/12", http.StatusOK, "Indexed project"},
 		{http.MethodGet, "/api/git/log/12?limit=2", http.StatusOK, `"second"`},
 		{http.MethodGet, "/api/git/diff/12?from=" + firstRevision + "&to=" + secondRevision + "&path=main.go", http.StatusOK, `println`},
-		{http.MethodGet, "/source/12?path=main.go&lines=1-3&focus=3", http.StatusOK, "example/repository@"},
+		{http.MethodGet, "/source/12?path=main.go&lines=1-3&focus=3", http.StatusOK, "Current directory"},
 		{http.MethodGet, "/api/artifacts/progress", http.StatusOK, `"state":"building"`},
 		{http.MethodGet, "/api/contexts/suggest?kind=repository&q=example", http.StatusOK, `"suggestions"`},
 		{http.MethodGet, "/api/symbol?symbol=main&repo=12", http.StatusOK, `"match_count":250`},

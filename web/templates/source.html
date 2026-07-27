@@ -20,48 +20,77 @@
           <a href="/" class="brand-mark shrink-0" aria-label="Back to RepoKarta">
             <img src="/assets/repokarta-mark-192.png" alt="" width="32" height="32">
           </a>
-          <span class="text-ink-faint">/</span>
-          <span class="shrink-0 text-sm font-medium text-ink">{{.File.Repository.Name}}</span>
-          <span class="text-ink-faint">/</span>
-          <span class="truncate font-mono text-xs text-ink-soft">{{.File.Path}}</span>
+          <span class="truncate text-sm font-medium text-ink">{{.File.Repository.Name}} project</span>
         </div>
         <div class="flex items-center gap-2">
           {{if .ChatEnabled}}<button class="secondary-button" type="button" data-contextual-chat-open data-contextual-chat-mode="source">Ask about this file</button>{{end}}
+          <a class="secondary-button" href="{{.ProjectURL}}">Browse directory</a>
           {{if .RemoteURL}}<a class="secondary-button" href="{{.RemoteURL}}" target="_blank" rel="noreferrer">Open remote ↗</a>{{end}}
           <button class="secondary-button" type="button" data-copy="{{.Citation}}">Copy citation</button>
         </div>
       </div>
     </header>
 
-    <main class="mx-auto max-w-[1500px] px-3 py-5 sm:px-5 lg:px-8">
-      <div class="mb-4 flex flex-wrap items-center justify-between gap-3 px-1">
-        <div class="flex items-center gap-3 font-mono text-xs text-ink-soft">
-          <span class="rounded bg-white/[0.05] px-2 py-1 text-ink-soft">{{.File.Language}}</span>
-          <span>{{shortCommit .File.Revision}}</span>
-          <span>lines {{.File.StartLine}}–{{.File.EndLine}} of {{.File.TotalLines}}</span>
-        </div>
-        <code class="text-xs text-emerald-300/70">{{.Citation}}</code>
-      </div>
-
-      <section class="source-viewer" aria-label="Source code">
-        {{range .File.Lines}}
-        <div class="source-line{{if lineFocused .Number $.FocusStart $.FocusEnd}} source-line-focused{{end}}" id="L{{.Number}}">
-          <a class="source-line-number" href="#L{{.Number}}" aria-label="Line {{.Number}}">{{.Number}}</a>
-          <code class="source-code language-{{$.File.Language}}" data-highlight-language="{{$.File.Language}}">{{.Text}}</code>
-        </div>
-        {{else}}
-        <p class="p-8 text-center text-sm text-ink-soft">This file is empty.</p>
+    <main class="project-source-browser">
+      <nav class="project-breadcrumbs" aria-label="Project path">
+        {{range $index, $crumb := .Breadcrumbs}}
+          {{if $index}}<span aria-hidden="true">/</span>{{end}}
+          {{if $crumb.URL}}<a href="{{$crumb.URL}}">{{$crumb.Label}}</a>{{else}}<strong>{{$crumb.Label}}</strong>{{end}}
         {{end}}
-      </section>
-
-      <nav class="mt-4 flex items-center justify-between gap-3" aria-label="Source pagination">
-        <div>
-          {{if .PreviousStart}}<a class="secondary-button" href="?rev={{.File.Revision}}&path={{urlquery .File.Path}}&lines={{.PreviousStart}}-{{.PreviousEnd}}">← Previous lines</a>{{end}}
-        </div>
-        <div>
-          {{if .NextStart}}<a class="secondary-button" href="?rev={{.File.Revision}}&path={{urlquery .File.Path}}&lines={{.NextStart}}-{{.NextEnd}}">Next lines →</a>{{end}}
-        </div>
       </nav>
+
+      <div class="project-source-layout">
+        <aside class="project-file-tree" aria-label="Files in the current directory">
+          <header>
+            <span>Current directory</span>
+            <a href="{{.ProjectURL}}">View all</a>
+          </header>
+          {{if .TreeEntries}}
+          <ul>
+            {{range .TreeEntries}}
+            <li>
+              <a href="{{.URL}}" class="{{if .Active}}active{{end}}" {{if .Active}}aria-current="page"{{end}}>
+                <span aria-hidden="true">{{if eq .Type "directory"}}▸{{else}}·{{end}}</span>
+                <span>{{.Name}}</span>
+              </a>
+            </li>
+            {{end}}
+          </ul>
+          {{else}}
+          <p>No sibling files are available.</p>
+          {{end}}
+        </aside>
+
+        <div class="project-source-content">
+          <div class="source-heading">
+            <div>
+              <strong>{{.File.Path}}</strong>
+              <span>{{.File.Language}} · {{shortCommit .File.Revision}} · lines {{.File.StartLine}}–{{.File.EndLine}} of {{.File.TotalLines}}</span>
+            </div>
+            <code>{{.Citation}}</code>
+          </div>
+
+          <section class="source-viewer" aria-label="Source code">
+            {{range .File.Lines}}
+            <div class="source-line{{if lineFocused .Number $.FocusStart $.FocusEnd}} source-line-focused{{end}}" id="L{{.Number}}">
+              <a class="source-line-number" href="#L{{.Number}}" aria-label="Line {{.Number}}">{{.Number}}</a>
+              <code class="source-code language-{{$.File.Language}}" data-highlight-language="{{$.File.Language}}">{{.Text}}</code>
+            </div>
+            {{else}}
+            <p class="p-8 text-center text-sm text-ink-soft">This file is empty.</p>
+            {{end}}
+          </section>
+
+          <nav class="mt-4 flex items-center justify-between gap-3" aria-label="Source pagination">
+            <div>
+              {{if .PreviousStart}}<a class="secondary-button" href="?rev={{.File.Revision}}&path={{urlquery .File.Path}}&lines={{.PreviousStart}}-{{.PreviousEnd}}">← Previous lines</a>{{end}}
+            </div>
+            <div>
+              {{if .NextStart}}<a class="secondary-button" href="?rev={{.File.Revision}}&path={{urlquery .File.Path}}&lines={{.NextStart}}-{{.NextEnd}}">Next lines →</a>{{end}}
+            </div>
+          </nav>
+        </div>
+      </div>
     </main>
     {{if .ChatEnabled}}{{template "contextual-chat-dialog" .}}{{end}}
   </body>

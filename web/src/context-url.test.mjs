@@ -52,6 +52,23 @@ test("repository-scoped pages become repository contexts", () => {
   }
 });
 
+test("project browser URLs become repository or directory contexts", () => {
+  assert.deepEqual(parseRepoKartaContextURL("/projects/42?rev=abc123", baseURL), {
+    kind: "repository",
+    repository_id: 42,
+    revision: "abc123"
+  });
+  assert.deepEqual(
+    parseRepoKartaContextURL("/projects/42?rev=abc123&path=internal%2Fcodeintel", baseURL),
+    {
+      kind: "directory",
+      repository_id: 42,
+      revision: "abc123",
+      path: "internal/codeintel"
+    }
+  );
+});
+
 test("canonical effective-context URLs round-trip every structured identity", () => {
   assert.deepEqual(
     parseRepoKartaContextURL(

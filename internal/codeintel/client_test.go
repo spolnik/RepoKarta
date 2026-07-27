@@ -78,7 +78,9 @@ func TestClientCoversReadOnlyJSONSurface(t *testing.T) {
 	if _, err := client.GetFile(ctx, FileRequest{RepositoryID: 7, Revision: "abc", Path: "main.go", StartLine: 2, EndLine: 4}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.ListTree(ctx, TreeRequest{Repository: "repo/name", Revision: "abc", Path: "internal"}); err != nil {
+	if _, err := client.ListTree(ctx, TreeRequest{
+		Repository: "repo/name", Revision: "abc", Path: "internal", Offset: 500,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := client.GitLog(ctx, GitLogRequest{RepositoryID: 7, Revision: "abc", Path: "main.go", Limit: 3}); err != nil {
@@ -103,6 +105,7 @@ func TestClientCoversReadOnlyJSONSurface(t *testing.T) {
 	foundPost := false
 	foundSymbolPost := false
 	foundCompactGet := false
+	foundTreeOffset := false
 	for _, request := range requests {
 		if request == "POST /api/search" {
 			foundPost = true
@@ -113,6 +116,9 @@ func TestClientCoversReadOnlyJSONSurface(t *testing.T) {
 		if strings.HasPrefix(request, "GET /api/search?") && strings.Contains(request, "compact=true") {
 			foundCompactGet = true
 		}
+		if strings.HasPrefix(request, "GET /api/tree/repo%2Fname?") && strings.Contains(request, "offset=500") {
+			foundTreeOffset = true
+		}
 	}
 	if !foundPost {
 		t.Fatalf("structured search did not use POST: %#v", requests)
@@ -122,5 +128,8 @@ func TestClientCoversReadOnlyJSONSurface(t *testing.T) {
 	}
 	if !foundCompactGet {
 		t.Fatalf("compact search did not reach the JSON API: %#v", requests)
+	}
+	if !foundTreeOffset {
+		t.Fatalf("tree pagination did not reach the JSON API: %#v", requests)
 	}
 }

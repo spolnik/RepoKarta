@@ -368,6 +368,7 @@ func (s *session) executeTool(ctx context.Context, name string, input json.RawMe
 			RepositoryID int64  `json:"repository_id"`
 			Revision     string `json:"revision"`
 			Path         string `json:"path"`
+			Offset       int    `json:"offset"`
 		}
 		if err := json.Unmarshal(input, &request); err != nil {
 			return nil, err
@@ -376,6 +377,7 @@ func (s *session) executeTool(ctx context.Context, name string, input json.RawMe
 			RepositoryID: request.RepositoryID,
 			Revision:     request.Revision,
 			Path:         request.Path,
+			Offset:       request.Offset,
 		})
 	case "git_log":
 		var request struct {
@@ -473,10 +475,11 @@ func toolDefinitions() []anthropicapi.ToolUnionParam {
 			"start_line":    integerProperty("First one-based line."),
 			"end_line":      integerProperty("Last one-based line, at most 500 lines."),
 		}, []string{"repository_id", "path"}),
-		tool("list_tree", "List a bounded committed repository directory without reading the worktree.", map[string]any{
+		tool("list_tree", "List a committed repository directory without reading the worktree. Follow next_offset until it is absent to traverse every entry.", map[string]any{
 			"repository_id": integerProperty("Repository ID returned by list_repositories."),
 			"revision":      stringProperty("Exact reachable commit; omit for indexed commit."),
 			"path":          stringProperty("Optional repository-relative directory."),
+			"offset":        integerProperty("Zero-based page offset returned as next_offset."),
 		}, []string{"repository_id"}),
 		tool("git_log", "Read bounded newest-first history from a recorded commit.", map[string]any{
 			"repository_id": integerProperty("Repository ID returned by list_repositories."),

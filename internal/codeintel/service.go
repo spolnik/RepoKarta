@@ -379,6 +379,7 @@ type TreeRequest struct {
 	Repository   string
 	Revision     string
 	Path         string
+	Offset       int
 }
 
 // TreeResponse lists a bounded repository directory.
@@ -389,6 +390,8 @@ type TreeResponse struct {
 	Entries    []TreeEntry `json:"entries"`
 	Truncated  bool        `json:"truncated"`
 	Limit      int         `json:"limit"`
+	Offset     int         `json:"offset"`
+	NextOffset int         `json:"next_offset,omitempty"`
 }
 
 // TreeEntry is one Git tree item.
@@ -1695,7 +1698,8 @@ func (s *Service) ListTree(ctx context.Context, request TreeRequest) (TreeRespon
 	if err != nil {
 		return TreeResponse{}, err
 	}
-	entries, truncated, err := gitTree(ctx, repository, revision, treePath)
+	offset := max(0, request.Offset)
+	entries, truncated, pageOffset, nextOffset, err := gitTree(ctx, repository, revision, treePath, offset)
 	if err != nil {
 		return TreeResponse{}, err
 	}
@@ -1706,6 +1710,8 @@ func (s *Service) ListTree(ctx context.Context, request TreeRequest) (TreeRespon
 		Entries:    entries,
 		Truncated:  truncated,
 		Limit:      MaximumTreeEntries,
+		Offset:     pageOffset,
+		NextOffset: nextOffset,
 	}, nil
 }
 
@@ -2063,7 +2069,12 @@ func safeTreePath(value string) (string, error) {
 	return cleaned, nil
 }
 
-func gitTree(ctx context.Context, repository catalog.Repository, revision, treePath string) ([]TreeEntry, bool, error) {
+func gitTree(
+	ctx context.Context,
+	repository catalog.Repository,
+	revision, treePath string,
+	offset int,
+) ([]TreeEntry, bool, int, int, error) {
 	bounded, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	arguments := make([]string, 0, 9)
@@ -2087,11 +2098,10 @@ func gitTree(ctx context.Context, repository catalog.Repository, revision, treeP
 		if message == "" {
 			message = err.Error()
 		}
-		return nil, false, fmt.Errorf("list Git tree: %s", message)
+		return nil, false, 0, 0, fmt.Errorf("list Git tree: %s", message)
 	}
 	records := strings.Split(strings.TrimSuffix(string(output), "\x00"), "\x00")
-	entries := make([]TreeEntry, 0, min(len(records), MaximumTreeEntries))
-	truncated := len(records) > MaximumTreeEntries
+	allEntries := make([]TreeEntry, 0, len(records))
 	for _, record := range records {
 		metadata, name, ok := strings.Cut(record, "\t")
 		if !ok || name == "" {
@@ -2106,18 +2116,23 @@ func gitTree(ctx context.Context, repository catalog.Repository, revision, treeP
 		if treePath != "" {
 			entryPath = path.Join(treePath, name)
 		}
-		entries = append(entries, TreeEntry{Type: entryType, Path: entryPath})
-		if len(entries) == MaximumTreeEntries {
-			break
-		}
+		allEntries = append(allEntries, TreeEntry{Type: entryType, Path: entryPath})
 	}
-	sort.SliceStable(entries, func(left, right int) bool {
-		if entries[left].Type != entries[right].Type {
-			return entries[left].Type == "directory"
+	sort.SliceStable(allEntries, func(left, right int) bool {
+		if allEntries[left].Type != allEntries[right].Type {
+			return allEntries[left].Type == "directory"
 		}
-		return entries[left].Path < entries[right].Path
+		return allEntries[left].Path < allEntries[right].Path
 	})
-	return entries, truncated, nil
+	offset = min(max(0, offset), len(allEntries))
+	end := min(len(allEntries), offset+MaximumTreeEntries)
+	entries := append([]TreeEntry(nil), allEntries[offset:end]...)
+	truncated := end < len(allEntries)
+	nextOffset := 0
+	if truncated {
+		nextOffset = end
+	}
+	return entries, truncated, offset, nextOffset, nil
 }
 
 func gitObjectType(ctx context.Context, repository catalog.Repository, revision, filePath string) (string, error) {

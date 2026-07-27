@@ -630,6 +630,9 @@
         {{if .DefaultRevision}}<span>·</span><span class="truncate">{{.DefaultRevision}}</span>{{end}}
         {{if .Bare}}<span>· bare</span>{{end}}
       </div>
+      {{if eq .IndexState "ready"}}
+      <a class="repository-project-link" href="/projects/{{.ID}}">Browse committed files →</a>
+      {{end}}
       {{if .IndexError}}<p class="mt-2 line-clamp-2 text-xs leading-4 {{if eq .IndexState "empty"}}text-ink-faint{{else}}text-rose-300/70{{end}}" title="{{.IndexError}}">{{.IndexError}}</p>{{end}}
     </li>
     {{end}}

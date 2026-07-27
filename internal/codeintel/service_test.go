@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -136,6 +137,60 @@ func TestServiceCommittedFileTreeAndHistoryAPIs(t *testing.T) {
 		RepositoryID: repository.ID, Path: "../secret",
 	}); err == nil {
 		t.Fatal("unsafe file path was accepted")
+	}
+}
+
+func TestListTreePaginatesEveryCommittedDirectoryEntry(t *testing.T) {
+	directory := t.TempDir()
+	runGit(t, directory, "init", "-q")
+	runGit(t, directory, "config", "user.name", "RepoKarta Test")
+	runGit(t, directory, "config", "user.email", "test@repokarta.local")
+	for index := 0; index < MaximumTreeEntries+2; index++ {
+		name := filepath.Join(directory, fmt.Sprintf("file-%03d.txt", index))
+		if err := os.WriteFile(name, []byte(strconv.Itoa(index)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runGit(t, directory, "add", ".")
+	runGit(t, directory, "commit", "-qm", "large tree")
+	revision := strings.TrimSpace(runGit(t, directory, "rev-parse", "HEAD"))
+	repository := catalog.Repository{
+		ID: 29, Name: "large-tree", Path: directory,
+		HeadCommit: revision, IndexedCommit: revision, IndexState: "ready",
+	}
+	service := New(referenceTestStore{repository: repository}, fixedResultSearcher{}, "")
+
+	first, err := service.ListTree(context.Background(), TreeRequest{
+		RepositoryID: repository.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Entries) != MaximumTreeEntries || !first.Truncated ||
+		first.Offset != 0 || first.NextOffset != MaximumTreeEntries {
+		t.Fatalf("first tree page = %#v", first)
+	}
+	last, err := service.ListTree(context.Background(), TreeRequest{
+		RepositoryID: repository.ID,
+		Offset:       first.NextOffset,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(last.Entries) != 2 || last.Truncated || last.Offset != MaximumTreeEntries ||
+		last.NextOffset != 0 || last.Entries[0].Path != "file-500.txt" {
+		t.Fatalf("last tree page = %#v", last)
+	}
+	pastEnd, err := service.ListTree(context.Background(), TreeRequest{
+		RepositoryID: repository.ID,
+		Offset:       MaximumTreeEntries * 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pastEnd.Entries) != 0 || pastEnd.Offset != MaximumTreeEntries+2 ||
+		pastEnd.Truncated || pastEnd.NextOffset != 0 {
+		t.Fatalf("past-end tree page = %#v", pastEnd)
 	}
 }
 

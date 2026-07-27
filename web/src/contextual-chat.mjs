@@ -4,6 +4,7 @@ const supportedModes = new Set([
   "insights",
   "maps",
   "mcp",
+  "project",
   "search",
   "source",
   "wiki"
