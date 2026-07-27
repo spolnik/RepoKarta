@@ -4,9 +4,12 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/spolnik/RepoKarta/internal/querylang"
 )
+
+const maximumSourceIndexRankingWeight = 40.0
 
 func finalizeSearchResponse(response *SearchResponse, parsed querylang.Query) {
 	rankSearchResponse(response, parsed)
@@ -50,6 +53,8 @@ func compactSearchResponse(response *SearchResponse) {
 
 func rankSearchResponse(response *SearchResponse, parsed querylang.Query) {
 	needle := strings.ToLower(strings.TrimSpace(parsed.Text))
+	queryTerms := rankingQueryTerms(parsed.Text)
+	sourceRanks, rankedSourceCount := sourceIndexRanks(response.Matches)
 	for index := range response.Matches {
 		match := &response.Matches[index]
 		match.Ranking = []RankingSignal{}
@@ -93,10 +98,34 @@ func rankSearchResponse(response *SearchResponse, parsed querylang.Query) {
 				Detail: "Persisted syntax evidence matched the exact target name.",
 			})
 		}
-		if match.Score != 0 {
+		match.Ranking = append(match.Ranking, identifierPathRankingSignals(match.Path, queryTerms)...)
+		if len(match.Lines) > 1 {
+			weight := float64(min((len(match.Lines)-1)*10, 30))
 			match.Ranking = append(match.Ranking, RankingSignal{
-				Name: "source_index_score", Weight: match.Score,
-				Detail: fmt.Sprintf("Source index score %.3f.", match.Score),
+				Name:   "file_match_coherence",
+				Weight: weight,
+				Detail: fmt.Sprintf(
+					"%d distinct matching lines make this file a coherent query candidate.",
+					len(match.Lines),
+				),
+			})
+		}
+		match.Ranking = append(match.Ranking, nonPrimaryPathRankingSignals(
+			match.Path,
+			parsed,
+			queryTerms,
+		)...)
+		if rank := sourceRanks[index]; rank > 0 {
+			weight := maximumSourceIndexRankingWeight / float64(rank)
+			match.Ranking = append(match.Ranking, RankingSignal{
+				Name: "source_index_score", Weight: weight,
+				Detail: fmt.Sprintf(
+					"Source index score %.3f is rank %d of %d and contributes normalized weight %.3f.",
+					match.Score,
+					rank,
+					rankedSourceCount,
+					weight,
+				),
 			})
 		}
 	}
@@ -140,11 +169,279 @@ func rankSearchResponse(response *SearchResponse, parsed querylang.Query) {
 				Detail: "The result title contains the free-text query.",
 			})
 		}
+		item.Ranking = append(item.Ranking, identifierPathRankingSignals(item.Path, queryTerms)...)
+		item.Ranking = append(item.Ranking, nonPrimaryPathRankingSignals(
+			item.Path,
+			parsed,
+			queryTerms,
+		)...)
 		item.Score = rankingWeight(item.Ranking)
 	}
 	sort.SliceStable(response.Items, func(left, right int) bool {
 		return response.Items[left].Score > response.Items[right].Score
 	})
+}
+
+func sourceIndexRanks(matches []SearchMatch) (map[int]int, int) {
+	indices := make([]int, 0, len(matches))
+	for index := range matches {
+		if matches[index].Score > 0 {
+			indices = append(indices, index)
+		}
+	}
+	sort.SliceStable(indices, func(left, right int) bool {
+		return matches[indices[left]].Score > matches[indices[right]].Score
+	})
+	ranks := make(map[int]int, len(indices))
+	rank := 0
+	previousScore := 0.0
+	for position, index := range indices {
+		if position == 0 || matches[index].Score != previousScore {
+			rank = position + 1
+			previousScore = matches[index].Score
+		}
+		ranks[index] = rank
+	}
+	return ranks, len(indices)
+}
+
+func identifierPathRankingSignals(path string, queryTerms []string) []RankingSignal {
+	if len(queryTerms) == 0 {
+		return nil
+	}
+	pathTerms := rankingPathTerms(path)
+	matched := 0
+	for _, queryTerm := range queryTerms {
+		for pathTerm := range pathTerms {
+			if rankingTermsOverlap(queryTerm, pathTerm) {
+				matched++
+				break
+			}
+		}
+	}
+	if matched == 0 {
+		return nil
+	}
+	weight := 40 * float64(matched) / float64(len(queryTerms))
+	return []RankingSignal{{
+		Name:   "identifier_path_match",
+		Weight: weight,
+		Detail: fmt.Sprintf(
+			"%d of %d meaningful query identifiers match the filename or its parent directory.",
+			matched,
+			len(queryTerms),
+		),
+	}}
+}
+
+func rankingQueryTerms(value string) []string {
+	stopwords := map[string]struct{}{
+		"a": {}, "an": {}, "and": {}, "are": {}, "as": {}, "at": {}, "be": {},
+		"by": {}, "do": {}, "does": {}, "for": {}, "from": {}, "has": {}, "have": {},
+		"how": {}, "if": {}, "in": {}, "is": {}, "it": {}, "not": {}, "of": {},
+		"on": {}, "or": {}, "the": {}, "to": {}, "was": {}, "what": {}, "when": {},
+		"where": {}, "which": {}, "who": {}, "why": {}, "with": {},
+	}
+	seen := make(map[string]struct{})
+	output := make([]string, 0)
+	for _, term := range splitRankingIdentifiers(value) {
+		if len([]rune(term)) < 3 {
+			continue
+		}
+		if _, skipped := stopwords[term]; skipped {
+			continue
+		}
+		if _, duplicate := seen[term]; duplicate {
+			continue
+		}
+		seen[term] = struct{}{}
+		output = append(output, term)
+	}
+	return output
+}
+
+func rankingPathTerms(value string) map[string]struct{} {
+	normalized := strings.Trim(strings.ReplaceAll(value, "\\", "/"), "/")
+	parts := strings.Split(normalized, "/")
+	relevant := parts
+	if len(relevant) > 2 {
+		relevant = relevant[len(relevant)-2:]
+	}
+	output := make(map[string]struct{})
+	for index, part := range relevant {
+		if index == len(relevant)-1 {
+			if extension := strings.LastIndex(part, "."); extension > 0 {
+				part = part[:extension]
+			}
+		}
+		for _, term := range splitRankingIdentifiers(part) {
+			if len([]rune(term)) >= 2 {
+				output[term] = struct{}{}
+			}
+		}
+	}
+	return output
+}
+
+func splitRankingIdentifiers(value string) []string {
+	runes := []rune(strings.TrimSpace(value))
+	output := make([]string, 0)
+	start := -1
+	flush := func(end int) {
+		if start < 0 || end <= start {
+			return
+		}
+		output = append(output, strings.ToLower(string(runes[start:end])))
+		start = -1
+	}
+	for index, current := range runes {
+		if !unicode.IsLetter(current) && !unicode.IsDigit(current) {
+			flush(index)
+			continue
+		}
+		if start < 0 {
+			start = index
+			continue
+		}
+		previous := runes[index-1]
+		var next rune
+		if index+1 < len(runes) {
+			next = runes[index+1]
+		}
+		if unicode.IsUpper(current) &&
+			(unicode.IsLower(previous) || unicode.IsDigit(previous) ||
+				(unicode.IsUpper(previous) && unicode.IsLower(next))) {
+			flush(index)
+			start = index
+		}
+	}
+	flush(len(runes))
+	return output
+}
+
+func rankingTermsOverlap(left, right string) bool {
+	if left == right {
+		return true
+	}
+	shorter, longer := left, right
+	if len(shorter) > len(longer) {
+		shorter, longer = longer, shorter
+	}
+	return len(shorter) >= 3 && strings.HasPrefix(longer, shorter)
+}
+
+func nonPrimaryPathRankingSignals(
+	path string,
+	parsed querylang.Query,
+	queryTerms []string,
+) []RankingSignal {
+	if path == "" {
+		return nil
+	}
+	normalized := strings.ToLower(strings.ReplaceAll(path, "\\", "/"))
+	base := normalized
+	if separator := strings.LastIndex(base, "/"); separator >= 0 {
+		base = base[separator+1:]
+	}
+	intentTerms := append(append([]string{}, queryTerms...), rankingPathFilterTerms(parsed)...)
+	queryHas := func(values ...string) bool {
+		for _, queryTerm := range intentTerms {
+			for _, value := range values {
+				if rankingTermsOverlap(queryTerm, value) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	signals := make([]RankingSignal, 0, 2)
+	if isTestPath(normalized, base) && !queryHas("test", "tests", "testing", "spec") {
+		signals = append(signals, RankingSignal{
+			Name:   "test_path_penalty",
+			Weight: -30,
+			Detail: "A conventional test path is demoted because the query did not ask for tests.",
+		})
+	}
+	if (pathHasComponent(normalized, "compat") ||
+		pathHasComponent(normalized, "_compat") ||
+		pathHasComponent(normalized, "legacy")) &&
+		!queryHas("compat", "compatibility", "legacy") {
+		signals = append(signals, RankingSignal{
+			Name:   "compatibility_path_penalty",
+			Weight: -20,
+			Detail: "A compatibility or legacy path is demoted because the query did not request it.",
+		})
+	}
+	if (pathHasComponent(normalized, "example") ||
+		pathHasComponent(normalized, "examples") ||
+		pathHasComponent(normalized, "_example") ||
+		pathHasComponent(normalized, "_examples") ||
+		pathHasComponent(normalized, "doc_src") ||
+		pathHasComponent(normalized, "docs_src")) &&
+		!queryHas("example", "examples", "documentation", "docs") {
+		signals = append(signals, RankingSignal{
+			Name:   "example_path_penalty",
+			Weight: -20,
+			Detail: "Example or documentation-source code is demoted because the query did not request it.",
+		})
+	}
+	if (strings.HasSuffix(base, ".d.ts") ||
+		base == "__init__.py" ||
+		base == "package-info.java") &&
+		!queryHas("declaration", "declarations", "types", "typing", "init", "package", "metadata") {
+		signals = append(signals, RankingSignal{
+			Name:   "stub_path_penalty",
+			Weight: -10,
+			Detail: "A declaration stub or package metadata file is mildly demoted.",
+		})
+	}
+	return signals
+}
+
+func rankingPathFilterTerms(parsed querylang.Query) []string {
+	output := make([]string, 0)
+	for _, filter := range parsed.Filters {
+		if !filter.Negative &&
+			(filter.Field == querylang.FieldPath || filter.Field == querylang.FieldFile) {
+			output = append(output, rankingQueryTerms(filter.Value)...)
+		}
+	}
+	return output
+}
+
+func pathHasComponent(path, component string) bool {
+	path = strings.Trim(path, "/")
+	for _, candidate := range strings.Split(path, "/") {
+		if candidate == component {
+			return true
+		}
+	}
+	return false
+}
+
+func isTestPath(path, base string) bool {
+	for _, component := range strings.Split(strings.Trim(path, "/"), "/") {
+		switch component {
+		case "test", "tests", "__tests__", "spec", "testing":
+			return true
+		}
+	}
+	if strings.HasPrefix(base, "test_") ||
+		strings.Contains(base, ".test.") ||
+		strings.Contains(base, ".spec.") {
+		return true
+	}
+	for _, suffix := range []string{
+		"_test.go", "_test.py", "_test.rb", "_spec.rb", "_test.cpp", "_test.c",
+		"_test.dart", "_test.lua", "_spec.lua", "test.java", "tests.java",
+		"test.kt", "tests.kt", "spec.kt", "test.swift", "tests.swift", "spec.swift",
+		"test.cs", "tests.cs", "spec.scala", "suite.scala", "test.scala",
+	} {
+		if strings.HasSuffix(base, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 func rankingTypedPriority(signals []RankingSignal) int {

@@ -882,7 +882,7 @@ completion criteria include:
 
 ## Current implementation version
 
-`0.67.1-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
+`0.68.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
 The M9 dependency inventory, public registry refresh, lockfile resolution,
 explicit private-registry routing, reproducible OSV advisory snapshots,
 ecosystem-correct fleet CVE matching, scope-aware UI/JSON/MCP findings, and
@@ -908,7 +908,9 @@ expose offsets so large directories remain completely traversable. The
 implemented slices also
 provide all twelve explicit search result types, grammar-compatible facets,
 mixed exact-path and exact-symbol ranking ahead of fuzzy content with
-deterministic explanations, and permission-preserving result actions
+deterministic explanations, normalized source-index ranks, identifier-aware
+filename and parent-directory boosts, multi-hit file coherence, and
+query-aware test/example/legacy penalties. Permission-preserving result actions
 for source, Maps, dependencies, references, implementations, scoped Chat, and
 the last active conversation context. Repository-scoped Git history search now
 filters commits and diffs by author, message, path, actual added or removed

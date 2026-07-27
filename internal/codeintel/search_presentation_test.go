@@ -1,6 +1,7 @@
 package codeintel
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/spolnik/RepoKarta/internal/querylang"
@@ -59,6 +60,141 @@ func TestSearchPresentationPrefersTypedExactPathOverContentFromTheSameFile(t *te
 	if response.Matches[0].ResultType != "file_path" ||
 		response.Matches[0].Ranking[1].Name != "filename_only_match" {
 		t.Fatalf("typed exact path order = %#v", response.Matches)
+	}
+}
+
+func TestSearchPresentationUsesIdentifierPathsAndNormalizedSourceRanks(t *testing.T) {
+	response := SearchResponse{
+		ResultType:      "content",
+		TotalFilesExact: true,
+		Matches: []SearchMatch{
+			{
+				ResultType: "content",
+				Repository: "repo",
+				Path:       "internal/helpers.go",
+				Score:      10000,
+				Lines:      []SearchLine{{Number: 1}},
+			},
+			{
+				ResultType: "content",
+				Repository: "repo",
+				Path:       "internal/AuthService.go",
+				Score:      1,
+				Lines:      []SearchLine{{Number: 1}},
+			},
+		},
+	}
+	finalizeSearchResponse(&response, querylang.Query{Text: "authenticate user service"})
+	if response.Matches[0].Path != "internal/AuthService.go" {
+		t.Fatalf("identifier-aware ranking = %#v", response.Matches)
+	}
+	signals := rankingSignalsByName(response.Matches[0].Ranking)
+	if signals["identifier_path_match"].Weight <= 0 ||
+		signals["source_index_score"].Weight > maximumSourceIndexRankingWeight {
+		t.Fatalf("normalized ranking signals = %#v", response.Matches[0].Ranking)
+	}
+	if !strings.Contains(signals["source_index_score"].Detail, "normalized weight") {
+		t.Fatalf("source score explanation = %#v", signals["source_index_score"])
+	}
+}
+
+func TestSearchPresentationRewardsCoherentFiles(t *testing.T) {
+	response := SearchResponse{
+		ResultType:      "content",
+		TotalFilesExact: true,
+		Matches: []SearchMatch{
+			{
+				ResultType: "content",
+				Repository: "repo",
+				Path:       "internal/first.go",
+				Score:      10,
+				Lines:      []SearchLine{{Number: 1}},
+			},
+			{
+				ResultType: "content",
+				Repository: "repo",
+				Path:       "internal/coherent.go",
+				Score:      9,
+				Lines: []SearchLine{
+					{Number: 1},
+					{Number: 3},
+					{Number: 8},
+					{Number: 13},
+				},
+			},
+		},
+	}
+	finalizeSearchResponse(&response, querylang.Query{Text: "needle"})
+	if response.Matches[0].Path != "internal/coherent.go" {
+		t.Fatalf("coherence ranking = %#v", response.Matches)
+	}
+	if signal := rankingSignalsByName(response.Matches[0].Ranking)["file_match_coherence"]; signal.Weight != 30 {
+		t.Fatalf("coherence signal = %#v", signal)
+	}
+}
+
+func TestSearchPresentationDemotesNoiseUnlessTheQueryRequestsIt(t *testing.T) {
+	response := SearchResponse{
+		ResultType:      "content",
+		TotalFilesExact: true,
+		Matches: []SearchMatch{
+			{
+				ResultType: "content",
+				Repository: "repo",
+				Path:       "internal/service_test.go",
+				Score:      10,
+				Lines:      []SearchLine{{Number: 1}},
+			},
+			{
+				ResultType: "content",
+				Repository: "repo",
+				Path:       "internal/service.go",
+				Score:      9,
+				Lines:      []SearchLine{{Number: 1}},
+			},
+		},
+	}
+	finalizeSearchResponse(&response, querylang.Query{Text: "service behavior"})
+	if response.Matches[0].Path != "internal/service.go" {
+		t.Fatalf("noise-aware ranking = %#v", response.Matches)
+	}
+	testSignals := rankingSignalsByName(response.Matches[1].Ranking)
+	if testSignals["test_path_penalty"].Weight != -30 {
+		t.Fatalf("test penalty = %#v", response.Matches[1].Ranking)
+	}
+
+	explicit := SearchResponse{
+		ResultType:      "content",
+		TotalFilesExact: true,
+		Matches: []SearchMatch{
+			{
+				ResultType: "content",
+				Repository: "repo",
+				Path:       "internal/service_test.go",
+				Score:      10,
+				Lines:      []SearchLine{{Number: 1}},
+			},
+			{
+				ResultType: "content",
+				Repository: "repo",
+				Path:       "internal/service.go",
+				Score:      9,
+				Lines:      []SearchLine{{Number: 1}},
+			},
+		},
+	}
+	finalizeSearchResponse(&explicit, querylang.Query{
+		Text: "service behavior",
+		Filters: []querylang.Filter{{
+			Field: querylang.FieldFile,
+			Value: "_test.go",
+		}},
+	})
+	if explicit.Matches[0].Path != "internal/service_test.go" {
+		t.Fatalf("explicit file intent changed source order = %#v", explicit.Matches)
+	}
+	if _, penalized := rankingSignalsByName(explicit.Matches[0].Ranking)["test_path_penalty"]; penalized {
+		t.Fatalf("explicit file result retained test penalty = %#v", explicit.Matches[0].Ranking)
 	}
 }
 
@@ -129,4 +265,12 @@ func TestCompactSearchPresentationPreservesLocationsWithoutPayloadBodies(t *test
 		response.FacetCoverage.Scope != "" || response.FacetCoverage.Complete {
 		t.Fatalf("compact response retained rich payload = %#v", response)
 	}
+}
+
+func rankingSignalsByName(signals []RankingSignal) map[string]RankingSignal {
+	output := make(map[string]RankingSignal, len(signals))
+	for _, signal := range signals {
+		output[signal.Name] = signal
+	}
+	return output
 }
