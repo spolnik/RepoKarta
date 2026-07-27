@@ -178,7 +178,7 @@ func TestEmptyTopologyUsesJSONArrays(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if topology.Components == nil || topology.Connections == nil ||
+	if topology.Components == nil || topology.Connections == nil || topology.Unresolved == nil ||
 		topology.Protocols == nil || topology.Providers == nil || topology.Environments == nil {
 		t.Fatalf("empty topology must serialize collections as arrays: %+v", topology)
 	}
@@ -189,16 +189,10 @@ func TestTopologyReportsAndFiltersStaticPlaceholderMetadata(t *testing.T) {
 		ID: "placeholder-summary",
 		Components: []graph.SystemComponent{
 			{ID: "checkout", Name: "checkout", Kind: "service"},
-			{ID: "unresolved", Name: "${BILLING_SERVICE_URL}", Kind: "service", External: true},
 			{ID: "stripe", Name: "stripe.com", Kind: "service", External: true},
+			{ID: "tax", Name: "tax-service", Kind: "service", External: true, Candidate: true},
 		},
 		Connections: []graph.SystemConnection{
-			{
-				ID: "unresolved-edge", Source: "checkout", Target: "unresolved",
-				Protocol: "http", Interaction: "calls", Confidence: "low",
-				EvidenceOrigin: "static", EnvironmentVariable: "BILLING_SERVICE_URL",
-				ResolutionTier: "unresolved", UnresolvedReason: "no_indexed_assignment",
-			},
 			{
 				ID: "staging-edge", Source: "checkout", Target: "stripe",
 				Protocol: "http", Interaction: "calls", Confidence: "high",
@@ -206,7 +200,18 @@ func TestTopologyReportsAndFiltersStaticPlaceholderMetadata(t *testing.T) {
 				ResolutionTier: "cross_repository_assignment", Environment: "staging",
 				ResolutionDivergent: true,
 			},
+			{
+				ID: "candidate-edge", Source: "checkout", Target: "tax",
+				Protocol: "http", Interaction: "calls", Confidence: "medium",
+				EvidenceOrigin: "static", EnvironmentVariable: "TAX_API_URL",
+				ResolutionTier: "in_file_default",
+			},
 		},
+		UnresolvedTopology: []graph.UnresolvedTopologyConnection{{
+			ID: "unresolved-edge", Source: "checkout", Variable: "BILLING_SERVICE_URL",
+			Candidate: "billing-service", Protocol: "http", Interaction: "calls",
+			Reason: "no-indexed-assignment", Evidence: []graph.Evidence{},
+		}},
 		Scope: graph.Scope{Complete: true, TotalRepositories: 1, AnalyzedRepositories: 1},
 	}
 	topology := buildTopology(
@@ -214,6 +219,9 @@ func TestTopologyReportsAndFiltersStaticPlaceholderMetadata(t *testing.T) {
 		TopologyOptions{}, time.Now(),
 	)
 	if topology.Summary.UnresolvedPlaceholderCount != 1 ||
+		topology.Summary.ResolvedCount != 1 ||
+		topology.Summary.CandidateCount != 1 ||
+		topology.Summary.UnresolvedCount != 1 ||
 		!slices.Contains(topology.Environments, "staging") {
 		t.Fatalf("placeholder honesty summary = %+v, environments = %v", topology.Summary, topology.Environments)
 	}

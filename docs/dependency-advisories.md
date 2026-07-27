@@ -43,7 +43,12 @@ the OSV schema's SemVer ordering. Fixed boundaries are exclusive;
 `last_affected` boundaries are inclusive. Maven qualifiers are not compared as
 generic semver.
 
-Every finding contains two independent evidence references:
+Findings are de-duplicated by advisory, repository, package, and matched
+resolved version. Each group exposes `manifest_occurrence_count` plus an
+expandable `occurrences` list, so repeated declarations in monorepo manifests
+do not inflate fleet finding counts and no commit-pinned location is lost.
+
+Every finding group contains two independent evidence classes:
 
 - the exact repository revision and manifest or lockfile URL captured by the
   dependency inventory;
@@ -63,7 +68,8 @@ does not populate it or imply that a vulnerable package is imported or called.
   message.
 - `read_dependency_findings` is a compact read-only MCP tool. It omits advisory
   prose bodies while retaining IDs, aliases, package versions, severity, usage,
-  match basis, remediation versions, and both evidence citations.
+  match basis, remediation versions, occurrence counts, occurrence detail, and
+  both evidence classes.
 - `/api/dependencies/findings.sarif` exports SARIF 2.1.0 that Insights can
   import beside external scanner evidence at the same revisions.
 

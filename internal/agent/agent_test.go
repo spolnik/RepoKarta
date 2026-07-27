@@ -634,7 +634,7 @@ func (s *memoryConversationStore) CreateConversation(_ context.Context, conversa
 func (s *memoryConversationStore) ListConversations(_ context.Context, filter ConversationFilter) ([]Conversation, error) {
 	result := make([]Conversation, 0, len(s.conversations))
 	for _, conversation := range s.conversations {
-		if !filter.All && conversation.Author.ID != filter.AuthorID {
+		if conversation.Author.ID != filter.AuthorID {
 			continue
 		}
 		result = append(result, conversation)
@@ -693,13 +693,12 @@ func TestManagerEnforcesConversationAuthorWhenContinuing(t *testing.T) {
 	}
 
 	err = manager.Send(context.Background(), TurnRequest{
-		ConversationID:   "saved",
-		Message:          "Continue as administrator",
-		Author:           ConversationAuthor{ID: "local:admin", Provider: "local"},
-		AuthorCanViewAll: true,
+		ConversationID: "saved",
+		Message:        "Continue as administrator",
+		Author:         ConversationAuthor{ID: "local:admin", Provider: "local"},
 	}, func(Event) error { return nil })
-	if err != nil {
-		t.Fatalf("administrator continuation failed: %v", err)
+	if !errors.Is(err, ErrConversationForbidden) {
+		t.Fatalf("administrator continuation error = %v, want ErrConversationForbidden", err)
 	}
 }
 

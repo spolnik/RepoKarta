@@ -60,6 +60,13 @@ application defaults, which outrank other recognized configuration. Test,
 fixture, snapshot, generated, history, changelog, and documentation paths never
 supply assignments.
 
+Service-name keys directly beneath `routes`, `clients`, `services`, or `urls`
+maps are target candidates. An unambiguous match in the indexed service
+registry produces a high-confidence internal edge even when no assignment
+repository is available; a matching assignment adds a second commit-pinned
+citation. A key without a registry match continues through the normal default,
+assignment, and name-shape tiers.
+
 Each assignment-resolved connection cites both the placeholder consumption and
 the commit-pinned assignment. Equivalent staging and production values collapse
 to one target with the highest-ranked assignment; divergent targets remain
@@ -67,11 +74,19 @@ separate, carry environment qualifiers when the path supplies one, and expose
 divergence metadata. Vault or secret-manager indirection remains an honest
 unresolved placeholder. Only an unassigned `<NAME>_URL`, `<NAME>_BASE_URL`, or
 `<NAME>_HOST` may fall back to a known service alias, at low confidence.
+Unresolved placeholders never become components named `${VAR}`. They are
+returned in the topology's `unresolved` collection with source, variable,
+map-key candidate, reason, and every available consumption/assignment
+citation. Secret and vault values are classified as `secret-indirection`
+without retaining the secret value.
 
 Resolved values are named after fleet reconciliation. Known internal services
 retain their short name. External hosts use the registrable domain and retain
 the full host as an alias, so generic labels such as `api`, `auth`, `www`, `app`,
-and `gateway` do not become standalone component names.
+`gateway`, `service`, `internal`, `prod`, and `staging` do not become standalone
+component names. Single-label service-shaped defaults such as `tax-service`
+remain visibly marked internal candidates until a matching repository is
+indexed; registrable external domains are resolved external components.
 
 Only aliases with one kind-compatible target are reconciled. A database or
 Kafka topic called `orders` never resolves to an application service called
@@ -183,7 +198,9 @@ GET /api/dependencies/topology?origin=confirmed&environment=prod
 GET /api/dependencies/topology?observed_from=2026-07-27T10:00:00Z&observed_to=2026-07-27T11:00:00Z
 ```
 
-The read-only MCP equivalent is `read_system_topology`.
+The read-only MCP equivalent is `read_system_topology`. It accepts either
+`repository_id` or an exact `repository` name; ambiguous names return their
+matching IDs.
 
 ## Architecture drift states
 
@@ -195,6 +212,11 @@ The read-only MCP equivalent is `read_system_topology`.
   extracted;
 - unresolved peer: a static service or MCP target could not be matched to one
   unambiguous known component.
+
+The workspace header reports resolved, candidate, and unresolved counts in the
+same area as artifact-build warnings. When unresolved configuration remains it
+also recommends indexing deployment-configuration repositories and provides an
+expandable, citation-backed unresolved list.
 
 Static-only does not necessarily mean unused, and runtime-only does not
 necessarily mean undocumented. Sampling, traffic windows, conditional paths,

@@ -42,8 +42,12 @@ var (
 	topologyPlaceholderPattern = regexp.MustCompile(
 		`\$\{([A-Z][A-Z0-9_]*)(?::([^}]+))?\}`,
 	)
+	topologyYAMLKeyPattern = regexp.MustCompile(
+		`^(\s*)([A-Za-z][A-Za-z0-9_.-]*)\s*:\s*(.*?)\s*$`,
+	)
 	genericExternalHostLabels = map[string]bool{
 		"api": true, "auth": true, "www": true, "app": true, "gateway": true,
+		"service": true, "internal": true, "prod": true, "staging": true,
 	}
 )
 
@@ -74,7 +78,9 @@ func (b *builder) addDistributedTopology(
 			defaultComponent.Capabilities = append(defaultComponent.Capabilities, "mcp_server")
 		}
 	}
-	b.addSystemComponent(defaultComponent)
+	if !topologyRepositoryIsDeploymentOnly(contents) {
+		b.addSystemComponent(defaultComponent)
+	}
 
 	componentRoots := map[string]string{".": defaultID}
 	for filePath, content := range contents {
@@ -143,6 +149,11 @@ func (b *builder) addDetectedConnections(
 	scanner := bufio.NewScanner(bytes.NewReader(content))
 	scanner.Buffer(make([]byte, 0, 64*1024), maximumSourceFileSize)
 	lineNumber := 0
+	type yamlMapEntry struct {
+		key    string
+		indent int
+	}
+	yamlParents := make([]yamlMapEntry, 0)
 	for scanner.Scan() {
 		lineNumber++
 		line := scanner.Text()
@@ -153,6 +164,23 @@ func (b *builder) addDetectedConnections(
 		}
 		lower := strings.ToLower(line)
 		confidence := sourceConfidence(filePath)
+		mapKeyCandidate := ""
+		var yamlMatch []string
+		if isServiceConfiguration(filePath) || isTopologyFile(filePath) {
+			yamlMatch = topologyYAMLKeyPattern.FindStringSubmatch(line)
+			if len(yamlMatch) == 4 {
+				indent := len(strings.ReplaceAll(yamlMatch[1], "\t", "  "))
+				for len(yamlParents) > 0 &&
+					yamlParents[len(yamlParents)-1].indent >= indent {
+					yamlParents = yamlParents[:len(yamlParents)-1]
+				}
+				if topologyPlaceholderPattern.MatchString(yamlMatch[3]) &&
+					len(yamlParents) > 0 &&
+					topologyServiceMapName(yamlParents[len(yamlParents)-1].key) {
+					mapKeyCandidate = topologyMapServiceCandidate(yamlMatch[2])
+				}
+			}
+		}
 		if topologyPlaceholderConsumerLine(line, filePath) {
 			for _, match := range topologyPlaceholderPattern.FindAllStringSubmatch(line, -1) {
 				defaultValue := ""
@@ -161,14 +189,27 @@ func (b *builder) addDetectedConnections(
 				}
 				b.topologyPlaceholders = append(b.topologyPlaceholders, TopologyPlaceholder{
 					Source: sourceID, Variable: match[1], Default: defaultValue,
-					Protocol: "http", Interaction: "calls",
+					MapKeyCandidate: mapKeyCandidate,
+					Protocol:        "http", Interaction: "calls",
 					ConsumptionEvidence: b.evidence(
 						repository, revision, filePath, lineNumber, match[0],
 					),
 				})
 			}
 		}
+		if len(yamlMatch) == 4 && strings.TrimSpace(yamlMatch[3]) == "" {
+			yamlParents = append(yamlParents, yamlMapEntry{
+				key:    yamlMatch[2],
+				indent: len(strings.ReplaceAll(yamlMatch[1], "\t", "  ")),
+			})
+		}
 		literalLine := topologyPlaceholderPattern.ReplaceAllString(line, "")
+		if environmentAssignmentRank(filePath) == environmentAssignmentInfrastructure &&
+			(environmentKeyValuePattern.MatchString(line) ||
+				environmentQuotedKeyValuePattern.MatchString(line) ||
+				kubernetesEnvironmentValuePattern.MatchString(line)) {
+			continue
+		}
 
 		for _, match := range topologyDatabaseURLPattern.FindAllStringSubmatch(literalLine, -1) {
 			parsed, err := url.Parse(match[0])
@@ -257,6 +298,51 @@ func (b *builder) addDetectedConnections(
 				Evidence:       []Evidence{b.evidence(repository, revision, filePath, lineNumber, raw)},
 			})
 		}
+	}
+}
+
+func topologyRepositoryIsDeploymentOnly(contents map[string][]byte) bool {
+	hasInfrastructure, hasDeployable := false, false
+	for filePath := range contents {
+		if isTopologyAssignmentExcluded(filePath) {
+			continue
+		}
+		if filePath == ".repokarta.yml" || filePath == ".repokarta.yaml" {
+			hasDeployable = true
+			continue
+		}
+		if environmentAssignmentCandidateRank(filePath) ==
+			environmentAssignmentInfrastructure {
+			hasInfrastructure = true
+			continue
+		}
+		if isServiceConfiguration(filePath) ||
+			(isAnalyzedSource(filePath) && !isCDKStackFile(filePath)) {
+			hasDeployable = true
+		}
+	}
+	return hasInfrastructure && !hasDeployable
+}
+
+func topologyMapServiceCandidate(value string) string {
+	candidate := normalizeServiceName(value)
+	if candidate == "" || genericExternalHostLabels[candidate] {
+		return ""
+	}
+	switch candidate {
+	case "url", "uri", "base-url", "baseurl", "endpoint", "host", "upstream":
+		return ""
+	default:
+		return candidate
+	}
+}
+
+func topologyServiceMapName(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "route", "routes", "client", "clients", "service", "services", "url", "urls":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -512,11 +598,19 @@ func normalizedAliases(name string, values ...string) []string {
 }
 
 func (b *builder) externalSystemComponent(kind, name, technology string, aliases []string) string {
+	return b.externalSystemComponentWithCandidate(kind, name, technology, aliases, false)
+}
+
+func (b *builder) externalSystemComponentWithCandidate(
+	kind, name, technology string,
+	aliases []string,
+	candidate bool,
+) string {
 	name = strings.TrimSpace(name)
 	id := "external:" + kind + ":" + normalizeID(name)
 	b.addSystemComponent(SystemComponent{
 		ID: id, Name: name, Kind: kind, Technology: technology,
-		Aliases: aliases, External: true,
+		Aliases: aliases, External: true, Candidate: candidate,
 	})
 	return id
 }

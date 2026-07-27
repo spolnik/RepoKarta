@@ -1262,6 +1262,68 @@ func TestDocumentationPageAPIGenerationAndExport(t *testing.T) {
 	}
 }
 
+func TestWikiAndAdministrationAuditEventsArePrincipalScoped(t *testing.T) {
+	database, err := store.Open(filepath.Join(t.TempDir(), "repokarta.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	securityManager, err := security.New(context.Background(), database, security.Config{
+		Address: "127.0.0.1:7331", DataDirectory: t.TempDir(),
+		Initial: security.Settings{Mode: security.ModeLocal}, Audit: database,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	documents := &testDocumentationService{site: docs.Site{RepositoryID: 6}}
+	server, err := New(
+		Config{
+			Address: "127.0.0.1:7331", Docs: documents,
+			Security: securityManager, Enterprise: database,
+		},
+		codeintel.New(testStore{}, testSearcher{}, "http://127.0.0.1:7331"),
+		testRefresher{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := func(method, target, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		httpRequest := httptest.NewRequest(
+			method, "http://127.0.0.1:7331"+target, strings.NewReader(body),
+		)
+		if body != "" {
+			httpRequest.Header.Set("Content-Type", "application/json")
+		}
+		response := httptest.NewRecorder()
+		server.server.Handler.ServeHTTP(response, httpRequest)
+		return response
+	}
+	if response := request(
+		http.MethodPost, "/api/wiki/generate", `{"repository_id":6,"plan_only":true}`,
+	); response.Code != http.StatusOK {
+		t.Fatalf("wiki generation = %d: %s", response.Code, response.Body.String())
+	}
+	if response := request(
+		http.MethodPut, "/api/admin/audit/retention", `{"days":30,"max_events":1000}`,
+	); response.Code != http.StatusOK {
+		t.Fatalf("administration mutation = %d: %s", response.Code, response.Body.String())
+	}
+	for _, action := range []string{"generation.wiki", "audit.retention.update"} {
+		page, queryErr := database.AuditEvents(
+			context.Background(), audit.Filter{Action: action, Limit: 10},
+		)
+		if queryErr != nil || len(page.Events) == 0 {
+			t.Fatalf("%s audit = %#v, error = %v", action, page.Events, queryErr)
+		}
+		for _, event := range page.Events {
+			if event.ActorID != "local:admin" || event.Provider != "local" {
+				t.Fatalf("%s audit principal = %#v", action, event)
+			}
+		}
+	}
+}
+
 func TestRepositoryMapPageAPIAndExport(t *testing.T) {
 	repository := catalog.Repository{ID: 4, Name: "Mapped Repo", IndexState: "ready"}
 	maps := &testMapService{snapshot: graph.Snapshot{
@@ -1507,7 +1569,7 @@ func TestDependencyTopologyIsDefaultAndExposesDirectedProtocolEvidence(t *testin
 	}
 	for _, expected := range []string{
 		`System topology`, `Who talks to what, and how`, `HTTP`, `MCP`,
-		`Unresolved placeholders`,
+		`Resolved`, `Candidates`, `Unresolved`,
 		`data-topology-workspace`, `/api/dependencies/topology?repository=4`,
 	} {
 		if !strings.Contains(pageResponse.Body.String(), expected) {
@@ -2271,7 +2333,7 @@ func (s *testHistoryConversations) ListConversations(_ context.Context, filter a
 	if s.deleted {
 		return []agent.Conversation{}, nil
 	}
-	if !filter.All && s.conversation.Author.ID != filter.AuthorID {
+	if s.conversation.Author.ID != filter.AuthorID {
 		return []agent.Conversation{}, nil
 	}
 	summary := s.conversation
@@ -2335,11 +2397,10 @@ func TestConversationHistoryCRUDAPI(t *testing.T) {
 	if strings.Contains(response.Body.String(), "opaque-provider-cursor") {
 		t.Fatal("provider resume cursor leaked through conversation list API")
 	}
-	if !conversations.lastFilter.All ||
-		!strings.Contains(response.Body.String(), `"can_view_all":true`) ||
-		!strings.Contains(response.Body.String(), `"scope":"all"`) ||
+	if !strings.Contains(response.Body.String(), `"can_view_all":false`) ||
+		!strings.Contains(response.Body.String(), `"scope":"own"`) ||
 		!strings.Contains(response.Body.String(), `"name":"Local administrator"`) {
-		t.Fatalf("administrator conversation scope was not exposed correctly: %s", response.Body.String())
+		t.Fatalf("strict owner conversation scope was not exposed correctly: %s", response.Body.String())
 	}
 
 	request = httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7331/api/conversations/saved", nil)
@@ -2418,7 +2479,6 @@ func TestSharedNonAdminCanOnlyAccessOwnConversations(t *testing.T) {
 	if listResponse.Code != http.StatusOK ||
 		!strings.Contains(listResponse.Body.String(), `"conversations":[]`) ||
 		!strings.Contains(listResponse.Body.String(), `"can_view_all":false`) ||
-		conversations.lastFilter.All ||
 		conversations.lastFilter.AuthorID != "open:anonymous" {
 		t.Fatalf("non-admin list status = %d, body = %s, filter = %#v",
 			listResponse.Code, listResponse.Body.String(), conversations.lastFilter)
@@ -2430,6 +2490,52 @@ func TestSharedNonAdminCanOnlyAccessOwnConversations(t *testing.T) {
 	server.server.Handler.ServeHTTP(getResponse, getRequest)
 	if getResponse.Code != http.StatusForbidden {
 		t.Fatalf("cross-author get status = %d, body = %s", getResponse.Code, getResponse.Body.String())
+	}
+}
+
+func TestAdministratorCannotBypassConversationOwnership(t *testing.T) {
+	conversations := &testHistoryConversations{conversation: agent.Conversation{
+		ID: "alice-chat", Title: "Alice private", Provider: "test",
+		Author: agent.ConversationAuthor{
+			ID: "saml:alice", Name: "Alice", Provider: "saml",
+		},
+	}}
+	server, err := New(
+		Config{Address: "127.0.0.1:7331", Conversations: conversations},
+		codeintel.New(testStore{}, testSearcher{}, "http://127.0.0.1:7331"),
+		testRefresher{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listRequest := httptest.NewRequest(
+		http.MethodGet,
+		"http://127.0.0.1:7331/api/conversations?scope=all",
+		nil,
+	)
+	listResponse := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(listResponse, listRequest)
+	if listResponse.Code != http.StatusOK ||
+		!strings.Contains(listResponse.Body.String(), `"conversations":[]`) ||
+		!strings.Contains(listResponse.Body.String(), `"can_view_all":false`) ||
+		conversations.lastFilter.AuthorID != "local:admin" {
+		t.Fatalf(
+			"administrator list status = %d, body = %s, filter = %#v",
+			listResponse.Code, listResponse.Body.String(), conversations.lastFilter,
+		)
+	}
+	getRequest := httptest.NewRequest(
+		http.MethodGet,
+		"http://127.0.0.1:7331/api/conversations/alice-chat",
+		nil,
+	)
+	getResponse := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(getResponse, getRequest)
+	if getResponse.Code != http.StatusForbidden {
+		t.Fatalf(
+			"administrator cross-author get status = %d, body = %s",
+			getResponse.Code, getResponse.Body.String(),
+		)
 	}
 }
 
@@ -2587,7 +2693,6 @@ func TestSearchAndChatRenderAsSeparatePages(t *testing.T) {
 		`id="conversation-evidence-list"`,
 		`data-conversation-filter`,
 		`data-conversation-scope="own"`,
-		`data-conversation-scope="all"`,
 		`data-conversation-author-filter`,
 		`data-mermaid-viewer-download`,
 		`aria-label="Ask RepoKarta"`,

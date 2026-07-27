@@ -174,7 +174,6 @@ type TurnRequest struct {
 	TokenBudget        int64                   `json:"token_budget,omitempty"`
 	ResumeCursor       string                  `json:"-"`
 	Author             ConversationAuthor      `json:"-"`
-	AuthorCanViewAll   bool                    `json:"-"`
 	Contexts           []contextscope.Context  `json:"-"`
 }
 
@@ -724,7 +723,7 @@ func (m *Manager) conversation(ctx context.Context, request TurnRequest) (*manag
 				return nil, "", ErrConversationNotFound
 			}
 			stored.Author = normalizeConversationAuthor(stored.Author)
-			if !request.AuthorCanViewAll && stored.Author.ID != request.Author.ID {
+			if stored.Author.ID != request.Author.ID {
 				return nil, "", ErrConversationForbidden
 			}
 			request.Provider = stored.Provider
@@ -749,7 +748,7 @@ func (m *Manager) conversation(ctx context.Context, request TurnRequest) (*manag
 		if conversation == nil {
 			return nil, "", ErrConversationNotFound
 		}
-		if !request.AuthorCanViewAll && conversation.author.ID != request.Author.ID {
+		if conversation.author.ID != request.Author.ID {
 			return nil, "", ErrConversationForbidden
 		}
 		if request.Provider != "" && request.Provider != conversation.provider {

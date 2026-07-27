@@ -214,7 +214,7 @@ BILLING_SERVICE_URL: http://billing-service.production.svc.cluster.local
 		t.Fatal(err)
 	}
 	connection, found := placeholderConnection(snapshot.Connections, "BILLING_SERVICE_URL")
-	if !found || connection.ResolutionTier != "cross_repository_assignment" ||
+	if !found || connection.ResolutionTier != "map_key_registry" ||
 		connection.Confidence != "high" || !connection.TargetResolved ||
 		componentByID(snapshot.Components, connection.Target).Name != "billing-service" ||
 		len(connection.Evidence) != 2 || progress.PendingRepositories != 0 {
@@ -230,7 +230,7 @@ BILLING_SERVICE_URL: http://billing-service.production.svc.cluster.local
 	selectedConnection, found := placeholderConnection(
 		selected.Connections, "BILLING_SERVICE_URL",
 	)
-	if !found || selectedConnection.ResolutionTier != "cross_repository_assignment" ||
+	if !found || selectedConnection.ResolutionTier != "map_key_registry" ||
 		!selectedConnection.TargetResolved ||
 		componentByID(selected.Components, selectedConnection.Target).Name != "billing-service" ||
 		selected.Scope.TotalRepositories != 1 ||

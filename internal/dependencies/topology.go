@@ -107,6 +107,11 @@ type TopologyConnection struct {
 	Runtime             *RuntimeMetrics  `json:"runtime,omitempty"`
 }
 
+type TopologyUnresolved struct {
+	graph.UnresolvedTopologyConnection
+	SourceName string `json:"source_name"`
+}
+
 type TopologySummary struct {
 	ComponentCount             int `json:"component_count"`
 	ConnectionCount            int `json:"connection_count"`
@@ -115,6 +120,8 @@ type TopologySummary struct {
 	ConfirmedCount             int `json:"confirmed_count"`
 	StaticOnlyCount            int `json:"static_only_count"`
 	RuntimeOnlyCount           int `json:"runtime_only_count"`
+	ResolvedCount              int `json:"resolved_count"`
+	CandidateCount             int `json:"candidate_count"`
 	UnresolvedCount            int `json:"unresolved_count"`
 	UnresolvedPlaceholderCount int `json:"unresolved_placeholder_count"`
 }
@@ -124,6 +131,7 @@ type Topology struct {
 	SnapshotID    string                 `json:"snapshot_id"`
 	Components    []TopologyComponent    `json:"components"`
 	Connections   []TopologyConnection   `json:"connections"`
+	Unresolved    []TopologyUnresolved   `json:"unresolved"`
 	Summary       TopologySummary        `json:"summary"`
 	Protocols     []string               `json:"protocols"`
 	Providers     []string               `json:"providers"`
@@ -388,6 +396,7 @@ func buildTopology(
 		GeneratedAt: generatedAt, SnapshotID: snapshot.ID,
 		Components:  make([]TopologyComponent, 0),
 		Connections: make([]TopologyConnection, 0),
+		Unresolved:  make([]TopologyUnresolved, 0),
 		Scope:       snapshot.Scope, BuildProgress: progress,
 		Partial: snapshot.Truncated || !snapshot.Scope.Complete,
 		Options: options,
@@ -414,17 +423,48 @@ func buildTopology(
 		default:
 			output.Summary.StaticOnlyCount++
 		}
-		targetKind := nodes[connection.Target].Kind
-		if !connection.TargetResolved && slices.Contains(
-			[]string{"service", "external_service", "mcp_server"}, targetKind,
-		) {
+		target := nodes[connection.Target]
+		if target.Candidate {
+			output.Summary.CandidateCount++
+		} else if strings.HasPrefix(connection.Target, "runtime:") &&
+			!connection.TargetResolved {
 			output.Summary.UnresolvedCount++
-		}
-		if connection.EnvironmentVariable != "" &&
-			connection.ResolutionTier == "unresolved" {
-			output.Summary.UnresolvedPlaceholderCount++
+		} else {
+			output.Summary.ResolvedCount++
 		}
 	}
+	for _, unresolved := range snapshot.UnresolvedTopology {
+		source := nodes[unresolved.Source]
+		if source.ID == "" {
+			continue
+		}
+		if options.Protocol != "" &&
+			!strings.EqualFold(options.Protocol, unresolved.Protocol) {
+			continue
+		}
+		if options.Origin != "" && options.Origin != "static_only" {
+			continue
+		}
+		if options.Environment != "" || options.Provider != "" ||
+			!options.ObservedFrom.IsZero() || !options.ObservedTo.IsZero() {
+			continue
+		}
+		if options.Query != "" {
+			query := strings.ToLower(options.Query)
+			if !strings.Contains(strings.ToLower(source.Name), query) &&
+				!strings.Contains(strings.ToLower(unresolved.Variable), query) &&
+				!strings.Contains(strings.ToLower(unresolved.Candidate), query) {
+				continue
+			}
+		}
+		output.Unresolved = append(output.Unresolved, TopologyUnresolved{
+			UnresolvedTopologyConnection: unresolved,
+			SourceName:                   source.Name,
+		})
+		visibleNodeIDs[unresolved.Source] = true
+	}
+	output.Summary.UnresolvedCount += len(output.Unresolved)
+	output.Summary.UnresolvedPlaceholderCount = len(output.Unresolved)
 	for id, component := range nodes {
 		if len(output.Connections) > 0 && !visibleNodeIDs[id] {
 			continue
@@ -446,6 +486,9 @@ func buildTopology(
 		return strings.Compare(strings.ToLower(left.Name), strings.ToLower(right.Name))
 	})
 	slices.SortFunc(output.Connections, func(left, right TopologyConnection) int {
+		return strings.Compare(left.ID, right.ID)
+	})
+	slices.SortFunc(output.Unresolved, func(left, right TopologyUnresolved) int {
 		return strings.Compare(left.ID, right.ID)
 	})
 	output.Protocols = sortedSet(protocols)

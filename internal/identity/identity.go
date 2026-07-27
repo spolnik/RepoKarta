@@ -23,7 +23,6 @@ const (
 	PermissionGenerateAI           Permission = "ai.generate"
 	PermissionManageArtifacts      Permission = "artifacts.manage"
 	PermissionExportArtifacts      Permission = "artifacts.export"
-	PermissionViewCrossAuthor      Permission = "conversations.cross-author"
 	PermissionAcquireRepositories  Permission = "repositories.acquire"
 	PermissionManageSecurity       Permission = "security.manage"
 	PermissionManageRoles          Permission = "roles.manage"
@@ -144,7 +143,7 @@ func Allows(role Role, permission Permission) bool {
 		return true
 	case PermissionGenerateAI, PermissionManageArtifacts:
 		return role == RoleMaintainer || role == RoleAdmin
-	case PermissionViewCrossAuthor, PermissionAcquireRepositories,
+	case PermissionAcquireRepositories,
 		PermissionManageSecurity, PermissionManageRoles, PermissionViewAudit,
 		PermissionManageAuditRetention, PermissionDestructiveOwnedData:
 		return role == RoleAdmin
@@ -160,7 +159,6 @@ func Permissions(role Role) []Permission {
 		PermissionGenerateAI,
 		PermissionManageArtifacts,
 		PermissionExportArtifacts,
-		PermissionViewCrossAuthor,
 		PermissionAcquireRepositories,
 		PermissionManageSecurity,
 		PermissionManageRoles,

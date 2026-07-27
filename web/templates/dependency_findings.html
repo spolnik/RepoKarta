@@ -24,7 +24,7 @@
   </div>
 
   <dl class="grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
-    <div class="rounded-xl border border-white/[0.08] bg-surface-raised p-4"><dt class="text-xs uppercase tracking-[0.16em] text-ink-faint">Findings</dt><dd class="mt-2 text-2xl font-semibold text-white">{{.Findings.TotalFindingCount}}</dd></div>
+    <div class="rounded-xl border border-white/[0.08] bg-surface-raised p-4"><dt class="text-xs uppercase tracking-[0.16em] text-ink-faint">Finding groups</dt><dd class="mt-2 text-2xl font-semibold text-white">{{.Findings.TotalFindingCount}}</dd><span class="mt-1 block text-xs text-ink-faint">{{.Findings.TotalManifestOccurrenceCount}} manifest occurrences</span></div>
     <div class="rounded-xl border border-emerald-300/20 bg-emerald-400/[0.06] p-4"><dt class="text-xs uppercase tracking-[0.16em] text-emerald-200">Checked declarations</dt><dd class="mt-2 text-2xl font-semibold text-emerald-100">{{.Findings.CheckedDeclarationCount}}</dd></div>
     <div class="rounded-xl border border-amber-300/20 bg-amber-400/[0.06] p-4"><dt class="text-xs uppercase tracking-[0.16em] text-amber-200">No version</dt><dd class="mt-2 text-2xl font-semibold text-amber-100">{{.Findings.SkippedNoVersionCount}}</dd></div>
     <div class="rounded-xl border border-amber-300/20 bg-amber-400/[0.06] p-4"><dt class="text-xs uppercase tracking-[0.16em] text-amber-200">Invalid version</dt><dd class="mt-2 text-2xl font-semibold text-amber-100">{{.Findings.SkippedInvalidVersionCount}}</dd></div>
@@ -60,7 +60,7 @@
 
   <div class="overflow-hidden rounded-xl border border-white/[0.08] bg-surface-raised">
     <div class="flex items-center justify-between border-b border-white/[0.08] px-5 py-4">
-      <div><h2 class="font-semibold text-white">Advisory findings</h2><p class="mt-1 text-xs text-ink-faint">Showing {{.Findings.ReturnedCount}} of {{.Findings.FindingCount}} filtered findings. Resolved lockfile versions take precedence; declared-only matches carry lower confidence.</p></div>
+      <div><h2 class="font-semibold text-white">Advisory findings</h2><p class="mt-1 text-xs text-ink-faint">Showing {{.Findings.ReturnedCount}} of {{.Findings.FindingCount}} filtered groups, de-duplicated by advisory, repository, package, and resolved version. Resolved lockfile versions take precedence; declared-only matches carry lower confidence.</p></div>
     </div>
     {{if .Findings.Findings}}
     <div class="overflow-x-auto">
@@ -74,7 +74,17 @@
             <td class="px-4 py-4"><span class="rounded-full border border-rose-300/20 bg-rose-400/[0.06] px-2 py-1 text-xs text-rose-100">{{.Severity}}</span><span class="ml-2 rounded-full border border-sky-300/20 bg-sky-400/[0.06] px-2 py-1 text-xs text-sky-100">{{.Usage}}</span>{{if .DeclaredScope}}<span class="mt-2 block text-xs text-ink-faint">{{.DeclaredScope}}</span>{{end}}</td>
             <td class="px-4 py-4"><span class="block text-ink-strong">Fixed in {{if .FixedVersion}}{{.FixedVersion}}{{else}}not published{{end}}</span><span class="mt-2 block text-xs text-ink-faint">Latest {{if .LatestStable}}{{.LatestStable}}{{else}}not checked{{end}}</span></td>
             <td class="px-4 py-4"><span class="block text-ink-strong">{{.Repository}}</span><span class="mt-1 block font-mono text-xs text-ink-faint">{{shortCommit .Revision}}</span></td>
-            <td class="px-4 py-4"><a class="text-emerald-300 hover:text-emerald-200" href="{{.ManifestEvidence.URL}}">{{.ManifestPath}}:{{.ManifestEvidence.Line}}</a><span class="mt-2 block text-xs text-ink-faint">Manifest @ {{shortCommit .Revision}}</span><span class="mt-1 block text-xs text-ink-faint">OSV snapshot {{shortCommit .AdvisoryEvidence.SnapshotVersion}}</span></td>
+            <td class="px-4 py-4">
+              <details {{if eq .ManifestOccurrenceCount 1}}open{{end}}>
+                <summary class="cursor-pointer text-emerald-300">{{.ManifestOccurrenceCount}} manifest {{if eq .ManifestOccurrenceCount 1}}occurrence{{else}}occurrences{{end}}</summary>
+                <ul class="mt-2 grid gap-2">
+                  {{range .Occurrences}}
+                  <li><a class="text-emerald-300 hover:text-emerald-200" href="{{.Evidence.URL}}">{{.ManifestPath}}:{{.Evidence.Line}}</a><span class="block text-xs text-ink-faint">{{.Usage}} · {{.Relationship}} · {{.MatchBasis}}</span></li>
+                  {{end}}
+                </ul>
+              </details>
+              <span class="mt-2 block text-xs text-ink-faint">Manifest @ {{shortCommit .Revision}}</span><span class="mt-1 block text-xs text-ink-faint">OSV snapshot {{shortCommit .AdvisoryEvidence.SnapshotVersion}}</span>
+            </td>
           </tr>
           {{end}}
         </tbody>

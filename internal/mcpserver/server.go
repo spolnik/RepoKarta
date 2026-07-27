@@ -10,7 +10,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -220,7 +222,7 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "list_repositories",
 		Title:       "List indexed repositories",
-		Description: "List the local Git repositories RepoKarta can search. Every repository-specific tool takes the numeric repository_id returned here. Results include pinned indexed commits.",
+		Description: "List the local Git repositories RepoKarta can search. Repository-specific tools accept either collision-safe repository_id or an exact repository name; ambiguous names return matching IDs. Results include pinned indexed commits.",
 		Annotations: readOnly,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ listRepositoriesInput) (*mcp.CallToolResult, listRepositoriesOutput, error) {
 		repositories, err := intelligence.Repositories(ctx)
@@ -262,9 +264,15 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 		Description: "Search permission-filtered source and deterministic evidence. Prefer literal compact search for globally unique text and fleet discovery; use find_references when syntax precision matters, then get_file only for selected evidence. Completeness, parsed query provenance, warnings, and pinned URLs are explicit.",
 		Annotations: readOnly,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input searchCodeInput) (*mcp.CallToolResult, searchCodeOutput, error) {
+		repositoryID, err := resolveRepositorySelector(
+			ctx, intelligence, input.RepositoryID, input.Repository, false,
+		)
+		if err != nil {
+			return nil, searchCodeOutput{}, err
+		}
 		result, err := intelligence.Search(ctx, codeintel.SearchRequest{
 			Query:              input.Query,
-			RepositoryID:       input.RepositoryID,
+			RepositoryID:       repositoryID,
 			Language:           input.Language,
 			Path:               input.Path,
 			File:               input.File,
@@ -295,8 +303,14 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 		Description: "Read a bounded line range from a repository at its pinned indexed commit. Returns numbered source and a citation URL.",
 		Annotations: readOnly,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input openFileInput) (*mcp.CallToolResult, openFileOutput, error) {
+		repositoryID, err := resolveRepositorySelector(
+			ctx, intelligence, input.RepositoryID, input.Repository, true,
+		)
+		if err != nil {
+			return nil, openFileOutput{}, err
+		}
 		file, err := intelligence.GetFile(ctx, codeintel.FileRequest{
-			RepositoryID: input.RepositoryID,
+			RepositoryID: repositoryID,
 			Revision:     input.Revision,
 			Path:         input.Path,
 			StartLine:    input.StartLine,
@@ -315,9 +329,15 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 		Description: "Find symbol definitions by exact name through the Zoekt/ctags index. Results are bounded, commit-pinned, and include explicit warnings when Universal Ctags symbol indexing is unavailable. Use find_references for syntax-backed call, import, and heritage sites.",
 		Annotations: readOnly,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input findSymbolInput) (*mcp.CallToolResult, findSymbolOutput, error) {
+		repositoryID, err := resolveRepositorySelector(
+			ctx, intelligence, input.RepositoryID, input.Repository, false,
+		)
+		if err != nil {
+			return nil, findSymbolOutput{}, err
+		}
 		result, err := intelligence.FindSymbol(ctx, codeintel.SymbolRequest{
 			Symbol:             input.Symbol,
-			RepositoryID:       input.RepositoryID,
+			RepositoryID:       repositoryID,
 			Language:           input.Language,
 			Limit:              input.Limit,
 			Compact:            input.Compact,
@@ -340,9 +360,15 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 		Description: "Find commit-pinned references from compiler-produced SCIP when complete exact-revision coverage resolves one symbol, otherwise from labeled persisted AST relations. A unique literal is cheaper through compact search_code. Set compact for fleet discovery without reopening every matched source blob, then use get_file selectively.",
 		Annotations: readOnly,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input findReferencesInput) (*mcp.CallToolResult, findReferencesOutput, error) {
+		repositoryID, err := resolveRepositorySelector(
+			ctx, intelligence, input.RepositoryID, input.Repository, false,
+		)
+		if err != nil {
+			return nil, findReferencesOutput{}, err
+		}
 		result, err := intelligence.FindReferences(ctx, codeintel.ReferenceRequest{
 			Symbol:             input.Symbol,
-			RepositoryID:       input.RepositoryID,
+			RepositoryID:       repositoryID,
 			Language:           input.Language,
 			Path:               input.Path,
 			File:               input.File,
@@ -367,7 +393,17 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 		Description: "Run a bounded Tree-sitter query with named captures and predicates over Java or Go. Persisted node-kind inventories prune impossible files; cursors, index readiness, truncation, and completeness are explicit.",
 		Annotations: readOnly,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input searchASTInput) (*mcp.CallToolResult, searchASTOutput, error) {
-		result, err := intelligence.SearchAST(ctx, codeintel.ASTSearchRequest(input))
+		repositoryID, err := resolveRepositorySelector(
+			ctx, intelligence, input.RepositoryID, input.Repository, false,
+		)
+		if err != nil {
+			return nil, searchASTOutput{}, err
+		}
+		result, err := intelligence.SearchAST(ctx, codeintel.ASTSearchRequest{
+			RepositoryID: repositoryID, Language: input.Language,
+			Query: input.Query, PathPrefix: input.PathPrefix,
+			Limit: input.Limit, Cursor: input.Cursor,
+		})
 		if err != nil {
 			return nil, searchASTOutput{}, err
 		}
@@ -383,8 +419,14 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 		Description: "List files and directories at a repository's pinned indexed commit. Follow next_offset to traverse directories larger than one page. This never reads the worktree.",
 		Annotations: readOnly,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input listTreeInput) (*mcp.CallToolResult, listTreeOutput, error) {
+		repositoryID, err := resolveRepositorySelector(
+			ctx, intelligence, input.RepositoryID, input.Repository, true,
+		)
+		if err != nil {
+			return nil, listTreeOutput{}, err
+		}
 		tree, err := intelligence.ListTree(ctx, codeintel.TreeRequest{
-			RepositoryID: input.RepositoryID,
+			RepositoryID: repositoryID,
 			Revision:     input.Revision,
 			Path:         input.Path,
 			Offset:       input.Offset,
@@ -401,8 +443,14 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 		Description: "List newest-first commits reachable from a repository's pinned indexed or HEAD commit. Optionally filter history to one path. Returns exact commit SHAs and explicit truncation metadata.",
 		Annotations: readOnly,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input gitLogInput) (*mcp.CallToolResult, gitLogOutput, error) {
+		repositoryID, err := resolveRepositorySelector(
+			ctx, intelligence, input.RepositoryID, input.Repository, true,
+		)
+		if err != nil {
+			return nil, gitLogOutput{}, err
+		}
 		history, err := intelligence.GitLog(ctx, codeintel.GitLogRequest{
-			RepositoryID: input.RepositoryID,
+			RepositoryID: repositoryID,
 			Revision:     input.Revision,
 			Path:         input.Path,
 			Limit:        input.Limit,
@@ -419,8 +467,14 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 		Description: "Read a bounded unified patch between exact reachable commits. Omit to_revision for the indexed commit; omit from_revision to compare its first parent. Returns change counts and explicit patch truncation metadata.",
 		Annotations: readOnly,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input gitDiffInput) (*mcp.CallToolResult, gitDiffOutput, error) {
+		repositoryID, err := resolveRepositorySelector(
+			ctx, intelligence, input.RepositoryID, input.Repository, true,
+		)
+		if err != nil {
+			return nil, gitDiffOutput{}, err
+		}
 		diff, err := intelligence.GitDiff(ctx, codeintel.GitDiffRequest{
-			RepositoryID: input.RepositoryID,
+			RepositoryID: repositoryID,
 			FromRevision: input.FromRevision,
 			ToRevision:   input.ToRevision,
 			Path:         input.Path,
@@ -439,7 +493,13 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 			Description: "Read the complete deterministic, commit-pinned repository snapshot: languages, manifests and resolved dependency coordinates, parsed structure, packages, entry points, routes, architecture edges, and HTTP service calls. Scope and truncation are explicit, every graph fact has exact source evidence, and no AI is invoked.",
 			Annotations: readOnly,
 		}, func(ctx context.Context, _ *mcp.CallToolRequest, input readRepositoryMapInput) (*mcp.CallToolResult, readRepositoryMapOutput, error) {
-			snapshot, err := config.Artifacts.RepositoryMap(ctx, input.RepositoryID)
+			repositoryID, err := resolveRepositorySelector(
+				ctx, intelligence, input.RepositoryID, input.Repository, true,
+			)
+			if err != nil {
+				return nil, readRepositoryMapOutput{}, err
+			}
+			snapshot, err := config.Artifacts.RepositoryMap(ctx, repositoryID)
 			if err != nil {
 				return nil, readRepositoryMapOutput{}, err
 			}
@@ -460,11 +520,17 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 			Description: "Read a compact, deterministic dependency inventory for one repository. Returns manifests, flattened declared coordinates with versions when statically available, outbound HTTP service calls, exact evidence, and explicit scope/truncation metadata. No AI is invoked.",
 			Annotations: readOnly,
 		}, func(ctx context.Context, _ *mcp.CallToolRequest, input readDependencyInventoryInput) (*mcp.CallToolResult, readDependencyInventoryOutput, error) {
-			snapshot, err := config.Artifacts.DependencySnapshot(ctx, input.RepositoryID)
+			repositoryID, err := resolveRepositorySelector(
+				ctx, intelligence, input.RepositoryID, input.Repository, true,
+			)
 			if err != nil {
 				return nil, readDependencyInventoryOutput{}, err
 			}
-			output := dependencyInventory(snapshot, input.RepositoryID)
+			snapshot, err := config.Artifacts.DependencySnapshot(ctx, repositoryID)
+			if err != nil {
+				return nil, readDependencyInventoryOutput{}, err
+			}
+			output := dependencyInventory(snapshot, repositoryID)
 			for _, manifest := range output.Manifests {
 				recordEvidence(tracker, conversationID, manifest.Evidence)
 			}
@@ -482,7 +548,13 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 			Description: "List the persisted Deep Wiki plan and page metadata for one repository, including slugs, hierarchy, generation status, revisions, models, supporting files, and evidence counts. Use a returned slug with read_generated_document. This never starts AI generation and omits page Markdown.",
 			Annotations: readOnly,
 		}, func(ctx context.Context, _ *mcp.CallToolRequest, input listDeepWikiPagesInput) (*mcp.CallToolResult, listDeepWikiPagesOutput, error) {
-			site, err := config.Artifacts.GeneratedDocuments(ctx, input.RepositoryID)
+			repositoryID, err := resolveRepositorySelector(
+				ctx, intelligence, input.RepositoryID, input.Repository, true,
+			)
+			if err != nil {
+				return nil, listDeepWikiPagesOutput{}, err
+			}
+			site, err := config.Artifacts.GeneratedDocuments(ctx, repositoryID)
 			if err != nil {
 				return nil, listDeepWikiPagesOutput{}, err
 			}
@@ -495,7 +567,13 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 			Description: "Read one persisted Deep Wiki page by slug with its source revision, generation status, supporting files, exact citations, and Markdown. This never starts AI generation.",
 			Annotations: readOnly,
 		}, func(ctx context.Context, _ *mcp.CallToolRequest, input readGeneratedDocumentInput) (*mcp.CallToolResult, readGeneratedDocumentOutput, error) {
-			page, err := config.Artifacts.GeneratedDocument(ctx, input.RepositoryID, input.Page)
+			repositoryID, err := resolveRepositorySelector(
+				ctx, intelligence, input.RepositoryID, input.Repository, true,
+			)
+			if err != nil {
+				return nil, readGeneratedDocumentOutput{}, err
+			}
+			page, err := config.Artifacts.GeneratedDocument(ctx, repositoryID, input.Page)
 			if err != nil {
 				return nil, readGeneratedDocumentOutput{}, err
 			}
@@ -516,11 +594,17 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 			Description: "Read a directed component-level dependency graph across one repository or the visible fleet. Returns HTTP, gRPC, Kafka, database, MCP, and declared relationships; static source evidence and timestamped runtime observations remain distinct, with confirmed/static-only/runtime-only drift states and explicit unresolved peers. No external service is contacted.",
 			Annotations: readOnly,
 		}, func(ctx context.Context, _ *mcp.CallToolRequest, input readSystemTopologyInput) (*mcp.CallToolResult, dependencies.Topology, error) {
+			repositoryID, err := resolveRepositorySelector(
+				ctx, intelligence, input.RepositoryID, input.Repository, false,
+			)
+			if err != nil {
+				return nil, dependencies.Topology{}, err
+			}
 			options, err := topologyToolOptions(input)
 			if err != nil {
 				return nil, dependencies.Topology{}, err
 			}
-			snapshot, progress, err := config.Artifacts.TopologySnapshot(ctx, input.RepositoryID)
+			snapshot, progress, err := config.Artifacts.TopologySnapshot(ctx, repositoryID)
 			if err != nil {
 				return nil, dependencies.Topology{}, err
 			}
@@ -542,12 +626,18 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 			Description: "Read compact, scope-aware OSV findings from the persisted local advisory snapshot. Returns IDs, versions, severity, usage, and evidence citations without advisory prose bodies. Findings are advisory evidence, never an enforced CI gate.",
 			Annotations: readOnly,
 		}, func(ctx context.Context, _ *mcp.CallToolRequest, input readDependencyFindingsInput) (*mcp.CallToolResult, readDependencyFindingsOutput, error) {
+			repositoryID, err := resolveRepositorySelector(
+				ctx, intelligence, input.RepositoryID, input.Repository, false,
+			)
+			if err != nil {
+				return nil, readDependencyFindingsOutput{}, err
+			}
 			if input.Limit < 0 || input.Limit > dependencies.MaximumFindingLimit {
 				return nil, readDependencyFindingsOutput{}, fmt.Errorf(
 					"limit must be between 1 and %d", dependencies.MaximumFindingLimit,
 				)
 			}
-			snapshot, err := config.Artifacts.DependencySnapshot(ctx, input.RepositoryID)
+			snapshot, err := config.Artifacts.DependencySnapshot(ctx, repositoryID)
 			if err != nil {
 				return nil, readDependencyFindingsOutput{}, err
 			}
@@ -580,8 +670,14 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 			Description: "Read already-computed coverage metrics, static-analysis findings, deterministic indicators, run status, history, facets, and advisory threshold evaluations. Results are commit-pinned and permission-aware. This never invokes AI, tests, scanners, or repository code.",
 			Annotations: readOnly,
 		}, func(ctx context.Context, _ *mcp.CallToolRequest, input readCodeInsightsInput) (*mcp.CallToolResult, readCodeInsightsOutput, error) {
+			repositoryID, err := resolveRepositorySelector(
+				ctx, intelligence, input.RepositoryID, input.Repository, false,
+			)
+			if err != nil {
+				return nil, readCodeInsightsOutput{}, err
+			}
 			result, err := config.Insights.Query(ctx, insights.Filter{
-				RepositoryID:       input.RepositoryID,
+				RepositoryID:       repositoryID,
 				Revision:           input.Revision,
 				Branch:             input.Branch,
 				Directory:          input.Directory,
@@ -606,7 +702,7 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 					})
 				}
 			}
-			evaluations, err := config.Insights.EvaluateThresholds(ctx, input.RepositoryID)
+			evaluations, err := config.Insights.EvaluateThresholds(ctx, repositoryID)
 			if err != nil {
 				return nil, readCodeInsightsOutput{}, err
 			}
@@ -619,7 +715,13 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 			Description: "Compare two exact stored revisions for metric deltas and introduced or resolved findings. A missing side remains explicit; RepoKarta does not manufacture measurements or enforce a CI gate.",
 			Annotations: readOnly,
 		}, func(ctx context.Context, _ *mcp.CallToolRequest, input compareCodeInsightsInput) (*mcp.CallToolResult, compareCodeInsightsOutput, error) {
-			result, err := config.Insights.Compare(ctx, input.RepositoryID, input.FromRevision, input.ToRevision)
+			repositoryID, err := resolveRepositorySelector(
+				ctx, intelligence, input.RepositoryID, input.Repository, true,
+			)
+			if err != nil {
+				return nil, compareCodeInsightsOutput{}, err
+			}
+			result, err := config.Insights.Compare(ctx, repositoryID, input.FromRevision, input.ToRevision)
 			if err != nil {
 				return nil, compareCodeInsightsOutput{}, err
 			}
@@ -636,6 +738,56 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 	}
 
 	return server
+}
+
+func resolveRepositorySelector(
+	ctx context.Context,
+	intelligence Intelligence,
+	repositoryID int64,
+	repository string,
+	required bool,
+) (int64, error) {
+	repository = strings.TrimSpace(repository)
+	if repositoryID < 0 {
+		return 0, errors.New("repository_id must be a positive integer")
+	}
+	if repository == "" {
+		if repositoryID > 0 || !required {
+			return repositoryID, nil
+		}
+		return 0, errors.New("repository_id or repository is required")
+	}
+	available, err := intelligence.Repositories(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("resolve repository name: %w", err)
+	}
+	matches := make([]int64, 0)
+	for _, candidate := range available.Repositories {
+		if strings.EqualFold(strings.TrimSpace(candidate.Name), repository) {
+			matches = append(matches, candidate.ID)
+		}
+	}
+	slices.Sort(matches)
+	if len(matches) == 0 {
+		return 0, fmt.Errorf("repository %q was not found", repository)
+	}
+	if len(matches) > 1 {
+		values := make([]string, len(matches))
+		for index, id := range matches {
+			values[index] = strconv.FormatInt(id, 10)
+		}
+		return 0, fmt.Errorf(
+			"repository %q is ambiguous; matching repository IDs: %s",
+			repository, strings.Join(values, ", "),
+		)
+	}
+	if repositoryID > 0 && repositoryID != matches[0] {
+		return 0, fmt.Errorf(
+			"repository_id %d conflicts with repository %q (ID %d)",
+			repositoryID, repository, matches[0],
+		)
+	}
+	return matches[0], nil
 }
 
 // RunStdio serves the same tools over stdio, normally backed by the JSON API.
@@ -662,6 +814,7 @@ type resolveEffectiveContextsOutput = contextscope.EffectiveResponse
 type searchCodeInput struct {
 	Query              string                  `json:"query" jsonschema:"required,Source or deterministic evidence text using fields content repository revision language path file symbol_kind result_type and owner; prefix a field with minus to exclude it. Result types are content file_path repository symbol_definition reference implementation dependency route commit diff wiki_page and code_insight."`
 	RepositoryID       int64                   `json:"repository_id,omitempty" jsonschema:"Optional repository ID returned by list_repositories. Omit to search every indexed repository."`
+	Repository         string                  `json:"repository,omitempty" jsonschema:"Optional exact repository name. Ambiguous names return matching IDs."`
 	Language           string                  `json:"language,omitempty" jsonschema:"Optional programming language filter."`
 	Path               string                  `json:"path,omitempty" jsonschema:"Optional substring required in the path."`
 	File               string                  `json:"file,omitempty" jsonschema:"Optional substring required in the filename."`
@@ -676,6 +829,7 @@ type searchCodeOutput = codeintel.SearchResponse
 
 type readCodeInsightsInput struct {
 	RepositoryID       int64  `json:"repository_id,omitempty" jsonschema:"Optional repository ID. Omit for the accessible fleet."`
+	Repository         string `json:"repository,omitempty" jsonschema:"Optional exact repository name. Ambiguous names return matching IDs."`
 	Revision           string `json:"revision,omitempty" jsonschema:"Optional exact analyzed Git revision."`
 	Branch             string `json:"branch,omitempty" jsonschema:"Optional reported branch."`
 	Directory          string `json:"directory,omitempty" jsonschema:"Optional repository-relative directory prefix."`
@@ -696,7 +850,8 @@ type readCodeInsightsOutput struct {
 }
 
 type compareCodeInsightsInput struct {
-	RepositoryID int64  `json:"repository_id" jsonschema:"required,Repository ID returned by list_repositories."`
+	RepositoryID int64  `json:"repository_id,omitempty" jsonschema:"Repository ID. Provide this or repository."`
+	Repository   string `json:"repository,omitempty" jsonschema:"Exact repository name. Ambiguous names return matching IDs."`
 	FromRevision string `json:"from_revision" jsonschema:"required,Exact baseline revision already present in insight history."`
 	ToRevision   string `json:"to_revision" jsonschema:"required,Exact target revision already present in insight history."`
 }
@@ -704,17 +859,20 @@ type compareCodeInsightsInput struct {
 type compareCodeInsightsOutput = insights.Comparison
 
 type readRepositoryMapInput struct {
-	RepositoryID int64 `json:"repository_id" jsonschema:"required,Repository ID returned by list_repositories."`
+	RepositoryID int64  `json:"repository_id,omitempty" jsonschema:"Repository ID. Provide this or repository."`
+	Repository   string `json:"repository,omitempty" jsonschema:"Exact repository name. Ambiguous names return matching IDs."`
 }
 
 type readRepositoryMapOutput = graph.Snapshot
 
 type readDependencyInventoryInput struct {
-	RepositoryID int64 `json:"repository_id" jsonschema:"required,Repository ID returned by list_repositories."`
+	RepositoryID int64  `json:"repository_id,omitempty" jsonschema:"Repository ID. Provide this or repository."`
+	Repository   string `json:"repository,omitempty" jsonschema:"Exact repository name. Ambiguous names return matching IDs."`
 }
 
 type readDependencyFindingsInput struct {
 	RepositoryID int64  `json:"repository_id,omitempty" jsonschema:"Optional repository ID returned by list_repositories. Omit for the accessible fleet."`
+	Repository   string `json:"repository,omitempty" jsonschema:"Optional exact repository name. Ambiguous names return matching IDs."`
 	Query        string `json:"query,omitempty" jsonschema:"Optional advisory ID, alias, package, repository, or manifest substring."`
 	Ecosystem    string `json:"ecosystem,omitempty" jsonschema:"Optional ecosystem: maven, npm, pypi, go, cargo, or nuget."`
 	Severity     string `json:"severity,omitempty" jsonschema:"Optional severity: critical, high, medium, low, or unknown."`
@@ -732,45 +890,59 @@ type compactDependencyEvidence struct {
 }
 
 type compactDependencyFinding struct {
-	ID              string                      `json:"id"`
-	AdvisoryID      string                      `json:"advisory_id"`
-	Aliases         []string                    `json:"aliases,omitempty"`
-	Ecosystem       string                      `json:"ecosystem"`
-	Package         string                      `json:"package"`
-	Version         string                      `json:"version"`
-	Severity        string                      `json:"severity"`
-	Usage           string                      `json:"usage"`
-	DeclaredScope   string                      `json:"declared_scope,omitempty"`
-	MatchBasis      string                      `json:"match_basis"`
-	MatchConfidence string                      `json:"match_confidence"`
-	FixedVersion    string                      `json:"fixed_version,omitempty"`
-	LatestStable    string                      `json:"latest_stable,omitempty"`
-	RepositoryID    int64                       `json:"repository_id"`
-	Repository      string                      `json:"repository"`
-	Revision        string                      `json:"revision"`
-	ManifestPath    string                      `json:"manifest_path"`
-	Evidence        []compactDependencyEvidence `json:"evidence"`
+	ID                      string                        `json:"id"`
+	AdvisoryID              string                        `json:"advisory_id"`
+	Aliases                 []string                      `json:"aliases,omitempty"`
+	Ecosystem               string                        `json:"ecosystem"`
+	Package                 string                        `json:"package"`
+	Version                 string                        `json:"version"`
+	Severity                string                        `json:"severity"`
+	Usage                   string                        `json:"usage"`
+	DeclaredScope           string                        `json:"declared_scope,omitempty"`
+	MatchBasis              string                        `json:"match_basis"`
+	MatchConfidence         string                        `json:"match_confidence"`
+	FixedVersion            string                        `json:"fixed_version,omitempty"`
+	LatestStable            string                        `json:"latest_stable,omitempty"`
+	RepositoryID            int64                         `json:"repository_id"`
+	Repository              string                        `json:"repository"`
+	Revision                string                        `json:"revision"`
+	ManifestPath            string                        `json:"manifest_path"`
+	ManifestOccurrenceCount int                           `json:"manifest_occurrence_count"`
+	Occurrences             []compactDependencyOccurrence `json:"occurrences"`
+	Evidence                []compactDependencyEvidence   `json:"evidence"`
+}
+
+type compactDependencyOccurrence struct {
+	ManifestPath    string                    `json:"manifest_path"`
+	Usage           string                    `json:"usage"`
+	Relationship    string                    `json:"relationship"`
+	DeclaredScope   string                    `json:"declared_scope,omitempty"`
+	MatchBasis      string                    `json:"match_basis"`
+	MatchConfidence string                    `json:"match_confidence"`
+	Evidence        compactDependencyEvidence `json:"evidence"`
 }
 
 type readDependencyFindingsOutput struct {
-	CheckState                 string                              `json:"check_state"`
-	CheckMessage               string                              `json:"check_message,omitempty"`
-	AdvisoryOnly               bool                                `json:"advisory_only"`
-	Snapshot                   dependencies.AdvisorySnapshotStatus `json:"snapshot"`
-	CheckedDeclarationCount    int                                 `json:"checked_declaration_count"`
-	SkippedNoVersionCount      int                                 `json:"skipped_no_version_count"`
-	SkippedInvalidVersionCount int                                 `json:"skipped_invalid_version_count"`
-	NotInSnapshotCount         int                                 `json:"not_in_snapshot_count"`
-	UncoveredEcosystems        []dependencies.AdvisoryGap          `json:"uncovered_ecosystems,omitempty"`
-	SkippedDeclarations        []dependencies.DependencyCheckGap   `json:"skipped_declarations,omitempty"`
-	TotalFindingCount          int                                 `json:"total_finding_count"`
-	ReturnedCount              int                                 `json:"returned_count"`
-	HasMore                    bool                                `json:"has_more"`
-	Findings                   []compactDependencyFinding          `json:"findings"`
+	CheckState                   string                              `json:"check_state"`
+	CheckMessage                 string                              `json:"check_message,omitempty"`
+	AdvisoryOnly                 bool                                `json:"advisory_only"`
+	Snapshot                     dependencies.AdvisorySnapshotStatus `json:"snapshot"`
+	CheckedDeclarationCount      int                                 `json:"checked_declaration_count"`
+	SkippedNoVersionCount        int                                 `json:"skipped_no_version_count"`
+	SkippedInvalidVersionCount   int                                 `json:"skipped_invalid_version_count"`
+	NotInSnapshotCount           int                                 `json:"not_in_snapshot_count"`
+	UncoveredEcosystems          []dependencies.AdvisoryGap          `json:"uncovered_ecosystems,omitempty"`
+	SkippedDeclarations          []dependencies.DependencyCheckGap   `json:"skipped_declarations,omitempty"`
+	TotalFindingCount            int                                 `json:"total_finding_count"`
+	TotalManifestOccurrenceCount int                                 `json:"total_manifest_occurrence_count"`
+	ReturnedCount                int                                 `json:"returned_count"`
+	HasMore                      bool                                `json:"has_more"`
+	Findings                     []compactDependencyFinding          `json:"findings"`
 }
 
 type readSystemTopologyInput struct {
 	RepositoryID int64  `json:"repository_id,omitempty" jsonschema:"Optional repository ID returned by list_repositories. Omit for the bounded visible fleet."`
+	Repository   string `json:"repository,omitempty" jsonschema:"Optional exact repository name. Ambiguous names return matching IDs."`
 	Query        string `json:"query,omitempty" jsonschema:"Optional component connection protocol or state substring."`
 	Protocol     string `json:"protocol,omitempty" jsonschema:"Optional protocol: http grpc kafka database mcp amqp or unknown."`
 	Origin       string `json:"origin,omitempty" jsonschema:"Optional evidence filter: static runtime or confirmed."`
@@ -827,7 +999,8 @@ type readDependencyInventoryOutput struct {
 }
 
 type listDeepWikiPagesInput struct {
-	RepositoryID int64 `json:"repository_id" jsonschema:"required,Repository ID returned by list_repositories."`
+	RepositoryID int64  `json:"repository_id,omitempty" jsonschema:"Repository ID. Provide this or repository."`
+	Repository   string `json:"repository,omitempty" jsonschema:"Exact repository name. Ambiguous names return matching IDs."`
 }
 
 type deepWikiPage struct {
@@ -870,7 +1043,8 @@ type listDeepWikiPagesOutput struct {
 }
 
 type readGeneratedDocumentInput struct {
-	RepositoryID int64  `json:"repository_id" jsonschema:"required,Repository ID returned by list_repositories."`
+	RepositoryID int64  `json:"repository_id,omitempty" jsonschema:"Repository ID. Provide this or repository."`
+	Repository   string `json:"repository,omitempty" jsonschema:"Exact repository name. Ambiguous names return matching IDs."`
 	Page         string `json:"page" jsonschema:"required,Page slug from the documentation plan such as overview architecture or dependencies."`
 }
 
@@ -879,6 +1053,7 @@ type readGeneratedDocumentOutput = docs.Page
 type findSymbolInput struct {
 	Symbol             string                  `json:"symbol" jsonschema:"required,Exact symbol name to find."`
 	RepositoryID       int64                   `json:"repository_id,omitempty" jsonschema:"Optional repository ID returned by list_repositories. Omit to search every indexed repository."`
+	Repository         string                  `json:"repository,omitempty" jsonschema:"Optional exact repository name. Ambiguous names return matching IDs."`
 	Language           string                  `json:"language,omitempty" jsonschema:"Optional programming language filter."`
 	Limit              int                     `json:"limit,omitempty" jsonschema:"Maximum files to return from 1 to 500. Defaults to 100."`
 	Compact            bool                    `json:"compact,omitempty" jsonschema:"Return paths line numbers and pinned citations without snippet bodies ranking facets or actions."`
@@ -892,6 +1067,7 @@ type findSymbolOutput = codeintel.SymbolResponse
 type findReferencesInput struct {
 	Symbol             string                  `json:"symbol" jsonschema:"required,Full SCIP symbol identity or exact source-level name. Bare names use SCIP only when unambiguous and otherwise fall back to AST relations."`
 	RepositoryID       int64                   `json:"repository_id,omitempty" jsonschema:"Optional repository ID returned by list_repositories. Omit to search every repository covered by the bounded structural snapshot."`
+	Repository         string                  `json:"repository,omitempty" jsonschema:"Optional exact repository name. Ambiguous names return matching IDs."`
 	Language           string                  `json:"language,omitempty" jsonschema:"Optional parser language filter."`
 	Path               string                  `json:"path,omitempty" jsonschema:"Optional substring required in the repository-relative path."`
 	File               string                  `json:"file,omitempty" jsonschema:"Optional substring required in the filename."`
@@ -906,6 +1082,7 @@ type findReferencesOutput = codeintel.ReferenceResponse
 
 type searchASTInput struct {
 	RepositoryID int64  `json:"repository_id,omitempty" jsonschema:"Optional repository ID returned by list_repositories. Omit for the accessible fleet."`
+	Repository   string `json:"repository,omitempty" jsonschema:"Optional exact repository name. Ambiguous names return matching IDs."`
 	Language     string `json:"language" jsonschema:"required,Tree-sitter language: java or go."`
 	Query        string `json:"query" jsonschema:"required,Tree-sitter S-expression query with named captures and optional predicates such as #eq? #match? #has-parent? or #has-ancestor?."`
 	PathPrefix   string `json:"path_prefix,omitempty" jsonschema:"Optional repository-relative directory or exact file prefix."`
@@ -916,7 +1093,8 @@ type searchASTInput struct {
 type searchASTOutput = codeintel.ASTSearchResponse
 
 type openFileInput struct {
-	RepositoryID int64  `json:"repository_id" jsonschema:"required,Repository ID returned by list_repositories."`
+	RepositoryID int64  `json:"repository_id,omitempty" jsonschema:"Repository ID. Provide this or repository."`
+	Repository   string `json:"repository,omitempty" jsonschema:"Exact repository name. Ambiguous names return matching IDs."`
 	Path         string `json:"path" jsonschema:"required,Repository-relative source path."`
 	Revision     string `json:"revision,omitempty" jsonschema:"Pinned indexed commit. Omit to use the current indexed commit."`
 	StartLine    int    `json:"start_line,omitempty" jsonschema:"First one-based line to return."`
@@ -926,7 +1104,8 @@ type openFileInput struct {
 type openFileOutput = codeintel.FileResponse
 
 type listTreeInput struct {
-	RepositoryID int64  `json:"repository_id" jsonschema:"required,Repository ID returned by list_repositories."`
+	RepositoryID int64  `json:"repository_id,omitempty" jsonschema:"Repository ID. Provide this or repository."`
+	Repository   string `json:"repository,omitempty" jsonschema:"Exact repository name. Ambiguous names return matching IDs."`
 	Path         string `json:"path,omitempty" jsonschema:"Optional repository-relative directory."`
 	Revision     string `json:"revision,omitempty" jsonschema:"Pinned indexed commit. Omit to use the current indexed commit."`
 	Offset       int    `json:"offset,omitempty" jsonschema:"Zero-based page offset. Use next_offset to traverse directories with more than 500 entries."`
@@ -935,7 +1114,8 @@ type listTreeInput struct {
 type listTreeOutput = codeintel.TreeResponse
 
 type gitLogInput struct {
-	RepositoryID int64  `json:"repository_id" jsonschema:"required,Repository ID returned by list_repositories."`
+	RepositoryID int64  `json:"repository_id,omitempty" jsonschema:"Repository ID. Provide this or repository."`
+	Repository   string `json:"repository,omitempty" jsonschema:"Exact repository name. Ambiguous names return matching IDs."`
 	Revision     string `json:"revision,omitempty" jsonschema:"Exact reachable commit SHA to start from. Omit to use the indexed commit."`
 	Path         string `json:"path,omitempty" jsonschema:"Optional repository-relative file or directory whose history should be returned."`
 	Limit        int    `json:"limit,omitempty" jsonschema:"Maximum commits to return from 1 to 200. Defaults to 50."`
@@ -944,7 +1124,8 @@ type gitLogInput struct {
 type gitLogOutput = codeintel.GitLogResponse
 
 type gitDiffInput struct {
-	RepositoryID int64  `json:"repository_id" jsonschema:"required,Repository ID returned by list_repositories."`
+	RepositoryID int64  `json:"repository_id,omitempty" jsonschema:"Repository ID. Provide this or repository."`
+	Repository   string `json:"repository,omitempty" jsonschema:"Exact repository name. Ambiguous names return matching IDs."`
 	FromRevision string `json:"from_revision,omitempty" jsonschema:"Exact reachable base commit SHA. Omit to use the first parent of to_revision."`
 	ToRevision   string `json:"to_revision,omitempty" jsonschema:"Exact reachable target commit SHA. Omit to use the indexed commit."`
 	Path         string `json:"path,omitempty" jsonschema:"Optional repository-relative file or directory to diff."`
@@ -1033,10 +1214,11 @@ func compactDependencyFindings(result dependencies.FindingResponse) readDependen
 		UncoveredEcosystems:        append([]dependencies.AdvisoryGap(nil), result.UncoveredEcosystems...),
 		SkippedDeclarations:        append([]dependencies.DependencyCheckGap(nil), result.SkippedDeclarations...),
 		TotalFindingCount:          result.TotalFindingCount, ReturnedCount: result.ReturnedCount,
-		HasMore: result.HasMore, Findings: make([]compactDependencyFinding, 0, len(result.Findings)),
+		TotalManifestOccurrenceCount: result.TotalManifestOccurrenceCount,
+		HasMore:                      result.HasMore, Findings: make([]compactDependencyFinding, 0, len(result.Findings)),
 	}
 	for _, finding := range result.Findings {
-		output.Findings = append(output.Findings, compactDependencyFinding{
+		compactFinding := compactDependencyFinding{
 			ID: finding.ID, AdvisoryID: finding.AdvisoryID,
 			Aliases:   append([]string(nil), finding.Aliases...),
 			Ecosystem: finding.Ecosystem, Package: finding.Package, Version: finding.Version,
@@ -1045,6 +1227,8 @@ func compactDependencyFindings(result dependencies.FindingResponse) readDependen
 			FixedVersion: finding.FixedVersion, LatestStable: finding.LatestStable,
 			RepositoryID: finding.RepositoryID, Repository: finding.Repository,
 			Revision: finding.Revision, ManifestPath: finding.ManifestPath,
+			ManifestOccurrenceCount: finding.ManifestOccurrenceCount,
+			Occurrences:             make([]compactDependencyOccurrence, 0, len(finding.Occurrences)),
 			Evidence: []compactDependencyEvidence{
 				{
 					Kind:  "manifest",
@@ -1057,7 +1241,21 @@ func compactDependencyFindings(result dependencies.FindingResponse) readDependen
 					SnapshotVersion: finding.AdvisoryEvidence.SnapshotVersion,
 				},
 			},
-		})
+		}
+		for _, occurrence := range finding.Occurrences {
+			compactFinding.Occurrences = append(compactFinding.Occurrences, compactDependencyOccurrence{
+				ManifestPath: occurrence.ManifestPath,
+				Usage:        occurrence.Usage, Relationship: occurrence.Relationship,
+				DeclaredScope: occurrence.DeclaredScope,
+				MatchBasis:    occurrence.MatchBasis, MatchConfidence: occurrence.MatchConfidence,
+				Evidence: compactDependencyEvidence{
+					Kind:  "manifest",
+					Label: finding.Repository + "@" + shortRevision(finding.Revision) + ":" + occurrence.ManifestPath,
+					URL:   occurrence.Evidence.URL, Revision: finding.Revision,
+				},
+			})
+		}
+		output.Findings = append(output.Findings, compactFinding)
 	}
 	return output
 }

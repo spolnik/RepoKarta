@@ -151,10 +151,10 @@ repositories on managed Windows and Apple Silicon macOS laptops.
 - Show the output budget only for providers that map it to a real request
   limit, and explain in the interface that it is a ceiling rather than a target
   or a context-window limit.
-- Select repositories by the stable numeric repository ID in every
-  repository-specific MCP tool and JSON endpoint. Cross-repository search keeps
-  it optional. Repository names are not unique and are never the advertised
-  selector.
+- Select repositories by the stable numeric repository ID in JSON endpoints.
+  Every repository-aware MCP tool also accepts an exact repository name for
+  agent ergonomics; ambiguous names fail with the matching numeric IDs instead
+  of guessing. Cross-repository reads keep both selectors optional.
 - Run provider harnesses outside every indexed repository. Claude loads only
   user-scoped operational settings (including hooks, environment, and
   telemetry), never project/local settings; grounding instructions disable
@@ -537,7 +537,8 @@ SQLite; bootstrap administrator credentials and SAML private keys do not.
   native SAML SP, and startup-gated unauthenticated shared access.
 - [x] Startup-credential-protected administration for authentication settings.
 - [x] Per-user ownership and access enforcement for durable conversations,
-  with administrator own/all and author filters.
+  with strict owner-only list, read, continue, rename, delete, and interrupt
+  semantics; administrator status is not a transcript-access bypass.
 - [x] Per-user separation of generated artifacts on a shared instance.
 - [x] Shared or team deployment packaging and operations.
 
@@ -792,7 +793,7 @@ Add an auditable organization-control layer without weakening RepoKarta's
 read-only source boundary.
 
 - [x] Record append-only audit events for authentication, authorization
-  failures, administration changes, role assignments, cross-author access,
+  failures, administration changes, role assignments, denied cross-author access,
   repository acquisition and removal, exports, generation, and destructive
   RepoKarta-owned data operations.
 - [x] Include actor, action, target, outcome, authentication provider, request
@@ -806,7 +807,7 @@ read-only source boundary.
   unknown or removed identities receive no implicit elevated access.
 - [x] Define an explicit permission matrix for reader, knowledge maintainer,
   and administrator roles, including AI generation, shared artifacts,
-  cross-author conversations, repository acquisition, security settings,
+  owner-only conversations, repository acquisition, security settings,
   role management, and audit-log access.
 - [x] Make role changes auditable and immediately effective for new requests;
   deprovisioning must revoke active application sessions without erasing
@@ -888,6 +889,10 @@ secondary views.
 - [x] Require artifact-management permission for runtime imports; keep reads
   cache-only and return explicit `202 Accepted` progress for cold topology
   artifacts.
+- [x] Resolve placeholder targets through map-key registry candidates, in-file
+  defaults, ranked cross-repository assignments, and name-shape fallback;
+  retain secret/test-only/missing assignments in a citation-backed unresolved
+  collection and never create `${VAR}` components.
 
 Exit condition: a user can answer which component communicates with which
 service or resource, in which direction and over which protocol, distinguish
@@ -945,7 +950,7 @@ completion criteria include:
 
 ## Current implementation version
 
-`0.72.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
+`0.76.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
 The M9 dependency inventory, public registry refresh, lockfile resolution,
 explicit private-registry routing, reproducible OSV advisory snapshots,
 ecosystem-correct fleet CVE matching, scope-aware UI/JSON/MCP findings, and
@@ -955,9 +960,15 @@ M12 distributed dependency topology is complete: the Dependencies landing view
 now models deployable components and directed HTTP, gRPC, Kafka, database, and
 MCP relationships; type-aware fleet reconciliation, explicit declarations,
 runtime observation import/retention, static-vs-runtime drift, JSON, MCP, and
-the interactive evidence view are implemented.
+the interactive evidence view are implemented. Placeholder resolution now
+includes service-map keys, ranked fleet assignments, candidate and unresolved
+payloads, registrable-domain naming, and resolved/candidate/unresolved honesty
+counts.
 Linked-worktree discovery deduplication and M10 enterprise identity and
-administration are complete; M11 is complete. The implemented M7-M11 slices
+administration are complete; conversations are strictly owner-only, Wiki/admin
+actions retain principal-scoped audit evidence, advisory results are grouped
+without losing manifest occurrences, and every repository-aware MCP tool
+accepts an exact name with ambiguity errors. M11 is complete. The implemented M7-M11 slices
 now resolve directory Git trees and exact syntax-backed symbol declarations
 alongside repository/file identities, scope deterministic matches to symbol
 line ranges, and turn pasted same-origin RepoKarta URLs into permission-checked

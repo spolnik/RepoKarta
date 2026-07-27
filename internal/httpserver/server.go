@@ -618,23 +618,8 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 
 func (s *Server) listConversations(response http.ResponseWriter, request *http.Request) {
 	viewer := s.conversationViewer(request.Context())
-	scope := "own"
-	requestedAll := strings.EqualFold(strings.TrimSpace(request.URL.Query().Get("scope")), "all")
-	all := requestedAll && viewer.Admin
-	if all {
-		scope = "all"
-	}
-	if requestedAll {
-		principal, _ := security.PrincipalFromContext(request.Context())
-		outcome := "denied"
-		if all {
-			outcome = "success"
-		}
-		s.recordApplicationEvent(request, principal, "conversation.cross-author.list", "conversation-history", "all", outcome, nil)
-	}
 	conversations, err := s.history.ListConversations(request.Context(), agent.ConversationFilter{
 		AuthorID: viewer.Author.ID,
-		All:      all,
 	})
 	if err != nil {
 		writeAPIError(response, http.StatusInternalServerError, err)
@@ -646,8 +631,8 @@ func (s *Server) listConversations(response http.ResponseWriter, request *http.R
 	writeJSON(response, http.StatusOK, map[string]any{
 		"conversations": conversations,
 		"viewer":        viewer.Author,
-		"can_view_all":  viewer.Admin,
-		"scope":         scope,
+		"can_view_all":  false,
+		"scope":         "own",
 	})
 }
 
@@ -771,7 +756,6 @@ func (s *Server) chat(response http.ResponseWriter, request *http.Request) {
 	turn.Contexts = effective.Contexts
 	viewer := s.conversationViewer(request.Context())
 	turn.Author = viewer.Author
-	turn.AuthorCanViewAll = viewer.Admin
 	for index := range turn.Images {
 		turn.Images[index].Name = strings.TrimSpace(turn.Images[index].Name)
 		turn.Images[index].MediaType = strings.ToLower(strings.TrimSpace(turn.Images[index].MediaType))
@@ -890,7 +874,7 @@ func (s *Server) conversationViewer(ctx context.Context) conversationViewer {
 
 func (s *Server) authorizeConversation(ctx context.Context, conversation agent.Conversation) error {
 	viewer := s.conversationViewer(ctx)
-	if viewer.Admin || conversation.Author.ID == viewer.Author.ID {
+	if conversation.Author.ID == viewer.Author.ID {
 		return nil
 	}
 	return agent.ErrConversationForbidden

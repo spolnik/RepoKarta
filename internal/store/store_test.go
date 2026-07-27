@@ -152,9 +152,9 @@ func TestConversationTranscriptPersistsAcrossDatabaseReopen(t *testing.T) {
 	if err != nil || len(own) != 1 || own[0].Author.ID != "saml:alice" {
 		t.Fatalf("own conversations = %#v, error = %v", own, err)
 	}
-	all, err := storage.ListConversations(ctx, agent.ConversationFilter{All: true})
-	if err != nil || len(all) != 2 {
-		t.Fatalf("all conversations = %#v, error = %v", all, err)
+	bob, err := storage.ListConversations(ctx, agent.ConversationFilter{AuthorID: "saml:bob"})
+	if err != nil || len(bob) != 1 || bob[0].Author.ID != "saml:bob" {
+		t.Fatalf("bob conversations = %#v, error = %v", bob, err)
 	}
 	if err := storage.DeleteConversation(ctx, conversation.ID); err != nil {
 		t.Fatal(err)

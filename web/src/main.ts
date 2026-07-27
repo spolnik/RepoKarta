@@ -6478,6 +6478,7 @@ type TopologyComponentPayload = {
   path?: string;
   capabilities?: string[];
   external: boolean;
+  candidate?: boolean;
   evidence?: TopologyEvidence[];
   origins: string[];
 };
@@ -6595,7 +6596,9 @@ function enableDependencyTopology(debug?: DebugLogger): void {
     element.addClass("topology-selected");
     if (element.isNode()) {
       const node = element.data("payload") as TopologyComponentPayload;
-      inspectorKind.textContent = node.external ? `External ${node.kind}` : node.kind;
+      inspectorKind.textContent = node.candidate
+        ? `Internal ${node.kind} candidate`
+        : node.external ? `External ${node.kind}` : node.kind;
       inspectorTitle.textContent = node.name;
       inspectorSubtitle.textContent = [
         node.technology,
@@ -6680,6 +6683,7 @@ function enableDependencyTopology(debug?: DebugLogger): void {
           label: component.name,
           kind: component.kind,
           external: component.external ? "yes" : "no",
+          candidate: component.candidate ? "yes" : "no",
           origin: component.origins.join("-"),
           payload: component
         }
@@ -6729,6 +6733,7 @@ function enableDependencyTopology(debug?: DebugLogger): void {
         { selector: 'node[kind = "queue"], node[kind = "broker"]', style: { shape: "diamond", "border-color": "#fbbf24", height: 62, width: 92 } },
         { selector: 'node[kind = "mcp_server"]', style: { shape: "hexagon", "border-color": "#f472b6" } },
         { selector: 'node[external = "yes"]', style: { "border-style": "dashed", "background-color": "#15121c" } },
+        { selector: 'node[candidate = "yes"]', style: { "border-color": "#fbbf24", "background-color": "#1c1810" } },
         {
           selector: "edge",
           style: {

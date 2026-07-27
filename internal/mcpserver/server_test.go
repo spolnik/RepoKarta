@@ -380,6 +380,24 @@ func TestMCPSearchReturnsPinnedCitation(t *testing.T) {
 	toolNames := make(map[string]bool, len(tools.Tools))
 	for _, tool := range tools.Tools {
 		toolNames[tool.Name] = true
+		encodedSchema, marshalErr := json.Marshal(tool.InputSchema)
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		var selectorSchema struct {
+			Properties map[string]json.RawMessage `json:"properties"`
+		}
+		if err := json.Unmarshal(encodedSchema, &selectorSchema); err != nil {
+			t.Fatal(err)
+		}
+		_, hasRepositoryID := selectorSchema.Properties["repository_id"]
+		_, hasRepositoryName := selectorSchema.Properties["repository"]
+		if hasRepositoryID != hasRepositoryName {
+			t.Fatalf(
+				"tool %q must expose repository with repository_id: %s",
+				tool.Name, encodedSchema,
+			)
+		}
 	}
 	for _, name := range []string{
 		"list_repositories",
@@ -471,7 +489,7 @@ func TestMCPSearchReturnsPinnedCitation(t *testing.T) {
 
 	result, err = session.CallTool(context.Background(), &mcp.CallToolParams{
 		Name:      "read_repository_map",
-		Arguments: map[string]any{"repository_id": 7},
+		Arguments: map[string]any{"repository": "RepoKarta"},
 	})
 	if err != nil || result.IsError {
 		t.Fatalf("map tool error: %v %#v", err, result.Content)
@@ -598,7 +616,7 @@ func TestMCPSearchReturnsPinnedCitation(t *testing.T) {
 	}
 }
 
-func TestMCPToolsSelectRepositoriesByIDOnly(t *testing.T) {
+func TestMCPToolsAcceptRepositoryIDsOrExactNames(t *testing.T) {
 	revision := strings.Repeat("b", 40)
 	store := fakeStore{repositories: []catalog.Repository{{
 		ID:            42,
@@ -658,15 +676,17 @@ func TestMCPToolsSelectRepositoriesByIDOnly(t *testing.T) {
 		if err := json.Unmarshal(encoded, &schema); err != nil {
 			t.Fatal(err)
 		}
-		if _, ok := schema.Properties["repository"]; ok {
-			t.Fatalf("tool %q still advertises a repository name parameter", tool.Name)
-		}
+		_, hasName := schema.Properties["repository"]
 		_, hasID := schema.Properties["repository_id"]
 		if (required[tool.Name] || optional[tool.Name]) != hasID {
 			t.Fatalf("tool %q repository_id presence = %v", tool.Name, hasID)
 		}
-		if required[tool.Name] && !slices.Contains(schema.Required, "repository_id") {
-			t.Fatalf("tool %q does not require repository_id: %v", tool.Name, schema.Required)
+		if hasName != hasID {
+			t.Fatalf("tool %q repository name presence = %v, repository_id presence = %v", tool.Name, hasName, hasID)
+		}
+		if slices.Contains(schema.Required, "repository_id") ||
+			slices.Contains(schema.Required, "repository") {
+			t.Fatalf("tool %q schema cannot require one selector when either is valid: %v", tool.Name, schema.Required)
 		}
 		_, hasCompact := schema.Properties["compact"]
 		if compact[tool.Name] != hasCompact {
@@ -684,6 +704,15 @@ func TestMCPToolsSelectRepositoriesByIDOnly(t *testing.T) {
 	}
 	if len(searcher.query.RepositoryIDs) != 1 || searcher.query.RepositoryIDs[0] != 42 {
 		t.Fatalf("search repository IDs = %#v", searcher.query.RepositoryIDs)
+	}
+	if _, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "search_code",
+		Arguments: map[string]any{"query": "OpenFile", "repository": "repokarta"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(searcher.query.RepositoryIDs) != 1 || searcher.query.RepositoryIDs[0] != 42 {
+		t.Fatalf("repository name resolved search IDs = %#v", searcher.query.RepositoryIDs)
 	}
 	if _, err := session.CallTool(context.Background(), &mcp.CallToolParams{
 		Name: "search_code",
@@ -711,5 +740,20 @@ func TestMCPToolsSelectRepositoriesByIDOnly(t *testing.T) {
 	})
 	if err == nil && !result.IsError {
 		t.Fatal("unknown repository_id was accepted")
+	}
+}
+
+func TestRepositoryNameResolutionReportsAmbiguityWithMatchingIDs(t *testing.T) {
+	intelligence := codeintel.New(fakeStore{repositories: []catalog.Repository{
+		{ID: 11, Name: "service", IndexState: "ready"},
+		{ID: 29, Name: "Service", IndexState: "ready"},
+	}}, &fakeSearcher{}, "http://ui")
+	_, err := resolveRepositorySelector(
+		context.Background(), intelligence, 0, "service", true,
+	)
+	if err == nil ||
+		!strings.Contains(err.Error(), `repository "service" is ambiguous`) ||
+		!strings.Contains(err.Error(), "11, 29") {
+		t.Fatalf("ambiguity error = %v", err)
 	}
 }

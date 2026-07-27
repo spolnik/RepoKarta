@@ -43,11 +43,10 @@ type ConversationAuthor struct {
 	Groups   []string `json:"-"`
 }
 
-// ConversationFilter bounds durable history to the current author unless an
-// administrator explicitly requests the complete deployment history.
+// ConversationFilter bounds durable history to exactly one authenticated
+// author. Cross-author chat access is intentionally unsupported.
 type ConversationFilter struct {
 	AuthorID string
-	All      bool
 }
 
 // Message is one durable user or assistant turn. Images are persisted as

@@ -98,22 +98,21 @@ func TestFindingsPreferResolvedVersionsAndPreserveTriageScope(t *testing.T) {
 		Status:      "ok", LatestStable: "3.0.0",
 	}}, AdvisoryOptions{}, time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC))
 	if response.CheckState != "ready" || response.CheckedDeclarationCount != 2 ||
-		len(response.Findings) != 2 {
+		len(response.Findings) != 1 ||
+		response.Findings[0].ManifestOccurrenceCount != 2 {
 		t.Fatalf("response = %#v", response)
 	}
-	resolved, declared := response.Findings[0], response.Findings[1]
-	if resolved.Usage != "production" {
-		resolved, declared = declared, resolved
-	}
+	resolved := response.Findings[0]
 	if resolved.Version != "1.5.0" || resolved.MatchBasis != "resolved" ||
 		resolved.MatchConfidence != "high" || resolved.ResolutionSource != "package-lock.json" ||
 		resolved.Usage != "production" || resolved.DeclaredScope != "implementation" ||
 		resolved.FixedVersion != "2.0.0" || resolved.LatestStable != "3.0.0" {
 		t.Fatalf("resolved finding = %#v", resolved)
 	}
+	declared := resolved.Occurrences[1]
 	if declared.MatchBasis != "declared" || declared.MatchConfidence != "lower" ||
 		declared.Usage != "test" || declared.DeclaredScope != "devDependencies" {
-		t.Fatalf("declared finding = %#v", declared)
+		t.Fatalf("declared occurrence = %#v", declared)
 	}
 }
 
@@ -189,6 +188,49 @@ func TestFindingsAreByteDeterministicForSnapshotAndInventory(t *testing.T) {
 	right, _ := json.Marshal(buildFindings(inventoryB, &snapshot, nil, AdvisoryOptions{}, now).Findings)
 	if !bytes.Equal(left, right) {
 		t.Fatalf("findings differ:\n%s\n%s", left, right)
+	}
+}
+
+func TestFindingsDeduplicateManifestOccurrencesByAdvisoryRepositoryPackageAndVersion(t *testing.T) {
+	inventory := findingInventory(
+		graph.DependencyDeclaration{
+			Ecosystem: "npm", Package: "left-pad", Resolved: "1.5.0",
+			Resolution: "exact", Usage: "production",
+			Evidence: findingEvidence("apps/api/package-lock.json", 17),
+		},
+		graph.DependencyDeclaration{
+			Ecosystem: "npm", Package: "left-pad", Resolved: "1.5.0",
+			Resolution: "exact", Usage: "development",
+			Evidence: findingEvidence("apps/admin/package-lock.json", 29),
+		},
+	)
+	snapshot := fixtureSnapshot(
+		inventory, fixtureAdvisory("GHSA-left-pad", "left-pad", "1.0.0", "2.0.0"),
+	)
+	response := buildFindings(
+		inventory, &snapshot, nil, AdvisoryOptions{}, snapshot.RetrievedAt,
+	)
+	if response.TotalFindingCount != 1 ||
+		response.TotalManifestOccurrenceCount != 2 ||
+		len(response.Findings) != 1 ||
+		response.Findings[0].ManifestOccurrenceCount != 2 ||
+		len(response.Findings[0].Occurrences) != 2 {
+		t.Fatalf("deduplicated response = %#v", response)
+	}
+	finding := response.Findings[0]
+	if finding.Usage != "production" ||
+		finding.ManifestPath != "apps/api/package-lock.json" ||
+		finding.Occurrences[0].ManifestPath != "apps/api/package-lock.json" ||
+		finding.Occurrences[1].ManifestPath != "apps/admin/package-lock.json" {
+		t.Fatalf("group representative or occurrence order = %#v", finding)
+	}
+	development := buildFindings(
+		inventory, &snapshot, nil,
+		AdvisoryOptions{Usage: "development"}, snapshot.RetrievedAt,
+	)
+	if len(development.Findings) != 1 ||
+		development.Findings[0].ManifestOccurrenceCount != 2 {
+		t.Fatalf("occurrence-aware usage filter = %#v", development.Findings)
 	}
 }
 

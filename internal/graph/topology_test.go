@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/spolnik/RepoKarta/internal/catalog"
@@ -177,7 +178,7 @@ env:
 	}
 	target := componentByID(snapshot.Components, connection.Target)
 	if target.Name != "billing-service" || !connection.TargetResolved ||
-		connection.ResolutionTier != "cross_repository_assignment" ||
+		connection.ResolutionTier != "map_key_registry" ||
 		connection.Confidence != "high" {
 		t.Fatalf("placeholder did not resolve to billing-service: %+v, target=%+v", connection, target)
 	}
@@ -290,7 +291,6 @@ func TestTopologyPlaceholderExcludesTestAndSnapshotAssignments(t *testing.T) {
 	builder := newBuilder("http://127.0.0.1:7331")
 	application := catalog.Repository{ID: 21, Name: "checkout", IndexedCommit: "aaaaaaaa"}
 	configuration := catalog.Repository{ID: 22, Name: "fleet-infra", IndexedCommit: "bbbbbbbb"}
-	billing := catalog.Repository{ID: 23, Name: "billing-service", IndexedCommit: "cccccccc"}
 	builder.addDistributedTopology(application, application.IndexedCommit, "README.md", map[string][]byte{
 		"README.md": []byte("# Checkout"),
 		"src/main/resources/application.yml": []byte(`
@@ -307,16 +307,12 @@ BILLING_SERVICE_URL: http://fictional-test-billing
 	BILLING_SERVICE_URL: http://fictional-snapshot-billing
 `),
 	})
-	builder.addDistributedTopology(billing, billing.IndexedCommit, "README.md", map[string][]byte{
-		"README.md": []byte("# Billing"),
-	})
-
 	snapshot := builder.snapshot("placeholder-exclusions")
-	connection, found := placeholderConnection(snapshot.Connections, "BILLING_SERVICE_URL")
-	if !found || connection.ResolutionTier != "unresolved" ||
-		connection.UnresolvedReason != "only_excluded_assignments" ||
-		len(connection.Evidence) != 1 {
-		t.Fatalf("excluded assignment resolved a placeholder: %+v", connection)
+	if _, found := placeholderConnection(snapshot.Connections, "BILLING_SERVICE_URL"); found ||
+		len(snapshot.UnresolvedTopology) != 1 ||
+		snapshot.UnresolvedTopology[0].Reason != "only-excluded-assignments" ||
+		snapshot.UnresolvedTopology[0].Candidate != "billing-service" {
+		t.Fatalf("excluded assignment resolved a placeholder: connections=%+v unresolved=%+v", snapshot.Connections, snapshot.UnresolvedTopology)
 	}
 }
 
@@ -396,6 +392,54 @@ BILLING_SERVICE_URL: https://api.paypal.com
 	}
 }
 
+func TestTopologyRegistryMatchPreservesDivergentAssignmentTarget(t *testing.T) {
+	builder := newBuilder("http://127.0.0.1:7331")
+	application := catalog.Repository{ID: 43, Name: "checkout", IndexedCommit: "aaaaaaaa"}
+	configuration := catalog.Repository{ID: 44, Name: "fleet-infra", IndexedCommit: "bbbbbbbb"}
+	billing := catalog.Repository{ID: 45, Name: "billing-service", IndexedCommit: "cccccccc"}
+	builder.addDistributedTopology(application, application.IndexedCommit, "README.md", map[string][]byte{
+		"README.md": []byte("# Checkout"),
+		"src/main/resources/application.yml": []byte(`
+routes:
+  billing-service: ${BILLING_SERVICE_URL}
+`),
+	})
+	builder.addDistributedTopology(configuration, configuration.IndexedCommit, "README.md", map[string][]byte{
+		"README.md": []byte("# Fleet infrastructure"),
+		"deploy/staging/values.yaml": []byte(`
+BILLING_SERVICE_URL: http://billing-service
+`),
+		"deploy/production/values.yaml": []byte(`
+BILLING_SERVICE_URL: https://api.paypal.com
+`),
+	})
+	builder.addDistributedTopology(billing, billing.IndexedCommit, "README.md", map[string][]byte{
+		"README.md": []byte("# Billing"),
+	})
+
+	snapshot := builder.snapshot("placeholder-registry-divergence")
+	connections := placeholderConnections(snapshot.Connections, "BILLING_SERVICE_URL")
+	if len(connections) != 2 {
+		t.Fatalf("registry divergence = %+v, want two connections", connections)
+	}
+	byTarget := make(map[string]SystemConnection)
+	for _, connection := range connections {
+		byTarget[componentByID(snapshot.Components, connection.Target).Name] = connection
+	}
+	registry := byTarget["billing-service"]
+	if registry.ResolutionTier != "map_key_registry" ||
+		registry.Confidence != "high" || !registry.ResolutionDivergent ||
+		registry.Environment != "staging" || len(registry.Evidence) != 2 {
+		t.Fatalf("registry edge lost preferred resolution metadata: %+v", registry)
+	}
+	alternate := byTarget["paypal.com"]
+	if alternate.ResolutionTier != "cross_repository_assignment" ||
+		alternate.Confidence != "medium" || !alternate.ResolutionDivergent ||
+		alternate.Environment != "production" || len(alternate.Evidence) != 2 {
+		t.Fatalf("divergent assignment edge missing metadata: %+v", alternate)
+	}
+}
+
 func TestTopologyPlaceholderKeepsVaultIndirectionUnresolved(t *testing.T) {
 	builder := newBuilder("http://127.0.0.1:7331")
 	application := catalog.Repository{ID: 51, Name: "checkout", IndexedCommit: "aaaaaaaa"}
@@ -416,11 +460,16 @@ DATABASE_PASSWORD: correct-horse-battery-staple
 	})
 
 	snapshot := builder.snapshot("placeholder-vault")
-	connection, found := placeholderConnection(snapshot.Connections, "BILLING_SERVICE_URL")
-	if !found || connection.ResolutionTier != "unresolved" ||
-		connection.UnresolvedReason != "secret_or_vault_indirection" ||
-		connection.TargetResolved {
-		t.Fatalf("vault indirection was not kept unresolved: %+v", connection)
+	if len(snapshot.UnresolvedTopology) != 1 ||
+		snapshot.UnresolvedTopology[0].Variable != "BILLING_SERVICE_URL" ||
+		snapshot.UnresolvedTopology[0].Reason != "secret-indirection" ||
+		len(snapshot.UnresolvedTopology[0].Evidence) != 2 {
+		t.Fatalf("vault indirection was not kept unresolved: %+v", snapshot.UnresolvedTopology)
+	}
+	for _, component := range snapshot.Components {
+		if strings.Contains(component.Name, "${") {
+			t.Fatalf("placeholder became a component: %+v", component)
+		}
 	}
 	if len(snapshot.EnvironmentAssignments) != 1 ||
 		snapshot.EnvironmentAssignments[0].Variable != "BILLING_SERVICE_URL" ||
@@ -437,8 +486,8 @@ func TestTopologyPlaceholderFallsBackToKnownServiceNameShape(t *testing.T) {
 	builder.addDistributedTopology(application, application.IndexedCommit, "README.md", map[string][]byte{
 		"README.md": []byte("# Checkout"),
 		"src/main/resources/application.yml": []byte(`
-routes:
-  billing-service: ${BILLING_SERVICE_BASE_URL}
+client:
+  url: ${BILLING_SERVICE_BASE_URL}
 `),
 	})
 	builder.addDistributedTopology(billing, billing.IndexedCommit, "README.md", map[string][]byte{
@@ -451,6 +500,155 @@ routes:
 		connection.Confidence != "low" || !connection.TargetResolved ||
 		componentByID(snapshot.Components, connection.Target).Name != "billing-service" {
 		t.Fatalf("name-shape fallback did not resolve at low confidence: %+v", connection)
+	}
+}
+
+func TestTopologySyntheticFleetResolvesMapKeysAssignmentsAndUnresolvedCandidates(t *testing.T) {
+	build := func(includeDeploymentConfiguration bool) Snapshot {
+		t.Helper()
+		builder := newBuilder("http://127.0.0.1:7331")
+		orders := catalog.Repository{
+			ID: 71, Name: "orders-service", IndexedCommit: "71717171",
+		}
+		billing := catalog.Repository{
+			ID: 72, Name: "billing-service", IndexedCommit: "72727272",
+		}
+		builder.addDistributedTopology(
+			orders, orders.IndexedCommit, "README.md", map[string][]byte{
+				"README.md": []byte("# Orders"),
+				"src/main/resources/application.yml": []byte(`
+application:
+  routes:
+    billing-service: ${BILLING_SERVICE_URL}
+    fraud-service: ${FRAUD_SERVICE_URL}
+  clients:
+    tax:
+      base-url: ${TAX_API_URL:http://tax-service:8080}
+    enrichment:
+      url: ${ENRICHMENT_URL}
+  vendor:
+    endpoint: https://api.vendor-example.com/v2
+`),
+			},
+		)
+		if includeDeploymentConfiguration {
+			deployment := catalog.Repository{
+				ID: 73, Name: "deploy-config", IndexedCommit: "73737373",
+			}
+			builder.addDistributedTopology(
+				deployment, deployment.IndexedCommit, "README.md", map[string][]byte{
+					"README.md": []byte("# Deployment configuration"),
+					"k8s/orders-service/deployment.yaml": []byte(`
+env:
+  - name: BILLING_SERVICE_URL
+    value: http://billing-service
+  - name: FRAUD_SERVICE_URL
+    value: https://fraud.internal.example-corp.net
+  - name: ENRICHMENT_URL
+    value: vault:secret/enrichment-endpoint
+`),
+				},
+			)
+		}
+		builder.addDistributedTopology(
+			billing, billing.IndexedCommit, "README.md",
+			map[string][]byte{"README.md": []byte("# Billing")},
+		)
+		return builder.snapshot("synthetic-fleet")
+	}
+
+	snapshot := build(true)
+	components := make(map[string]SystemComponent)
+	for _, component := range snapshot.Components {
+		components[component.Name] = component
+		if strings.Contains(component.Name, "${") {
+			t.Fatalf("placeholder became a component name: %+v", component)
+		}
+	}
+	for _, name := range []string{
+		"orders-service", "billing-service", "example-corp.net",
+		"vendor-example.com", "tax-service",
+	} {
+		if components[name].ID == "" {
+			t.Fatalf("missing component %q: %+v", name, snapshot.Components)
+		}
+	}
+	if len(snapshot.Components) != 5 {
+		t.Fatalf("components = %+v, want exactly five resolved/candidate components", snapshot.Components)
+	}
+	for _, forbidden := range []string{"fraud", "api", "app", "deploy-config"} {
+		if components[forbidden].ID != "" {
+			t.Fatalf("forbidden component %q exists: %+v", forbidden, components[forbidden])
+		}
+	}
+	if !components["tax-service"].Candidate || !components["tax-service"].External {
+		t.Fatalf("tax-service must be an internal-shaped unconfirmed candidate: %+v", components["tax-service"])
+	}
+
+	byVariable := make(map[string]SystemConnection)
+	for _, connection := range snapshot.Connections {
+		if connection.EnvironmentVariable != "" {
+			byVariable[connection.EnvironmentVariable] = connection
+		}
+	}
+	billingEdge := byVariable["BILLING_SERVICE_URL"]
+	if componentByID(snapshot.Components, billingEdge.Target).Name != "billing-service" ||
+		billingEdge.ResolutionTier != "map_key_registry" ||
+		billingEdge.Confidence != "high" || len(billingEdge.Evidence) != 2 {
+		t.Fatalf("billing edge = %+v", billingEdge)
+	}
+	fraudEdge := byVariable["FRAUD_SERVICE_URL"]
+	if componentByID(snapshot.Components, fraudEdge.Target).Name != "example-corp.net" ||
+		fraudEdge.Confidence != "medium" || len(fraudEdge.Evidence) != 2 {
+		t.Fatalf("fraud edge = %+v", fraudEdge)
+	}
+	taxEdge := byVariable["TAX_API_URL"]
+	if componentByID(snapshot.Components, taxEdge.Target).Name != "tax-service" ||
+		taxEdge.ResolutionTier != "in_file_default" ||
+		taxEdge.Confidence != "medium" || len(taxEdge.Evidence) != 1 {
+		t.Fatalf("tax edge = %+v", taxEdge)
+	}
+	vendorEdges := 0
+	for _, connection := range snapshot.Connections {
+		if componentByID(snapshot.Components, connection.Target).Name == "vendor-example.com" {
+			vendorEdges++
+			if connection.Confidence != "high" {
+				t.Fatalf("vendor edge confidence = %+v", connection)
+			}
+		}
+	}
+	if vendorEdges != 1 {
+		t.Fatalf("vendor edges = %d, connections=%+v", vendorEdges, snapshot.Connections)
+	}
+	if len(snapshot.UnresolvedTopology) != 1 {
+		t.Fatalf("unresolved = %+v, want one secret indirection", snapshot.UnresolvedTopology)
+	}
+	unresolved := snapshot.UnresolvedTopology[0]
+	if unresolved.Variable != "ENRICHMENT_URL" ||
+		unresolved.Reason != "secret-indirection" ||
+		len(unresolved.Evidence) != 2 {
+		t.Fatalf("enrichment unresolved = %+v", unresolved)
+	}
+
+	downgraded := build(false)
+	downgradedBilling, found := placeholderConnection(
+		downgraded.Connections, "BILLING_SERVICE_URL",
+	)
+	if !found || downgradedBilling.ResolutionTier != "map_key_registry" ||
+		downgradedBilling.Confidence != "high" ||
+		len(downgradedBilling.Evidence) != 1 {
+		t.Fatalf("registry-backed downgrade = %+v", downgradedBilling)
+	}
+	var fraudUnresolved UnresolvedTopologyConnection
+	for _, candidate := range downgraded.UnresolvedTopology {
+		if candidate.Variable == "FRAUD_SERVICE_URL" {
+			fraudUnresolved = candidate
+		}
+	}
+	if fraudUnresolved.Candidate != "fraud-service" ||
+		fraudUnresolved.Reason != "no-indexed-assignment" ||
+		len(fraudUnresolved.Evidence) != 1 {
+		t.Fatalf("fraud downgrade = %+v", fraudUnresolved)
 	}
 }
 

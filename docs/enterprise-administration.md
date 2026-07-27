@@ -40,10 +40,11 @@ read.
 
 `knowledge-maintainer` adds AI chat and Wiki generation.
 
-`administrator` adds cross-author conversation access, repository refresh and
-acquisition, security configuration, direct and group role management, audit
+`administrator` adds repository refresh and acquisition, security
+configuration, direct and group role management, audit
 search/export/retention, and destructive administration of RepoKarta-owned
-data.
+data. Conversation transcripts remain strictly owner-only; administrator
+status does not provide a bypass.
 
 Loopback-local mode always resolves its single `local:admin` identity as
 administrator, opens `/admin` without separate bootstrap credentials, and does
@@ -75,6 +76,11 @@ PUT    /api/admin/audit/retention
 ```
 
 ## Audit evidence
+
+Wiki-run initiation and every administrative mutation are recorded with the
+stable authenticated principal ID and provider from the request context.
+Conversation authorization failures are attributed the same way, without
+exposing transcript content in audit metadata.
 
 Audit events contain actor, action, target, outcome, authentication provider,
 request correlation ID, timestamp, and a small metadata object. Metadata keys

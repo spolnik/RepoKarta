@@ -31,7 +31,7 @@ func TestRolesPermissionsAndRanking(t *testing.T) {
 	}) {
 		t.Fatalf("reader permissions = %#v", got)
 	}
-	if len(Permissions(RoleAdmin)) != 11 {
+	if len(Permissions(RoleAdmin)) != 10 {
 		t.Fatalf("administrator permissions = %#v", Permissions(RoleAdmin))
 	}
 }

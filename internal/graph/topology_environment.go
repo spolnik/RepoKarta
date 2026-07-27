@@ -389,6 +389,63 @@ func (b *builder) resolveTopologyPlaceholders() {
 }
 
 func (b *builder) resolveTopologyPlaceholder(placeholder TopologyPlaceholder) {
+	assignments := b.topRankedEnvironmentAssignments(placeholder.Variable)
+	if placeholder.MapKeyCandidate != "" {
+		if targetID, ok := b.knownServiceTarget(
+			placeholder.MapKeyCandidate, placeholder.Source,
+		); ok {
+			evidence := []Evidence{placeholder.ConsumptionEvidence}
+			transport := "http"
+			groups := make(map[string][]resolvedEnvironmentTarget)
+			for _, assignment := range assignments {
+				if assignment.Indirect {
+					continue
+				}
+				if target, resolved := b.resolvedEnvironmentTarget(placeholder, assignment); resolved {
+					groups[target.target] = append(groups[target.target], target)
+				}
+			}
+			divergent := len(groups) > 1
+			registryEnvironment := ""
+			if corroborating := groups[targetID]; len(corroborating) > 0 {
+				transport = corroborating[0].transport
+				evidence = appendUniqueEvidence(evidence, corroborating[0].assignment.Evidence)
+				if divergent {
+					registryEnvironment = corroborating[0].assignment.Environment
+				}
+			} else if len(groups) > 0 {
+				divergent = true
+			}
+			b.addSystemConnection(SystemConnection{
+				Source: placeholder.Source, Target: targetID,
+				Protocol: placeholder.Protocol, Interaction: placeholder.Interaction,
+				Transport: transport, Confidence: "high", EvidenceOrigin: "static",
+				TargetResolved: true, EnvironmentVariable: placeholder.Variable,
+				ResolutionTier: "map_key_registry", Environment: registryEnvironment,
+				ResolutionDivergent: divergent, Evidence: evidence,
+			})
+			otherTargets := make([]string, 0, len(groups))
+			for assignmentTarget := range groups {
+				if assignmentTarget != targetID {
+					otherTargets = append(otherTargets, assignmentTarget)
+				}
+			}
+			sort.Strings(otherTargets)
+			for _, assignmentTarget := range otherTargets {
+				candidates := groups[assignmentTarget]
+				environment := ""
+				if divergent {
+					environment = candidates[0].assignment.Environment
+				}
+				b.addResolvedPlaceholderConnection(
+					placeholder, candidates[0], "cross_repository_assignment",
+					divergent, environment,
+				)
+			}
+			return
+		}
+	}
+
 	if placeholder.Default != "" && !isIndirectEnvironmentValue(placeholder.Default) {
 		assignment := EnvironmentAssignment{
 			Variable: placeholder.Variable,
@@ -405,25 +462,13 @@ func (b *builder) resolveTopologyPlaceholder(placeholder TopologyPlaceholder) {
 		}
 	}
 
-	assignments := make([]EnvironmentAssignment, 0)
-	maximumRank := 0
-	for _, assignment := range b.environmentAssignments {
-		if assignment.Variable != placeholder.Variable {
-			continue
-		}
-		if assignment.Rank > maximumRank {
-			maximumRank = assignment.Rank
-			assignments = assignments[:0]
-		}
-		if assignment.Rank == maximumRank {
-			assignments = append(assignments, assignment)
-		}
-	}
 	if len(assignments) > 0 {
 		groups := make(map[string][]resolvedEnvironmentTarget)
 		indirect := false
+		unresolvedEvidence := make([]Evidence, 0, len(assignments))
 		for _, assignment := range assignments {
 			indirect = indirect || assignment.Indirect
+			unresolvedEvidence = appendUniqueEvidence(unresolvedEvidence, assignment.Evidence)
 			if assignment.Indirect {
 				continue
 			}
@@ -465,11 +510,11 @@ func (b *builder) resolveTopologyPlaceholder(placeholder TopologyPlaceholder) {
 			}
 			return
 		}
-		reason := "assignment_not_a_literal_target"
+		reason := "assignment-not-a-literal-target"
 		if indirect {
-			reason = "secret_or_vault_indirection"
+			reason = "secret-indirection"
 		}
-		b.addUnresolvedPlaceholderConnection(placeholder, reason)
+		b.addUnresolvedPlaceholderConnection(placeholder, reason, unresolvedEvidence...)
 		return
 	}
 
@@ -477,7 +522,7 @@ func (b *builder) resolveTopologyPlaceholder(placeholder TopologyPlaceholder) {
 		nameShapeServiceCandidate(placeholder.Variable), placeholder.Source,
 	); ok {
 		if b.excludedEnvironmentVariables[placeholder.Variable] {
-			b.addUnresolvedPlaceholderConnection(placeholder, "only_excluded_assignments")
+			b.addUnresolvedPlaceholderConnection(placeholder, "only-excluded-assignments")
 			return
 		}
 		b.addSystemConnection(SystemConnection{
@@ -491,10 +536,37 @@ func (b *builder) resolveTopologyPlaceholder(placeholder TopologyPlaceholder) {
 		return
 	}
 	if b.excludedEnvironmentVariables[placeholder.Variable] {
-		b.addUnresolvedPlaceholderConnection(placeholder, "only_excluded_assignments")
+		b.addUnresolvedPlaceholderConnection(placeholder, "only-excluded-assignments")
 		return
 	}
-	b.addUnresolvedPlaceholderConnection(placeholder, "no_indexed_assignment")
+	b.addUnresolvedPlaceholderConnection(placeholder, "no-indexed-assignment")
+}
+
+func (b *builder) topRankedEnvironmentAssignments(variable string) []EnvironmentAssignment {
+	assignments := make([]EnvironmentAssignment, 0)
+	maximumRank := 0
+	for _, assignment := range b.environmentAssignments {
+		if assignment.Variable != variable {
+			continue
+		}
+		if assignment.Rank > maximumRank {
+			maximumRank = assignment.Rank
+			assignments = assignments[:0]
+		}
+		if assignment.Rank == maximumRank {
+			assignments = append(assignments, assignment)
+		}
+	}
+	slices.SortFunc(assignments, func(left, right EnvironmentAssignment) int {
+		if left.Evidence.RepositoryID != right.Evidence.RepositoryID {
+			return int(left.Evidence.RepositoryID - right.Evidence.RepositoryID)
+		}
+		if compared := strings.Compare(left.Evidence.Path, right.Evidence.Path); compared != 0 {
+			return compared
+		}
+		return left.Evidence.Line - right.Evidence.Line
+	})
+	return assignments
 }
 
 func sortedEnvironmentVariables(values map[string]bool) []string {
@@ -526,9 +598,11 @@ func (b *builder) resolvedEnvironmentTarget(
 	if name == "" {
 		return resolvedEnvironmentTarget{}, false
 	}
-	targetID := b.externalSystemComponent(
+	candidate := !strings.Contains(host, ".") &&
+		!genericExternalHostLabels[normalizeServiceName(host)]
+	targetID := b.externalSystemComponentWithCandidate(
 		"service", name, strings.ToUpper(transport),
-		[]string{name, host, normalizeServiceName(host)},
+		[]string{name, host, normalizeServiceName(host)}, candidate,
 	)
 	return resolvedEnvironmentTarget{
 		target: targetID, transport: transport, assignment: assignment,
@@ -603,10 +677,17 @@ func (b *builder) addResolvedPlaceholderConnection(
 	environment string,
 ) {
 	confidence := "medium"
-	if tier == "in_file_default" ||
+	if (tier == "in_file_default" && target.targetResolved) ||
 		(tier == "cross_repository_assignment" &&
-			target.assignment.Rank == environmentAssignmentInfrastructure) {
+			target.assignment.Rank == environmentAssignmentInfrastructure &&
+			target.targetResolved) {
 		confidence = "high"
+	}
+	evidence := []Evidence{placeholder.ConsumptionEvidence}
+	if target.assignment.Evidence.Path != placeholder.ConsumptionEvidence.Path ||
+		target.assignment.Evidence.Line != placeholder.ConsumptionEvidence.Line ||
+		target.assignment.Evidence.RepositoryID != placeholder.ConsumptionEvidence.RepositoryID {
+		evidence = appendUniqueEvidence(evidence, target.assignment.Evidence)
 	}
 	b.addSystemConnection(SystemConnection{
 		Source: placeholder.Source, Target: target.target,
@@ -615,27 +696,36 @@ func (b *builder) addResolvedPlaceholderConnection(
 		TargetResolved:      target.targetResolved,
 		EnvironmentVariable: placeholder.Variable, ResolutionTier: tier,
 		Environment: environment, ResolutionDivergent: divergent,
-		Evidence: []Evidence{
-			placeholder.ConsumptionEvidence,
-			target.assignment.Evidence,
-		},
+		Evidence: evidence,
 	})
 }
 
 func (b *builder) addUnresolvedPlaceholderConnection(
 	placeholder TopologyPlaceholder,
 	reason string,
+	additionalEvidence ...Evidence,
 ) {
-	name := "${" + placeholder.Variable + "}"
-	targetID := b.externalSystemComponent(
-		"service", name, "Environment", []string{name, placeholder.Variable},
+	evidence := appendUniqueEvidence(
+		[]Evidence{placeholder.ConsumptionEvidence},
+		additionalEvidence...,
 	)
-	b.addSystemConnection(SystemConnection{
-		Source: placeholder.Source, Target: targetID,
-		Protocol: placeholder.Protocol, Interaction: placeholder.Interaction,
-		Transport: "http", Confidence: "low", EvidenceOrigin: "static",
-		EnvironmentVariable: placeholder.Variable, ResolutionTier: "unresolved",
-		UnresolvedReason: reason,
-		Evidence:         []Evidence{placeholder.ConsumptionEvidence},
-	})
+	unresolved := UnresolvedTopologyConnection{
+		ID: normalizeID(strings.Join([]string{
+			"unresolved", placeholder.Source, placeholder.Variable,
+			placeholder.MapKeyCandidate,
+		}, ":")),
+		Source: placeholder.Source, Variable: placeholder.Variable,
+		Candidate: placeholder.MapKeyCandidate,
+		Protocol:  placeholder.Protocol, Interaction: placeholder.Interaction,
+		Reason: reason, Evidence: evidence,
+	}
+	for index, existing := range b.unresolvedTopology {
+		if existing.ID != unresolved.ID {
+			continue
+		}
+		existing.Evidence = appendUniqueEvidence(existing.Evidence, evidence...)
+		b.unresolvedTopology[index] = existing
+		return
+	}
+	b.unresolvedTopology = append(b.unresolvedTopology, unresolved)
 }

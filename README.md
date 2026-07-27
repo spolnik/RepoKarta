@@ -249,7 +249,9 @@ For clients that launch a stdio adapter:
 The tools cover repository discovery, text and structural AST search, symbols,
 references, files, trees, Git history, diffs, maps, dependencies, Wiki pages,
 insights, and named contexts. They use the same permission and completeness
-rules as the browser.
+rules as the browser. Every repository-aware MCP tool accepts either
+`repository_id` or an exact `repository` name; ambiguous names fail with the
+matching IDs.
 
 ### JSON API
 
@@ -285,6 +287,10 @@ team deployment, RepoKarta also supports:
 - SCIM 2.0 provisioning and deprovisioning;
 - redacted audit evidence and bounded exports; and
 - administrator-approved GitHub, GitLab, and local repository acquisition.
+
+Conversation transcripts are owner-only on shared instances, including for
+administrators. Wiki generation and administrative mutations retain the
+authenticated principal in redacted audit evidence.
 
 A shared deployment needs a trusted HTTPS reverse proxy, protected secret
 files, explicit repository grants, backups, and post-deploy authorization

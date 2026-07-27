@@ -134,34 +134,51 @@ type OSVEvent struct {
 // Reachability is reserved as an optional extension point; the current
 // deterministic pipeline never claims import or call reachability.
 type Finding struct {
-	ID                 string                 `json:"id"`
-	AdvisoryID         string                 `json:"advisory_id"`
-	Aliases            []string               `json:"aliases,omitempty"`
-	Summary            string                 `json:"summary,omitempty"`
-	Severity           string                 `json:"severity"`
-	CVSS               []OSVSeverity          `json:"cvss,omitempty"`
-	AffectedRange      string                 `json:"affected_range,omitempty"`
-	FixedVersion       string                 `json:"fixed_version,omitempty"`
-	LatestStable       string                 `json:"latest_stable,omitempty"`
-	Ecosystem          string                 `json:"ecosystem"`
-	Package            string                 `json:"package"`
-	Version            string                 `json:"version"`
-	MatchBasis         string                 `json:"match_basis"`
-	MatchConfidence    string                 `json:"match_confidence"`
-	RepositoryID       int64                  `json:"repository_id"`
-	Repository         string                 `json:"repository"`
-	Revision           string                 `json:"revision"`
-	ManifestKind       string                 `json:"manifest_kind"`
-	ManifestPath       string                 `json:"manifest_path"`
-	Resolution         string                 `json:"resolution"`
-	ResolutionSource   string                 `json:"resolution_source,omitempty"`
-	Usage              string                 `json:"usage"`
-	Relationship       string                 `json:"relationship"`
-	DeclaredScope      string                 `json:"declared_scope,omitempty"`
-	ManifestEvidence   graph.Evidence         `json:"manifest_evidence"`
-	AdvisoryEvidence   AdvisoryEvidence       `json:"advisory_evidence"`
-	Reachability       *FindingReachability   `json:"reachability,omitempty"`
-	AdditionalMetadata map[string]interface{} `json:"metadata,omitempty"`
+	ID                      string                 `json:"id"`
+	AdvisoryID              string                 `json:"advisory_id"`
+	Aliases                 []string               `json:"aliases,omitempty"`
+	Summary                 string                 `json:"summary,omitempty"`
+	Severity                string                 `json:"severity"`
+	CVSS                    []OSVSeverity          `json:"cvss,omitempty"`
+	AffectedRange           string                 `json:"affected_range,omitempty"`
+	FixedVersion            string                 `json:"fixed_version,omitempty"`
+	LatestStable            string                 `json:"latest_stable,omitempty"`
+	Ecosystem               string                 `json:"ecosystem"`
+	Package                 string                 `json:"package"`
+	Version                 string                 `json:"version"`
+	MatchBasis              string                 `json:"match_basis"`
+	MatchConfidence         string                 `json:"match_confidence"`
+	RepositoryID            int64                  `json:"repository_id"`
+	Repository              string                 `json:"repository"`
+	Revision                string                 `json:"revision"`
+	ManifestKind            string                 `json:"manifest_kind"`
+	ManifestPath            string                 `json:"manifest_path"`
+	Resolution              string                 `json:"resolution"`
+	ResolutionSource        string                 `json:"resolution_source,omitempty"`
+	Usage                   string                 `json:"usage"`
+	Relationship            string                 `json:"relationship"`
+	DeclaredScope           string                 `json:"declared_scope,omitempty"`
+	ManifestEvidence        graph.Evidence         `json:"manifest_evidence"`
+	ManifestOccurrenceCount int                    `json:"manifest_occurrence_count"`
+	Occurrences             []FindingOccurrence    `json:"occurrences"`
+	AdvisoryEvidence        AdvisoryEvidence       `json:"advisory_evidence"`
+	Reachability            *FindingReachability   `json:"reachability,omitempty"`
+	AdditionalMetadata      map[string]interface{} `json:"metadata,omitempty"`
+}
+
+// FindingOccurrence is one commit-pinned manifest declaration represented by
+// a de-duplicated advisory/repository/package/version finding.
+type FindingOccurrence struct {
+	ManifestKind     string         `json:"manifest_kind"`
+	ManifestPath     string         `json:"manifest_path"`
+	Resolution       string         `json:"resolution"`
+	ResolutionSource string         `json:"resolution_source,omitempty"`
+	MatchBasis       string         `json:"match_basis"`
+	MatchConfidence  string         `json:"match_confidence"`
+	Usage            string         `json:"usage"`
+	Relationship     string         `json:"relationship"`
+	DeclaredScope    string         `json:"declared_scope,omitempty"`
+	Evidence         graph.Evidence `json:"evidence"`
 }
 
 type FindingReachability struct {
@@ -238,28 +255,29 @@ type DependencyCheckGap struct {
 // FindingResponse distinguishes a checked zero from unavailable or partial
 // coverage and keeps every honesty count visible to API, UI, and MCP adapters.
 type FindingResponse struct {
-	CheckState                 string                 `json:"check_state"`
-	CheckMessage               string                 `json:"check_message,omitempty"`
-	AdvisoryOnly               bool                   `json:"advisory_only"`
-	Snapshot                   AdvisorySnapshotStatus `json:"snapshot"`
-	DeclarationCount           int                    `json:"declaration_count"`
-	CheckedDeclarationCount    int                    `json:"checked_declaration_count"`
-	SkippedNoVersionCount      int                    `json:"skipped_no_version_count"`
-	SkippedInvalidVersionCount int                    `json:"skipped_invalid_version_count"`
-	NotInSnapshotCount         int                    `json:"not_in_snapshot_count"`
-	UncoveredEcosystems        []AdvisoryGap          `json:"uncovered_ecosystems,omitempty"`
-	SkippedDeclarations        []DependencyCheckGap   `json:"skipped_declarations,omitempty"`
-	TotalFindingCount          int                    `json:"total_finding_count"`
-	FindingCount               int                    `json:"finding_count"`
-	ReturnedCount              int                    `json:"returned_count"`
-	Findings                   []Finding              `json:"findings"`
-	Facets                     FindingFacets          `json:"facets"`
-	Headlines                  []FindingHeadline      `json:"headlines"`
-	Groups                     []FindingGroup         `json:"groups"`
-	Offset                     int                    `json:"offset"`
-	Limit                      int                    `json:"limit"`
-	HasMore                    bool                   `json:"has_more"`
-	Truncated                  bool                   `json:"truncated"`
+	CheckState                   string                 `json:"check_state"`
+	CheckMessage                 string                 `json:"check_message,omitempty"`
+	AdvisoryOnly                 bool                   `json:"advisory_only"`
+	Snapshot                     AdvisorySnapshotStatus `json:"snapshot"`
+	DeclarationCount             int                    `json:"declaration_count"`
+	CheckedDeclarationCount      int                    `json:"checked_declaration_count"`
+	SkippedNoVersionCount        int                    `json:"skipped_no_version_count"`
+	SkippedInvalidVersionCount   int                    `json:"skipped_invalid_version_count"`
+	NotInSnapshotCount           int                    `json:"not_in_snapshot_count"`
+	UncoveredEcosystems          []AdvisoryGap          `json:"uncovered_ecosystems,omitempty"`
+	SkippedDeclarations          []DependencyCheckGap   `json:"skipped_declarations,omitempty"`
+	TotalFindingCount            int                    `json:"total_finding_count"`
+	TotalManifestOccurrenceCount int                    `json:"total_manifest_occurrence_count"`
+	FindingCount                 int                    `json:"finding_count"`
+	ReturnedCount                int                    `json:"returned_count"`
+	Findings                     []Finding              `json:"findings"`
+	Facets                       FindingFacets          `json:"facets"`
+	Headlines                    []FindingHeadline      `json:"headlines"`
+	Groups                       []FindingGroup         `json:"groups"`
+	Offset                       int                    `json:"offset"`
+	Limit                        int                    `json:"limit"`
+	HasMore                      bool                   `json:"has_more"`
+	Truncated                    bool                   `json:"truncated"`
 }
 
 // AdvisoryRefreshProgress is a race-free, bounded background refresh snapshot.
@@ -474,6 +492,8 @@ func buildFindings(
 		response.CheckMessage = "Some declarations could not be checked; inspect the explicit coverage gaps."
 	}
 
+	response.TotalManifestOccurrenceCount = len(allFindings)
+	allFindings = deduplicateFindings(allFindings)
 	sortFindings(allFindings)
 	response.TotalFindingCount = len(allFindings)
 	response.Facets = findingFacets(allFindings)
@@ -734,11 +754,97 @@ func numericCVSS(vector string) (float64, bool) {
 	return math.Ceil(base*10) / 10, true
 }
 
+func deduplicateFindings(findings []Finding) []Finding {
+	grouped := make(map[string]Finding)
+	for _, finding := range findings {
+		key := strings.Join([]string{
+			finding.AdvisoryID,
+			strconv.FormatInt(finding.RepositoryID, 10),
+			strings.ToLower(finding.Package),
+			finding.Version,
+		}, "\x00")
+		occurrence := findingOccurrence(finding)
+		existing, ok := grouped[key]
+		if !ok {
+			finding.Occurrences = []FindingOccurrence{occurrence}
+			finding.ManifestOccurrenceCount = 1
+			finding.ID = findingID(finding)
+			grouped[key] = finding
+			continue
+		}
+		duplicate := false
+		for _, current := range existing.Occurrences {
+			if current.ManifestPath == occurrence.ManifestPath &&
+				current.Evidence.Line == occurrence.Evidence.Line &&
+				current.Usage == occurrence.Usage &&
+				current.Relationship == occurrence.Relationship {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			existing.Occurrences = append(existing.Occurrences, occurrence)
+		}
+		if findingOccurrenceLess(occurrence, findingOccurrence(existing)) {
+			existing.ManifestKind = finding.ManifestKind
+			existing.ManifestPath = finding.ManifestPath
+			existing.Resolution = finding.Resolution
+			existing.ResolutionSource = finding.ResolutionSource
+			existing.MatchBasis = finding.MatchBasis
+			existing.MatchConfidence = finding.MatchConfidence
+			existing.Usage = finding.Usage
+			existing.Relationship = finding.Relationship
+			existing.DeclaredScope = finding.DeclaredScope
+			existing.ManifestEvidence = finding.ManifestEvidence
+		}
+		existing.ManifestOccurrenceCount = len(existing.Occurrences)
+		grouped[key] = existing
+	}
+	output := make([]Finding, 0, len(grouped))
+	for _, finding := range grouped {
+		slices.SortFunc(finding.Occurrences, func(left, right FindingOccurrence) int {
+			if findingOccurrenceLess(left, right) {
+				return -1
+			}
+			if findingOccurrenceLess(right, left) {
+				return 1
+			}
+			return 0
+		})
+		finding.ManifestOccurrenceCount = len(finding.Occurrences)
+		output = append(output, finding)
+	}
+	return output
+}
+
+func findingOccurrence(finding Finding) FindingOccurrence {
+	return FindingOccurrence{
+		ManifestKind: finding.ManifestKind, ManifestPath: finding.ManifestPath,
+		Resolution: finding.Resolution, ResolutionSource: finding.ResolutionSource,
+		MatchBasis: finding.MatchBasis, MatchConfidence: finding.MatchConfidence,
+		Usage: finding.Usage, Relationship: finding.Relationship,
+		DeclaredScope: finding.DeclaredScope, Evidence: finding.ManifestEvidence,
+	}
+}
+
+func findingOccurrenceLess(left, right FindingOccurrence) bool {
+	for _, comparison := range []int{
+		usageRank(left.Usage) - usageRank(right.Usage),
+		strings.Compare(left.ManifestPath, right.ManifestPath),
+		left.Evidence.Line - right.Evidence.Line,
+		strings.Compare(left.Relationship, right.Relationship),
+	} {
+		if comparison != 0 {
+			return comparison < 0
+		}
+	}
+	return false
+}
+
 func findingID(finding Finding) string {
 	value := strings.Join([]string{
-		strconv.FormatInt(finding.RepositoryID, 10), finding.Revision,
-		finding.ManifestPath, finding.Ecosystem, finding.Package, finding.Version,
-		finding.MatchBasis, finding.AdvisoryID,
+		finding.AdvisoryID, strconv.FormatInt(finding.RepositoryID, 10),
+		finding.Package, finding.Version,
 	}, "\x00")
 	digest := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(digest[:16])
@@ -807,17 +913,34 @@ func filterFindings(findings []Finding, options AdvisoryOptions) []Finding {
 		if options.Severity != "" && !strings.EqualFold(finding.Severity, options.Severity) {
 			continue
 		}
-		if options.Usage != "" && !strings.EqualFold(finding.Usage, options.Usage) {
-			continue
+		if options.Usage != "" {
+			matched := false
+			for _, occurrence := range finding.Occurrences {
+				if strings.EqualFold(occurrence.Usage, options.Usage) {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				continue
+			}
 		}
 		if options.Package != "" && !strings.Contains(
 			strings.ToLower(finding.Package), strings.ToLower(options.Package),
 		) {
 			continue
 		}
+		occurrenceText := make([]string, 0, len(finding.Occurrences))
+		for _, occurrence := range finding.Occurrences {
+			occurrenceText = append(occurrenceText, strings.Join([]string{
+				occurrence.ManifestPath, occurrence.Usage, occurrence.Relationship,
+				occurrence.DeclaredScope,
+			}, " "))
+		}
 		if query != "" && !strings.Contains(strings.ToLower(strings.Join([]string{
 			finding.AdvisoryID, strings.Join(finding.Aliases, " "), finding.Summary,
 			finding.Package, finding.Repository, finding.ManifestPath, finding.Version,
+			strings.Join(occurrenceText, " "),
 		}, "\n")), query) {
 			continue
 		}

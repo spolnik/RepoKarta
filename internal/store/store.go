@@ -1283,16 +1283,11 @@ SELECT
     c.created_at, c.updated_at, c.input_tokens, c.output_tokens,
     COUNT(m.id)
 FROM conversations c
-LEFT JOIN conversation_messages m ON m.conversation_id = c.id`
-	var arguments []any
-	if !filter.All {
-		query += "\nWHERE c.author_id = ?"
-		arguments = append(arguments, strings.TrimSpace(filter.AuthorID))
-	}
-	query += `
+LEFT JOIN conversation_messages m ON m.conversation_id = c.id
+WHERE c.author_id = ?
 GROUP BY c.id
 ORDER BY c.updated_at DESC, c.id DESC`
-	rows, err := s.db.QueryContext(ctx, query, arguments...)
+	rows, err := s.db.QueryContext(ctx, query, strings.TrimSpace(filter.AuthorID))
 	if err != nil {
 		return nil, err
 	}

@@ -34,7 +34,7 @@ import (
 )
 
 const (
-	snapshotVersion       = 16
+	snapshotVersion       = 17
 	maximumFiles          = 20_000
 	maximumSourceFiles    = 5_000
 	maximumSourceFileSize = 1 << 20
@@ -161,6 +161,7 @@ type SystemComponent struct {
 	Aliases      []string   `json:"aliases,omitempty"`
 	Capabilities []string   `json:"capabilities,omitempty"`
 	External     bool       `json:"external"`
+	Candidate    bool       `json:"candidate,omitempty"`
 	Evidence     []Evidence `json:"evidence,omitempty"`
 }
 
@@ -192,9 +193,24 @@ type TopologyPlaceholder struct {
 	Source              string   `json:"source"`
 	Variable            string   `json:"variable"`
 	Default             string   `json:"default,omitempty"`
+	MapKeyCandidate     string   `json:"map_key_candidate,omitempty"`
 	Protocol            string   `json:"protocol"`
 	Interaction         string   `json:"interaction"`
 	ConsumptionEvidence Evidence `json:"consumption_evidence"`
+}
+
+// UnresolvedTopologyConnection preserves a configuration consumption site
+// whose target cannot yet be made into a truthful component. Placeholder text
+// and secret references stay here instead of becoming graph node names.
+type UnresolvedTopologyConnection struct {
+	ID          string     `json:"id"`
+	Source      string     `json:"source"`
+	Variable    string     `json:"variable"`
+	Candidate   string     `json:"candidate,omitempty"`
+	Protocol    string     `json:"protocol"`
+	Interaction string     `json:"interaction"`
+	Reason      string     `json:"reason"`
+	Evidence    []Evidence `json:"evidence"`
 }
 
 // EnvironmentAssignment is an exact configuration-key assignment found in a
@@ -252,24 +268,25 @@ type StructuralDocument struct {
 
 // Snapshot is an immutable map derived from one or more catalogue revisions.
 type Snapshot struct {
-	Version                      int                     `json:"version"`
-	ID                           string                  `json:"id"`
-	GeneratedAt                  time.Time               `json:"generated_at"`
-	Repositories                 []Repository            `json:"repositories"`
-	Languages                    []Language              `json:"languages"`
-	Manifests                    []Manifest              `json:"manifests"`
-	Nodes                        []Node                  `json:"nodes"`
-	Edges                        []Edge                  `json:"edges"`
-	Components                   []SystemComponent       `json:"components,omitempty"`
-	Connections                  []SystemConnection      `json:"connections,omitempty"`
-	TopologyPlaceholders         []TopologyPlaceholder   `json:"topology_placeholders,omitempty"`
-	EnvironmentAssignments       []EnvironmentAssignment `json:"environment_assignments,omitempty"`
-	ExcludedEnvironmentVariables []string                `json:"excluded_environment_variables,omitempty"`
-	Structure                    []StructuralDocument    `json:"structure,omitempty"`
-	StructureTruncated           bool                    `json:"structure_truncated"`
-	FileCount                    int                     `json:"file_count"`
-	Truncated                    bool                    `json:"truncated"`
-	Scope                        Scope                   `json:"scope"`
+	Version                      int                            `json:"version"`
+	ID                           string                         `json:"id"`
+	GeneratedAt                  time.Time                      `json:"generated_at"`
+	Repositories                 []Repository                   `json:"repositories"`
+	Languages                    []Language                     `json:"languages"`
+	Manifests                    []Manifest                     `json:"manifests"`
+	Nodes                        []Node                         `json:"nodes"`
+	Edges                        []Edge                         `json:"edges"`
+	Components                   []SystemComponent              `json:"components,omitempty"`
+	Connections                  []SystemConnection             `json:"connections,omitempty"`
+	TopologyPlaceholders         []TopologyPlaceholder          `json:"topology_placeholders,omitempty"`
+	UnresolvedTopology           []UnresolvedTopologyConnection `json:"unresolved_topology,omitempty"`
+	EnvironmentAssignments       []EnvironmentAssignment        `json:"environment_assignments,omitempty"`
+	ExcludedEnvironmentVariables []string                       `json:"excluded_environment_variables,omitempty"`
+	Structure                    []StructuralDocument           `json:"structure,omitempty"`
+	StructureTruncated           bool                           `json:"structure_truncated"`
+	FileCount                    int                            `json:"file_count"`
+	Truncated                    bool                           `json:"truncated"`
+	Scope                        Scope                          `json:"scope"`
 }
 
 // StructuralIndex is the compact, persisted syntax inventory consumed by
@@ -650,6 +667,9 @@ func (s *Service) ReadTopologySnapshot(
 	for _, connection := range merged.connections {
 		output.Connections = append(output.Connections, connection)
 	}
+	output.UnresolvedTopology = append(
+		[]UnresolvedTopologyConnection(nil), merged.unresolvedTopology...,
+	)
 	slices.SortFunc(output.Components, func(left, right SystemComponent) int {
 		if left.External != right.External {
 			if left.External {
@@ -660,6 +680,9 @@ func (s *Service) ReadTopologySnapshot(
 		return strings.Compare(strings.ToLower(left.Name), strings.ToLower(right.Name))
 	})
 	slices.SortFunc(output.Connections, func(left, right SystemConnection) int {
+		return strings.Compare(left.ID, right.ID)
+	})
+	slices.SortFunc(output.UnresolvedTopology, func(left, right UnresolvedTopologyConnection) int {
 		return strings.Compare(left.ID, right.ID)
 	})
 	output.Scope.OmittedRepositories = output.Scope.TotalRepositories - output.Scope.AnalyzedRepositories
@@ -996,6 +1019,7 @@ type builder struct {
 	structuralCallRelations      int
 	structuralBuildFacts         int
 	topologyPlaceholders         []TopologyPlaceholder
+	unresolvedTopology           []UnresolvedTopologyConnection
 	environmentAssignments       []EnvironmentAssignment
 	excludedEnvironmentVariables map[string]bool
 	structureTruncated           bool
@@ -1064,6 +1088,9 @@ func (b *builder) snapshot(signature string) Snapshot {
 	slices.SortFunc(connections, func(left, right SystemConnection) int {
 		return strings.Compare(left.ID, right.ID)
 	})
+	slices.SortFunc(b.unresolvedTopology, func(left, right UnresolvedTopologyConnection) int {
+		return strings.Compare(left.ID, right.ID)
+	})
 	slices.SortFunc(b.manifests, func(left, right Manifest) int {
 		if left.RepositoryID != right.RepositoryID {
 			return int(left.RepositoryID - right.RepositoryID)
@@ -1088,6 +1115,7 @@ func (b *builder) snapshot(signature string) Snapshot {
 		Components:                   components,
 		Connections:                  connections,
 		TopologyPlaceholders:         append([]TopologyPlaceholder(nil), b.topologyPlaceholders...),
+		UnresolvedTopology:           append([]UnresolvedTopologyConnection(nil), b.unresolvedTopology...),
 		EnvironmentAssignments:       append([]EnvironmentAssignment(nil), b.environmentAssignments...),
 		ExcludedEnvironmentVariables: sortedEnvironmentVariables(b.excludedEnvironmentVariables),
 		Structure:                    b.structure,

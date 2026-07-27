@@ -259,16 +259,17 @@
 
 {{define "dependency-topology-content"}}
 <div class="mt-6" data-topology-workspace data-topology-api="{{.APIURL}}">
-  <dl class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-9">
+  <dl class="grid gap-3 sm:grid-cols-2 lg:grid-cols-5 xl:grid-cols-10">
     <div class="topology-metric"><dt>Components</dt><dd>{{.Topology.Summary.ComponentCount}}</dd></div>
     <div class="topology-metric"><dt>Connections</dt><dd>{{.Topology.Summary.ConnectionCount}}</dd></div>
+    <div class="topology-metric topology-metric-confirmed"><dt>Resolved</dt><dd>{{.Topology.Summary.ResolvedCount}}</dd></div>
+    <div class="topology-metric"><dt>Candidates</dt><dd>{{.Topology.Summary.CandidateCount}}</dd></div>
+    <div class="topology-metric topology-metric-unresolved"><dt>Unresolved</dt><dd>{{.Topology.Summary.UnresolvedCount}}</dd></div>
     <div class="topology-metric topology-metric-confirmed"><dt>Confirmed</dt><dd>{{.Topology.Summary.ConfirmedCount}}</dd></div>
     <div class="topology-metric"><dt>Static only</dt><dd>{{.Topology.Summary.StaticOnlyCount}}</dd></div>
     <div class="topology-metric topology-metric-runtime"><dt>Runtime only</dt><dd>{{.Topology.Summary.RuntimeOnlyCount}}</dd></div>
     <div class="topology-metric"><dt>Services</dt><dd>{{.Topology.Summary.ServiceCount}}</dd></div>
     <div class="topology-metric"><dt>Resources</dt><dd>{{.Topology.Summary.ResourceCount}}</dd></div>
-    <div class="topology-metric topology-metric-unresolved"><dt>Unresolved peers</dt><dd>{{.Topology.Summary.UnresolvedCount}}</dd></div>
-    <div class="topology-metric topology-metric-unresolved"><dt>Unresolved placeholders</dt><dd>{{.Topology.Summary.UnresolvedPlaceholderCount}}</dd></div>
   </dl>
 
   {{if .Topology.Summary.UnresolvedPlaceholderCount}}
@@ -277,6 +278,19 @@
     environment-variable connection {{if eq .Topology.Summary.UnresolvedPlaceholderCount 1}}target remains{{else}}targets remain{{end}} unresolved.
     Index the fleet's deployment-configuration repositories to resolve committed Kubernetes, Helm, Terraform/CDK, and Compose assignments.
   </p>
+  <details class="mt-3 rounded-lg border border-white/[0.08] bg-white/[0.02] px-4 py-3">
+    <summary class="cursor-pointer text-sm font-semibold text-ink-strong">Review unresolved connection candidates</summary>
+    <ul class="mt-3 grid gap-3 text-sm text-ink-soft">
+      {{range .Topology.Unresolved}}
+      <li>
+        <strong class="text-ink-strong">{{.SourceName}} → {{if .Candidate}}{{.Candidate}}{{else}}{{.Variable}}{{end}}</strong>
+        <span class="ml-2 rounded-full border border-amber-300/20 px-2 py-1 text-xs text-amber-100">{{.Reason}}</span>
+        <span class="mt-1 block text-xs text-ink-faint">Variable {{.Variable}} · {{len .Evidence}} commit-pinned {{if eq (len .Evidence) 1}}citation{{else}}citations{{end}}</span>
+        {{range .Evidence}}<a class="mr-3 text-xs text-emerald-300 hover:text-emerald-200" href="{{.URL}}">{{.Repository}} · {{.Path}}:{{.Line}}</a>{{end}}
+      </li>
+      {{end}}
+    </ul>
+  </details>
   {{end}}
   {{if .Topology.BuildProgress.PendingRepositories}}
   <p class="mt-5 rounded-lg border border-sky-300/20 bg-sky-400/[0.06] px-4 py-3 text-sm text-sky-100" role="status">
