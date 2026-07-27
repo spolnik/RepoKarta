@@ -961,6 +961,23 @@ type testDependencyService struct {
 	force            bool
 }
 
+func (s *testDependencyService) Topology(
+	_ context.Context,
+	snapshot graph.Snapshot,
+	progress graph.ArtifactProgress,
+	options dependencies.TopologyOptions,
+) (dependencies.Topology, error) {
+	service := dependencies.NewService(context.Background(), nil, nil)
+	return service.Topology(context.Background(), snapshot, progress, options)
+}
+
+func (s *testDependencyService) ImportTopologyObservations(
+	_ context.Context,
+	_ dependencies.TopologyImportRequest,
+) (dependencies.TopologyImportResult, error) {
+	return dependencies.TopologyImportResult{}, nil
+}
+
 func (s *testDependencyService) Inventory(
 	_ context.Context,
 	_ graph.Snapshot,
@@ -1026,6 +1043,20 @@ func (s *testMapService) ReadDependencySnapshot(
 			State:                 "ready",
 			RequestedRepositories: 1,
 			ReadyRepositories:     1,
+		}
+	}
+	return s.snapshot, progress, nil
+}
+
+func (s *testMapService) ReadTopologySnapshot(
+	_ context.Context,
+	repositoryID int64,
+) (graph.Snapshot, graph.ArtifactProgress, error) {
+	s.repositoryID = repositoryID
+	progress := s.progress
+	if progress.State == "" {
+		progress = graph.ArtifactProgress{
+			State: "ready", RequestedRepositories: 1, ReadyRepositories: 1,
 		}
 	}
 	return s.snapshot, progress, nil
@@ -1108,10 +1139,11 @@ func TestMCPSetupPageProvidesCopyableReadOnlyConfiguration(t *testing.T) {
 		`resolve_effective_contexts`,
 		`find_references`,
 		`read_dependency_inventory`,
+		`read_system_topology`,
 		`read_dependency_findings`,
 		`list_deep_wiki_pages`,
 		`read_generated_document`,
-		`17 tools · no writes`,
+		`18 tools · no writes`,
 	} {
 		if !strings.Contains(response.Body.String(), expected) {
 			t.Fatalf("MCP setup page does not contain %q", expected)
@@ -1377,7 +1409,7 @@ func TestDependencyWorkspaceAndAPIExposeNormalizedDeclarations(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	pageRequest := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7331/dependencies?repository=4", nil)
+	pageRequest := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7331/dependencies?view=inventory&repository=4", nil)
 	pageResponse := httptest.NewRecorder()
 	server.server.Handler.ServeHTTP(pageResponse, pageRequest)
 	if pageResponse.Code != http.StatusOK || maps.repositoryID != 4 {
@@ -1385,7 +1417,7 @@ func TestDependencyWorkspaceAndAPIExposeNormalizedDeclarations(t *testing.T) {
 	}
 	for _, expected := range []string{
 		`aria-current="page">Dependencies`,
-		`Dependency management`,
+		`Package inventory`,
 		`marked`,
 		`^16.4.1`,
 		`production`,
@@ -1428,6 +1460,71 @@ func TestDependencyWorkspaceAndAPIExposeNormalizedDeclarations(t *testing.T) {
 	server.server.Handler.ServeHTTP(invalidResponse, invalidRequest)
 	if invalidResponse.Code != http.StatusBadRequest {
 		t.Fatalf("oversized dependency page status = %d, body = %s", invalidResponse.Code, invalidResponse.Body.String())
+	}
+}
+
+func TestDependencyTopologyIsDefaultAndExposesDirectedProtocolEvidence(t *testing.T) {
+	repository := catalog.Repository{ID: 4, Name: "checkout", IndexState: "ready"}
+	maps := &testMapService{snapshot: graph.Snapshot{
+		ID: "topology-snapshot",
+		Scope: graph.Scope{
+			Kind: "repository", Complete: true,
+			TotalRepositories: 1, AnalyzedRepositories: 1,
+		},
+		Components: []graph.SystemComponent{
+			{ID: "checkout", Name: "checkout", Kind: "service", RepositoryID: 4, Repository: "checkout"},
+			{ID: "orders", Name: "orders", Kind: "service", External: true},
+		},
+		Connections: []graph.SystemConnection{{
+			ID: "http-checkout-orders", Source: "checkout", Target: "orders",
+			Protocol: "http", Interaction: "calls", Transport: "https",
+			Confidence: "high", EvidenceOrigin: "static",
+			Evidence: []graph.Evidence{{
+				RepositoryID: 4, Repository: "checkout", Revision: strings.Repeat("a", 40),
+				Path: "internal/client.go", Line: 22,
+				URL: "http://127.0.0.1:7331/source/4#L22",
+			}},
+		}},
+	}}
+	registry := &testDependencyService{}
+	server, err := New(
+		Config{Address: "127.0.0.1:7331", Maps: maps, Dependencies: registry},
+		codeintel.New(
+			testStore{repositories: []catalog.Repository{repository}},
+			testSearcher{},
+			"http://127.0.0.1:7331",
+		),
+		testRefresher{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pageRequest := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7331/dependencies?repository=4", nil)
+	pageResponse := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(pageResponse, pageRequest)
+	if pageResponse.Code != http.StatusOK {
+		t.Fatalf("topology page status = %d, body = %s", pageResponse.Code, pageResponse.Body.String())
+	}
+	for _, expected := range []string{
+		`System topology`, `Who talks to what, and how`, `HTTP`, `MCP`,
+		`data-topology-workspace`, `/api/dependencies/topology?repository=4`,
+	} {
+		if !strings.Contains(pageResponse.Body.String(), expected) {
+			t.Fatalf("topology page does not contain %q", expected)
+		}
+	}
+	apiRequest := httptest.NewRequest(
+		http.MethodGet,
+		"http://127.0.0.1:7331/api/dependencies/topology?repository=4&protocol=http",
+		nil,
+	)
+	apiResponse := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(apiResponse, apiRequest)
+	if apiResponse.Code != http.StatusOK ||
+		!strings.Contains(apiResponse.Body.String(), `"protocol":"http"`) ||
+		!strings.Contains(apiResponse.Body.String(), `"source":"checkout"`) ||
+		!strings.Contains(apiResponse.Body.String(), `"target":"orders"`) {
+		t.Fatalf("topology API status = %d, body = %s", apiResponse.Code, apiResponse.Body.String())
 	}
 }
 
@@ -2718,7 +2815,7 @@ func TestHTTPBoundaryAndFormattingHelpers(t *testing.T) {
 	if dependencyURL("/dependencies", 7, options, 30) == "" {
 		t.Fatal("dependency URL is empty")
 	}
-	if data := buildMCPPageData("http://localhost/mcp", "secret-token-value", "repokarta", "http://localhost"); len(data.Tools) != 17 {
+	if data := buildMCPPageData("http://localhost/mcp", "secret-token-value", "repokarta", "http://localhost"); len(data.Tools) != 18 {
 		t.Fatalf("MCP page tools = %d", len(data.Tools))
 	}
 

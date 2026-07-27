@@ -99,6 +99,15 @@ func (f fakeArtifacts) DependencySnapshot(context.Context, int64) (graph.Snapsho
 	return f.snapshot, nil
 }
 
+func (f fakeArtifacts) TopologySnapshot(
+	context.Context,
+	int64,
+) (graph.Snapshot, graph.ArtifactProgress, error) {
+	return f.snapshot, graph.ArtifactProgress{
+		State: "ready", RequestedRepositories: 1, ReadyRepositories: 1,
+	}, nil
+}
+
 func (f fakeArtifacts) GeneratedDocuments(context.Context, int64) (docs.Site, error) {
 	return f.site, nil
 }
@@ -115,6 +124,16 @@ type testInsightReader struct{}
 
 type testDependencyFindingReader struct {
 	response dependencies.FindingResponse
+	topology dependencies.Topology
+}
+
+func (reader testDependencyFindingReader) Topology(
+	context.Context,
+	graph.Snapshot,
+	graph.ArtifactProgress,
+	dependencies.TopologyOptions,
+) (dependencies.Topology, error) {
+	return reader.topology, nil
 }
 
 func (reader testDependencyFindingReader) Findings(
@@ -319,6 +338,21 @@ func TestMCPSearchReturnsPinnedCitation(t *testing.T) {
 					SnapshotVersion: "sha256:fixture",
 				},
 			}},
+		}, topology: dependencies.Topology{
+			SnapshotID: "topology-1",
+			Components: []dependencies.TopologyComponent{
+				{SystemComponent: graph.SystemComponent{ID: "checkout", Name: "checkout", Kind: "service"}},
+				{SystemComponent: graph.SystemComponent{ID: "orders", Name: "orders", Kind: "service"}},
+			},
+			Connections: []dependencies.TopologyConnection{{
+				ID: "checkout-orders", Source: "checkout", Target: "orders",
+				Protocol: "http", Interaction: "calls", State: "confirmed",
+				Evidence: []graph.Evidence{{
+					Repository: "RepoKarta", Revision: revision, Path: "internal/client.go",
+					Line: 12, URL: "http://ui/source/7?rev=" + revision + "&path=internal/client.go",
+				}},
+			}},
+			Summary: dependencies.TopologySummary{ComponentCount: 2, ConnectionCount: 1, ConfirmedCount: 1},
 		}},
 	}, intelligence, tracker)
 	server := httptest.NewServer(handler)
@@ -340,8 +374,8 @@ func TestMCPSearchReturnsPinnedCitation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tools.Tools) != 17 {
-		t.Fatalf("got %d tools, want 17", len(tools.Tools))
+	if len(tools.Tools) != 18 {
+		t.Fatalf("got %d tools, want 18", len(tools.Tools))
 	}
 	toolNames := make(map[string]bool, len(tools.Tools))
 	for _, tool := range tools.Tools {
@@ -360,6 +394,7 @@ func TestMCPSearchReturnsPinnedCitation(t *testing.T) {
 		"git_diff",
 		"read_repository_map",
 		"read_dependency_inventory",
+		"read_system_topology",
 		"read_dependency_findings",
 		"list_deep_wiki_pages",
 		"read_generated_document",
@@ -473,6 +508,27 @@ func TestMCPSearchReturnsPinnedCitation(t *testing.T) {
 		dependencyOutput.ServiceCallCount != 1 ||
 		!dependencyOutput.Scope.Complete {
 		t.Fatalf("dependency output = %+v", dependencyOutput)
+	}
+
+	result, err = session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "read_system_topology",
+		Arguments: map[string]any{"repository_id": 7, "protocol": "http"},
+	})
+	if err != nil || result.IsError {
+		t.Fatalf("system topology tool error: %v %#v", err, result.Content)
+	}
+	encoded, err = json.Marshal(result.StructuredContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var topologyOutput dependencies.Topology
+	if err := json.Unmarshal(encoded, &topologyOutput); err != nil {
+		t.Fatal(err)
+	}
+	if topologyOutput.SnapshotID != "topology-1" ||
+		topologyOutput.Summary.ConnectionCount != 1 ||
+		topologyOutput.Connections[0].Protocol != "http" {
+		t.Fatalf("system topology output = %+v", topologyOutput)
 	}
 
 	result, err = session.CallTool(context.Background(), &mcp.CallToolParams{

@@ -73,6 +73,7 @@ type ConversationHistoryService interface {
 type MapService interface {
 	Snapshot(context.Context, int64, bool) (graph.Snapshot, error)
 	ReadDependencySnapshot(context.Context, int64) (graph.Snapshot, graph.ArtifactProgress, error)
+	ReadTopologySnapshot(context.Context, int64) (graph.Snapshot, graph.ArtifactProgress, error)
 	StructureProgress(context.Context, int64) (graph.ArtifactProgress, error)
 }
 
@@ -84,6 +85,8 @@ type DependencyService interface {
 	Findings(context.Context, graph.Snapshot, dependencies.AdvisoryOptions) (dependencies.FindingResponse, error)
 	StartAdvisoryRefresh(graph.Snapshot, bool) (dependencies.AdvisoryRefreshProgress, error)
 	AdvisoryProgress() dependencies.AdvisoryRefreshProgress
+	Topology(context.Context, graph.Snapshot, graph.ArtifactProgress, dependencies.TopologyOptions) (dependencies.Topology, error)
+	ImportTopologyObservations(context.Context, dependencies.TopologyImportRequest) (dependencies.TopologyImportResult, error)
 }
 
 // DocumentationService supplies durable, commit-aware repository pages.
@@ -315,6 +318,8 @@ type contextPageData struct {
 
 type dependencyPageData struct {
 	pageData
+	Topology             dependencies.Topology
+	TopologyView         bool
 	Inventory            dependencies.Inventory
 	Findings             dependencies.FindingResponse
 	AdvisoryOptions      dependencies.AdvisoryOptions
@@ -502,7 +507,14 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 		))
 		mux.HandleFunc("GET /dependencies", server.dependencyPage)
 		mux.HandleFunc("GET /api/dependencies", server.apiDependencies)
+		mux.HandleFunc("GET /api/dependencies/topology", server.apiDependencyTopology)
 		if server.dependencies != nil {
+			mux.HandleFunc("POST /api/dependencies/topology/observations", server.controlled(
+				identity.PermissionManageArtifacts,
+				"dependency.topology.import",
+				"runtime-topology",
+				server.importDependencyTopology,
+			))
 			mux.HandleFunc("POST /api/dependencies/refresh", server.controlled(
 				identity.PermissionManageArtifacts,
 				"dependency.refresh",
@@ -1419,6 +1431,37 @@ func (s *Server) dependencyPage(response http.ResponseWriter, request *http.Requ
 		http.Error(response, "Invalid repository", http.StatusBadRequest)
 		return
 	}
+	view := strings.ToLower(strings.TrimSpace(request.URL.Query().Get("view")))
+	if view == "" || view == "topology" {
+		if s.dependencies == nil {
+			http.Error(response, "Distributed topology service is unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		options, err := dependencyTopologyOptions(request)
+		if err != nil {
+			http.Error(response, err.Error(), http.StatusBadRequest)
+			return
+		}
+		snapshot, progress, err := s.maps.ReadTopologySnapshot(request.Context(), repositoryID)
+		if err != nil {
+			slog.Error("compose distributed topology", "repository_id", repositoryID, "error", err)
+			http.Error(response, "Distributed topology could not be built", http.StatusInternalServerError)
+			return
+		}
+		topology, err := s.dependencies.Topology(request.Context(), snapshot, progress, options)
+		if err != nil {
+			slog.Error("join runtime topology observations", "repository_id", repositoryID, "error", err)
+			http.Error(response, "Distributed topology could not be loaded", http.StatusInternalServerError)
+			return
+		}
+		data.ActivePage = "dependencies"
+		s.render(response, "dependencies", dependencyPageData{
+			pageData: data, Topology: topology, TopologyView: true,
+			SelectedRepositoryID: repositoryID,
+			APIURL:               dependencyTopologyURL("/api/dependencies/topology", repositoryID, options),
+		})
+		return
+	}
 	options, err := dependencyOptions(request)
 	if err != nil {
 		http.Error(response, err.Error(), http.StatusBadRequest)
@@ -1438,7 +1481,7 @@ func (s *Server) dependencyPage(response http.ResponseWriter, request *http.Requ
 		return
 	}
 	inventory.BuildProgress = progress
-	findingsView := strings.EqualFold(strings.TrimSpace(request.URL.Query().Get("view")), "findings")
+	findingsView := view == "findings"
 	advisoryOptions, err := dependencyAdvisoryOptions(request)
 	if err != nil {
 		http.Error(response, err.Error(), http.StatusBadRequest)
@@ -1719,6 +1762,62 @@ func (s *Server) apiDependencies(response http.ResponseWriter, request *http.Req
 	writeJSON(response, status, inventory)
 }
 
+func (s *Server) apiDependencyTopology(response http.ResponseWriter, request *http.Request) {
+	if s.dependencies == nil {
+		writeAPIError(response, http.StatusServiceUnavailable, errors.New("distributed topology service is unavailable"))
+		return
+	}
+	repositoryID, err := optionalRepositoryID(request.URL.Query().Get("repository"))
+	if err != nil {
+		writeAPIError(response, http.StatusBadRequest, err)
+		return
+	}
+	options, err := dependencyTopologyOptions(request)
+	if err != nil {
+		writeAPIError(response, http.StatusBadRequest, err)
+		return
+	}
+	snapshot, progress, err := s.maps.ReadTopologySnapshot(request.Context(), repositoryID)
+	if err != nil {
+		slog.Error("compose distributed topology", "repository_id", repositoryID, "error", err)
+		writeAPIError(response, http.StatusInternalServerError, errors.New("distributed topology could not be built"))
+		return
+	}
+	topology, err := s.dependencies.Topology(request.Context(), snapshot, progress, options)
+	if err != nil {
+		slog.Error("join runtime topology observations", "repository_id", repositoryID, "error", err)
+		writeAPIError(response, http.StatusInternalServerError, errors.New("runtime topology observations could not be loaded"))
+		return
+	}
+	status := http.StatusOK
+	if progress.State == "building" {
+		status = http.StatusAccepted
+		response.Header().Set("Retry-After", "2")
+	}
+	writeJSON(response, status, topology)
+}
+
+func (s *Server) importDependencyTopology(response http.ResponseWriter, request *http.Request) {
+	if s.dependencies == nil {
+		writeAPIError(response, http.StatusServiceUnavailable, errors.New("distributed topology service is unavailable"))
+		return
+	}
+	request.Body = http.MaxBytesReader(response, request.Body, 4<<20)
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	var input dependencies.TopologyImportRequest
+	if err := decoder.Decode(&input); err != nil {
+		writeAPIError(response, http.StatusBadRequest, fmt.Errorf("decode runtime topology observations: %w", err))
+		return
+	}
+	result, err := s.dependencies.ImportTopologyObservations(request.Context(), input)
+	if err != nil {
+		writeAPIError(response, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(response, http.StatusCreated, result)
+}
+
 func (s *Server) dependencyInventory(
 	ctx context.Context,
 	snapshot graph.Snapshot,
@@ -1920,6 +2019,52 @@ func dependencyOptions(request *http.Request) (dependencies.Options, error) {
 	return options, nil
 }
 
+func dependencyTopologyOptions(request *http.Request) (dependencies.TopologyOptions, error) {
+	query := request.URL.Query()
+	options := dependencies.TopologyOptions{
+		Query:       strings.TrimSpace(query.Get("query")),
+		Protocol:    strings.ToLower(strings.TrimSpace(query.Get("protocol"))),
+		Origin:      strings.ToLower(strings.TrimSpace(query.Get("origin"))),
+		Environment: strings.TrimSpace(query.Get("environment")),
+		Provider:    strings.TrimSpace(query.Get("provider")),
+	}
+	if len(options.Query) > 200 || len(options.Protocol) > 30 ||
+		len(options.Origin) > 30 || len(options.Environment) > 80 ||
+		len(options.Provider) > 80 {
+		return dependencies.TopologyOptions{}, errors.New("topology filters are too long")
+	}
+	if options.Protocol != "" && !slices.Contains(
+		[]string{"http", "grpc", "kafka", "database", "mcp", "amqp", "unknown"},
+		options.Protocol,
+	) {
+		return dependencies.TopologyOptions{}, errors.New("protocol filter is unsupported")
+	}
+	if options.Origin != "" && !slices.Contains(
+		[]string{"static", "runtime", "confirmed"}, options.Origin,
+	) {
+		return dependencies.TopologyOptions{}, errors.New("origin must be static, runtime, or confirmed")
+	}
+	for key, target := range map[string]*time.Time{
+		"observed_from": &options.ObservedFrom,
+		"observed_to":   &options.ObservedTo,
+	} {
+		value := strings.TrimSpace(query.Get(key))
+		if value == "" {
+			continue
+		}
+		parsed, err := time.Parse(time.RFC3339, value)
+		if err != nil {
+			return dependencies.TopologyOptions{}, fmt.Errorf("%s must be RFC3339", key)
+		}
+		*target = parsed.UTC()
+	}
+	if !options.ObservedFrom.IsZero() && !options.ObservedTo.IsZero() &&
+		options.ObservedFrom.After(options.ObservedTo) {
+		return dependencies.TopologyOptions{}, errors.New("observed_from must not be after observed_to")
+	}
+	return options, nil
+}
+
 func dependencyAdvisoryOptions(request *http.Request) (dependencies.AdvisoryOptions, error) {
 	query := request.URL.Query()
 	options := dependencies.AdvisoryOptions{
@@ -1973,6 +2118,9 @@ func dependencyAdvisoryOptions(request *http.Request) (dependencies.AdvisoryOpti
 
 func dependencyURL(base string, repositoryID int64, options dependencies.Options, offset int) string {
 	query := url.Values{}
+	if base == "/dependencies" {
+		query.Set("view", "inventory")
+	}
 	if repositoryID > 0 {
 		query.Set("repository", strconv.FormatInt(repositoryID, 10))
 	}
@@ -1996,6 +2144,35 @@ func dependencyURL(base string, repositoryID int64, options dependencies.Options
 		query.Set("offset", strconv.Itoa(offset))
 	}
 	return base + "?" + query.Encode()
+}
+
+func dependencyTopologyURL(
+	base string,
+	repositoryID int64,
+	options dependencies.TopologyOptions,
+) string {
+	query := url.Values{}
+	if repositoryID > 0 {
+		query.Set("repository", strconv.FormatInt(repositoryID, 10))
+	}
+	for key, value := range map[string]string{
+		"query": options.Query, "protocol": options.Protocol, "origin": options.Origin,
+		"environment": options.Environment, "provider": options.Provider,
+	} {
+		if value = strings.TrimSpace(value); value != "" {
+			query.Set(key, value)
+		}
+	}
+	if !options.ObservedFrom.IsZero() {
+		query.Set("observed_from", options.ObservedFrom.UTC().Format(time.RFC3339))
+	}
+	if !options.ObservedTo.IsZero() {
+		query.Set("observed_to", options.ObservedTo.UTC().Format(time.RFC3339))
+	}
+	if encoded := query.Encode(); encoded != "" {
+		return base + "?" + encoded
+	}
+	return base
 }
 
 func dependencyAdvisoryURL(
@@ -2475,6 +2652,7 @@ func buildMCPPageData(endpoint, token, command, stdioBaseURL string) mcpPageData
 			{Name: "git_diff", Description: "Resolved revisions and bounded unified patches."},
 			{Name: "read_repository_map", Description: "Complete static snapshot: structure, routes, entry points, dependencies, and edges."},
 			{Name: "read_dependency_inventory", Description: "Focused manifests, versioned coordinates, and outbound HTTP calls."},
+			{Name: "read_system_topology", Description: "Directed component-level HTTP, gRPC, Kafka, database, MCP, and runtime-observed relationships."},
 			{Name: "read_dependency_findings", Description: "Compact scope-aware OSV findings with manifest and advisory-snapshot evidence."},
 			{Name: "list_deep_wiki_pages", Description: "Persisted Wiki plan, page slugs, hierarchy, status, and provenance."},
 			{Name: "read_generated_document", Description: "Generated Deep Wiki pages and their grounded evidence."},

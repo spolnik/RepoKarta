@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	currentSchemaVersion = 17
+	currentSchemaVersion = 18
 
 	schemaV1 = `
 CREATE TABLE IF NOT EXISTS repositories (
@@ -474,6 +474,37 @@ CREATE UNIQUE INDEX IF NOT EXISTS named_contexts_owner_title_index
 ON named_contexts(owner_id, title COLLATE NOCASE);
 CREATE INDEX IF NOT EXISTS named_contexts_visibility_default_index
 ON named_contexts(visibility, default_scope, updated_at DESC);`
+
+	// Version 18 stores bounded runtime service-graph observations separately
+	// from commit-pinned static topology. Provider and time-window columns keep
+	// observed traffic honest and allow static/observed drift to be explained.
+	schemaV18 = `
+CREATE TABLE IF NOT EXISTS runtime_topology_observations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    provider TEXT NOT NULL,
+    environment TEXT NOT NULL DEFAULT '',
+    source_name TEXT NOT NULL,
+    source_kind TEXT NOT NULL,
+    target_name TEXT NOT NULL,
+    target_kind TEXT NOT NULL,
+    protocol TEXT NOT NULL,
+    interaction TEXT NOT NULL,
+    transport TEXT NOT NULL DEFAULT '',
+    observed_from TEXT NOT NULL,
+    observed_to TEXT NOT NULL,
+    request_count INTEGER NOT NULL DEFAULT 0 CHECK(request_count >= 0),
+    error_count INTEGER NOT NULL DEFAULT 0 CHECK(error_count >= 0),
+    latency_p95_ms REAL NOT NULL DEFAULT 0 CHECK(latency_p95_ms >= 0),
+    imported_at TEXT NOT NULL,
+    UNIQUE(
+        provider, environment, source_name, target_name, protocol,
+        interaction, transport, observed_from, observed_to
+    )
+);
+CREATE INDEX IF NOT EXISTS runtime_topology_observations_window_index
+ON runtime_topology_observations(observed_to DESC, observed_from DESC);
+CREATE INDEX IF NOT EXISTS runtime_topology_observations_peer_index
+ON runtime_topology_observations(source_name, target_name, protocol);`
 )
 
 // SchemaVersion is the current durable SQLite format. Diagnostics and upgrade
@@ -558,6 +589,8 @@ func migrate(db *sql.DB) error {
 			migration = schemaV16
 		case 17:
 			migration = schemaV17
+		case 18:
+			migration = schemaV18
 		default:
 			return fmt.Errorf("missing migration for schema version %d", next)
 		}

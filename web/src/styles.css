@@ -2369,6 +2369,259 @@ a.brand-mark:hover,
   }
 }
 
+.topology-metric {
+  border: 1px solid rgb(255 255 255 / 8%);
+  border-radius: 0.8rem;
+  background: rgb(255 255 255 / 2.5%);
+  padding: 0.9rem 1rem;
+}
+
+.topology-metric dt {
+  color: var(--color-ink-faint);
+  font-size: 0.68rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.topology-metric dd {
+  margin-top: 0.4rem;
+  color: white;
+  font-size: 1.5rem;
+  font-weight: 650;
+}
+
+.topology-metric-confirmed {
+  border-color: rgb(52 211 153 / 24%);
+  background: rgb(52 211 153 / 6%);
+}
+
+.topology-metric-confirmed dd {
+  color: #a7f3d0;
+}
+
+.topology-metric-runtime {
+  border-color: rgb(34 211 238 / 24%);
+  background: rgb(34 211 238 / 5%);
+}
+
+.topology-metric-runtime dd {
+  color: #a5f3fc;
+}
+
+.topology-metric-unresolved {
+  border-color: rgb(251 191 36 / 22%);
+  background: rgb(251 191 36 / 5%);
+}
+
+.topology-metric-unresolved dd {
+  color: #fde68a;
+}
+
+.topology-shell {
+  display: grid;
+  min-height: 680px;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  overflow: hidden;
+  border: 1px solid rgb(255 255 255 / 8%);
+  border-radius: 1rem;
+  background: #0a0d13;
+}
+
+.topology-stage {
+  position: relative;
+  min-width: 0;
+}
+
+.topology-toolbar {
+  display: flex;
+  min-height: 76px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  border-bottom: 1px solid rgb(255 255 255 / 8%);
+  padding: 1rem 1.25rem;
+}
+
+.topology-canvas {
+  height: 548px;
+  background:
+    radial-gradient(circle at 20% 20%, rgb(52 211 153 / 5%), transparent 34%),
+    radial-gradient(circle at 80% 75%, rgb(59 130 246 / 5%), transparent 32%),
+    linear-gradient(rgb(255 255 255 / 2%) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(255 255 255 / 2%) 1px, transparent 1px);
+  background-size: auto, auto, 30px 30px, 30px 30px;
+}
+
+.topology-empty {
+  position: absolute;
+  inset: 76px 0 44px;
+  display: grid;
+  place-content: center;
+  padding: 2rem;
+  text-align: center;
+}
+
+.topology-empty[hidden] {
+  display: none;
+}
+
+.topology-empty strong {
+  color: white;
+  font-size: 1.05rem;
+}
+
+.topology-empty p {
+  max-width: 42rem;
+  margin-top: 0.6rem;
+  color: var(--color-ink-soft);
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+
+.topology-legend {
+  display: flex;
+  min-height: 44px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.55rem 1rem;
+  border-top: 1px solid rgb(255 255 255 / 8%);
+  padding: 0.65rem 1.25rem;
+  color: var(--color-ink-faint);
+  font-size: 0.7rem;
+}
+
+.topology-legend span::before {
+  display: inline-block;
+  width: 0.65rem;
+  height: 0.18rem;
+  margin-right: 0.4rem;
+  border-radius: 999px;
+  background: #64748b;
+  content: "";
+  vertical-align: middle;
+}
+
+.topology-legend [data-protocol="http"]::before { background: #34d399; }
+.topology-legend [data-protocol="grpc"]::before { background: #a78bfa; }
+.topology-legend [data-protocol="kafka"]::before { background: #fbbf24; }
+.topology-legend [data-protocol="database"]::before { background: #38bdf8; }
+.topology-legend [data-protocol="mcp"]::before { background: #f472b6; }
+.topology-legend [data-state="runtime_only"]::before { background: transparent; border-top: 2px dashed #22d3ee; }
+.topology-legend [data-state="static_only"]::before { opacity: 0.55; }
+
+.topology-inspector {
+  overflow-y: auto;
+  border-left: 1px solid rgb(255 255 255 / 8%);
+  background: rgb(255 255 255 / 2%);
+  padding: 1.4rem;
+}
+
+.topology-inspector-kind,
+.topology-protocol,
+.topology-state {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid rgb(255 255 255 / 12%);
+  border-radius: 999px;
+  padding: 0.25rem 0.55rem;
+  color: var(--color-ink-soft);
+  font-size: 0.68rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.topology-inspector-meta {
+  display: grid;
+  gap: 0.55rem;
+  margin-top: 1.25rem;
+}
+
+.topology-inspector-meta div {
+  display: grid;
+  grid-template-columns: 6rem minmax(0, 1fr);
+  gap: 0.75rem;
+  border-top: 1px solid rgb(255 255 255 / 7%);
+  padding-top: 0.55rem;
+  font-size: 0.78rem;
+}
+
+.topology-inspector-meta dt {
+  color: var(--color-ink-faint);
+}
+
+.topology-inspector-meta dd {
+  overflow-wrap: anywhere;
+  color: var(--color-ink);
+}
+
+.topology-evidence-link {
+  display: block;
+  border: 1px solid rgb(255 255 255 / 8%);
+  border-radius: 0.65rem;
+  padding: 0.65rem 0.75rem;
+  color: #a7f3d0;
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+.topology-evidence-link:hover {
+  border-color: rgb(52 211 153 / 30%);
+  background: rgb(52 211 153 / 5%);
+}
+
+.topology-table {
+  overflow: hidden;
+  border: 1px solid rgb(255 255 255 / 8%);
+  border-radius: 0.9rem;
+  background: var(--color-surface-raised);
+}
+
+.topology-table th,
+.topology-table td {
+  border-bottom: 1px solid rgb(255 255 255 / 6%);
+  padding: 0.85rem 1rem;
+}
+
+.topology-table th {
+  color: var(--color-ink-faint);
+  font-size: 0.68rem;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.topology-state-confirmed { border-color: rgb(52 211 153 / 25%); color: #a7f3d0; }
+.topology-state-runtime_only { border-color: rgb(34 211 238 / 25%); color: #a5f3fc; }
+.topology-state-static_only { color: #cbd5e1; }
+.topology-protocol-mcp { border-color: rgb(244 114 182 / 25%); color: #fbcfe8; }
+.topology-protocol-kafka { border-color: rgb(251 191 36 / 25%); color: #fde68a; }
+.topology-protocol-database { border-color: rgb(56 189 248 / 25%); color: #bae6fd; }
+.topology-protocol-grpc { border-color: rgb(167 139 250 / 25%); color: #ddd6fe; }
+.topology-protocol-http { border-color: rgb(52 211 153 / 25%); color: #a7f3d0; }
+
+@media (max-width: 1024px) {
+  .topology-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .topology-inspector {
+    max-height: 360px;
+    border-top: 1px solid rgb(255 255 255 / 8%);
+    border-left: 0;
+  }
+}
+
+@media (max-width: 640px) {
+  .topology-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .topology-canvas {
+    height: 470px;
+  }
+}
+
 /* Evidence-backed repository maps */
 .map-workspace {
   display: grid;

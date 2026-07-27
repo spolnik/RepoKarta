@@ -30,9 +30,9 @@ provider, an API key, Docker, or a cloud account.
 - **Browse the indexed revision.** Open a repository tree, follow stable line
   links, and inspect history or diffs without changing branches in your
   worktree.
-- **See how a system fits together.** Explore architecture maps, packages,
-  entry points, routes, and dependency relationships backed by source
-  evidence.
+- **See how a system fits together.** Follow component-to-component HTTP,
+  gRPC, Kafka, database, and MCP communication with visible direction,
+  commit-pinned source evidence, and separately timestamped runtime signals.
 - **Ask questions with citations.** Use Codex, Claude Code, or the Anthropic
   API to answer questions against RepoKarta's read-only code tools.
 - **Create living documentation.** Generate commit-pinned repository pages,
@@ -97,7 +97,8 @@ Once at least one repository is ready:
 2. Open a result and use the repository tree and line links to inspect it in
    context.
 3. Open **Maps** to explore packages, entry points, and relationships.
-4. Open **Dependencies** to see declared and resolved packages.
+4. Open **Dependencies** to explore the distributed component topology, then
+   switch to package inventory or security findings when needed.
 5. If an AI provider is available, open **Chat**, add an `@repository`,
    `@file`, `@directory`, or `@symbol` context, and ask a focused question.
 6. Open **Wiki** when you want a reusable, cited explanation of a repository.
@@ -261,6 +262,7 @@ GET /api/symbol?symbol=OpenFile&repo=RepoKarta
 GET /api/file/{repository}?rev={commit}&path={path}&lines=1-200
 GET /api/git/log/{repository}?rev={commit}&limit=50
 GET /api/maps?repository={repository-id}
+GET /api/dependencies/topology?repository={repository-id}
 GET /api/dependencies?repository={repository-id}
 GET /api/wiki?repository={repository-id}
 GET /api/whoami
@@ -335,6 +337,7 @@ $version = go run ./cmd/repokarta version
 - [Shared deployment operations](./docs/shared-deployment.md)
 - [Enterprise identity and audit operations](./docs/enterprise-administration.md)
 - [Dependency advisory data and refresh behavior](./docs/dependency-advisories.md)
+- [Distributed dependency topology and runtime observations](./docs/distributed-topology.md)
 - [Pinned Zoekt revision and Windows portability](./docs/zoekt-windows-portability.md)
 
 RepoKarta vendors a pinned Zoekt revision under `third_party/zoekt`. Native

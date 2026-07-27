@@ -6460,6 +6460,351 @@ function enableDependencyRefresh(): void {
   void poll();
 }
 
+type TopologyEvidence = {
+  repository: string;
+  revision: string;
+  path: string;
+  line: number;
+  label: string;
+  url: string;
+};
+
+type TopologyComponentPayload = {
+  id: string;
+  name: string;
+  kind: string;
+  technology?: string;
+  repository?: string;
+  path?: string;
+  capabilities?: string[];
+  external: boolean;
+  evidence?: TopologyEvidence[];
+  origins: string[];
+};
+
+type TopologyRuntimePayload = {
+  provider: string;
+  environment?: string;
+  observed_from: string;
+  observed_to: string;
+  request_count: number;
+  error_count: number;
+  error_rate: number;
+  latency_p95_ms?: number;
+};
+
+type TopologyConnectionPayload = {
+  id: string;
+  source: string;
+  source_name: string;
+  target: string;
+  target_name: string;
+  protocol: string;
+  interaction: string;
+  transport?: string;
+  confidence: string;
+  state: "confirmed" | "static_only" | "runtime_only";
+  origins: string[];
+  target_resolved: boolean;
+  evidence?: TopologyEvidence[];
+  runtime?: TopologyRuntimePayload;
+};
+
+type TopologyPayload = {
+  components: TopologyComponentPayload[];
+  connections: TopologyConnectionPayload[];
+  build_progress: { state: string; pending_repositories: number };
+};
+
+function enableDependencyTopology(debug?: DebugLogger): void {
+  const workspace = document.querySelector<HTMLElement>("[data-topology-workspace]");
+  const canvas = workspace?.querySelector<HTMLElement>("[data-topology-canvas]");
+  const empty = workspace?.querySelector<HTMLElement>("[data-topology-empty]");
+  const focus = workspace?.querySelector<HTMLButtonElement>("[data-topology-focus]");
+  const reset = workspace?.querySelector<HTMLButtonElement>("[data-topology-reset]");
+  const listToggle = workspace?.querySelector<HTMLButtonElement>("[data-topology-list]");
+  const table = workspace?.querySelector<HTMLElement>("[data-topology-table]");
+  const inspectorEmpty = workspace?.querySelector<HTMLElement>("[data-topology-inspector-empty]");
+  const inspector = workspace?.querySelector<HTMLElement>("[data-topology-inspector]");
+  const inspectorKind = workspace?.querySelector<HTMLElement>("[data-topology-inspector-kind]");
+  const inspectorTitle = workspace?.querySelector<HTMLElement>("[data-topology-inspector-title]");
+  const inspectorSubtitle = workspace?.querySelector<HTMLElement>("[data-topology-inspector-subtitle]");
+  const inspectorMeta = workspace?.querySelector<HTMLElement>("[data-topology-inspector-meta]");
+  const inspectorEvidence = workspace?.querySelector<HTMLOListElement>("[data-topology-evidence]");
+  if (!workspace || !canvas || !empty || !focus || !reset || !listToggle || !table ||
+    !inspectorEmpty || !inspector || !inspectorKind || !inspectorTitle ||
+    !inspectorSubtitle || !inspectorMeta || !inspectorEvidence) {
+    return;
+  }
+  const apiURL = workspace.dataset.topologyApi;
+  if (!apiURL) {
+    return;
+  }
+
+  type TopologyCore = import("cytoscape").Core;
+  type TopologySingular = import("cytoscape").NodeSingular | import("cytoscape").EdgeSingular;
+  let graph: TopologyCore | undefined;
+  let selected: TopologySingular | undefined;
+
+  const metadata = (entries: Array<[string, string | number | undefined]>): void => {
+    inspectorMeta.replaceChildren();
+    entries.forEach(([label, value]) => {
+      if (value === undefined || value === "") {
+        return;
+      }
+      const row = document.createElement("div");
+      const term = document.createElement("dt");
+      const detail = document.createElement("dd");
+      term.textContent = label;
+      detail.textContent = String(value);
+      row.append(term, detail);
+      inspectorMeta.append(row);
+    });
+  };
+  const evidence = (items: TopologyEvidence[] = []): void => {
+    inspectorEvidence.replaceChildren();
+    if (items.length === 0) {
+      const item = document.createElement("li");
+      item.className = "text-xs leading-5 text-ink-faint";
+      item.textContent = "No commit-pinned source evidence. Runtime observations are timestamped telemetry, not source facts.";
+      inspectorEvidence.append(item);
+      return;
+    }
+    items.forEach((fact) => {
+      const item = document.createElement("li");
+      const link = document.createElement("a");
+      link.className = "topology-evidence-link";
+      link.href = fact.url;
+      link.textContent = `${fact.repository} · ${fact.path}:${fact.line}`;
+      link.title = `${fact.label} at ${fact.revision}`;
+      item.append(link);
+      inspectorEvidence.append(item);
+    });
+  };
+  const inspect = (element: TopologySingular): void => {
+    selected = element;
+    focus.disabled = false;
+    inspectorEmpty.hidden = true;
+    inspector.hidden = false;
+    graph?.elements().removeClass("topology-dim topology-selected");
+    element.addClass("topology-selected");
+    if (element.isNode()) {
+      const node = element.data("payload") as TopologyComponentPayload;
+      inspectorKind.textContent = node.external ? `External ${node.kind}` : node.kind;
+      inspectorTitle.textContent = node.name;
+      inspectorSubtitle.textContent = [
+        node.technology,
+        node.capabilities?.length ? `Capabilities: ${node.capabilities.join(", ")}` : undefined
+      ].filter(Boolean).join(" · ") || "Deployable component";
+      metadata([
+        ["Repository", node.repository],
+        ["Path", node.path],
+        ["Evidence", node.origins.join(" + ")],
+        ["Identity", node.id]
+      ]);
+      evidence(node.evidence);
+      return;
+    }
+    const edge = element.data("payload") as TopologyConnectionPayload;
+    inspectorKind.textContent = `${edge.protocol} · ${edge.state.replaceAll("_", " ")}`;
+    inspectorTitle.textContent = `${edge.source_name || edge.source} → ${edge.target_name || edge.target}`;
+    inspectorSubtitle.textContent = `${edge.interaction}${edge.transport ? ` over ${edge.transport}` : ""}`;
+    const runtime = edge.runtime;
+    metadata([
+      ["Confidence", edge.confidence],
+      ["Peer identity", edge.target_resolved ? "Resolved" : "Unresolved"],
+      ["Provider", runtime?.provider],
+      ["Environment", runtime?.environment],
+      ["Requests", runtime?.request_count],
+      ["Errors", runtime?.error_count],
+      ["Error rate", runtime ? `${(runtime.error_rate * 100).toFixed(2)}%` : undefined],
+      ["p95 latency", runtime?.latency_p95_ms === undefined ? undefined : `${runtime.latency_p95_ms.toFixed(1)} ms`],
+      ["Observed", runtime ? `${new Date(runtime.observed_from).toLocaleString()} – ${new Date(runtime.observed_to).toLocaleString()}` : undefined]
+    ]);
+    evidence(edge.evidence);
+  };
+  const fit = (): void => {
+    if (!graph || graph.elements().length === 0) {
+      return;
+    }
+    graph.elements().removeClass("topology-dim");
+    graph.fit(graph.elements(), 48);
+  };
+  focus.addEventListener("click", () => {
+    if (!graph || !selected) {
+      return;
+    }
+    const neighborhood = selected.isNode()
+      ? selected.closedNeighborhood()
+      : selected.connectedNodes().union(selected);
+    graph.elements().forEach((element) => {
+      element.toggleClass("topology-dim", !neighborhood.contains(element));
+    });
+    graph.fit(neighborhood, 70);
+  });
+  reset.addEventListener("click", () => {
+    selected = undefined;
+    focus.disabled = true;
+    graph?.elements().removeClass("topology-dim topology-selected");
+    inspector.hidden = true;
+    inspectorEmpty.hidden = false;
+    fit();
+  });
+  listToggle.addEventListener("click", () => {
+    table.hidden = !table.hidden;
+    listToggle.setAttribute("aria-pressed", String(!table.hidden));
+    listToggle.textContent = table.hidden ? "Connection table" : "Hide table";
+  });
+
+  const render = async (payload: TopologyPayload): Promise<void> => {
+    const { default: cytoscape } = await import("cytoscape");
+    graph?.destroy();
+    empty.hidden = payload.components.length > 0;
+    canvas.hidden = payload.components.length === 0;
+    if (payload.components.length === 0) {
+      return;
+    }
+    const elements = [
+      ...payload.components.map((component) => ({
+        data: {
+          id: component.id,
+          label: component.name,
+          kind: component.kind,
+          external: component.external ? "yes" : "no",
+          origin: component.origins.join("-"),
+          payload: component
+        }
+      })),
+      ...payload.connections.map((connection) => ({
+        data: {
+          id: connection.id,
+          source: connection.source,
+          target: connection.target,
+          label: connection.protocol === "unknown"
+            ? connection.interaction
+            : `${connection.protocol} · ${connection.interaction}`,
+          protocol: connection.protocol,
+          state: connection.state,
+          width: Math.min(7, 2 + Math.log10((connection.runtime?.request_count ?? 0) + 1)),
+          payload: connection
+        }
+      }))
+    ];
+    graph = cytoscape({
+      container: canvas,
+      elements,
+      minZoom: 0.15,
+      maxZoom: 2.4,
+      wheelSensitivity: 0.18,
+      style: [
+        {
+          selector: "node",
+          style: {
+            "background-color": "#111827",
+            "border-color": "#64748b",
+            "border-width": 2,
+            color: "#e2e8f0",
+            content: "data(label)",
+            "font-family": "Inter, ui-sans-serif, system-ui, sans-serif",
+            "font-size": 11,
+            "font-weight": 600,
+            height: 48,
+            "text-valign": "center",
+            "text-wrap": "ellipsis",
+            "text-max-width": "112px",
+            width: 132,
+            shape: "round-rectangle"
+          }
+        },
+        { selector: 'node[kind = "database"]', style: { shape: "barrel", "border-color": "#38bdf8" } },
+        { selector: 'node[kind = "queue"], node[kind = "broker"]', style: { shape: "diamond", "border-color": "#fbbf24", height: 62, width: 92 } },
+        { selector: 'node[kind = "mcp_server"]', style: { shape: "hexagon", "border-color": "#f472b6" } },
+        { selector: 'node[external = "yes"]', style: { "border-style": "dashed", "background-color": "#15121c" } },
+        {
+          selector: "edge",
+          style: {
+            "curve-style": "bezier",
+            "line-color": "#64748b",
+            "target-arrow-color": "#64748b",
+            "target-arrow-shape": "triangle",
+            width: "data(width)",
+            opacity: 0.72,
+            label: "data(label)",
+            color: "#94a3b8",
+            "font-size": 8,
+            "text-background-color": "#090b0f",
+            "text-background-opacity": 0.88,
+            "text-background-padding": "2px",
+            "text-rotation": "autorotate"
+          }
+        },
+        { selector: 'edge[protocol = "http"]', style: { "line-color": "#34d399", "target-arrow-color": "#34d399" } },
+        { selector: 'edge[protocol = "grpc"]', style: { "line-color": "#a78bfa", "target-arrow-color": "#a78bfa" } },
+        { selector: 'edge[protocol = "kafka"]', style: { "line-color": "#fbbf24", "target-arrow-color": "#fbbf24" } },
+        { selector: 'edge[protocol = "database"]', style: { "line-color": "#38bdf8", "target-arrow-color": "#38bdf8" } },
+        { selector: 'edge[protocol = "mcp"]', style: { "line-color": "#f472b6", "target-arrow-color": "#f472b6" } },
+        { selector: 'edge[state = "runtime_only"]', style: { "line-style": "dashed", opacity: 0.9 } },
+        { selector: 'edge[state = "static_only"]', style: { opacity: 0.48 } },
+        { selector: ".topology-selected", style: { "overlay-color": "#ffffff", "overlay-opacity": 0.08, "overlay-padding": 7 } },
+        { selector: ".topology-dim", style: { opacity: 0.08, "text-opacity": 0.08 } }
+      ],
+      layout: {
+        name: "breadthfirst",
+        directed: true,
+        padding: 48,
+        spacingFactor: 1.25,
+        avoidOverlap: true,
+        circle: false
+      }
+    });
+    graph.on("tap", "node, edge", (event) => inspect(event.target as TopologySingular));
+    graph.on("tap", (event) => {
+      if (event.target === graph) {
+        reset.click();
+      }
+    });
+    graph.on("mouseover", "node, edge", () => {
+      canvas.style.cursor = "pointer";
+    });
+    graph.on("mouseout", "node, edge", () => {
+      canvas.style.cursor = "default";
+    });
+    fit();
+  };
+
+  void (async () => {
+    const started = performance.now();
+    try {
+      const response = await fetch(apiURL, {
+        cache: "no-store",
+        headers: { Accept: "application/json" }
+      });
+      if (!response.ok && response.status !== 202) {
+        throw new Error(await responseErrorMessage(response, `Topology request failed (${response.status})`));
+      }
+      const rawPayload = await response.json() as TopologyPayload;
+      const payload: TopologyPayload = {
+        ...rawPayload,
+        components: rawPayload.components ?? [],
+        connections: rawPayload.connections ?? []
+      };
+      await render(payload);
+      debug?.add("info", "dependency.topology.rendered", {
+        components: payload.components.length,
+        connections: payload.connections.length,
+        partial: payload.build_progress.pending_repositories > 0,
+        duration_ms: Math.round(performance.now() - started)
+      });
+    } catch (error) {
+      canvas.hidden = true;
+      empty.hidden = false;
+      empty.querySelector("strong")!.textContent = "The topology could not be rendered.";
+      empty.querySelector("p")!.textContent = error instanceof Error ? error.message : "Unknown topology error";
+      debug?.add("error", "dependency.topology.failed", describeError(error));
+    }
+  })();
+}
+
 connectIndexEvents();
 enableContextualChatLauncher();
 enableArtifactProgress();
@@ -6481,6 +6826,7 @@ const debugLogger = enableDebugLogger();
 enableMermaidViewer(debugLogger);
 enableConversations(debugLogger);
 enableRepositoryMaps(debugLogger);
+enableDependencyTopology(debugLogger);
 enableRepositoryWiki(debugLogger);
 
 document.body.addEventListener("htmx:afterSwap", (event) => {
