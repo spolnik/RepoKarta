@@ -331,6 +331,25 @@ function enableSearchFeedback(): void {
   // "Show more" re-runs the current query against a higher file limit instead
   // of making the reader scroll back up and edit the numeric limit field.
   results.addEventListener("click", (event) => {
+    const refinement = (event.target as HTMLElement | null)?.closest<HTMLButtonElement>(
+      "[data-search-refinement-field][data-search-refinement-value]"
+    );
+    if (refinement) {
+      const query = form.querySelector<HTMLInputElement>('input[name="q"]');
+      const field = refinement.dataset.searchRefinementField;
+      const value = refinement.dataset.searchRefinementValue;
+      if (!query || !field || !value) {
+        return;
+      }
+      const encoded = /[\s"\\]/.test(value)
+        ? `"${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`
+        : value;
+      const token = `${field}:${encoded}`;
+      query.value = `${query.value.trim()} ${token}`.trim();
+      query.focus();
+      form.requestSubmit();
+      return;
+    }
     const button = (event.target as HTMLElement | null)?.closest<HTMLButtonElement>("[data-search-more]");
     if (!button) {
       return;

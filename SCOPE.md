@@ -586,7 +586,7 @@ search must remain fast and AI-free.
   generated Wiki page, and captured code insight.
 - [ ] Add qualified programming-element search by package, type, method, member,
   and full name, with exact, prefix, case-sensitive, and case-insensitive modes.
-- [ ] Add result facets and “search within these results” refinement without
+- [x] Add result facets and “search within these results” refinement without
   discarding the original query, scope, revision, or completeness metadata.
 - [ ] Rank exact symbol and path matches ahead of fuzzy content matches and
   explain important ranking signals; never let personalization hide complete

@@ -236,6 +236,8 @@ type searchData struct {
 	Truncated            bool
 	Matches              []searchMatchView
 	Items                []codeintel.SearchItem
+	Facets               []codeintel.SearchFacet
+	FacetCoverage        codeintel.SearchFacetCoverage
 	ResultType           string
 }
 
@@ -248,6 +250,7 @@ type searchMatchView struct {
 	Language     string
 	FocusLine    int
 	Lines        []search.LineMatch
+	Ranking      []codeintel.RankingSignal
 }
 
 type sourcePageData struct {
@@ -1774,6 +1777,8 @@ func (s *Server) search(response http.ResponseWriter, request *http.Request) {
 			data.Search.ResultType = result.ResultType
 			data.Search.Matches = resolveSearchViews(result.Matches, data.Repositories)
 			data.Search.Items = result.Items
+			data.Search.Facets = result.Facets
+			data.Search.FacetCoverage = result.FacetCoverage
 		}
 	}
 
@@ -2131,6 +2136,7 @@ func resolveSearchViews(matches []codeintel.SearchMatch, repositories []catalog.
 			Revision:   match.Revision,
 			Path:       match.Path,
 			Language:   match.Language,
+			Ranking:    match.Ranking,
 			Lines:      make([]search.LineMatch, 0, len(match.Lines)),
 		}
 		if len(match.Lines) > 0 {

@@ -280,6 +280,24 @@
       {{.Search.FilesSkipped}} candidate files skipped · {{.Search.ShardsSkipped}} shards skipped
     </p>
     {{end}}
+    {{if .Search.Facets}}
+    <aside class="mb-4 rounded-xl border border-white/[0.06] bg-white/[0.02] px-4 py-3" aria-label="Search result refinements">
+      <div class="flex flex-wrap items-center gap-2">
+        <span class="mr-1 text-xs font-semibold uppercase tracking-wider text-ink-faint">Search within these results</span>
+        {{range .Search.Facets}}
+        <button
+          type="button"
+          class="query-chip"
+          data-search-refinement-field="{{.Field}}"
+          data-search-refinement-value="{{.Value}}"
+        >{{.Field}}:{{.Value}} <span class="text-ink-faint">{{.Count}}</span></button>
+        {{end}}
+      </div>
+      {{if not .Search.FacetCoverage.Complete}}
+      <p class="mt-2 text-xs text-amber-300">Facets describe the returned result window because search coverage is partial.</p>
+      {{end}}
+    </aside>
+    {{end}}
     {{if .Search.Matches}}
     <div class="space-y-3">
       {{range .Search.Matches}}
@@ -311,6 +329,14 @@
             {{end}}
           </div>
         </header>
+        {{if .Ranking}}
+        <details class="border-b border-white/[0.04] px-4 py-2 text-xs text-ink-faint">
+          <summary class="cursor-pointer select-none">Why this result ranks here</summary>
+          <ul class="mt-2 grid gap-1">
+            {{range .Ranking}}<li><span class="font-mono text-emerald-300">{{.Name}}</span> · {{.Detail}}</li>{{end}}
+          </ul>
+        </details>
+        {{end}}
         <div class="divide-y divide-white/[0.035]">
           {{range .Lines}}
           {{if .Before}}
@@ -393,6 +419,14 @@
           {{if .Value}}<div><dt class="inline text-ink-faint">{{.Label}}:</dt> <dd class="inline font-mono text-ink-soft">{{.Value}}</dd></div>{{end}}
           {{end}}
         </dl>
+        {{end}}
+        {{if .Ranking}}
+        <details class="border-b border-white/[0.04] px-4 py-2 text-xs text-ink-faint">
+          <summary class="cursor-pointer select-none">Why this result ranks here</summary>
+          <ul class="mt-2 grid gap-1">
+            {{range .Ranking}}<li><span class="font-mono text-emerald-300">{{.Name}}</span> · {{.Detail}}</li>{{end}}
+          </ul>
+        </details>
         {{end}}
         {{if .Detail}}<pre class="max-h-96 overflow-auto whitespace-pre-wrap px-4 py-3 font-mono text-xs leading-5 text-ink-soft">{{.Detail}}</pre>{{end}}
         {{if .Citation}}<footer class="border-t border-white/[0.04] px-4 py-2 font-mono text-xs text-ink-faint">{{.Citation}}</footer>{{end}}

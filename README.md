@@ -228,6 +228,15 @@ for result families that do not carry that evidence. The existing repository,
 language, path, filename, mode, and limit form fields remain supported and
 combine with grammar filters where they apply.
 
+Every response also includes grammar-compatible `facets` for result type,
+repository, language, and top-level path plus `facet_coverage`. The browser’s
+“Search within these results” chips append a refinement to the existing query
+and resubmit the unchanged form scope and revision selectors. When the result
+window is partial, facet coverage is labeled `returned_results` rather than
+pretending to describe unseen matches. Deterministic `ranking` signals explain
+exact title/path, filename-prefix, AST-target, symbol, and source-index score
+contributions. Ranking only changes display order; it never removes a result.
+
 RepoKarta enables symbol indexing automatically when `universal-ctags` is on
 `PATH`, or when `ctags`/`CTAGS_COMMAND` identifies itself as Universal Ctags via
 `--version`. This supports Homebrew's `ctags` name without accidentally enabling
@@ -752,11 +761,11 @@ Windows amd64 and Apple Silicon macOS. The workflow:
 Run the same packagers locally:
 
 ```powershell
-.\scripts\package-release.ps1 -Version 0.58.0-dev
+.\scripts\package-release.ps1 -Version 0.59.0-dev
 ```
 
 ```sh
-./scripts/package-release.sh 0.58.0-dev
+./scripts/package-release.sh 0.59.0-dev
 ```
 
 macOS packages are signed with the hardened runtime when

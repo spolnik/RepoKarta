@@ -201,6 +201,8 @@ type SearchResponse struct {
 	Warnings            []search.Warning            `json:"warnings,omitempty"`
 	Matches             []SearchMatch               `json:"matches"`
 	Items               []SearchItem                `json:"items"`
+	Facets              []SearchFacet               `json:"facets"`
+	FacetCoverage       SearchFacetCoverage         `json:"facet_coverage"`
 	SearchKind          string                      `json:"search_kind,omitempty"`
 	ReferenceResolution string                      `json:"reference_resolution,omitempty"`
 	ReferenceIndex      *ReferenceIndex             `json:"reference_index,omitempty"`
@@ -225,12 +227,35 @@ type SearchItem struct {
 	Citation     string               `json:"citation,omitempty"`
 	SourceURL    string               `json:"source_url,omitempty"`
 	Metadata     []SearchItemMetadata `json:"metadata,omitempty"`
+	Score        float64              `json:"score,omitempty"`
+	Ranking      []RankingSignal      `json:"ranking,omitempty"`
 }
 
 // SearchItemMetadata is stable display metadata for a non-source result.
 type SearchItemMetadata struct {
 	Label string `json:"label"`
 	Value string `json:"value"`
+}
+
+// SearchFacet is one grammar-compatible refinement over the returned result
+// set. Coverage says whether it describes every deterministic match.
+type SearchFacet struct {
+	Field string `json:"field"`
+	Value string `json:"value"`
+	Count int    `json:"count"`
+}
+
+// SearchFacetCoverage prevents partial facets from looking exhaustive.
+type SearchFacetCoverage struct {
+	Scope    string `json:"scope"`
+	Complete bool   `json:"complete"`
+}
+
+// RankingSignal explains one deterministic contribution to display order.
+type RankingSignal struct {
+	Name   string  `json:"name"`
+	Weight float64 `json:"weight"`
+	Detail string  `json:"detail"`
 }
 
 // ReferenceIndex reports whether every requested repository has a persisted
@@ -278,15 +303,16 @@ type ReferenceResponse = SearchResponse
 
 // SearchMatch is one commit-pinned matched file.
 type SearchMatch struct {
-	ResultType string       `json:"result_type"`
-	Repository string       `json:"repository"`
-	Revision   string       `json:"revision"`
-	Path       string       `json:"path"`
-	Language   string       `json:"language,omitempty"`
-	Score      float64      `json:"score,omitempty"`
-	Lines      []SearchLine `json:"lines"`
-	Citation   string       `json:"citation"`
-	SourceURL  string       `json:"source_url,omitempty"`
+	ResultType string          `json:"result_type"`
+	Repository string          `json:"repository"`
+	Revision   string          `json:"revision"`
+	Path       string          `json:"path"`
+	Language   string          `json:"language,omitempty"`
+	Score      float64         `json:"score,omitempty"`
+	Lines      []SearchLine    `json:"lines"`
+	Citation   string          `json:"citation"`
+	SourceURL  string          `json:"source_url,omitempty"`
+	Ranking    []RankingSignal `json:"ranking,omitempty"`
 }
 
 // SearchLine is one line of source evidence.
@@ -848,9 +874,17 @@ func (s *Service) Search(ctx context.Context, request SearchRequest) (SearchResp
 	}
 	switch resultType {
 	case "repository", "commit", "diff":
-		return s.searchEntityEvidence(ctx, request, parsedQuery, resultType)
+		response, searchErr := s.searchEntityEvidence(ctx, request, parsedQuery, resultType)
+		if searchErr == nil {
+			finalizeSearchResponse(&response, parsedQuery)
+		}
+		return response, searchErr
 	case "dependency", "route", "wiki_page", "code_insight":
-		return s.searchDerivedEvidence(ctx, request, parsedQuery, resultType)
+		response, searchErr := s.searchDerivedEvidence(ctx, request, parsedQuery, resultType)
+		if searchErr == nil {
+			finalizeSearchResponse(&response, parsedQuery)
+		}
+		return response, searchErr
 	}
 	referenceMode := strings.EqualFold(strings.TrimSpace(request.Mode), "references")
 	if referenceMode || resultType == "reference" || resultType == "implementation" {
@@ -869,6 +903,9 @@ func (s *Service) Search(ctx context.Context, request SearchRequest) (SearchResp
 			setSearchResultType(&response, "reference")
 		}
 		response.QueryLanguage = &parsedQuery
+		if referenceErr == nil {
+			finalizeSearchResponse(&response, parsedQuery)
+		}
 		return response, referenceErr
 	}
 	limit := normalizeLimit(request.Limit, DefaultSearchLimit, MaximumSearchLimit)
@@ -948,7 +985,7 @@ func (s *Service) Search(ctx context.Context, request SearchRequest) (SearchResp
 				repositoryIDAllowList = append(repositoryIDAllowList, uint32(repository.ID))
 			}
 			if len(repositoryIDAllowList) == 0 {
-				return SearchResponse{
+				response := SearchResponse{
 					Limit:           limit,
 					Matches:         []SearchMatch{},
 					Items:           []SearchItem{},
@@ -956,7 +993,9 @@ func (s *Service) Search(ctx context.Context, request SearchRequest) (SearchResp
 					Warnings:        []search.Warning{},
 					QueryLanguage:   &parsedQuery,
 					ResultType:      resultType,
-				}, nil
+				}
+				finalizeSearchResponse(&response, parsedQuery)
+				return response, nil
 			}
 		}
 	}
@@ -968,7 +1007,7 @@ func (s *Service) Search(ctx context.Context, request SearchRequest) (SearchResp
 		queryFilters.repositoryDeny,
 	)
 	if empty {
-		return SearchResponse{
+		response := SearchResponse{
 			Limit:           limit,
 			Matches:         []SearchMatch{},
 			Items:           []SearchItem{},
@@ -978,7 +1017,9 @@ func (s *Service) Search(ctx context.Context, request SearchRequest) (SearchResp
 			NamedContexts:   effective.NamedContexts,
 			QueryLanguage:   &parsedQuery,
 			ResultType:      resultType,
-		}, nil
+		}
+		finalizeSearchResponse(&response, parsedQuery)
+		return response, nil
 	}
 	engineText := parsedQuery.Text
 	engineMode := strings.TrimSpace(request.Mode)
@@ -1040,6 +1081,7 @@ func (s *Service) Search(ctx context.Context, request SearchRequest) (SearchResp
 	response.NamedContexts = effective.NamedContexts
 	response.QueryLanguage = &parsedQuery
 	setSearchResultType(&response, resultType)
+	finalizeSearchResponse(&response, parsedQuery)
 	return response, nil
 }
 
@@ -1162,6 +1204,9 @@ func (s *Service) FindSymbol(ctx context.Context, request SymbolRequest) (Symbol
 		UseDefaultContexts: request.UseDefaultContexts,
 	})
 	setSearchResultType(&response, "symbol_definition")
+	if err == nil {
+		finalizeSearchResponse(&response, querylang.Query{Text: symbol})
+	}
 	return response, err
 }
 
@@ -1255,6 +1300,7 @@ func (s *Service) FindReferences(ctx context.Context, request ReferenceRequest) 
 	}
 	output.Contexts = resolvedContexts
 	output.NamedContexts = effective.NamedContexts
+	finalizeSearchResponse(&output, querylang.Query{Text: symbol})
 	return output, nil
 }
 

@@ -24,6 +24,7 @@ func TestRoadmapKeepsM7ScopeAndCompletedMilestones(t *testing.T) {
 		"- [x] Add named search contexts",
 		"- [x] Make every effective context visible",
 		"- [x] Provide explicit result types",
+		"- [x] Add result facets",
 	} {
 		if !strings.Contains(m7, completed) {
 			t.Errorf("M7 completed scope is missing %q", completed)
