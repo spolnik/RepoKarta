@@ -508,7 +508,7 @@ type searchCodeInput struct {
 	File         string                  `json:"file,omitempty" jsonschema:"Optional substring required in the filename."`
 	Mode         string                  `json:"mode,omitempty" jsonschema:"Search mode: literal regex zoekt or references. References uses persisted AST relations."`
 	Limit        int                     `json:"limit,omitempty" jsonschema:"Maximum files to return from 1 to 500. Defaults to 100."`
-	Contexts     []contextscope.Selector `json:"contexts,omitempty" jsonschema:"Optional structured repository and file contexts. Each context uses kind repository or file plus repository_id pinned revision and optional repository-relative path."`
+	Contexts     []contextscope.Selector `json:"contexts,omitempty" jsonschema:"Optional structured repository file directory or symbol contexts. Each uses a stable repository ID and pinned revision; path and symbol identity fields are required by their context kind."`
 }
 type searchCodeOutput = codeintel.SearchResponse
 
@@ -626,7 +626,7 @@ type findSymbolInput struct {
 	RepositoryID int64                   `json:"repository_id,omitempty" jsonschema:"Optional repository ID returned by list_repositories. Omit to search every indexed repository."`
 	Language     string                  `json:"language,omitempty" jsonschema:"Optional programming language filter."`
 	Limit        int                     `json:"limit,omitempty" jsonschema:"Maximum files to return from 1 to 500. Defaults to 100."`
-	Contexts     []contextscope.Selector `json:"contexts,omitempty" jsonschema:"Optional structured repository and file contexts."`
+	Contexts     []contextscope.Selector `json:"contexts,omitempty" jsonschema:"Optional structured repository file directory or symbol contexts."`
 }
 
 type findSymbolOutput = codeintel.SymbolResponse
@@ -638,7 +638,7 @@ type findReferencesInput struct {
 	Path         string                  `json:"path,omitempty" jsonschema:"Optional substring required in the repository-relative path."`
 	File         string                  `json:"file,omitempty" jsonschema:"Optional substring required in the filename."`
 	Limit        int                     `json:"limit,omitempty" jsonschema:"Maximum files to return from 1 to 500. Defaults to 100."`
-	Contexts     []contextscope.Selector `json:"contexts,omitempty" jsonschema:"Optional structured repository and file contexts."`
+	Contexts     []contextscope.Selector `json:"contexts,omitempty" jsonschema:"Optional structured repository file directory or symbol contexts."`
 }
 
 type findReferencesOutput = codeintel.ReferenceResponse

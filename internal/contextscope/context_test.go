@@ -24,10 +24,16 @@ func TestResolutionErrorAndPrompt(t *testing.T) {
 	prompt := Prompt([]Context{
 		{Kind: KindRepository, RepositoryID: 7, Revision: "abc"},
 		{Kind: KindFile, RepositoryID: 7, Revision: "abc", Path: "internal/main.go"},
+		{
+			Kind: KindSymbol, RepositoryID: 7, Revision: "abc",
+			Path: "internal/main.go", Symbol: "run", SymbolKind: "function",
+			StartLine: 12, EndLine: 20,
+		},
 	})
 	for _, expected := range []string{
 		"repository_id=7 revision=abc",
 		`file repository_id=7 revision=abc path="internal/main.go"`,
+		`symbol repository_id=7 revision=abc path="internal/main.go" symbol="run" symbol_kind="function" lines=12-20`,
 	} {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("prompt missing %q: %s", expected, prompt)

@@ -269,7 +269,7 @@ CREATE TABLE IF NOT EXISTS identity_role_mappings (
     UNIQUE(provider, group_value COLLATE NOCASE)
 );`
 
-	// Version 13 keeps server-resolved structured repository/file contexts on
+	// Version 13 keeps server-resolved structured contexts on
 	// the user message that introduced them. Saved chats can render exact chips
 	// without reconstructing identities from message text. The defensive CREATE
 	// supports early pre-release databases whose recorded version omitted the

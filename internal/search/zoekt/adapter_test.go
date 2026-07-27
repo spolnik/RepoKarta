@@ -162,6 +162,22 @@ func TestAdapterIndexesAndSearchesRepositoryOnNativePlatform(t *testing.T) {
 	if len(scoped.Matches) != 1 || scoped.Matches[0].Path != "internal/hello.go" {
 		t.Fatalf("structured file scope = %#v; indexed repository identity = %q", scoped.Matches, match.Repository)
 	}
+	directoryScoped, err := adapter.Search(context.Background(), search.Query{
+		Text: "needle from local code",
+		Scopes: []search.Scope{{
+			RepositoryID: uint32(repository.ID),
+			Repository:   filepath.ToSlash(repositoryPath),
+			Kind:         search.ScopeKindDirectory,
+			Path:         "internal",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(directoryScoped.Matches) != 1 ||
+		directoryScoped.Matches[0].Path != "internal/hello.go" {
+		t.Fatalf("structured directory scope = %#v", directoryScoped.Matches)
+	}
 
 	if err := os.WriteFile(filepath.Join(internalPath, "hello.go"), []byte(source+"\nconst UpdatedNeedle = \"fresh index\"\n"), 0o644); err != nil {
 		t.Fatal(err)

@@ -136,6 +136,11 @@ class PaymentJob {
 	}) {
 		t.Fatalf("prepared relations = %#v", ready.Structure[0].Relations)
 	}
+	if !slices.ContainsFunc(ready.Structure[0].Symbols, func(symbol analysis.Symbol) bool {
+		return symbol.Name == "PaymentJob"
+	}) {
+		t.Fatalf("prepared symbols = %#v", ready.Structure[0].Symbols)
+	}
 }
 
 func TestStructuralIndexReadsEveryPreparedRepositoryInLargeFleet(t *testing.T) {
@@ -431,7 +436,7 @@ func TestSnapshotRegeneratesUnsupportedCachedArtifact(t *testing.T) {
 	}
 	content := mustReadGraphFile(t, files[0])
 	if bytes.Contains(content, []byte("unsupported-marker")) ||
-		!bytes.Contains(content, []byte(`"version": 9`)) {
+		!bytes.Contains(content, []byte(`"version": 10`)) {
 		t.Fatalf("unsupported cache was not regenerated: %s", content)
 	}
 }

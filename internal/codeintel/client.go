@@ -80,6 +80,11 @@ func (c *Client) post(ctx context.Context, endpoint string, input, output any) e
 
 // FindSymbol calls GET /api/symbol.
 func (c *Client) FindSymbol(ctx context.Context, request SymbolRequest) (SymbolResponse, error) {
+	if len(request.Contexts) > 0 {
+		var output SymbolResponse
+		err := c.post(ctx, "/api/symbol", request, &output)
+		return output, err
+	}
 	values := url.Values{
 		"symbol": []string{request.Symbol},
 		"repo":   []string{repositorySelector(request.RepositoryID, request.Repository)},
@@ -104,6 +109,7 @@ func (c *Client) FindReferences(ctx context.Context, request ReferenceRequest) (
 		File:         request.File,
 		Mode:         "references",
 		Limit:        request.Limit,
+		Contexts:     request.Contexts,
 	})
 }
 

@@ -46,7 +46,23 @@ func TestClientCoversReadOnlyJSONSurface(t *testing.T) {
 	if _, err := client.FindSymbol(ctx, SymbolRequest{Symbol: "Thing", Repository: "repo", Limit: 5}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.FindReferences(ctx, ReferenceRequest{Symbol: "Thing", RepositoryID: 7, Limit: 10}); err != nil {
+	if _, err := client.FindSymbol(ctx, SymbolRequest{
+		Symbol: "Thing",
+		Contexts: []contextscope.Selector{{
+			Kind: contextscope.KindSymbol, RepositoryID: 7,
+			Revision: "abc", Path: "main.go", Symbol: "Thing",
+			SymbolKind: "type", Line: 4,
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.FindReferences(ctx, ReferenceRequest{
+		Symbol: "Thing", Limit: 10,
+		Contexts: []contextscope.Selector{{
+			Kind: contextscope.KindDirectory, RepositoryID: 7,
+			Revision: "abc", Path: "internal",
+		}},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := client.GetFile(ctx, FileRequest{RepositoryID: 7, Revision: "abc", Path: "main.go", StartLine: 2, EndLine: 4}); err != nil {
@@ -71,16 +87,23 @@ func TestClientCoversReadOnlyJSONSurface(t *testing.T) {
 		!strings.Contains(err.Error(), "bounded failure") {
 		t.Fatalf("API error = %v", err)
 	}
-	if len(requests) != 12 {
+	if len(requests) != 13 {
 		t.Fatalf("requests = %#v", requests)
 	}
 	foundPost := false
+	foundSymbolPost := false
 	for _, request := range requests {
 		if request == "POST /api/search" {
 			foundPost = true
 		}
+		if request == "POST /api/symbol" {
+			foundSymbolPost = true
+		}
 	}
 	if !foundPost {
 		t.Fatalf("structured search did not use POST: %#v", requests)
+	}
+	if !foundSymbolPost {
+		t.Fatalf("structured symbol search did not use POST: %#v", requests)
 	}
 }

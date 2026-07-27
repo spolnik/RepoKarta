@@ -18,6 +18,7 @@ import (
 
 	"github.com/spolnik/RepoKarta/internal/acquisition"
 	"github.com/spolnik/RepoKarta/internal/agent"
+	"github.com/spolnik/RepoKarta/internal/analysis"
 	"github.com/spolnik/RepoKarta/internal/audit"
 	"github.com/spolnik/RepoKarta/internal/catalog"
 	"github.com/spolnik/RepoKarta/internal/codeintel"
@@ -1410,6 +1411,14 @@ func (pendingReferenceStructure) ReadStructure(context.Context, int64) (graph.St
 	}}, nil
 }
 
+type fixedReferenceStructure struct {
+	index graph.StructuralIndex
+}
+
+func (structure fixedReferenceStructure) ReadStructure(context.Context, int64) (graph.StructuralIndex, error) {
+	return structure.index, nil
+}
+
 func TestAPIReferenceSearchReturnsAcceptedWithIndexProgress(t *testing.T) {
 	intelligence := codeintel.New(testStore{}, testSearcher{}, "http://127.0.0.1:7331").
 		UseStructure(pendingReferenceStructure{})
@@ -1446,6 +1455,16 @@ func TestStructuredContextsFlowThroughJSONSearchAndChat(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(directory, "main.go"), []byte("package main\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.MkdirAll(filepath.Join(directory, "internal"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(directory, "internal", "helper.go"),
+		[]byte("package internal\n\nfunc Helper() {}\n"),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
 	runHTTPGit(t, directory, "init", "-q")
 	runHTTPGit(t, directory, "add", ".")
 	runHTTPGit(t, directory, "-c", "user.name=RepoKarta Test", "-c", "user.email=test@repokarta.local", "commit", "-qm", "fixture")
@@ -1455,9 +1474,24 @@ func TestStructuredContextsFlowThroughJSONSearchAndChat(t *testing.T) {
 		IndexedCommit: revision, IndexState: "ready",
 	}
 	conversations := &testConversations{}
+	intelligence := codeintel.New(
+		testStore{repositories: []catalog.Repository{repository}},
+		testSearcher{},
+		"http://127.0.0.1:7331",
+	).UseStructure(fixedReferenceStructure{index: graph.StructuralIndex{
+		Scope: graph.Scope{Complete: true, TotalRepositories: 1, AnalyzedRepositories: 1},
+		Structure: []graph.StructuralDocument{{
+			RepositoryID: repository.ID, Repository: repository.Name,
+			Revision: revision, Path: "internal/helper.go",
+			Symbols: []analysis.Symbol{{
+				Name: "Helper", Kind: "function",
+				Range: analysis.Range{StartLine: 3, EndLine: 3},
+			}},
+		}},
+	}})
 	server, err := New(
 		Config{Address: "127.0.0.1:7331", Conversations: conversations},
-		codeintel.New(testStore{repositories: []catalog.Repository{repository}}, testSearcher{}, "http://127.0.0.1:7331"),
+		intelligence,
 		testRefresher{},
 	)
 	if err != nil {
@@ -1484,6 +1518,48 @@ func TestStructuredContextsFlowThroughJSONSearchAndChat(t *testing.T) {
 		!strings.Contains(resolveResponse.Body.String(), `"label":"@fixture:main.go"`) {
 		t.Fatalf("structured context resolution = %d, body = %s", resolveResponse.Code, resolveResponse.Body.String())
 	}
+	for _, testCase := range []struct {
+		name     string
+		selector contextscope.Selector
+		label    string
+	}{
+		{
+			name: "directory",
+			selector: contextscope.Selector{
+				Kind: contextscope.KindDirectory, RepositoryID: repository.ID,
+				Revision: revision, Path: "internal",
+			},
+			label: `"label":"@fixture:internal/"`,
+		},
+		{
+			name: "symbol",
+			selector: contextscope.Selector{
+				Kind: contextscope.KindSymbol, RepositoryID: repository.ID,
+				Revision: revision, Path: "internal/helper.go", Symbol: "Helper",
+				SymbolKind: "function", Line: 3,
+			},
+			label: `"label":"@fixture:internal/helper.go#Helper:3"`,
+		},
+	} {
+		t.Run(testCase.name+" context resolution", func(t *testing.T) {
+			body, marshalErr := json.Marshal(map[string]any{
+				"contexts": []contextscope.Selector{testCase.selector},
+			})
+			if marshalErr != nil {
+				t.Fatal(marshalErr)
+			}
+			request := httptest.NewRequest(
+				http.MethodPost,
+				"http://127.0.0.1:7331/api/contexts/resolve",
+				bytes.NewReader(body),
+			)
+			response := httptest.NewRecorder()
+			server.server.Handler.ServeHTTP(response, request)
+			if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), testCase.label) {
+				t.Fatalf("resolution = %d, body = %s", response.Code, response.Body.String())
+			}
+		})
+	}
 
 	searchBody, err := json.Marshal(codeintel.SearchRequest{
 		Query: "package", Contexts: []contextscope.Selector{selector},
@@ -1503,6 +1579,28 @@ func TestStructuredContextsFlowThroughJSONSearchAndChat(t *testing.T) {
 	}
 	if len(searchResult.Contexts) != 1 || searchResult.Contexts[0].Path != "main.go" {
 		t.Fatalf("structured search contexts = %#v", searchResult.Contexts)
+	}
+	symbolSelector := contextscope.Selector{
+		Kind: contextscope.KindSymbol, RepositoryID: repository.ID,
+		Revision: revision, Path: "internal/helper.go", Symbol: "Helper",
+		SymbolKind: "function", Line: 3,
+	}
+	symbolBody, err := json.Marshal(codeintel.SymbolRequest{
+		Symbol: "Helper", Contexts: []contextscope.Selector{symbolSelector},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	symbolRequest := httptest.NewRequest(
+		http.MethodPost,
+		"http://127.0.0.1:7331/api/symbol",
+		bytes.NewReader(symbolBody),
+	)
+	symbolResponse := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(symbolResponse, symbolRequest)
+	if symbolResponse.Code != http.StatusOK ||
+		!strings.Contains(symbolResponse.Body.String(), `"symbol":"Helper"`) {
+		t.Fatalf("structured symbol status = %d, body = %s", symbolResponse.Code, symbolResponse.Body.String())
 	}
 	staleSelector := selector
 	staleSelector.Revision = strings.Repeat("b", 40)

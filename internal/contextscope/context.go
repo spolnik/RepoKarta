@@ -1,5 +1,5 @@
 // Package contextscope defines RepoKarta's protocol-independent structured
-// repository and file context contract.
+// repository, file, directory, and symbol context contract.
 package contextscope
 
 import (
@@ -13,16 +13,21 @@ const (
 
 	KindRepository = "repository"
 	KindFile       = "file"
+	KindDirectory  = "directory"
+	KindSymbol     = "symbol"
 )
 
-// Selector is the client-supplied identity of a repository or committed file.
-// Display labels are deliberately absent: callers must send stable repository
-// IDs, pinned revisions, and repository-relative paths.
+// Selector is the client-supplied identity of a repository, committed path, or
+// source declaration. Display labels are deliberately absent: callers must
+// send stable repository IDs, pinned revisions, paths, and symbol coordinates.
 type Selector struct {
 	Kind         string `json:"kind"`
 	RepositoryID int64  `json:"repository_id"`
 	Revision     string `json:"revision,omitempty"`
 	Path         string `json:"path,omitempty"`
+	Symbol       string `json:"symbol,omitempty"`
+	SymbolKind   string `json:"symbol_kind,omitempty"`
+	Line         int    `json:"line,omitempty"`
 }
 
 // Context is a selector resolved against the viewer's current, commit-pinned
@@ -33,6 +38,11 @@ type Context struct {
 	Repository   string `json:"repository"`
 	Revision     string `json:"revision"`
 	Path         string `json:"path,omitempty"`
+	Symbol       string `json:"symbol,omitempty"`
+	SymbolKind   string `json:"symbol_kind,omitempty"`
+	Line         int    `json:"line,omitempty"`
+	StartLine    int    `json:"start_line,omitempty"`
+	EndLine      int    `json:"end_line,omitempty"`
 	Label        string `json:"label"`
 }
 
@@ -72,6 +82,16 @@ func Prompt(contexts []Context) string {
 		fmt.Fprintf(&output, "- %s repository_id=%d revision=%s", context.Kind, context.RepositoryID, context.Revision)
 		if context.Path != "" {
 			fmt.Fprintf(&output, " path=%q", context.Path)
+		}
+		if context.Symbol != "" {
+			fmt.Fprintf(
+				&output,
+				" symbol=%q symbol_kind=%q lines=%d-%d",
+				context.Symbol,
+				context.SymbolKind,
+				context.StartLine,
+				context.EndLine,
+			)
 		}
 		output.WriteByte('\n')
 	}

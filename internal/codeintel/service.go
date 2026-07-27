@@ -22,6 +22,7 @@ import (
 	"unicode"
 
 	"github.com/spolnik/RepoKarta/internal/access"
+	"github.com/spolnik/RepoKarta/internal/analysis"
 	"github.com/spolnik/RepoKarta/internal/catalog"
 	"github.com/spolnik/RepoKarta/internal/contextscope"
 	"github.com/spolnik/RepoKarta/internal/graph"
@@ -137,8 +138,8 @@ type RepositoryList struct {
 	Repositories []Repository `json:"repositories"`
 }
 
-// ContextSuggestionRequest selects permission-aware repository or file
-// autocomplete results.
+// ContextSuggestionRequest selects permission-aware repository, file,
+// directory, or symbol autocomplete results.
 type ContextSuggestionRequest struct {
 	Kind         string
 	Query        string
@@ -421,13 +422,22 @@ func (s *Service) ResolveContexts(ctx context.Context, selectors []contextscope.
 		selector.Kind = strings.ToLower(strings.TrimSpace(selector.Kind))
 		selector.Revision = strings.TrimSpace(selector.Revision)
 		selector.Path = strings.TrimSpace(strings.ReplaceAll(selector.Path, "\\", "/"))
+		selector.Symbol = strings.TrimSpace(selector.Symbol)
+		selector.SymbolKind = strings.ToLower(strings.TrimSpace(selector.SymbolKind))
 		issue := func(code, message string) {
 			issues = append(issues, contextscope.Issue{
 				Index: index, Code: code, Message: message, Selector: selector,
 			})
 		}
-		if selector.Kind != contextscope.KindRepository && selector.Kind != contextscope.KindFile {
-			issue("invalid_kind", "context kind must be repository or file")
+		switch selector.Kind {
+		case contextscope.KindRepository, contextscope.KindFile,
+			contextscope.KindDirectory, contextscope.KindSymbol:
+		default:
+			issue("invalid_kind", "context kind must be repository, file, directory, or symbol")
+			continue
+		}
+		if selector.Line < 0 {
+			issue("invalid_line", "context line must be a positive integer when provided")
 			continue
 		}
 		if selector.RepositoryID <= 0 {
@@ -457,36 +467,132 @@ func (s *Service) ResolveContexts(ctx context.Context, selectors []contextscope.
 			))
 			continue
 		}
-		if selector.Kind == contextscope.KindRepository && selector.Path != "" {
-			issue("invalid_path", "repository contexts cannot include a file path")
+		if selector.Kind != contextscope.KindSymbol &&
+			(selector.Symbol != "" || selector.SymbolKind != "" || selector.Line != 0) {
+			issue("invalid_symbol", "only symbol contexts can include symbol identity fields")
 			continue
 		}
-		if selector.Kind == contextscope.KindFile {
-			filePath, pathErr := safeTreePath(selector.Path)
-			if pathErr != nil || filePath == "" {
-				issue("invalid_path", "file context path must be a safe repository-relative path")
+		var (
+			symbolStart int
+			symbolEnd   int
+		)
+		switch selector.Kind {
+		case contextscope.KindRepository:
+			if selector.Path != "" {
+				issue("invalid_path", "repository contexts cannot include a path")
 				continue
 			}
-			objectType, objectErr := gitObjectType(ctx, repository, repository.IndexedCommit, filePath)
-			if objectErr != nil || objectType != "blob" {
-				issue("missing_file", fmt.Sprintf(
-					"file %q is missing from repository %q at indexed revision %s",
-					filePath,
+		case contextscope.KindFile, contextscope.KindDirectory:
+			contextPath, pathErr := safeTreePath(selector.Path)
+			if pathErr != nil || contextPath == "" {
+				issue("invalid_path", fmt.Sprintf(
+					"%s context path must be a safe repository-relative path",
+					selector.Kind,
+				))
+				continue
+			}
+			expectedType := "blob"
+			missingCode := "missing_file"
+			if selector.Kind == contextscope.KindDirectory {
+				expectedType = "tree"
+				missingCode = "missing_directory"
+			}
+			objectType, objectErr := gitObjectType(ctx, repository, repository.IndexedCommit, contextPath)
+			if objectErr != nil || objectType != expectedType {
+				issue(missingCode, fmt.Sprintf(
+					"%s %q is missing from repository %q at indexed revision %s",
+					selector.Kind,
+					contextPath,
 					repository.Name,
 					shortRevision(repository.IndexedCommit),
 				))
 				continue
 			}
-			selector.Path = filePath
+			selector.Path = contextPath
+		case contextscope.KindSymbol:
+			symbol, symbolErr := validSymbol(selector.Symbol)
+			if symbolErr != nil {
+				issue("invalid_symbol", symbolErr.Error())
+				continue
+			}
+			selector.Symbol = symbol
+			if selector.Path != "" {
+				symbolPath, pathErr := safeTreePath(selector.Path)
+				if pathErr != nil || symbolPath == "" {
+					issue("invalid_path", "symbol context path must be a safe repository-relative file path")
+					continue
+				}
+				selector.Path = symbolPath
+			}
+			candidates, incomplete, candidateErr := s.contextSymbolCandidates(ctx, repository, selector)
+			if candidateErr != nil {
+				issue("symbol_index_unavailable", candidateErr.Error())
+				continue
+			}
+			if len(candidates) == 0 {
+				if incomplete {
+					issue("incomplete_symbol_index", fmt.Sprintf(
+						"symbol %q could not be proven missing because the symbol context index for repository %q is incomplete",
+						selector.Symbol,
+						repository.Name,
+					))
+				} else {
+					issue("missing_symbol", fmt.Sprintf(
+						"symbol %q is missing from repository %q at indexed revision %s",
+						selector.Symbol,
+						repository.Name,
+						shortRevision(repository.IndexedCommit),
+					))
+				}
+				continue
+			}
+			if len(candidates) > 1 || (incomplete && (selector.Path == "" || selector.Line == 0)) {
+				issue("ambiguous_symbol", fmt.Sprintf(
+					"symbol %q is ambiguous in repository %q; choose a specific @symbol suggestion with its file and line",
+					selector.Symbol,
+					repository.Name,
+				))
+				continue
+			}
+			candidate := candidates[0]
+			selector.Path = candidate.Path
+			selector.SymbolKind = candidate.Symbol.Kind
+			selector.Line = candidate.Symbol.Range.StartLine
+			symbolStart = candidate.Symbol.Range.StartLine
+			symbolEnd = max(symbolStart, candidate.Symbol.Range.EndLine)
 		}
-		key := fmt.Sprintf("%s\x00%d\x00%s\x00%s", selector.Kind, selector.RepositoryID, repository.IndexedCommit, selector.Path)
+		key := fmt.Sprintf(
+			"%s\x00%d\x00%s\x00%s\x00%s\x00%s\x00%d",
+			selector.Kind,
+			selector.RepositoryID,
+			repository.IndexedCommit,
+			selector.Path,
+			selector.Symbol,
+			selector.SymbolKind,
+			selector.Line,
+		)
 		if _, duplicate := seen[key]; duplicate {
 			continue
 		}
 		seen[key] = struct{}{}
 		label := repositoryContextLabel(repository, visibleRepositories)
-		if selector.Kind == contextscope.KindFile {
+		switch selector.Kind {
+		case contextscope.KindFile:
 			label += ":" + selector.Path
+		case contextscope.KindDirectory:
+			label += ":" + strings.TrimSuffix(selector.Path, "/") + "/"
+		case contextscope.KindSymbol:
+			label = contextSymbolLabel(label, contextSymbolCandidate{
+				Path: selector.Path,
+				Symbol: analysis.Symbol{
+					Name: selector.Symbol,
+					Kind: selector.SymbolKind,
+					Range: analysis.Range{
+						StartLine: symbolStart,
+						EndLine:   symbolEnd,
+					},
+				},
+			})
 		}
 		resolved = append(resolved, contextscope.Context{
 			Kind:         selector.Kind,
@@ -494,6 +600,11 @@ func (s *Service) ResolveContexts(ctx context.Context, selectors []contextscope.
 			Repository:   repository.Name,
 			Revision:     repository.IndexedCommit,
 			Path:         selector.Path,
+			Symbol:       selector.Symbol,
+			SymbolKind:   selector.SymbolKind,
+			Line:         selector.Line,
+			StartLine:    symbolStart,
+			EndLine:      symbolEnd,
 			Label:        label,
 		})
 	}
@@ -538,9 +649,9 @@ func (s *Service) SuggestContexts(ctx context.Context, request ContextSuggestion
 				Detail: detail,
 			})
 		}
-	case contextscope.KindFile:
+	case contextscope.KindFile, contextscope.KindDirectory:
 		if request.RepositoryID <= 0 {
-			return output, errors.New("repository_id is required for file context suggestions")
+			return output, fmt.Errorf("repository_id is required for %s context suggestions", kind)
 		}
 		repository, err := s.store.RepositoryByID(ctx, request.RepositoryID)
 		if err != nil {
@@ -558,8 +669,16 @@ func (s *Service) SuggestContexts(ctx context.Context, request ContextSuggestion
 		if err != nil {
 			return output, err
 		}
-		for _, filePath := range paths {
-			if queryText != "" && !strings.Contains(strings.ToLower(filePath), queryText) {
+		contextPaths := paths
+		if kind == contextscope.KindDirectory {
+			contextPaths = contextDirectories(paths)
+		}
+		labelSuffix := ""
+		if kind == contextscope.KindDirectory {
+			labelSuffix = "/"
+		}
+		for _, contextPath := range contextPaths {
+			if queryText != "" && !strings.Contains(strings.ToLower(contextPath), queryText) {
 				continue
 			}
 			if len(output.Suggestions) == limit {
@@ -568,18 +687,40 @@ func (s *Service) SuggestContexts(ctx context.Context, request ContextSuggestion
 			}
 			output.Suggestions = append(output.Suggestions, ContextSuggestion{
 				Context: contextscope.Selector{
-					Kind:         contextscope.KindFile,
+					Kind:         kind,
 					RepositoryID: repository.ID,
 					Revision:     repository.IndexedCommit,
-					Path:         filePath,
+					Path:         contextPath,
 				},
-				Label:  repositoryLabel + ":" + filePath,
+				Label:  repositoryLabel + ":" + contextPath + labelSuffix,
 				Detail: shortRevision(repository.IndexedCommit),
 			})
 		}
 		output.Truncated = output.Truncated || truncated
+	case contextscope.KindSymbol:
+		if request.RepositoryID <= 0 {
+			return output, errors.New("repository_id is required for symbol context suggestions")
+		}
+		repository, err := s.store.RepositoryByID(ctx, request.RepositoryID)
+		if err != nil {
+			return output, err
+		}
+		repositories, err := s.store.ListRepositories(ctx)
+		if err != nil {
+			return output, err
+		}
+		if repository.IndexState != "ready" || repository.IndexedCommit == "" {
+			return output, fmt.Errorf("repository %q does not have a ready indexed revision", repository.Name)
+		}
+		return s.suggestSymbolContexts(
+			ctx,
+			repository,
+			repositoryContextLabel(repository, repositories),
+			queryText,
+			limit,
+		)
 	default:
-		return output, errors.New("context kind must be repository or file")
+		return output, errors.New("context kind must be repository, file, directory, or symbol")
 	}
 	return output, nil
 }
@@ -686,7 +827,11 @@ func (s *Service) Search(ctx context.Context, request SearchRequest) (SearchResp
 			structuredScopes = append(structuredScopes, search.Scope{
 				RepositoryID: uint32(repository.ID),
 				Repository:   filepath.ToSlash(repository.Path),
+				Kind:         resolved.Kind,
 				Path:         resolved.Path,
+				Symbol:       resolved.Symbol,
+				StartLine:    resolved.StartLine,
+				EndLine:      resolved.EndLine,
 			})
 		}
 		structuredScopes = compactSearchScopes(structuredScopes)
@@ -739,6 +884,7 @@ func (s *Service) Search(ctx context.Context, request SearchRequest) (SearchResp
 	if err != nil {
 		return SearchResponse{}, err
 	}
+	result = filterSearchResultToStructuredScopes(result, structuredScopes, true)
 	response, err := s.searchResponse(ctx, result, limit)
 	if err != nil {
 		return SearchResponse{}, err
@@ -877,30 +1023,26 @@ func (s *Service) FindReferences(ctx context.Context, request ReferenceRequest) 
 		(repositoryID > 0 || strings.TrimSpace(request.Repository) != "") {
 		return ReferenceResponse{}, errors.New("structured contexts cannot be combined with the legacy repository selector")
 	}
+	var structuredScopes []search.Scope
 	if len(resolvedContexts) > 0 {
 		repositoryIDs := make(map[int64]struct{})
-		filePaths := make(map[string]struct{})
-		repositoryWide := false
 		for _, resolved := range resolvedContexts {
 			repositoryIDs[resolved.RepositoryID] = struct{}{}
-			if resolved.Kind == contextscope.KindRepository {
-				repositoryWide = true
-			} else if resolved.Path != "" {
-				filePaths[resolved.Path] = struct{}{}
-			}
+			structuredScopes = append(structuredScopes, search.Scope{
+				RepositoryID: uint32(resolved.RepositoryID),
+				Kind:         resolved.Kind,
+				Path:         resolved.Path,
+				Symbol:       resolved.Symbol,
+				StartLine:    resolved.StartLine,
+				EndLine:      resolved.EndLine,
+			})
 		}
 		if len(repositoryIDs) != 1 {
 			return ReferenceResponse{}, errors.New("reference search currently accepts structured contexts from one repository")
 		}
-		if !repositoryWide {
-			if len(filePaths) > 1 {
-				return ReferenceResponse{}, errors.New("reference search currently accepts one structured file context")
-			}
-			for request.Path = range filePaths {
-			}
-		}
 		for repositoryID = range repositoryIDs {
 		}
+		structuredScopes = compactSearchScopes(structuredScopes)
 	}
 	if repositoryID <= 0 && strings.TrimSpace(request.Repository) != "" {
 		repository, resolveErr := s.namedRepository(ctx, request.Repository)
@@ -917,6 +1059,7 @@ func (s *Service) FindReferences(ctx context.Context, request ReferenceRequest) 
 	if err != nil {
 		return ReferenceResponse{}, err
 	}
+	result = filterSearchResultToStructuredScopes(result, structuredScopes, false)
 	result.Duration = time.Since(started)
 	output, err := s.searchResponse(ctx, result, normalizeLimit(request.Limit, DefaultSearchLimit, MaximumSearchLimit))
 	if err != nil {
@@ -1512,26 +1655,127 @@ func repositoryContextLabel(repository catalog.Repository, repositories []catalo
 }
 
 func compactSearchScopes(scopes []search.Scope) []search.Scope {
-	repositoryWide := make(map[string]bool)
-	for _, scope := range scopes {
-		if scope.Path == "" {
-			repositoryWide[scope.Repository] = true
-		}
-	}
 	output := make([]search.Scope, 0, len(scopes))
-	seen := make(map[string]struct{}, len(scopes))
 	for _, scope := range scopes {
-		if scope.Path != "" && repositoryWide[scope.Repository] {
+		covered := false
+		for _, existing := range output {
+			if searchScopeCovers(existing, scope) {
+				covered = true
+				break
+			}
+		}
+		if covered {
 			continue
 		}
-		key := scope.Repository + "\x00" + scope.Path
-		if _, duplicate := seen[key]; duplicate {
-			continue
+		compacted := output[:0]
+		for _, existing := range output {
+			if !searchScopeCovers(scope, existing) {
+				compacted = append(compacted, existing)
+			}
 		}
-		seen[key] = struct{}{}
-		output = append(output, scope)
+		output = append(compacted, scope)
 	}
 	return output
+}
+
+func searchScopeCovers(left, right search.Scope) bool {
+	if left.RepositoryID != right.RepositoryID || left.Repository != right.Repository {
+		return false
+	}
+	if left.Path == "" || left.Kind == search.ScopeKindRepository {
+		return true
+	}
+	leftPath := strings.TrimSuffix(filepath.ToSlash(left.Path), "/")
+	rightPath := strings.TrimSuffix(filepath.ToSlash(right.Path), "/")
+	if left.Kind == search.ScopeKindDirectory {
+		return rightPath == leftPath || strings.HasPrefix(rightPath, leftPath+"/")
+	}
+	if left.Kind == search.ScopeKindFile || left.Kind == "" {
+		return rightPath == leftPath
+	}
+	return left.Kind == search.ScopeKindSymbol &&
+		right.Kind == search.ScopeKindSymbol &&
+		rightPath == leftPath &&
+		left.StartLine == right.StartLine &&
+		left.EndLine == right.EndLine &&
+		left.Symbol == right.Symbol
+}
+
+func filterSearchResultToStructuredScopes(result search.Result, scopes []search.Scope, engineScoped bool) search.Result {
+	if len(scopes) == 0 {
+		return result
+	}
+	if engineScoped {
+		hasSymbolScope := false
+		for _, scope := range scopes {
+			if scope.Kind == search.ScopeKindSymbol {
+				hasSymbolScope = true
+				break
+			}
+		}
+		if !hasSymbolScope {
+			return result
+		}
+	}
+	filtered := result
+	filtered.Matches = make([]search.FileMatch, 0, len(result.Matches))
+	filtered.MatchCount = 0
+	for _, match := range result.Matches {
+		wholeFile := false
+		ranges := make([]search.Scope, 0)
+		matchPath := filepath.ToSlash(match.Path)
+		for _, scope := range scopes {
+			if scope.RepositoryID > 0 && int64(scope.RepositoryID) != match.RepositoryID {
+				continue
+			}
+			scopePath := strings.TrimSuffix(filepath.ToSlash(scope.Path), "/")
+			switch scope.Kind {
+			case search.ScopeKindRepository:
+				wholeFile = true
+			case search.ScopeKindDirectory:
+				if matchPath == scopePath || strings.HasPrefix(matchPath, scopePath+"/") {
+					wholeFile = true
+				}
+			case search.ScopeKindSymbol:
+				if matchPath == scopePath {
+					ranges = append(ranges, scope)
+				}
+			default:
+				if matchPath == scopePath {
+					wholeFile = true
+				}
+			}
+		}
+		if !wholeFile && len(ranges) == 0 {
+			continue
+		}
+		outputMatch := match
+		if !wholeFile {
+			outputMatch.Lines = outputMatch.Lines[:0]
+			for _, line := range match.Lines {
+				for _, scope := range ranges {
+					if line.Number >= scope.StartLine && line.Number <= scope.EndLine {
+						outputMatch.Lines = append(outputMatch.Lines, line)
+						break
+					}
+				}
+			}
+			if len(outputMatch.Lines) == 0 {
+				continue
+			}
+		}
+		for _, line := range outputMatch.Lines {
+			filtered.MatchCount += max(1, len(line.Fragments))
+		}
+		filtered.Matches = append(filtered.Matches, outputMatch)
+	}
+	filtered.FileCount = len(filtered.Matches)
+	filtered.EstimatedFiles = len(filtered.Matches)
+	filtered.ReturnedFiles = len(filtered.Matches)
+	if filtered.TotalFilesExact {
+		filtered.Truncated = false
+	}
+	return filtered
 }
 
 func safeTreePath(value string) (string, error) {

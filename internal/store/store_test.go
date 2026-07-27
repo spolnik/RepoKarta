@@ -61,6 +61,18 @@ func TestConversationTranscriptPersistsAcrossDatabaseReopen(t *testing.T) {
 			Revision:     strings.Repeat("a", 40),
 			Path:         "internal/app/app.go",
 			Label:        "@RepoKarta:internal/app/app.go",
+		}, {
+			Kind:         contextscope.KindSymbol,
+			RepositoryID: 42,
+			Repository:   "RepoKarta",
+			Revision:     strings.Repeat("a", 40),
+			Path:         "internal/app/app.go",
+			Symbol:       "New",
+			SymbolKind:   "function",
+			Line:         14,
+			StartLine:    14,
+			EndLine:      22,
+			Label:        "@RepoKarta:internal/app/app.go#New:14",
 		}},
 		CreatedAt: now.Add(time.Second),
 	}); err != nil {
@@ -106,9 +118,13 @@ func TestConversationTranscriptPersistsAcrossDatabaseReopen(t *testing.T) {
 	if len(got.Messages) != 2 || len(got.Messages[0].Images) != 1 || len(got.Messages[1].Sources) != 1 {
 		t.Fatalf("conversation transcript = %#v", got.Messages)
 	}
-	if len(got.Messages[0].Contexts) != 1 ||
+	if len(got.Messages[0].Contexts) != 2 ||
 		got.Messages[0].Contexts[0].Path != "internal/app/app.go" ||
-		got.Messages[0].Contexts[0].Revision != strings.Repeat("a", 40) {
+		got.Messages[0].Contexts[0].Revision != strings.Repeat("a", 40) ||
+		got.Messages[0].Contexts[1].Symbol != "New" ||
+		got.Messages[0].Contexts[1].Line != 14 ||
+		got.Messages[0].Contexts[1].StartLine != 14 ||
+		got.Messages[0].Contexts[1].EndLine != 22 {
 		t.Fatalf("persisted contexts = %#v", got.Messages[0].Contexts)
 	}
 	if got.Messages[0].Images[0].Name != "diagram.png" || got.Messages[0].Images[0].Data != image.Data {

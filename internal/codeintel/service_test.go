@@ -155,7 +155,8 @@ func (s symbolTestStore) RepositoryByID(context.Context, int64) (catalog.Reposit
 }
 
 type capturingSearcher struct {
-	query search.Query
+	query  search.Query
+	result search.Result
 }
 
 type fixedResultSearcher struct {
@@ -299,6 +300,150 @@ func TestFileContextSuggestionsCacheImmutableGitTree(t *testing.T) {
 	}
 }
 
+func TestDirectoryAndSymbolContextsResolveAndScopeSearch(t *testing.T) {
+	directory := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(directory, "internal", "nested"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for filePath, content := range map[string]string{
+		"internal/service.go":       "package internal\n\nfunc Run() {}\n",
+		"internal/nested/worker.go": "package nested\n\nfunc Run() {}\n",
+		"README.md":                 "outside\n",
+	} {
+		fullPath := filepath.Join(directory, filepath.FromSlash(filePath))
+		if err := os.WriteFile(fullPath, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runGit(t, directory, "init", "-q")
+	runGit(t, directory, "add", ".")
+	runGit(t, directory, "-c", "user.name=RepoKarta Test", "-c", "user.email=test@repokarta.local", "commit", "-qm", "fixture")
+	revision := strings.TrimSpace(runGit(t, directory, "rev-parse", "HEAD"))
+	repository := catalog.Repository{
+		ID: 23, Name: "contexts", Path: directory, HeadCommit: revision,
+		IndexedCommit: revision, IndexState: "ready",
+	}
+	structure := referenceTestStructure{index: graph.StructuralIndex{
+		Scope: graph.Scope{Complete: true, TotalRepositories: 1, AnalyzedRepositories: 1},
+		Structure: []graph.StructuralDocument{
+			{
+				RepositoryID: repository.ID, Repository: repository.Name,
+				Revision: revision, Path: "internal/service.go",
+				Symbols: []analysis.Symbol{{
+					Name: "Run", Kind: "function",
+					Range: analysis.Range{StartLine: 10, EndLine: 20},
+				}},
+			},
+			{
+				RepositoryID: repository.ID, Repository: repository.Name,
+				Revision: revision, Path: "internal/nested/worker.go",
+				Symbols: []analysis.Symbol{{
+					Name: "Run", Kind: "function",
+					Range: analysis.Range{StartLine: 30, EndLine: 35},
+				}},
+			},
+		},
+	}}
+	searcher := &capturingSearcher{result: search.Result{
+		Matches: []search.FileMatch{
+			{
+				RepositoryID: repository.ID, Repository: filepath.ToSlash(directory),
+				Revision: revision, Path: "internal/service.go",
+				Lines: []search.LineMatch{
+					{Number: 5, Text: "before"},
+					{Number: 12, Text: "inside"},
+					{Number: 21, Text: "after"},
+				},
+			},
+			{
+				RepositoryID: repository.ID, Repository: filepath.ToSlash(directory),
+				Revision: revision, Path: "README.md",
+				Lines: []search.LineMatch{{Number: 1, Text: "outside"}},
+			},
+		},
+		MatchCount: 4, FileCount: 2, EstimatedFiles: 2, ReturnedFiles: 2,
+		TotalFilesExact: true,
+	}}
+	service := New(referenceTestStore{repository: repository}, searcher, "http://localhost").UseStructure(structure)
+
+	directorySuggestions, err := service.SuggestContexts(t.Context(), ContextSuggestionRequest{
+		Kind: contextscope.KindDirectory, Query: "nested", RepositoryID: repository.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(directorySuggestions.Suggestions) != 1 ||
+		directorySuggestions.Suggestions[0].Context.Path != "internal/nested" ||
+		directorySuggestions.Suggestions[0].Label != "@contexts:internal/nested/" {
+		t.Fatalf("directory suggestions = %#v", directorySuggestions)
+	}
+	directoryContexts, err := service.ResolveContexts(t.Context(), []contextscope.Selector{{
+		Kind: contextscope.KindDirectory, RepositoryID: repository.ID,
+		Revision: revision, Path: "internal",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(directoryContexts) != 1 || directoryContexts[0].Kind != contextscope.KindDirectory {
+		t.Fatalf("directory contexts = %#v", directoryContexts)
+	}
+
+	symbolSuggestions, err := service.SuggestContexts(t.Context(), ContextSuggestionRequest{
+		Kind: contextscope.KindSymbol, Query: "service", RepositoryID: repository.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(symbolSuggestions.Suggestions) != 1 {
+		t.Fatalf("symbol suggestions = %#v", symbolSuggestions)
+	}
+	symbolSelector := symbolSuggestions.Suggestions[0].Context
+	if symbolSelector.Symbol != "Run" || symbolSelector.SymbolKind != "function" ||
+		symbolSelector.Line != 10 || symbolSelector.Path != "internal/service.go" {
+		t.Fatalf("symbol selector = %#v", symbolSelector)
+	}
+	symbolContexts, err := service.ResolveContexts(t.Context(), []contextscope.Selector{symbolSelector})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(symbolContexts) != 1 ||
+		symbolContexts[0].StartLine != 10 ||
+		symbolContexts[0].EndLine != 20 ||
+		symbolContexts[0].Label != "@contexts:internal/service.go#Run:10" {
+		t.Fatalf("symbol contexts = %#v", symbolContexts)
+	}
+
+	_, err = service.ResolveContexts(t.Context(), []contextscope.Selector{{
+		Kind: contextscope.KindSymbol, RepositoryID: repository.ID,
+		Revision: revision, Symbol: "Run",
+	}})
+	var resolutionError *contextscope.ResolutionError
+	if !errors.As(err, &resolutionError) ||
+		len(resolutionError.Issues) != 1 ||
+		resolutionError.Issues[0].Code != "ambiguous_symbol" {
+		t.Fatalf("ambiguous symbol error = %#v, %v", resolutionError, err)
+	}
+
+	result, err := service.Search(t.Context(), SearchRequest{
+		Query: "needle", Contexts: []contextscope.Selector{symbolSelector},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(searcher.query.Scopes) != 1 ||
+		searcher.query.Scopes[0].Kind != search.ScopeKindSymbol ||
+		searcher.query.Scopes[0].StartLine != 10 ||
+		searcher.query.Scopes[0].EndLine != 20 {
+		t.Fatalf("symbol search scope = %#v", searcher.query.Scopes)
+	}
+	if len(result.Matches) != 1 ||
+		len(result.Matches[0].Lines) != 1 ||
+		result.Matches[0].Lines[0].Number != 12 ||
+		result.MatchCount != 1 {
+		t.Fatalf("symbol-scoped result = %#v", result)
+	}
+}
+
 func TestStructuredContextErrorsNeverBroadenSearch(t *testing.T) {
 	directory := t.TempDir()
 	if err := os.WriteFile(filepath.Join(directory, "present.go"), []byte("package fixture\n"), 0o644); err != nil {
@@ -355,7 +500,7 @@ func TestStructuredContextErrorsNeverBroadenSearch(t *testing.T) {
 
 func (s *capturingSearcher) Search(_ context.Context, query search.Query) (search.Result, error) {
 	s.query = query
-	return search.Result{}, nil
+	return s.result, nil
 }
 
 func TestFindSymbolUsesBoundedZoektSymbolQuery(t *testing.T) {

@@ -7,6 +7,7 @@ import {
   recommendedProviderEffort,
   recommendedProviderModel
 } from "./provider-defaults.mjs";
+import { activeContextMention } from "./context-mention.mjs";
 import { parseRepoKartaContextURL } from "./context-url.mjs";
 import { wikiPrimaryAction } from "./wiki-run-state.mjs";
 import "./styles.css";
@@ -483,16 +484,23 @@ type ConversationImage = {
   data: string;
 };
 
+type ContextKind = "repository" | "file" | "directory" | "symbol";
+
 type ContextSelector = {
-  kind: "repository" | "file";
+  kind: ContextKind;
   repository_id: number;
   revision?: string;
   path?: string;
+  symbol?: string;
+  symbol_kind?: string;
+  line?: number;
 };
 
 type ResolvedContext = ContextSelector & {
   repository: string;
   revision: string;
+  start_line?: number;
+  end_line?: number;
   label: string;
 };
 
@@ -1753,7 +1761,7 @@ function enableConversations(debug?: DebugLogger): void {
   let suggestedContexts: ContextSuggestion[] = [];
   let activeContextSuggestion = -1;
   let contextRequestSequence = 0;
-  let contextMention: { kind: "repository" | "file"; start: number; end: number } | undefined;
+  let contextMention: { kind: ContextKind; start: number; end: number } | undefined;
   let attachmentFeedback = "";
   let statuses: ProviderStatus[] = [];
   let conversationSummaries: ConversationRecord[] = [];
@@ -1966,7 +1974,15 @@ function enableConversations(debug?: DebugLogger): void {
   };
 
   const contextKey = (selector: ContextSelector): string => {
-    return `${selector.kind}:${selector.repository_id}:${selector.revision ?? ""}:${selector.path ?? ""}`;
+    return [
+      selector.kind,
+      selector.repository_id,
+      selector.revision ?? "",
+      selector.path ?? "",
+      selector.symbol ?? "",
+      selector.symbol_kind ?? "",
+      selector.line ?? ""
+    ].join(":");
   };
 
   const appendMessageContexts = (
@@ -2074,26 +2090,9 @@ function enableConversations(debug?: DebugLogger): void {
     input.focus();
   };
 
-  const activeMention = (): { kind: "repository" | "file"; query: string; start: number; end: number } | undefined => {
+  const activeMention = (): { kind: ContextKind; query: string; start: number; end: number } | undefined => {
     const caret = input.selectionStart ?? input.value.length;
-    const beforeCaret = input.value.slice(0, caret);
-    const repositoryStart = beforeCaret.lastIndexOf("@repository:");
-    const fileStart = beforeCaret.lastIndexOf("@file:");
-    const start = Math.max(repositoryStart, fileStart);
-    if (start < 0) {
-      return undefined;
-    }
-    const prefix = start === fileStart ? "@file:" : "@repository:";
-    const previousBoundary = start === 0 || /\s/.test(beforeCaret[start - 1] ?? "");
-    if (!previousBoundary || beforeCaret.slice(start + prefix.length).includes("\n")) {
-      return undefined;
-    }
-    return {
-      kind: prefix === "@file:" ? "file" : "repository",
-      query: beforeCaret.slice(start + prefix.length),
-      start,
-      end: caret
-    };
+    return activeContextMention(input.value, caret);
   };
 
   const updateContextSuggestions = async (): Promise<void> => {
@@ -2107,11 +2106,11 @@ function enableConversations(debug?: DebugLogger): void {
       q: mention.query,
       limit: "12"
     });
-    if (mention.kind === "file") {
+    if (mention.kind !== "repository") {
       const repositoryIDs = Array.from(new Set(selectedContexts.map((context) => context.context.repository_id)));
       if (repositoryIDs.length !== 1) {
         closeContextSuggestions();
-        showContextError("Add exactly one repository context before choosing @file.");
+        showContextError(`Add context from exactly one repository before choosing @${mention.kind}.`);
         return;
       }
       params.set("repository_id", String(repositoryIDs[0]));
@@ -2170,7 +2169,10 @@ function enableConversations(debug?: DebugLogger): void {
           kind: resolved.kind,
           repository_id: resolved.repository_id,
           revision: resolved.revision,
-          ...(resolved.path ? { path: resolved.path } : {})
+          ...(resolved.path ? { path: resolved.path } : {}),
+          ...(resolved.symbol ? { symbol: resolved.symbol } : {}),
+          ...(resolved.symbol_kind ? { symbol_kind: resolved.symbol_kind } : {}),
+          ...(resolved.line ? { line: resolved.line } : {})
         },
         label: resolved.label,
         detail: `${resolved.repository} @ ${resolved.revision.slice(0, 8)}`
@@ -2184,7 +2186,9 @@ function enableConversations(debug?: DebugLogger): void {
         kind: resolved.kind,
         repository_id: resolved.repository_id,
         revision: resolved.revision,
-        path: resolved.path || null
+        path: resolved.path || null,
+        symbol: resolved.symbol || null,
+        line: resolved.line || null
       });
     } catch (error: unknown) {
       showContextError(error instanceof Error ? error.message : "The pasted RepoKarta URL could not be resolved.");

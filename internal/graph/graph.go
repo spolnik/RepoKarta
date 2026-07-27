@@ -34,7 +34,7 @@ import (
 )
 
 const (
-	snapshotVersion       = 9
+	snapshotVersion       = 10
 	maximumFiles          = 20_000
 	maximumSourceFiles    = 5_000
 	maximumSourceFileSize = 1 << 20
@@ -204,8 +204,9 @@ type Snapshot struct {
 }
 
 // StructuralIndex is the compact, persisted syntax inventory consumed by
-// reference search. Reading it never analyzes source or builds a repository
-// map, so an interactive search cannot accidentally become an indexing job.
+// reference search and structured symbol contexts. Reading it never analyzes
+// source or builds a repository map, so an interactive request cannot
+// accidentally become an indexing job.
 type StructuralIndex struct {
 	Version            int                  `json:"version"`
 	ID                 string               `json:"id"`
@@ -484,8 +485,8 @@ func artifactProgress(requested, ready int) ArtifactProgress {
 	return progress
 }
 
-// PrepareStructure builds or projects the compact structural artifact in the
-// background after normal code indexing completes.
+// PrepareStructure builds or projects the compact relation and symbol artifact
+// in the background after normal code indexing completes.
 func (s *Service) PrepareStructure(ctx context.Context, repositoryID int64) error {
 	if repositoryID <= 0 {
 		return errors.New("repository ID is required for structural indexing")
@@ -582,6 +583,7 @@ func structuralIndexFromSnapshot(snapshot Snapshot) StructuralIndex {
 			Parser:        document.Parser,
 			ParseComplete: document.ParseComplete,
 			Truncated:     document.Truncated,
+			Symbols:       append([]analysis.Symbol(nil), document.Symbols...),
 			Relations:     append([]analysis.Relation(nil), document.Relations...),
 		})
 	}

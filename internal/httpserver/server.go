@@ -345,6 +345,7 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 	mux.HandleFunc("GET /api/contexts/suggest", server.apiContextSuggestions)
 	mux.HandleFunc("POST /api/contexts/resolve", server.apiContextResolution)
 	mux.HandleFunc("GET /api/symbol", server.apiSymbol)
+	mux.HandleFunc("POST /api/symbol", server.apiSymbolJSON)
 	mux.HandleFunc("GET /api/repositories", server.apiRepositories)
 	mux.HandleFunc("GET /api/whoami", server.apiWhoAmI)
 	mux.HandleFunc("GET /api/file/{repository}", server.apiFile)
@@ -898,6 +899,23 @@ func (s *Server) apiSymbol(response http.ResponseWriter, request *http.Request) 
 	})
 	if err != nil {
 		writeAPIError(response, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
+func (s *Server) apiSymbolJSON(response http.ResponseWriter, request *http.Request) {
+	request.Body = http.MaxBytesReader(response, request.Body, 1<<20)
+	var input codeintel.SymbolRequest
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
+		writeAPIError(response, http.StatusBadRequest, errors.New("invalid symbol request"))
+		return
+	}
+	result, err := s.intelligence.FindSymbol(request.Context(), input)
+	if err != nil {
+		writeContextError(response, err)
 		return
 	}
 	writeJSON(response, http.StatusOK, result)

@@ -19,6 +19,8 @@ func TestRoadmapKeepsM7ScopeAndCompletedMilestones(t *testing.T) {
 		"- [x] Resolve repository and file mentions against the commit-pinned catalogue",
 		"- [x] Share the typed repository/file context contract across Chat",
 		"- [x] Support pasting a RepoKarta source",
+		"- [x] Extend the same structured chip contract to directory and symbol",
+		"- [x] Extend resolution to directory and symbol contexts",
 	} {
 		if !strings.Contains(m7, completed) {
 			t.Errorf("M7 completed scope is missing %q", completed)
@@ -27,8 +29,6 @@ func TestRoadmapKeepsM7ScopeAndCompletedMilestones(t *testing.T) {
 
 	for _, remaining := range []string{
 		"- [ ] Extend permission-aware autocomplete to `@directory` and `@symbol`",
-		"- [ ] Extend the same structured chip contract to directory and symbol identities",
-		"- [ ] Extend resolution to directory and symbol contexts",
 		"- [ ] Add named search contexts",
 		"- [ ] Make every effective context visible",
 		"- [ ] Add one documented query grammar",

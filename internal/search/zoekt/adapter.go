@@ -341,7 +341,13 @@ func buildQuery(request search.Query) (query.Q, error) {
 			}
 			scopeChildren := []query.Q{repositoryQuery}
 			if filePath := strings.TrimSpace(filepath.ToSlash(scope.Path)); filePath != "" {
-				fileQuery, err := exactFileNameQuery(filePath)
+				var fileQuery query.Q
+				var err error
+				if scope.Kind == search.ScopeKindDirectory {
+					fileQuery, err = exactDirectoryQuery(filePath)
+				} else {
+					fileQuery, err = exactFileNameQuery(filePath)
+				}
 				if err != nil {
 					return nil, err
 				}
@@ -361,6 +367,22 @@ func buildQuery(request search.Query) (query.Q, error) {
 		children = append(children, &query.Substring{Pattern: file, FileName: true})
 	}
 	return &query.And{Children: children}, nil
+}
+
+func exactDirectoryQuery(directory string) (query.Q, error) {
+	parts := strings.Split(strings.TrimSuffix(filepath.ToSlash(directory), "/"), "/")
+	escaped := make([]string, 0, len(parts))
+	for _, part := range parts {
+		escaped = append(escaped, stdregexp.QuoteMeta(part))
+	}
+	expression, err := syntax.Parse(
+		`^`+strings.Join(escaped, `[/\\]`)+`[/\\]`,
+		syntax.ClassNL|syntax.PerlX|syntax.UnicodeGroups,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("invalid structured directory scope: %w", err)
+	}
+	return &query.Regexp{Regexp: expression, FileName: true, CaseSensitive: true}, nil
 }
 
 func exactFileNameQuery(filePath string) (query.Q, error) {

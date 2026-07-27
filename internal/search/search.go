@@ -12,6 +12,13 @@ import (
 	"github.com/spolnik/RepoKarta/internal/catalog"
 )
 
+const (
+	ScopeKindRepository = "repository"
+	ScopeKindFile       = "file"
+	ScopeKindDirectory  = "directory"
+	ScopeKindSymbol     = "symbol"
+)
+
 // Query is a bounded code-search request.
 type Query struct {
 	Text       string
@@ -33,11 +40,16 @@ type Query struct {
 	Limit    int
 }
 
-// Scope is one exact repository identity and an optional exact file path.
+// Scope is one exact repository identity and an optional exact committed path
+// or source declaration range.
 type Scope struct {
 	RepositoryID uint32
 	Repository   string
+	Kind         string
 	Path         string
+	Symbol       string
+	StartLine    int
+	EndLine      int
 }
 
 // Result contains source matches tied to exact repository revisions.
