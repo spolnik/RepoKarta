@@ -71,6 +71,7 @@ func (s *Service) referenceRequestForQuery(
 		Path:               request.Path,
 		File:               request.File,
 		Limit:              request.Limit,
+		Compact:            request.Compact,
 		Contexts:           request.Contexts,
 		NamedContextIDs:    request.NamedContextIDs,
 		UseDefaultContexts: request.UseDefaultContexts,

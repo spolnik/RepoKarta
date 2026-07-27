@@ -870,7 +870,7 @@ completion criteria include:
 
 ## Current implementation version
 
-`0.62.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
+`0.63.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
 The M9 dependency inventory, public registry refresh, lockfile resolution, and
 explicit private-registry routing are implemented; discrepancy filtering and
 fail-closed classification of unconfigured internal package prefixes remain.
@@ -897,7 +897,10 @@ administrator console directly in loopback-local mode, and support
 credential-backed acquisition from explicitly configured GitHub and GitLab
 HTTPS hosts with canonical checkout validation. Empty Git repositories remain
 visible as terminal `empty` catalogue entries without inflating pending index
-or derived-artifact work.
+or derived-artifact work. Native JSON, MCP, and the direct Anthropic tool loop
+now share compact source/symbol/reference discovery. Compact reference reads
+stay on persisted structural artifacts and omit snippet bodies until selected
+files are opened explicitly.
 
 ## Recommended next session
 

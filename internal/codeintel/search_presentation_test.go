@@ -95,3 +95,38 @@ func TestSearchPresentationBuildsGrammarCompatiblePartialFacets(t *testing.T) {
 	assertFacet(querylang.FieldPath, "internal", 2)
 	assertFacet(querylang.FieldResultType, "dependency", 3)
 }
+
+func TestCompactSearchPresentationPreservesLocationsWithoutPayloadBodies(t *testing.T) {
+	response := SearchResponse{
+		Compact:         true,
+		TotalFilesExact: true,
+		Matches: []SearchMatch{{
+			ResultType: "reference",
+			Repository: "repo",
+			Revision:   "abc",
+			Path:       "internal/service.go",
+			Score:      99,
+			Lines: []SearchLine{{
+				Number:          12,
+				Text:            "service.Run()",
+				Before:          "before",
+				After:           "after",
+				ReferenceKind:   "call",
+				ReferenceTarget: "Run",
+			}},
+			Actions: []SearchAction{{Kind: "open", Label: "Open", URL: "/source"}},
+		}},
+	}
+	finalizeSearchResponse(&response, querylang.Query{Text: "Run"})
+	match := response.Matches[0]
+	line := match.Lines[0]
+	if match.Path != "internal/service.go" || line.Number != 12 ||
+		line.ReferenceKind != "call" || line.ReferenceTarget != "Run" {
+		t.Fatalf("compact location metadata = %#v", match)
+	}
+	if line.Text != "" || line.Before != "" || line.After != "" ||
+		len(match.Ranking) != 0 || len(match.Actions) != 0 || len(response.Facets) != 0 ||
+		response.FacetCoverage.Scope != "" || response.FacetCoverage.Complete {
+		t.Fatalf("compact response retained rich payload = %#v", response)
+	}
+}

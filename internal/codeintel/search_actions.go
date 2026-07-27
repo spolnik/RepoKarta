@@ -11,6 +11,9 @@ import (
 )
 
 func (s *Service) addSearchActions(response *SearchResponse, query querylang.Query) {
+	if response.Compact {
+		return
+	}
 	for index := range response.Matches {
 		match := &response.Matches[index]
 		if match.RepositoryID <= 0 {

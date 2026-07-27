@@ -730,6 +730,66 @@ func TestReferenceSearchReportsPartialASTCoverage(t *testing.T) {
 	}
 }
 
+func TestCompactReferenceSearchUsesCachedRelationsWithoutOpeningSource(t *testing.T) {
+	revision := strings.Repeat("c", 40)
+	repository := catalog.Repository{
+		ID:            17,
+		Name:          "cached-only",
+		Path:          filepath.Join(t.TempDir(), "missing-checkout"),
+		HeadCommit:    revision,
+		IndexedCommit: revision,
+		IndexState:    "ready",
+	}
+	service := New(
+		referenceTestStore{repository: repository},
+		&capturingSearcher{},
+		"http://localhost",
+	).UseStructure(referenceTestStructure{index: graph.StructuralIndex{
+		Structure: []graph.StructuralDocument{{
+			RepositoryID:  repository.ID,
+			Repository:    repository.Name,
+			Revision:      revision,
+			Path:          "src/Consumer.java",
+			Language:      "java",
+			ParseComplete: true,
+			Relations: []analysis.Relation{{
+				Kind:       "type",
+				Target:     "JobTimeGuard",
+				Confidence: "syntax",
+				Range:      analysis.Range{StartLine: 42, EndLine: 42},
+			}},
+		}},
+		Scope: graph.Scope{
+			Kind:                  "repository",
+			Complete:              true,
+			TotalRepositories:     1,
+			AnalyzedRepositories:  1,
+			RequestedRepositoryID: repository.ID,
+		},
+	}})
+
+	result, err := service.FindReferences(t.Context(), ReferenceRequest{
+		Symbol:       "JobTimeGuard",
+		RepositoryID: repository.ID,
+		Compact:      true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Compact || result.MatchCount != 1 || result.ReturnedFiles != 1 ||
+		len(result.Matches) != 1 || len(result.Matches[0].Lines) != 1 {
+		t.Fatalf("compact reference result = %#v", result)
+	}
+	match := result.Matches[0]
+	line := match.Lines[0]
+	if match.Path != "src/Consumer.java" || line.Number != 42 ||
+		line.ReferenceKind != "type" || line.ReferenceTarget != "JobTimeGuard" ||
+		line.Text != "" || line.Before != "" || line.After != "" ||
+		len(line.Fragments) != 0 || match.Citation == "" || match.SourceURL == "" {
+		t.Fatalf("compact cached evidence = %#v", match)
+	}
+}
+
 func TestReferenceSearchPreservesTypedRecallAcrossTwoThousandJavaFiles(t *testing.T) {
 	const (
 		fileCount     = 2_000

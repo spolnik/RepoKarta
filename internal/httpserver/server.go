@@ -831,6 +831,11 @@ func (s *Server) apiSearch(response http.ResponseWriter, request *http.Request) 
 		writeAPIError(response, http.StatusBadRequest, err)
 		return
 	}
+	compact, err := optionalBool(request.URL.Query().Get("compact"))
+	if err != nil {
+		writeAPIError(response, http.StatusBadRequest, errors.New("compact must be a boolean"))
+		return
+	}
 	repositoryID, repositoryName := repositorySelector(request.URL.Query().Get("repo"))
 	result, err := s.intelligence.Search(request.Context(), codeintel.SearchRequest{
 		Query:        request.URL.Query().Get("q"),
@@ -841,6 +846,7 @@ func (s *Server) apiSearch(response http.ResponseWriter, request *http.Request) 
 		File:         request.URL.Query().Get("file"),
 		Mode:         request.URL.Query().Get("mode"),
 		Limit:        limit,
+		Compact:      compact,
 	})
 	if err != nil {
 		writeContextOrAPIError(response, err)
@@ -1013,6 +1019,11 @@ func (s *Server) apiSymbol(response http.ResponseWriter, request *http.Request) 
 		writeAPIError(response, http.StatusBadRequest, err)
 		return
 	}
+	compact, err := optionalBool(request.URL.Query().Get("compact"))
+	if err != nil {
+		writeAPIError(response, http.StatusBadRequest, errors.New("compact must be a boolean"))
+		return
+	}
 	repositoryID, repositoryName := repositorySelector(request.URL.Query().Get("repo"))
 	result, err := s.intelligence.FindSymbol(request.Context(), codeintel.SymbolRequest{
 		Symbol:       request.URL.Query().Get("symbol"),
@@ -1020,6 +1031,7 @@ func (s *Server) apiSymbol(response http.ResponseWriter, request *http.Request) 
 		Repository:   repositoryName,
 		Language:     request.URL.Query().Get("lang"),
 		Limit:        limit,
+		Compact:      compact,
 	})
 	if err != nil {
 		writeAPIError(response, http.StatusBadRequest, err)

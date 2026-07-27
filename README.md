@@ -28,6 +28,10 @@ dependency-management workspace:
 - syntax-backed reference search over persisted AST call, import, extends, and
   implements relations, with relation metadata, explicit coverage limits, and
   background structural-index warming after repositories become search-ready;
+- compact source, symbol, and reference discovery that preserves pinned paths,
+  line numbers, citations, completeness, and typed relation metadata while
+  omitting snippet bodies; compact references stay entirely on persisted
+  structural artifacts until the caller selects files to open;
 - repository, language, path, and file filters;
 - caller-controlled file limits up to 500, with explicit matched, returned,
   skipped, truncated, and exact/estimated completeness metadata;
@@ -560,11 +564,28 @@ commit-pinned AST calls, type usages, imports, and heritage relations without
 invoking AI. Structural artifacts are prepared in the background after code
 indexing; an incomplete API request returns `202 Accepted`, `Retry-After`, and
 per-repository progress instead of building inside the request. MCP returns the
-same progress and partial-coverage warning in its normal tool result. The
+same progress and partial-coverage warning in its normal tool result.
+`search_code`, `find_symbol`, and `find_references` accept `compact: true`.
+Compact discovery returns repositories, revisions, paths, line numbers,
+citations, and typed reference metadata without snippet bodies, ranking,
+facets, or actions. For references it also avoids reopening every matched Git
+blob: use the compact result to establish the complete candidate set, then call
+`get_file` only for the files needed to explain the answer. The
 artifact tools return
 deterministic repository maps, a focused dependency/version and HTTP-call
 inventory, the persisted Deep Wiki page index, and generated page content
 without starting an AI run.
+
+MCP is one adapter, not RepoKarta's product boundary. The browser and native Go
+providers use the same JSON/service capabilities, and external local agents
+should normally keep their native Grep/Glob/Read tools alongside RepoKarta.
+Use native tools for cheap literal searches over clones already on the same
+machine; use RepoKarta for fleet scope, semantic references, access control,
+explicit completeness, and commit-pinned evidence. MCP-only remains the right
+mode for shared deployments, machines without clones, and policy-constrained
+clients. Provider prompt-cache reads are controlled by the provider harness,
+not by MCP; compact discovery improves their economics by keeping unique tool
+results small and deferring rich source reads.
 
 For MCP clients that launch a stdio process, keep RepoKarta running and add:
 
@@ -766,11 +787,11 @@ Windows amd64 and Apple Silicon macOS. The workflow:
 Run the same packagers locally:
 
 ```powershell
-.\scripts\package-release.ps1 -Version 0.62.0-dev
+.\scripts\package-release.ps1 -Version 0.63.0-dev
 ```
 
 ```sh
-./scripts/package-release.sh 0.62.0-dev
+./scripts/package-release.sh 0.63.0-dev
 ```
 
 macOS packages are signed with the hardened runtime when

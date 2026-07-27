@@ -1499,6 +1499,27 @@ func TestAPISearchReturnsCompletenessAndPinnedEvidence(t *testing.T) {
 		result.Matches[0].SourceURL == "" {
 		t.Fatalf("evidence = %#v", result.Matches)
 	}
+
+	compactRequest := httptest.NewRequest(
+		http.MethodGet,
+		"http://127.0.0.1:7331/api/search?q=needle&limit=100&compact=true",
+		nil,
+	)
+	compactResponse := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(compactResponse, compactRequest)
+	if compactResponse.Code != http.StatusOK {
+		t.Fatalf("compact status = %d, body = %s", compactResponse.Code, compactResponse.Body.String())
+	}
+	var compact codeintel.SearchResponse
+	if err := json.Unmarshal(compactResponse.Body.Bytes(), &compact); err != nil {
+		t.Fatal(err)
+	}
+	if !compact.Compact || len(compact.Matches) != 3 || len(compact.Matches[0].Lines) != 1 ||
+		compact.Matches[0].Lines[0].Number != 7 || compact.Matches[0].Lines[0].Text != "" ||
+		len(compact.Matches[0].Ranking) != 0 || len(compact.Matches[0].Actions) != 0 ||
+		len(compact.Facets) != 0 {
+		t.Fatalf("compact API evidence = %#v", compact)
+	}
 }
 
 type pendingReferenceStructure struct{}

@@ -229,7 +229,7 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "search_code",
 		Title:       "Search indexed code",
-		Description: "Search permission-filtered source, repositories, symbols, references, implementations, dependencies, routes, commits, diffs, generated Wiki pages, and captured code insights. Shared filters, completeness, parsed query provenance, warnings, and pinned evidence URLs are explicit.",
+		Description: "Search permission-filtered source and deterministic evidence. Prefer literal compact search for globally unique text and fleet discovery; use find_references when syntax precision matters, then get_file only for selected evidence. Completeness, parsed query provenance, warnings, and pinned URLs are explicit.",
 		Annotations: readOnly,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input searchCodeInput) (*mcp.CallToolResult, searchCodeOutput, error) {
 		result, err := intelligence.Search(ctx, codeintel.SearchRequest{
@@ -240,6 +240,7 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 			File:               input.File,
 			Mode:               input.Mode,
 			Limit:              input.Limit,
+			Compact:            input.Compact,
 			Contexts:           input.Contexts,
 			NamedContextIDs:    input.NamedContextIDs,
 			UseDefaultContexts: input.UseDefaultContexts,
@@ -289,6 +290,7 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 			RepositoryID:       input.RepositoryID,
 			Language:           input.Language,
 			Limit:              input.Limit,
+			Compact:            input.Compact,
 			Contexts:           input.Contexts,
 			NamedContextIDs:    input.NamedContextIDs,
 			UseDefaultContexts: input.UseDefaultContexts,
@@ -305,7 +307,7 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "find_references",
 		Title:       "Find AST references",
-		Description: "Find commit-pinned call, type-usage, import, extends, and implements sites from RepoKarta's persisted AST relations. Matches are exact source-level target names with relation kind, receiver, syntax confidence, index progress, and explicit coverage warnings; this does not pretend to resolve overloads or dynamic dispatch.",
+		Description: "Find commit-pinned call, type-usage, import, extends, and implements sites from persisted AST relations. Use this for non-unique symbols or syntax precision; a unique literal is cheaper through compact search_code. Set compact for fleet discovery from cached relations without reopening every matched source blob, then use get_file selectively.",
 		Annotations: readOnly,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input findReferencesInput) (*mcp.CallToolResult, findReferencesOutput, error) {
 		result, err := intelligence.FindReferences(ctx, codeintel.ReferenceRequest{
@@ -315,6 +317,7 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 			Path:               input.Path,
 			File:               input.File,
 			Limit:              input.Limit,
+			Compact:            input.Compact,
 			Contexts:           input.Contexts,
 			NamedContextIDs:    input.NamedContextIDs,
 			UseDefaultContexts: input.UseDefaultContexts,
@@ -553,6 +556,7 @@ type searchCodeInput struct {
 	File               string                  `json:"file,omitempty" jsonschema:"Optional substring required in the filename."`
 	Mode               string                  `json:"mode,omitempty" jsonschema:"Search mode: literal regex zoekt or references. References uses persisted AST relations."`
 	Limit              int                     `json:"limit,omitempty" jsonschema:"Maximum files to return from 1 to 500. Defaults to 100."`
+	Compact            bool                    `json:"compact,omitempty" jsonschema:"Return compact discovery evidence: repositories revisions paths line numbers citations and typed reference metadata without snippet bodies ranking facets or actions."`
 	Contexts           []contextscope.Selector `json:"contexts,omitempty" jsonschema:"Optional structured repository file directory or symbol contexts. Each uses a stable repository ID and pinned revision; path and symbol identity fields are required by their context kind."`
 	NamedContextIDs    []string                `json:"named_context_ids,omitempty" jsonschema:"Optional IDs returned by list_named_contexts. Definitions are permission rechecked and expanded at their pinned revisions."`
 	UseDefaultContexts *bool                   `json:"use_default_contexts,omitempty" jsonschema:"Apply personal and administrator defaults. Defaults to true; set false for an explicitly unscoped search."`
@@ -673,6 +677,7 @@ type findSymbolInput struct {
 	RepositoryID       int64                   `json:"repository_id,omitempty" jsonschema:"Optional repository ID returned by list_repositories. Omit to search every indexed repository."`
 	Language           string                  `json:"language,omitempty" jsonschema:"Optional programming language filter."`
 	Limit              int                     `json:"limit,omitempty" jsonschema:"Maximum files to return from 1 to 500. Defaults to 100."`
+	Compact            bool                    `json:"compact,omitempty" jsonschema:"Return paths line numbers and pinned citations without snippet bodies ranking facets or actions."`
 	Contexts           []contextscope.Selector `json:"contexts,omitempty" jsonschema:"Optional structured repository file directory or symbol contexts."`
 	NamedContextIDs    []string                `json:"named_context_ids,omitempty" jsonschema:"Optional IDs returned by list_named_contexts."`
 	UseDefaultContexts *bool                   `json:"use_default_contexts,omitempty" jsonschema:"Apply personal and administrator defaults. Defaults to true."`
@@ -687,6 +692,7 @@ type findReferencesInput struct {
 	Path               string                  `json:"path,omitempty" jsonschema:"Optional substring required in the repository-relative path."`
 	File               string                  `json:"file,omitempty" jsonschema:"Optional substring required in the filename."`
 	Limit              int                     `json:"limit,omitempty" jsonschema:"Maximum files to return from 1 to 500. Defaults to 100."`
+	Compact            bool                    `json:"compact,omitempty" jsonschema:"Read only cached structural relations and return paths line numbers citations and relation metadata without reopening source blobs for snippets."`
 	Contexts           []contextscope.Selector `json:"contexts,omitempty" jsonschema:"Optional structured repository file directory or symbol contexts."`
 	NamedContextIDs    []string                `json:"named_context_ids,omitempty" jsonschema:"Optional IDs returned by list_named_contexts."`
 	UseDefaultContexts *bool                   `json:"use_default_contexts,omitempty" jsonschema:"Apply personal and administrator defaults. Defaults to true."`

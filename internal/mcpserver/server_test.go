@@ -527,6 +527,7 @@ func TestMCPToolsSelectRepositoriesByIDOnly(t *testing.T) {
 		"read_generated_document":   true,
 	}
 	optional := map[string]bool{"search_code": true, "find_symbol": true, "find_references": true}
+	compact := map[string]bool{"search_code": true, "find_symbol": true, "find_references": true}
 	for _, tool := range tools.Tools {
 		encoded, err := json.Marshal(tool.InputSchema)
 		if err != nil {
@@ -548,6 +549,10 @@ func TestMCPToolsSelectRepositoriesByIDOnly(t *testing.T) {
 		}
 		if required[tool.Name] && !slices.Contains(schema.Required, "repository_id") {
 			t.Fatalf("tool %q does not require repository_id: %v", tool.Name, schema.Required)
+		}
+		_, hasCompact := schema.Properties["compact"]
+		if compact[tool.Name] != hasCompact {
+			t.Fatalf("tool %q compact presence = %v", tool.Name, hasCompact)
 		}
 	}
 

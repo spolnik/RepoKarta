@@ -180,6 +180,7 @@ type SearchRequest struct {
 	File               string                  `json:"file,omitempty"`
 	Mode               string                  `json:"mode,omitempty"`
 	Limit              int                     `json:"limit,omitempty"`
+	Compact            bool                    `json:"compact,omitempty"`
 	Contexts           []contextscope.Selector `json:"contexts,omitempty"`
 	NamedContextIDs    []string                `json:"named_context_ids,omitempty"`
 	UseDefaultContexts *bool                   `json:"use_default_contexts,omitempty"`
@@ -210,6 +211,7 @@ type SearchResponse struct {
 	NamedContexts       []contextscope.NamedContext `json:"named_contexts,omitempty"`
 	QueryLanguage       *querylang.Query            `json:"query_language,omitempty"`
 	ResultType          string                      `json:"result_type"`
+	Compact             bool                        `json:"compact,omitempty"`
 }
 
 // SearchItem is one non-source result from the permission-filtered catalogue
@@ -283,6 +285,7 @@ type SymbolRequest struct {
 	Repository         string                  `json:"repository,omitempty"`
 	Language           string                  `json:"language,omitempty"`
 	Limit              int                     `json:"limit,omitempty"`
+	Compact            bool                    `json:"compact,omitempty"`
 	Contexts           []contextscope.Selector `json:"contexts,omitempty"`
 	NamedContextIDs    []string                `json:"named_context_ids,omitempty"`
 	UseDefaultContexts *bool                   `json:"use_default_contexts,omitempty"`
@@ -301,6 +304,7 @@ type ReferenceRequest struct {
 	Path               string                  `json:"path,omitempty"`
 	File               string                  `json:"file,omitempty"`
 	Limit              int                     `json:"limit,omitempty"`
+	Compact            bool                    `json:"compact,omitempty"`
 	Contexts           []contextscope.Selector `json:"contexts,omitempty"`
 	NamedContextIDs    []string                `json:"named_context_ids,omitempty"`
 	UseDefaultContexts *bool                   `json:"use_default_contexts,omitempty"`
@@ -329,7 +333,7 @@ type SearchMatch struct {
 // SearchLine is one line of source evidence.
 type SearchLine struct {
 	Number              int               `json:"number"`
-	Text                string            `json:"text"`
+	Text                string            `json:"text,omitempty"`
 	Before              string            `json:"before,omitempty"`
 	After               string            `json:"after,omitempty"`
 	Fragments           []search.Fragment `json:"fragments,omitempty"`
@@ -890,6 +894,7 @@ func (s *Service) Search(ctx context.Context, request SearchRequest) (SearchResp
 	case "repository", "commit", "diff":
 		response, searchErr := s.searchEntityEvidence(ctx, request, parsedQuery, resultType)
 		if searchErr == nil {
+			response.Compact = request.Compact
 			finalizeSearchResponse(&response, parsedQuery)
 			s.addSearchActions(&response, parsedQuery)
 		}
@@ -897,6 +902,7 @@ func (s *Service) Search(ctx context.Context, request SearchRequest) (SearchResp
 	case "dependency", "route", "wiki_page", "code_insight":
 		response, searchErr := s.searchDerivedEvidence(ctx, request, parsedQuery, resultType)
 		if searchErr == nil {
+			response.Compact = request.Compact
 			finalizeSearchResponse(&response, parsedQuery)
 			s.addSearchActions(&response, parsedQuery)
 		}
@@ -1010,6 +1016,7 @@ func (s *Service) Search(ctx context.Context, request SearchRequest) (SearchResp
 					Warnings:        []search.Warning{},
 					QueryLanguage:   &parsedQuery,
 					ResultType:      resultType,
+					Compact:         request.Compact,
 				}
 				finalizeSearchResponse(&response, parsedQuery)
 				s.addSearchActions(&response, parsedQuery)
@@ -1035,6 +1042,7 @@ func (s *Service) Search(ctx context.Context, request SearchRequest) (SearchResp
 			NamedContexts:   effective.NamedContexts,
 			QueryLanguage:   &parsedQuery,
 			ResultType:      resultType,
+			Compact:         request.Compact,
 		}
 		finalizeSearchResponse(&response, parsedQuery)
 		s.addSearchActions(&response, parsedQuery)
@@ -1099,6 +1107,7 @@ func (s *Service) Search(ctx context.Context, request SearchRequest) (SearchResp
 	response.Contexts = resolvedContexts
 	response.NamedContexts = effective.NamedContexts
 	response.QueryLanguage = &parsedQuery
+	response.Compact = request.Compact
 	setSearchResultType(&response, resultType)
 	finalizeSearchResponse(&response, parsedQuery)
 	s.addSearchActions(&response, parsedQuery)
@@ -1220,6 +1229,7 @@ func (s *Service) FindSymbol(ctx context.Context, request SymbolRequest) (Symbol
 		Language:           request.Language,
 		Mode:               "zoekt",
 		Limit:              request.Limit,
+		Compact:            request.Compact,
 		Contexts:           request.Contexts,
 		NamedContextIDs:    request.NamedContextIDs,
 		UseDefaultContexts: request.UseDefaultContexts,
@@ -1321,6 +1331,7 @@ func (s *Service) FindReferences(ctx context.Context, request ReferenceRequest) 
 	}
 	output.Contexts = resolvedContexts
 	output.NamedContexts = effective.NamedContexts
+	output.Compact = request.Compact
 	finalizeSearchResponse(&output, querylang.Query{Text: symbol})
 	return output, nil
 }
@@ -1486,6 +1497,28 @@ func (s *Service) referenceResult(
 			result.Truncated = true
 			linesTruncated = true
 		}
+		match := search.FileMatch{
+			RepositoryID: indexedFile.repositoryID,
+			Repository:   indexedFile.repository,
+			Revision:     indexedFile.revision,
+			Path:         indexedFile.path,
+			Language:     indexedFile.language,
+			Score:        1,
+			Lines:        make([]search.LineMatch, 0, len(references)),
+		}
+		if request.Compact {
+			for _, reference := range references {
+				match.Lines = append(match.Lines, search.LineMatch{
+					Number:              reference.line,
+					ReferenceKind:       reference.kind,
+					ReferenceTarget:     reference.target,
+					ReferenceReceiver:   reference.receiver,
+					ReferenceConfidence: reference.confidence,
+				})
+			}
+			result.Matches = append(result.Matches, match)
+			continue
+		}
 		minimumLine := references[0].line
 		maximumLine := references[len(references)-1].line
 		file, openErr := source.OpenFile(
@@ -1504,15 +1537,6 @@ func (s *Service) referenceResult(
 		sourceLines := make(map[int]string, len(file.Lines))
 		for _, line := range file.Lines {
 			sourceLines[line.Number] = line.Text
-		}
-		match := search.FileMatch{
-			RepositoryID: indexedFile.repositoryID,
-			Repository:   indexedFile.repository,
-			Revision:     indexedFile.revision,
-			Path:         indexedFile.path,
-			Language:     indexedFile.language,
-			Score:        1,
-			Lines:        make([]search.LineMatch, 0, len(references)),
 		}
 		for _, reference := range references {
 			text := sourceLines[reference.line]

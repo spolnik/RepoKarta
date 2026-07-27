@@ -56,6 +56,9 @@ func (c *Client) Search(ctx context.Context, request SearchRequest) (SearchRespo
 	if request.Limit > 0 {
 		values.Set("limit", strconv.Itoa(request.Limit))
 	}
+	if request.Compact {
+		values.Set("compact", "true")
+	}
 	var output SearchResponse
 	err := c.get(ctx, "/api/search", values, &output)
 	return output, err
@@ -94,6 +97,9 @@ func (c *Client) FindSymbol(ctx context.Context, request SymbolRequest) (SymbolR
 	if request.Limit > 0 {
 		values.Set("limit", strconv.Itoa(request.Limit))
 	}
+	if request.Compact {
+		values.Set("compact", "true")
+	}
 	var output SymbolResponse
 	err := c.get(ctx, "/api/symbol", values, &output)
 	return output, err
@@ -110,6 +116,7 @@ func (c *Client) FindReferences(ctx context.Context, request ReferenceRequest) (
 		File:               request.File,
 		Mode:               "references",
 		Limit:              request.Limit,
+		Compact:            request.Compact,
 		Contexts:           request.Contexts,
 		NamedContextIDs:    request.NamedContextIDs,
 		UseDefaultContexts: request.UseDefaultContexts,

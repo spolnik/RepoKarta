@@ -11,6 +11,41 @@ import (
 func finalizeSearchResponse(response *SearchResponse, parsed querylang.Query) {
 	rankSearchResponse(response, parsed)
 	buildSearchFacets(response)
+	compactSearchResponse(response)
+}
+
+// compactSearchResponse keeps discovery results cheap to transport and
+// consume. Completeness, commit identity, paths, line numbers, citations, and
+// typed reference metadata remain available; selected source can be fetched
+// through get_file after the candidate set has been narrowed.
+func compactSearchResponse(response *SearchResponse) {
+	if !response.Compact {
+		return
+	}
+	for index := range response.Matches {
+		match := &response.Matches[index]
+		match.Score = 0
+		match.Ranking = nil
+		match.Actions = nil
+		for lineIndex := range match.Lines {
+			line := &match.Lines[lineIndex]
+			line.Text = ""
+			line.Before = ""
+			line.After = ""
+			line.Fragments = nil
+		}
+	}
+	for index := range response.Items {
+		item := &response.Items[index]
+		item.Summary = ""
+		item.Detail = ""
+		item.Metadata = nil
+		item.Score = 0
+		item.Ranking = nil
+		item.Actions = nil
+	}
+	response.Facets = nil
+	response.FacetCoverage = SearchFacetCoverage{}
 }
 
 func rankSearchResponse(response *SearchResponse, parsed querylang.Query) {

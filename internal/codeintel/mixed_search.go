@@ -54,6 +54,7 @@ func (s *Service) searchMixedSourceEvidence(
 		Items:         []SearchItem{},
 		QueryLanguage: &parsed,
 		ResultType:    "mixed",
+		Compact:       request.Compact,
 	}
 	for index, child := range children {
 		output.MatchCount += child.MatchCount
@@ -86,6 +87,7 @@ func (s *Service) searchMixedSourceEvidence(
 		})
 	}
 	buildSearchFacets(&output)
+	compactSearchResponse(&output)
 	s.addSearchActions(&output, parsed)
 	return output, nil
 }

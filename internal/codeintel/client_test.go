@@ -44,7 +44,7 @@ func TestClientCoversReadOnlyJSONSurface(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.Search(ctx, SearchRequest{Query: "needle", RepositoryID: 7, Limit: 25}); err != nil {
+	if _, err := client.Search(ctx, SearchRequest{Query: "needle", RepositoryID: 7, Limit: 25, Compact: true}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := client.Search(ctx, SearchRequest{
@@ -102,6 +102,7 @@ func TestClientCoversReadOnlyJSONSurface(t *testing.T) {
 	}
 	foundPost := false
 	foundSymbolPost := false
+	foundCompactGet := false
 	for _, request := range requests {
 		if request == "POST /api/search" {
 			foundPost = true
@@ -109,11 +110,17 @@ func TestClientCoversReadOnlyJSONSurface(t *testing.T) {
 		if request == "POST /api/symbol" {
 			foundSymbolPost = true
 		}
+		if strings.HasPrefix(request, "GET /api/search?") && strings.Contains(request, "compact=true") {
+			foundCompactGet = true
+		}
 	}
 	if !foundPost {
 		t.Fatalf("structured search did not use POST: %#v", requests)
 	}
 	if !foundSymbolPost {
 		t.Fatalf("structured symbol search did not use POST: %#v", requests)
+	}
+	if !foundCompactGet {
+		t.Fatalf("compact search did not reach the JSON API: %#v", requests)
 	}
 }
