@@ -227,6 +227,7 @@ type searchData struct {
 	FileCount            int
 	EstimatedFiles       int
 	ReturnedFiles        int
+	ReturnedItems        int
 	Limit                int
 	TotalFilesExact      bool
 	FilesSkipped         int
@@ -234,6 +235,7 @@ type searchData struct {
 	Warnings             []search.Warning
 	Truncated            bool
 	Matches              []searchMatchView
+	Items                []codeintel.SearchItem
 	ResultType           string
 }
 
@@ -1762,6 +1764,7 @@ func (s *Server) search(response http.ResponseWriter, request *http.Request) {
 			data.Search.FileCount = result.MatchingFiles
 			data.Search.EstimatedFiles = result.EstimatedTotalFiles
 			data.Search.ReturnedFiles = result.ReturnedFiles
+			data.Search.ReturnedItems = result.ReturnedItems
 			data.Search.Limit = result.Limit
 			data.Search.TotalFilesExact = result.TotalFilesExact
 			data.Search.FilesSkipped = result.FilesSkipped
@@ -1770,6 +1773,7 @@ func (s *Server) search(response http.ResponseWriter, request *http.Request) {
 			data.Search.Truncated = result.Truncated
 			data.Search.ResultType = result.ResultType
 			data.Search.Matches = resolveSearchViews(result.Matches, data.Repositories)
+			data.Search.Items = result.Items
 		}
 	}
 

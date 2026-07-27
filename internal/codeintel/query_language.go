@@ -44,9 +44,10 @@ func requestedResultType(parsed querylang.Query) (string, error) {
 		explicit = true
 	}
 	switch resultType {
-	case "content", "file_path", "symbol_definition", "reference", "implementation":
+	case "content", "file_path", "repository", "symbol_definition", "reference", "implementation",
+		"commit", "diff":
 		return resultType, nil
-	case "repository", "dependency", "route", "commit", "diff", "wiki_page", "code_insight":
+	case "dependency", "route", "wiki_page", "code_insight":
 		return "", fmt.Errorf("result_type %q is not connected to unified search yet", resultType)
 	default:
 		return "", fmt.Errorf("unknown result_type %q", resultType)

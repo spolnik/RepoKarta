@@ -183,6 +183,7 @@ type SearchResponse struct {
 	MatchingFiles       int                         `json:"matching_files"`
 	EstimatedTotalFiles int                         `json:"estimated_total_files"`
 	ReturnedFiles       int                         `json:"returned_files"`
+	ReturnedItems       int                         `json:"returned_items"`
 	Limit               int                         `json:"limit"`
 	Truncated           bool                        `json:"truncated"`
 	TotalFilesExact     bool                        `json:"total_files_exact"`
@@ -191,6 +192,7 @@ type SearchResponse struct {
 	DurationMS          float64                     `json:"duration_ms"`
 	Warnings            []search.Warning            `json:"warnings,omitempty"`
 	Matches             []SearchMatch               `json:"matches"`
+	Items               []SearchItem                `json:"items"`
 	SearchKind          string                      `json:"search_kind,omitempty"`
 	ReferenceResolution string                      `json:"reference_resolution,omitempty"`
 	ReferenceIndex      *ReferenceIndex             `json:"reference_index,omitempty"`
@@ -198,6 +200,29 @@ type SearchResponse struct {
 	NamedContexts       []contextscope.NamedContext `json:"named_contexts,omitempty"`
 	QueryLanguage       *querylang.Query            `json:"query_language,omitempty"`
 	ResultType          string                      `json:"result_type"`
+}
+
+// SearchItem is one non-source result from the permission-filtered catalogue
+// or another deterministic evidence store. Source matches remain in Matches
+// so existing clients keep their commit-pinned line contract.
+type SearchItem struct {
+	ResultType   string               `json:"result_type"`
+	RepositoryID int64                `json:"repository_id,omitempty"`
+	Repository   string               `json:"repository,omitempty"`
+	Revision     string               `json:"revision,omitempty"`
+	Path         string               `json:"path,omitempty"`
+	Title        string               `json:"title"`
+	Summary      string               `json:"summary,omitempty"`
+	Detail       string               `json:"detail,omitempty"`
+	Citation     string               `json:"citation,omitempty"`
+	SourceURL    string               `json:"source_url,omitempty"`
+	Metadata     []SearchItemMetadata `json:"metadata,omitempty"`
+}
+
+// SearchItemMetadata is stable display metadata for a non-source result.
+type SearchItemMetadata struct {
+	Label string `json:"label"`
+	Value string `json:"value"`
 }
 
 // ReferenceIndex reports whether every requested repository has a persisted
@@ -813,6 +838,10 @@ func (s *Service) Search(ctx context.Context, request SearchRequest) (SearchResp
 	if err != nil {
 		return SearchResponse{}, err
 	}
+	switch resultType {
+	case "repository", "commit", "diff":
+		return s.searchEntityEvidence(ctx, request, parsedQuery, resultType)
+	}
 	referenceMode := strings.EqualFold(strings.TrimSpace(request.Mode), "references")
 	if referenceMode || resultType == "reference" || resultType == "implementation" {
 		referenceRequest, referenceErr := s.referenceRequestForQuery(ctx, request, parsedQuery)
@@ -912,6 +941,7 @@ func (s *Service) Search(ctx context.Context, request SearchRequest) (SearchResp
 				return SearchResponse{
 					Limit:           limit,
 					Matches:         []SearchMatch{},
+					Items:           []SearchItem{},
 					TotalFilesExact: true,
 					Warnings:        []search.Warning{},
 					QueryLanguage:   &parsedQuery,
@@ -931,6 +961,7 @@ func (s *Service) Search(ctx context.Context, request SearchRequest) (SearchResp
 		return SearchResponse{
 			Limit:           limit,
 			Matches:         []SearchMatch{},
+			Items:           []SearchItem{},
 			TotalFilesExact: true,
 			Warnings:        []search.Warning{},
 			Contexts:        resolvedContexts,
@@ -1027,6 +1058,7 @@ func (s *Service) searchResponse(ctx context.Context, result search.Result, limi
 		DurationMS:          float64(result.Duration.Microseconds()) / 1000,
 		Warnings:            result.Warnings,
 		Matches:             make([]SearchMatch, 0, len(result.Matches)),
+		Items:               []SearchItem{},
 	}
 	if output.Limit == 0 {
 		output.Limit = limit
@@ -1095,6 +1127,7 @@ func (s *Service) searchResponse(ctx context.Context, result search.Result, limi
 		output.Truncated = visibleMatches >= limit
 		output.TotalFilesExact = !output.Truncated
 	}
+	output.ReturnedItems = len(output.Matches)
 	return output, nil
 }
 

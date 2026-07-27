@@ -240,7 +240,14 @@
       {{/* Only the summary announces. The results list itself is not a live
            region: announcing every card on every search made a screen reader
            re-read the whole page. */}}
-      <p role="status"><span class="font-medium text-ink">{{.Search.ReturnedFiles}} files shown</span> · {{.Search.MatchCount}} matches · {{.Search.Duration}}</p>
+      <p role="status">
+        {{if .Search.Items}}
+        <span class="font-medium text-ink">{{.Search.ReturnedItems}} results shown</span>
+        {{else}}
+        <span class="font-medium text-ink">{{.Search.ReturnedFiles}} files shown</span> · {{.Search.MatchCount}} matches
+        {{end}}
+        {{if .Search.Duration}} · {{.Search.Duration}}{{end}}
+      </p>
       {{if .Search.Truncated}}
       <p class="flex items-center gap-2 text-right text-amber-300">
         {{if lt .Search.ReturnedFiles .Search.FileCount}}
@@ -356,6 +363,39 @@
           {{end}}
           {{end}}
         </div>
+      </article>
+      {{end}}
+    </div>
+    {{else if .Search.Items}}
+    <div class="space-y-3">
+      {{range .Search.Items}}
+      <article class="result-card">
+        <header class="flex flex-wrap items-start justify-between gap-3 border-b border-white/[0.06] px-4 py-3">
+          <div class="min-w-0">
+            <div class="flex min-w-0 items-center gap-2">
+              {{if .Repository}}<span class="shrink-0 rounded bg-white/[0.05] px-2 py-1 text-xs font-semibold uppercase tracking-wider text-ink-soft">{{.Repository}}</span>{{end}}
+              {{if .SourceURL}}
+              <a class="truncate text-sm font-semibold text-ink-strong hover:text-emerald-300" href="{{.SourceURL}}">{{.Title}}</a>
+              {{else}}
+              <span class="truncate text-sm font-semibold text-ink-strong">{{.Title}}</span>
+              {{end}}
+            </div>
+            {{if .Summary}}<p class="mt-2 text-sm text-ink-soft">{{.Summary}}</p>{{end}}
+          </div>
+          <div class="flex shrink-0 items-center gap-2 font-mono text-xs text-ink-faint">
+            <span class="rounded bg-emerald-400/[0.08] px-1.5 py-0.5 text-emerald-200">{{.ResultType}}</span>
+            {{if .Revision}}<span>·</span><span>{{shortCommit .Revision}}</span>{{end}}
+          </div>
+        </header>
+        {{if .Metadata}}
+        <dl class="flex flex-wrap gap-x-5 gap-y-2 border-b border-white/[0.04] px-4 py-3 text-xs">
+          {{range .Metadata}}
+          {{if .Value}}<div><dt class="inline text-ink-faint">{{.Label}}:</dt> <dd class="inline font-mono text-ink-soft">{{.Value}}</dd></div>{{end}}
+          {{end}}
+        </dl>
+        {{end}}
+        {{if .Detail}}<pre class="max-h-96 overflow-auto whitespace-pre-wrap px-4 py-3 font-mono text-xs leading-5 text-ink-soft">{{.Detail}}</pre>{{end}}
+        {{if .Citation}}<footer class="border-t border-white/[0.04] px-4 py-2 font-mono text-xs text-ink-faint">{{.Citation}}</footer>{{end}}
       </article>
       {{end}}
     </div>
