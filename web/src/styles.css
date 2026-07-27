@@ -1338,6 +1338,64 @@ a.brand-mark:hover,
     inset 0 1px rgb(255 255 255 / 0.025);
 }
 
+.search-query-shell {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  flex: 1;
+}
+
+.search-query-shell input {
+  width: 100%;
+}
+
+.search-query-completions {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% - 0.25rem);
+  right: 0;
+  left: 0;
+  overflow-y: auto;
+  max-height: min(22rem, 55vh);
+  border: 1px solid rgb(52 211 153 / 0.22);
+  border-radius: var(--r-md);
+  padding: 0.35rem;
+  background: rgb(10 15 25 / 0.98);
+  box-shadow: 0 24px 60px rgb(0 0 0 / 0.45);
+}
+
+.search-query-completion {
+  display: flex;
+  width: 100%;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  border-radius: var(--r-sm);
+  padding: 0.55rem 0.65rem;
+  color: var(--color-ink);
+  text-align: left;
+}
+
+.search-query-completion:hover,
+.search-query-completion[data-active="true"] {
+  background: rgb(52 211 153 / 0.11);
+}
+
+.search-query-completion strong {
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: var(--fs-small);
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-query-completion span {
+  flex: none;
+  color: var(--color-ink-faint);
+  font-size: var(--fs-meta);
+}
+
 .conversation-panel {
   overflow: hidden;
   border: 1px solid rgb(167 139 250 / 0.16);

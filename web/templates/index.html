@@ -42,16 +42,28 @@
             <div class="flex min-w-0 flex-1 items-center gap-3">
               <span class="font-mono text-lg text-emerald-400" aria-hidden="true">›</span>
               <label for="search-query" class="sr-only">Search source code</label>
-              <input
-                id="search-query"
-                name="q"
-                value="{{.Search.Query.Text}}"
-                class="min-w-0 flex-1 bg-transparent py-4 text-base text-white outline-none placeholder:text-ink-faint"
-                placeholder="Search code, symbols, or regex…"
-                autocomplete="off"
-                spellcheck="false"
-                autofocus
-              >
+              <div class="search-query-shell">
+                <input
+                  id="search-query"
+                  name="q"
+                  value="{{.Search.Query.Text}}"
+                  class="min-w-0 flex-1 bg-transparent py-4 text-base text-white outline-none placeholder:text-ink-faint"
+                  placeholder="Search code, symbols, or regex…"
+                  autocomplete="off"
+                  aria-autocomplete="list"
+                  aria-controls="search-query-completions"
+                  aria-expanded="false"
+                  spellcheck="false"
+                  autofocus
+                >
+                <div
+                  id="search-query-completions"
+                  class="search-query-completions"
+                  role="listbox"
+                  aria-label="Query completions"
+                  hidden
+                ></div>
+              </div>
             </div>
             <button class="search-button" type="submit">
               <span id="search-progress" class="htmx-indicator">Searching</span>
@@ -94,6 +106,11 @@
                 <span>File limit</span>
                 <input name="limit" type="number" min="1" max="500" value="{{.Search.Query.Limit}}" inputmode="numeric">
               </label>
+              <p class="col-span-full text-xs leading-5 text-ink-faint">
+                Keep using the simple fields, or type filters such as
+                <code>repository:RepoKarta language:Go -path:vendor content:"exact phrase"</code>.
+                Press <kbd>Tab</kbd> to accept a suggestion.
+              </p>
             </div>
           </form>
         </section>

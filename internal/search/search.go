@@ -21,23 +21,34 @@ const (
 
 // Query is a bounded code-search request.
 type Query struct {
-	Text       string
-	Repository string
+	Text        string
+	IncludeText []string
+	ExcludeText []string
+	Repository  string
 	// Repositories is an internal exact allow-list of canonical repository
 	// identities. External query syntax never populates it.
 	Repositories []string
 	// RepositoryIDs is the collision-safe internal allow-list stored in Zoekt
 	// shard metadata.
 	RepositoryIDs []uint32
+	// ExcludeRepositoryIDs is an internal deny-list resolved after access
+	// control and never accepts caller-supplied shard identities directly.
+	ExcludeRepositoryIDs []uint32
 	// Scopes is an internal union of exact repository and optional file
 	// identities resolved from structured contexts. External query syntax never
 	// populates it.
-	Scopes   []Scope
-	Language string
-	Path     string
-	File     string
-	Mode     string
-	Limit    int
+	Scopes           []Scope
+	Language         string
+	Languages        []string
+	ExcludeLanguages []string
+	Path             string
+	Paths            []string
+	ExcludePaths     []string
+	File             string
+	Files            []string
+	ExcludeFiles     []string
+	Mode             string
+	Limit            int
 }
 
 // Scope is one exact repository identity and an optional exact committed path

@@ -278,21 +278,34 @@ func (a *Adapter) acquireSearcher() (upstream.Streamer, func(), error) {
 
 func buildQuery(request search.Query) (query.Q, error) {
 	var children []query.Q
-	switch request.Mode {
-	case "zoekt":
-		parsed, err := query.Parse(request.Text)
-		if err != nil {
-			return nil, fmt.Errorf("invalid Zoekt query: %w", err)
+	if request.Text != "" {
+		switch request.Mode {
+		case "zoekt":
+			parsed, err := query.Parse(request.Text)
+			if err != nil {
+				return nil, fmt.Errorf("invalid Zoekt query: %w", err)
+			}
+			children = append(children, parsed)
+		case "regex":
+			regularExpression, err := syntax.Parse(request.Text, syntax.ClassNL|syntax.PerlX|syntax.UnicodeGroups)
+			if err != nil {
+				return nil, fmt.Errorf("invalid regular expression: %w", err)
+			}
+			children = append(children, &query.Regexp{Regexp: regularExpression})
+		default:
+			children = append(children, &query.Substring{Pattern: request.Text})
 		}
-		children = append(children, parsed)
-	case "regex":
-		regularExpression, err := syntax.Parse(request.Text, syntax.ClassNL|syntax.PerlX|syntax.UnicodeGroups)
-		if err != nil {
-			return nil, fmt.Errorf("invalid regular expression: %w", err)
-		}
-		children = append(children, &query.Regexp{Regexp: regularExpression})
-	default:
-		children = append(children, &query.Substring{Pattern: request.Text})
+	}
+	if textQuery := stringAlternatives(request.IncludeText, func(value string) query.Q {
+		return &query.Substring{Pattern: value}
+	}); textQuery != nil {
+		children = append(children, textQuery)
+	}
+	for _, text := range request.ExcludeText {
+		children = append(children, &query.Not{Child: &query.Substring{Pattern: text}})
+	}
+	if len(children) == 0 {
+		children = append(children, &query.Const{Value: true})
 	}
 
 	if repository := strings.TrimSpace(request.Repository); repository != "" {
@@ -321,6 +334,9 @@ func buildQuery(request search.Query) (query.Q, error) {
 	}
 	if len(request.RepositoryIDs) > 0 {
 		children = append(children, query.NewRepoIDs(request.RepositoryIDs...))
+	}
+	if len(request.ExcludeRepositoryIDs) > 0 {
+		children = append(children, &query.Not{Child: query.NewRepoIDs(request.ExcludeRepositoryIDs...)})
 	}
 	if len(request.Scopes) > 0 {
 		scopeQueries := make([]query.Q, 0, len(request.Scopes))
@@ -360,13 +376,72 @@ func buildQuery(request search.Query) (query.Q, error) {
 	if language := strings.TrimSpace(request.Language); language != "" {
 		children = append(children, &query.Language{Language: language})
 	}
+	if languageQuery := stringAlternatives(request.Languages, func(value string) query.Q {
+		return &query.Language{Language: value}
+	}); languageQuery != nil {
+		children = append(children, languageQuery)
+	}
+	for _, language := range compactStrings(request.ExcludeLanguages) {
+		children = append(children, &query.Not{Child: &query.Language{Language: language}})
+	}
 	if path := strings.TrimSpace(request.Path); path != "" {
 		children = append(children, &query.Substring{Pattern: filepath.ToSlash(path), FileName: true})
+	}
+	if pathQuery := stringAlternatives(request.Paths, func(value string) query.Q {
+		return &query.Substring{Pattern: filepath.ToSlash(value), FileName: true}
+	}); pathQuery != nil {
+		children = append(children, pathQuery)
+	}
+	for _, path := range compactStrings(request.ExcludePaths) {
+		children = append(children, &query.Not{Child: &query.Substring{
+			Pattern: filepath.ToSlash(path), FileName: true,
+		}})
 	}
 	if file := strings.TrimSpace(request.File); file != "" {
 		children = append(children, &query.Substring{Pattern: file, FileName: true})
 	}
+	if fileQuery := stringAlternatives(request.Files, func(value string) query.Q {
+		return &query.Substring{Pattern: value, FileName: true}
+	}); fileQuery != nil {
+		children = append(children, fileQuery)
+	}
+	for _, file := range compactStrings(request.ExcludeFiles) {
+		children = append(children, &query.Not{Child: &query.Substring{Pattern: file, FileName: true}})
+	}
 	return &query.And{Children: children}, nil
+}
+
+func stringAlternatives(values []string, build func(string) query.Q) query.Q {
+	values = compactStrings(values)
+	if len(values) == 0 {
+		return nil
+	}
+	if len(values) == 1 {
+		return build(values[0])
+	}
+	children := make([]query.Q, 0, len(values))
+	for _, value := range values {
+		children = append(children, build(value))
+	}
+	return &query.Or{Children: children}
+}
+
+func compactStrings(values []string) []string {
+	output := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		key := strings.ToLower(value)
+		if _, duplicate := seen[key]; duplicate {
+			continue
+		}
+		seen[key] = struct{}{}
+		output = append(output, value)
+	}
+	return output
 }
 
 func exactDirectoryQuery(directory string) (query.Q, error) {

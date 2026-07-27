@@ -166,6 +166,18 @@ func TestNamedContextJSONAndCanonicalPageExposeEffectiveScope(t *testing.T) {
 		!strings.Contains(response.Body.String(), "Copy context URL") {
 		t.Fatalf("context page status = %d, body = %s", response.Code, response.Body.String())
 	}
+
+	request = httptest.NewRequest(
+		http.MethodGet,
+		"http://127.0.0.1:7331/api/search/query-completions?q=repository%3Apay&cursor=14",
+		nil,
+	)
+	response = httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK ||
+		!strings.Contains(response.Body.String(), `"insert_text":"repository:payments"`) {
+		t.Fatalf("query completion status = %d, body = %s", response.Code, response.Body.String())
+	}
 }
 
 func TestAdministratorCanPreviewCleanupAndExportDiagnostics(t *testing.T) {

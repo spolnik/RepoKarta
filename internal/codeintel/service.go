@@ -26,6 +26,7 @@ import (
 	"github.com/spolnik/RepoKarta/internal/catalog"
 	"github.com/spolnik/RepoKarta/internal/contextscope"
 	"github.com/spolnik/RepoKarta/internal/graph"
+	"github.com/spolnik/RepoKarta/internal/querylang"
 	"github.com/spolnik/RepoKarta/internal/search"
 	"github.com/spolnik/RepoKarta/internal/source"
 )
@@ -195,6 +196,7 @@ type SearchResponse struct {
 	ReferenceIndex      *ReferenceIndex             `json:"reference_index,omitempty"`
 	Contexts            []contextscope.Context      `json:"contexts,omitempty"`
 	NamedContexts       []contextscope.NamedContext `json:"named_contexts,omitempty"`
+	QueryLanguage       *querylang.Query            `json:"query_language,omitempty"`
 }
 
 // ReferenceIndex reports whether every requested repository has a persisted
@@ -800,9 +802,16 @@ func (s *Service) RepositoryByID(ctx context.Context, id int64) (catalog.Reposit
 
 // Search performs a bounded search and resolves every match to a citation.
 func (s *Service) Search(ctx context.Context, request SearchRequest) (SearchResponse, error) {
+	parsedQuery, err := querylang.Parse(request.Query)
+	if err != nil {
+		return SearchResponse{}, err
+	}
 	if strings.EqualFold(strings.TrimSpace(request.Mode), "references") {
-		return s.FindReferences(ctx, ReferenceRequest{
-			Symbol:             request.Query,
+		if len(parsedQuery.Filters) > 0 {
+			return SearchResponse{}, errors.New("query filters cannot be combined with references mode yet")
+		}
+		response, referenceErr := s.FindReferences(ctx, ReferenceRequest{
+			Symbol:             parsedQuery.Text,
 			RepositoryID:       request.RepositoryID,
 			Repository:         request.Repository,
 			Language:           request.Language,
@@ -813,6 +822,8 @@ func (s *Service) Search(ctx context.Context, request SearchRequest) (SearchResp
 			NamedContextIDs:    request.NamedContextIDs,
 			UseDefaultContexts: request.UseDefaultContexts,
 		})
+		response.QueryLanguage = &parsedQuery
+		return response, referenceErr
 	}
 	limit := normalizeLimit(request.Limit, DefaultSearchLimit, MaximumSearchLimit)
 	useDefaultContexts := request.UseDefaultContexts
@@ -837,6 +848,10 @@ func (s *Service) Search(ctx context.Context, request SearchRequest) (SearchResp
 		return SearchResponse{}, errors.New("structured contexts cannot be combined with the legacy repository selector")
 	}
 	repositoryFilter := strings.TrimSpace(request.Repository)
+	queryFilters, err := s.compileQueryFilters(ctx, parsedQuery)
+	if err != nil {
+		return SearchResponse{}, err
+	}
 	var repositoryIDAllowList []uint32
 	var structuredScopes []search.Scope
 	if len(resolvedContexts) > 0 {
@@ -896,16 +911,50 @@ func (s *Service) Search(ctx context.Context, request SearchRequest) (SearchResp
 			}
 		}
 	}
+	repositoryIDAllowList, structuredScopes, empty := applyQueryRepositoryFilters(
+		repositoryIDAllowList,
+		structuredScopes,
+		queryFilters.repositoryAllow,
+		queryFilters.repositoryLimited,
+		queryFilters.repositoryDeny,
+	)
+	if empty {
+		return SearchResponse{
+			Limit:           limit,
+			Matches:         []SearchMatch{},
+			TotalFilesExact: true,
+			Warnings:        []search.Warning{},
+			Contexts:        resolvedContexts,
+			NamedContexts:   effective.NamedContexts,
+			QueryLanguage:   &parsedQuery,
+		}, nil
+	}
+	engineText := parsedQuery.Text
+	if len(parsedQuery.Filters) == 0 {
+		switch strings.ToLower(strings.TrimSpace(request.Mode)) {
+		case "zoekt", "regex":
+			engineText = strings.TrimSpace(request.Query)
+		}
+	}
 	result, err := s.searcher.Search(ctx, search.Query{
-		Text:          strings.TrimSpace(request.Query),
-		Repository:    repositoryFilter,
-		RepositoryIDs: repositoryIDAllowList,
-		Scopes:        structuredScopes,
-		Language:      strings.TrimSpace(request.Language),
-		Path:          strings.TrimSpace(request.Path),
-		File:          strings.TrimSpace(request.File),
-		Mode:          strings.TrimSpace(request.Mode),
-		Limit:         limit,
+		Text:                 engineText,
+		IncludeText:          queryFilters.includeText,
+		ExcludeText:          queryFilters.excludeText,
+		Repository:           repositoryFilter,
+		RepositoryIDs:        repositoryIDAllowList,
+		ExcludeRepositoryIDs: queryFilters.repositoryDeny,
+		Scopes:               structuredScopes,
+		Language:             strings.TrimSpace(request.Language),
+		Languages:            queryFilters.languages,
+		ExcludeLanguages:     queryFilters.excludeLanguages,
+		Path:                 strings.TrimSpace(request.Path),
+		Paths:                queryFilters.paths,
+		ExcludePaths:         queryFilters.excludePaths,
+		File:                 strings.TrimSpace(request.File),
+		Files:                queryFilters.files,
+		ExcludeFiles:         queryFilters.excludeFiles,
+		Mode:                 strings.TrimSpace(request.Mode),
+		Limit:                limit,
 	})
 	if err != nil {
 		return SearchResponse{}, err
@@ -917,6 +966,7 @@ func (s *Service) Search(ctx context.Context, request SearchRequest) (SearchResp
 	}
 	response.Contexts = resolvedContexts
 	response.NamedContexts = effective.NamedContexts
+	response.QueryLanguage = &parsedQuery
 	return response, nil
 }
 

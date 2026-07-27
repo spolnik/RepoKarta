@@ -229,7 +229,7 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "search_code",
 		Title:       "Search indexed code",
-		Description: "Search committed source across local repositories. Supports literal, regex, and Zoekt syntax (repo:, lang:, file:, sym:, booleans, and negation). Completeness, skipped work, warnings, and pinned source URLs are explicit.",
+		Description: "Search committed source across local repositories. The query supports shared repository, revision, language, path, file, content, and negative filters; literal, regex, Zoekt, and AST-reference modes remain available. Completeness, parsed query provenance, skipped work, warnings, and pinned source URLs are explicit.",
 		Annotations: readOnly,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input searchCodeInput) (*mcp.CallToolResult, searchCodeOutput, error) {
 		result, err := intelligence.Search(ctx, codeintel.SearchRequest{
@@ -541,7 +541,7 @@ type resolveEffectiveContextsInput contextscope.EffectiveRequest
 type resolveEffectiveContextsOutput = contextscope.EffectiveResponse
 
 type searchCodeInput struct {
-	Query              string                  `json:"query" jsonschema:"required,The source text symbol or regular expression to find."`
+	Query              string                  `json:"query" jsonschema:"required,Source text or shared query grammar. Fields include content repository revision language path file symbol_kind result_type and owner; prefix a field with minus to exclude it. Unsupported evidence domains fail explicitly."`
 	RepositoryID       int64                   `json:"repository_id,omitempty" jsonschema:"Optional repository ID returned by list_repositories. Omit to search every indexed repository."`
 	Language           string                  `json:"language,omitempty" jsonschema:"Optional programming language filter."`
 	Path               string                  `json:"path,omitempty" jsonschema:"Optional substring required in the path."`

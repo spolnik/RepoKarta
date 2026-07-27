@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/spolnik/RepoKarta/internal/catalog"
@@ -16,6 +17,30 @@ func TestDiscoverCTagsTreatsMissingConfiguredCommandAsUnavailable(t *testing.T) 
 	t.Setenv("PATH", t.TempDir())
 	if found := discoverCTags(); found != "" {
 		t.Fatalf("discoverCTags() = %q, want unavailable", found)
+	}
+}
+
+func TestBuildQueryUsesORWithinFieldsAndNOTForNegativeFilters(t *testing.T) {
+	compiled, err := buildQuery(search.Query{
+		IncludeText:          []string{"first", "second"},
+		ExcludeText:          []string{"generated"},
+		RepositoryIDs:        []uint32{1, 2},
+		ExcludeRepositoryIDs: []uint32{2},
+		Languages:            []string{"Go", "TypeScript"},
+		ExcludeLanguages:     []string{"Java"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := compiled.String()
+	for _, fragment := range []string{
+		"(or substr:\"first\" substr:\"second\")", "(not substr:\"generated\")",
+		"(repoids count:2)", "(not (repoids repoid={2}))",
+		"(or lang:Go lang:TypeScript)", "(not lang:Java)",
+	} {
+		if !strings.Contains(value, fragment) {
+			t.Fatalf("compiled query %q does not contain %q", value, fragment)
+		}
 	}
 }
 

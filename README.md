@@ -178,6 +178,32 @@ go run ./cmd/repokarta serve -exclude archived -exclude vendor C:\Work\ghorg
 Search works without an AI provider or API key. Literal mode is the default;
 regular-expression mode treats the whole query as a regex; Zoekt mode exposes
 boolean, `repo:`, `lang:`, `file:`, `sym:`, and other native Zoekt syntax.
+The default search box, `GET`/`POST /api/search`, and MCP `search_code` also
+share a deterministic RepoKarta grammar:
+
+```text
+ordinary text repository:RepoKarta revision:8f42c0a language:Go path:internal file:.go
+content:"exact phrase" -content:generated -path:vendor result_type:content
+```
+
+The canonical fields are `content`, `repository`, `revision`, `language`,
+`path`, `file`, `symbol_kind`, `result_type`, and `owner`; `repo`, `rev`,
+`lang`, `filename`, `kind`, and `type` are accepted aliases. Prefix a field or
+bare content term with `-` to exclude it. Quote values containing whitespace.
+Multiple values of the same field are alternatives, while different fields
+are combined. Repository names and stable IDs resolve only against repositories
+visible to the caller, revision prefixes resolve only against their exact
+indexed snapshots, and the response's `query_language` object records the
+parsed free text and filters.
+
+Autocomplete is available in the browser and from
+`GET /api/search/query-completions?q={query}&cursor={utf16-offset}`. It
+advertises the complete stable grammar. Filters whose evidence is not indexed
+yet—currently non-content result types, symbol kinds, and ownership—fail with
+an explicit error instead of silently widening or ignoring the request. The
+existing repository, language, path, filename, mode, and limit form fields
+remain supported and combine with grammar filters.
+
 RepoKarta enables symbol indexing automatically when `universal-ctags` is on
 `PATH`, or when `ctags`/`CTAGS_COMMAND` identifies itself as Universal Ctags via
 `--version`. This supports Homebrew's `ctags` name without accidentally enabling
@@ -436,6 +462,7 @@ The JSON API is the capability boundary used by non-browser clients:
 
 ```text
 GET /api/search?q=OpenFile&mode=literal&repo=RepoKarta&lang=Go&limit=100
+GET /api/search/query-completions?q=repository%3ARepo&cursor=15
 GET /api/contexts/suggest?kind=repository&q=RepoKarta&limit=12
 GET /api/contexts/suggest?kind=symbol&repository_id=1&q=OpenFile&limit=12
 POST /api/contexts/resolve
@@ -472,8 +499,9 @@ repository grants in the administrator panel.
 
 Search responses always include `returned_files`, `matching_files`,
 `estimated_total_files`, `total_files_exact`, `truncated`, `files_skipped`,
-`shards_skipped`, and the effective `limit`. A consumer can therefore tell
-whether a fleet-wide negative answer is complete.
+`shards_skipped`, the effective `limit`, and `query_language`. A consumer can
+therefore inspect the exact grammar interpretation and tell whether a
+fleet-wide negative answer is complete.
 
 Git history walks are newest-first and report `truncated`, `output_truncated`,
 the effective `limit`, and their byte budget. Diffs return exact resolved
@@ -700,11 +728,11 @@ Windows amd64 and Apple Silicon macOS. The workflow:
 Run the same packagers locally:
 
 ```powershell
-.\scripts\package-release.ps1 -Version 0.54.0-dev
+.\scripts\package-release.ps1 -Version 0.55.0-dev
 ```
 
 ```sh
-./scripts/package-release.sh 0.54.0-dev
+./scripts/package-release.sh 0.55.0-dev
 ```
 
 macOS packages are signed with the hardened runtime when

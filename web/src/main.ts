@@ -9,6 +9,7 @@ import {
 } from "./provider-defaults.mjs";
 import { activeContextMention } from "./context-mention.mjs";
 import { parseRepoKartaContextURL } from "./context-url.mjs";
+import { applyQueryCompletion, type QueryCompletionEdit } from "./query-completion.mjs";
 import { wikiPrimaryAction } from "./wiki-run-state.mjs";
 import "./styles.css";
 
@@ -152,6 +153,143 @@ function enableQueryChips(): void {
       form.requestSubmit();
     });
   });
+}
+
+type QueryCompletion = QueryCompletionEdit & {
+  label: string;
+  detail: string;
+};
+
+type QueryCompletionResponse = {
+  completions: QueryCompletion[];
+};
+
+function enableSearchQueryCompletion(): void {
+  const input = document.querySelector<HTMLInputElement>("#search-query");
+  const list = document.querySelector<HTMLElement>("#search-query-completions");
+  if (!input || !list) {
+    return;
+  }
+
+  let completions: QueryCompletion[] = [];
+  let activeIndex = -1;
+  let requestSequence = 0;
+  let controller: AbortController | undefined;
+
+  const close = (): void => {
+    completions = [];
+    activeIndex = -1;
+    list.replaceChildren();
+    list.hidden = true;
+    input.setAttribute("aria-expanded", "false");
+    input.removeAttribute("aria-activedescendant");
+  };
+
+  const setActive = (index: number): void => {
+    if (completions.length === 0) {
+      activeIndex = -1;
+      input.removeAttribute("aria-activedescendant");
+      return;
+    }
+    activeIndex = (index + completions.length) % completions.length;
+    list.querySelectorAll<HTMLElement>("[role=option]").forEach((option, optionIndex) => {
+      const active = optionIndex === activeIndex;
+      option.dataset.active = String(active);
+      option.setAttribute("aria-selected", String(active));
+      if (active) {
+        input.setAttribute("aria-activedescendant", option.id);
+        option.scrollIntoView({ block: "nearest" });
+      }
+    });
+  };
+
+  const apply = (completion: QueryCompletion): void => {
+    const edit = applyQueryCompletion(input.value, completion);
+    input.value = edit.value;
+    input.focus();
+    input.setSelectionRange(edit.cursor, edit.cursor);
+    close();
+  };
+
+  const render = (next: QueryCompletion[]): void => {
+    completions = next;
+    activeIndex = -1;
+    list.replaceChildren();
+    if (completions.length === 0 || document.activeElement !== input) {
+      close();
+      return;
+    }
+    completions.forEach((completion, index) => {
+      const option = document.createElement("button");
+      option.type = "button";
+      option.id = `search-query-completion-${index}`;
+      option.className = "search-query-completion";
+      option.setAttribute("role", "option");
+      option.setAttribute("aria-selected", "false");
+      option.dataset.active = "false";
+
+      const label = document.createElement("strong");
+      label.textContent = completion.label;
+      option.append(label);
+      if (completion.detail) {
+        const detail = document.createElement("span");
+        detail.textContent = completion.detail;
+        option.append(detail);
+      }
+      option.addEventListener("mouseenter", () => setActive(index));
+      option.addEventListener("mousedown", (event) => event.preventDefault());
+      option.addEventListener("click", () => apply(completion));
+      list.append(option);
+    });
+    list.hidden = false;
+    input.setAttribute("aria-expanded", "true");
+  };
+
+  const refresh = async (): Promise<void> => {
+    const sequence = ++requestSequence;
+    controller?.abort();
+    controller = new AbortController();
+    const cursor = input.selectionStart ?? input.value.length;
+    const parameters = new URLSearchParams({ q: input.value, cursor: String(cursor) });
+    try {
+      const response = await fetch(`/api/search/query-completions?${parameters}`, {
+        headers: { Accept: "application/json" },
+        signal: controller.signal
+      });
+      if (!response.ok) {
+        close();
+        return;
+      }
+      const payload = await response.json() as QueryCompletionResponse;
+      if (sequence === requestSequence) {
+        render(payload.completions ?? []);
+      }
+    } catch (error) {
+      if (!(error instanceof DOMException && error.name === "AbortError")) {
+        close();
+      }
+    }
+  };
+
+  input.addEventListener("input", () => void refresh());
+  input.addEventListener("click", () => void refresh());
+  input.addEventListener("focus", () => void refresh());
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowDown" && completions.length > 0) {
+      event.preventDefault();
+      setActive(activeIndex + 1);
+    } else if (event.key === "ArrowUp" && completions.length > 0) {
+      event.preventDefault();
+      setActive(activeIndex - 1);
+    } else if ((event.key === "Tab" || event.key === "Enter") && activeIndex >= 0) {
+      event.preventDefault();
+      apply(completions[activeIndex]);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      close();
+    }
+  });
+  input.addEventListener("blur", () => window.setTimeout(close, 0));
 }
 
 /**
@@ -6133,6 +6271,7 @@ enableArtifactProgress();
 enableDependencyRefresh();
 enableRepositoryDrawer();
 enableQueryChips();
+enableSearchQueryCompletion();
 enableSearchFeedback();
 enableFirstRunProgress();
 enableSearchShortcut();

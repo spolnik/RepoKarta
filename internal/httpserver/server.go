@@ -356,6 +356,7 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 	mux.HandleFunc("GET /source/{repositoryID}", server.source)
 	mux.HandleFunc("GET /api/search", server.apiSearch)
 	mux.HandleFunc("POST /api/search", server.apiSearchJSON)
+	mux.HandleFunc("GET /api/search/query-completions", server.apiQueryCompletions)
 	mux.HandleFunc("GET /api/contexts/suggest", server.apiContextSuggestions)
 	mux.HandleFunc("POST /api/contexts/resolve", server.apiContextResolution)
 	mux.HandleFunc("GET /api/contexts/named", server.apiNamedContexts)
@@ -855,6 +856,25 @@ func (s *Server) apiSearchJSON(response http.ResponseWriter, request *http.Reque
 		return
 	}
 	writeSearchJSON(response, result)
+}
+
+func (s *Server) apiQueryCompletions(response http.ResponseWriter, request *http.Request) {
+	raw := request.URL.Query().Get("q")
+	if len(raw) > 8192 {
+		writeAPIError(response, http.StatusRequestURITooLong, errors.New("query is too long"))
+		return
+	}
+	cursor, err := strconv.Atoi(request.URL.Query().Get("cursor"))
+	if err != nil || cursor < 0 {
+		writeAPIError(response, http.StatusBadRequest, errors.New("cursor must be a non-negative integer"))
+		return
+	}
+	result, err := s.intelligence.CompleteQuery(request.Context(), raw, cursor)
+	if err != nil {
+		writeAPIError(response, http.StatusInternalServerError, errors.New("query completions are unavailable"))
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
 }
 
 func (s *Server) apiContextSuggestions(response http.ResponseWriter, request *http.Request) {

@@ -430,8 +430,8 @@ func (s *session) recordSearchCitations(result codeintel.SearchResponse) {
 func toolDefinitions() []anthropicapi.ToolUnionParam {
 	return []anthropicapi.ToolUnionParam{
 		tool("list_repositories", "List every indexed repository and its exact indexed commit.", nil, nil),
-		tool("search_code", "Search committed source with explicit completeness and commit-pinned source URLs.", map[string]any{
-			"query":         stringProperty("Source text or Zoekt expression."),
+		tool("search_code", "Search committed source with shared query filters, explicit completeness, parsed provenance, and commit-pinned source URLs.", map[string]any{
+			"query":         stringProperty("Source text or query fields such as repository:, revision:, language:, path:, file:, content:, and negative -field:value filters."),
 			"repository_id": integerProperty("Optional repository ID returned by list_repositories."),
 			"language":      stringProperty("Optional language filter."),
 			"path":          stringProperty("Optional path substring."),
