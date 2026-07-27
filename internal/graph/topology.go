@@ -45,6 +45,10 @@ var (
 	topologyYAMLKeyPattern = regexp.MustCompile(
 		`^(\s*)([A-Za-z][A-Za-z0-9_.-]*)\s*:\s*(.*?)\s*$`,
 	)
+	topologyExternalHostLetterPattern = regexp.MustCompile(`[A-Za-z]`)
+	topologyExternalTokenPattern      = regexp.MustCompile(
+		`(?i)^\d+(?:\.\d+)?(?:b|kb|mb|gb|tb|ki|mi|gi|ms|s|m|h|d)?$`,
+	)
 	genericExternalHostLabels = map[string]bool{
 		"api": true, "auth": true, "www": true, "app": true, "gateway": true,
 		"service": true, "internal": true, "prod": true, "staging": true,
@@ -267,10 +271,12 @@ func (b *builder) addDetectedConnections(
 			}
 		}
 
-		if isMCPConfig || !httpClientLine(lower, filePath) {
+		if isMCPConfig ||
+			(!isServiceConfiguration(filePath) && !isTopologyFile(filePath) &&
+				!httpClientLine(lower, filePath)) {
 			continue
 		}
-		for _, raw := range topologyURLPattern.FindAllString(literalLine, -1) {
+		for _, raw := range topologyURLPattern.FindAllString(line, -1) {
 			parsed, err := url.Parse(raw)
 			if err != nil || parsed.Hostname() == "" {
 				continue
@@ -575,6 +581,7 @@ func (b *builder) addSystemComponent(component SystemComponent) {
 		if existing.Technology == "" {
 			existing.Technology = component.Technology
 		}
+		existing.Candidate = existing.Candidate || component.Candidate
 		b.components[component.ID] = existing
 		return
 	}
@@ -607,12 +614,35 @@ func (b *builder) externalSystemComponentWithCandidate(
 	candidate bool,
 ) string {
 	name = strings.TrimSpace(name)
+	if kind == "service" && !b.validExternalHostName(name, candidate) {
+		b.rejectedExternalCount++
+		return ""
+	}
 	id := "external:" + kind + ":" + normalizeID(name)
 	b.addSystemComponent(SystemComponent{
 		ID: id, Name: name, Kind: kind, Technology: technology,
 		Aliases: aliases, External: true, Candidate: candidate,
 	})
 	return id
+}
+
+func (b *builder) validExternalHostName(name string, candidate bool) bool {
+	if name == "" || strings.ContainsAny(name, ")} \t\r\n") ||
+		!topologyExternalHostLetterPattern.MatchString(name) ||
+		topologyExternalTokenPattern.MatchString(name) {
+		return false
+	}
+	normalized := normalizeServiceName(name)
+	if normalized == "" || genericExternalHostLabels[normalized] {
+		return false
+	}
+	if strings.Contains(name, ".") {
+		return true
+	}
+	if candidate || strings.Contains(normalized, "-") {
+		return true
+	}
+	return b.serviceTargets[normalized] != ""
 }
 
 func (b *builder) addSystemConnection(connection SystemConnection) {
@@ -630,7 +660,10 @@ func (b *builder) addSystemConnection(connection SystemConnection) {
 	if existing, ok := b.connections[connection.ID]; ok {
 		existing.Evidence = appendUniqueEvidence(existing.Evidence, connection.Evidence...)
 		existing.Evidence = existing.Evidence[:min(len(existing.Evidence), topologyEvidenceLimit)]
-		if confidenceRank(connection.Confidence) > confidenceRank(existing.Confidence) {
+		if connection.EnvironmentVariable != "" &&
+			existing.EnvironmentVariable == "" {
+			existing.Confidence = connection.Confidence
+		} else if confidenceRank(connection.Confidence) > confidenceRank(existing.Confidence) {
 			existing.Confidence = connection.Confidence
 		}
 		existing.TargetResolved = existing.TargetResolved || connection.TargetResolved

@@ -638,6 +638,13 @@ func (b *builder) knownServiceTarget(value, source string) (string, bool) {
 	if normalized == "" {
 		return "", false
 	}
+	if repositoryNodeID := b.serviceTargets[normalized]; repositoryNodeID != "" {
+		if componentID, ok := b.registeredServiceComponent(
+			repositoryNodeID, normalized, source,
+		); ok {
+			return componentID, true
+		}
+	}
 	candidates := make(map[string]bool)
 	for componentID, component := range b.components {
 		if component.External || componentID == source || component.Kind != "service" {
@@ -657,6 +664,36 @@ func (b *builder) knownServiceTarget(value, source string) (string, bool) {
 		return componentID, true
 	}
 	return "", false
+}
+
+func (b *builder) registeredServiceComponent(
+	repositoryNodeID, alias, source string,
+) (string, bool) {
+	node, ok := b.nodes[repositoryNodeID]
+	if !ok || node.Kind != "repository" || node.RepositoryID == 0 {
+		return "", false
+	}
+	componentID := "system:" + strconv.FormatInt(node.RepositoryID, 10)
+	if componentID == source {
+		return "", false
+	}
+	if component, exists := b.components[componentID]; exists {
+		return componentID, !component.External && component.Kind == "service"
+	}
+	name := strings.TrimSpace(node.Label)
+	if name == "" {
+		name = alias
+	}
+	repository := strings.TrimSpace(node.Repository)
+	if repository == "" {
+		repository = name
+	}
+	b.addSystemComponent(SystemComponent{
+		ID: componentID, Name: name, Kind: "service",
+		RepositoryID: node.RepositoryID, Repository: repository,
+		Path: ".", Aliases: []string{name, alias}, Evidence: node.Evidence,
+	})
+	return componentID, true
 }
 
 func nameShapeServiceCandidate(variable string) string {

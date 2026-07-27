@@ -34,7 +34,7 @@ import (
 )
 
 const (
-	snapshotVersion       = 17
+	snapshotVersion       = 18
 	maximumFiles          = 20_000
 	maximumSourceFiles    = 5_000
 	maximumSourceFileSize = 1 << 20
@@ -282,6 +282,7 @@ type Snapshot struct {
 	UnresolvedTopology           []UnresolvedTopologyConnection `json:"unresolved_topology,omitempty"`
 	EnvironmentAssignments       []EnvironmentAssignment        `json:"environment_assignments,omitempty"`
 	ExcludedEnvironmentVariables []string                       `json:"excluded_environment_variables,omitempty"`
+	RejectedExternalCount        int                            `json:"rejected_external_component_count,omitempty"`
 	Structure                    []StructuralDocument           `json:"structure,omitempty"`
 	StructureTruncated           bool                           `json:"structure_truncated"`
 	FileCount                    int                            `json:"file_count"`
@@ -649,6 +650,7 @@ func (s *Service) ReadTopologySnapshot(
 		merged.environmentAssignments = append(
 			merged.environmentAssignments, result.snapshot.EnvironmentAssignments...,
 		)
+		merged.rejectedExternalCount += result.snapshot.RejectedExternalCount
 		for _, variable := range result.snapshot.ExcludedEnvironmentVariables {
 			merged.excludedEnvironmentVariables[variable] = true
 		}
@@ -1022,6 +1024,7 @@ type builder struct {
 	unresolvedTopology           []UnresolvedTopologyConnection
 	environmentAssignments       []EnvironmentAssignment
 	excludedEnvironmentVariables map[string]bool
+	rejectedExternalCount        int
 	structureTruncated           bool
 	fileCount                    int
 	truncated                    bool
@@ -1118,6 +1121,7 @@ func (b *builder) snapshot(signature string) Snapshot {
 		UnresolvedTopology:           append([]UnresolvedTopologyConnection(nil), b.unresolvedTopology...),
 		EnvironmentAssignments:       append([]EnvironmentAssignment(nil), b.environmentAssignments...),
 		ExcludedEnvironmentVariables: sortedEnvironmentVariables(b.excludedEnvironmentVariables),
+		RejectedExternalCount:        b.rejectedExternalCount,
 		Structure:                    b.structure,
 		StructureTruncated:           b.structureTruncated,
 		FileCount:                    b.fileCount,

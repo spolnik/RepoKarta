@@ -950,7 +950,7 @@ completion criteria include:
 
 ## Current implementation version
 
-`0.76.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
+`0.77.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
 The M9 dependency inventory, public registry refresh, lockfile resolution,
 explicit private-registry routing, reproducible OSV advisory snapshots,
 ecosystem-correct fleet CVE matching, scope-aware UI/JSON/MCP findings, and
