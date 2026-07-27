@@ -50,7 +50,7 @@ cp "$repository_root/docs/dependency-advisories.md" \
 cp "$repository_root/deploy/"* "$stage_directory/deploy/"
 cp "$repository_root/third_party/zoekt/LICENSE" \
     "$stage_directory/licenses/zoekt-Apache-2.0.txt"
-cp "$repository_root/third_party/zoekt/LICENSE" \
+cp "$repository_root/third_party/licenses/deps.dev-semver-Apache-2.0.txt" \
     "$stage_directory/licenses/deps.dev-semver-Apache-2.0.txt"
 cp "$repository_root/third_party/licenses/gotreesitter-MIT.txt" \
     "$stage_directory/licenses/gotreesitter-MIT.txt"

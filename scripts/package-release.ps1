@@ -54,7 +54,7 @@ function Copy-ThirdPartyLicenses {
         Copy-Item -LiteralPath (Join-Path $repositoryRoot $source) -Destination (Join-Path $Destination $licenses[$source]) -Force
     }
     Copy-Item `
-        -LiteralPath (Join-Path $repositoryRoot "third_party\zoekt\LICENSE") `
+        -LiteralPath (Join-Path $repositoryRoot "third_party\licenses\deps.dev-semver-Apache-2.0.txt") `
         -Destination (Join-Path $Destination "deps.dev-semver-Apache-2.0.txt") `
         -Force
 }

@@ -28,7 +28,6 @@ class Repokarta < Formula
     system "go", "build", "-tags", grammar_tags, "-trimpath", *std_go_args(output: bin/"repokarta"), "./cmd/repokarta"
 
     (share/"repokarta/licenses").install "third_party/zoekt/LICENSE" => "zoekt-Apache-2.0.txt"
-    (share/"repokarta/licenses").install "third_party/zoekt/LICENSE" => "deps.dev-semver-Apache-2.0.txt"
     (share/"repokarta/licenses").install Dir["third_party/licenses/*"]
   end
 
