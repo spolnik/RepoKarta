@@ -97,7 +97,7 @@
                 <span>Query mode</span>
                 <select name="mode">
                   <option value="zoekt" {{if or (eq .Search.Query.Mode "") (eq .Search.Query.Mode "zoekt")}}selected{{end}}>Zoekt syntax</option>
-                  <option value="references" {{if eq .Search.Query.Mode "references"}}selected{{end}}>AST references</option>
+                  <option value="references" {{if eq .Search.Query.Mode "references"}}selected{{end}}>SCIP / AST references</option>
                   <option value="regex" {{if eq .Search.Query.Mode "regex"}}selected{{end}}>Regular expression</option>
                   <option value="literal" {{if eq .Search.Query.Mode "literal"}}selected{{end}}>Literal text</option>
                 </select>

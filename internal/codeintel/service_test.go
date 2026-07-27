@@ -16,6 +16,7 @@ import (
 	"github.com/spolnik/RepoKarta/internal/catalog"
 	"github.com/spolnik/RepoKarta/internal/contextscope"
 	"github.com/spolnik/RepoKarta/internal/graph"
+	"github.com/spolnik/RepoKarta/internal/scipindex"
 	"github.com/spolnik/RepoKarta/internal/search"
 )
 
@@ -613,6 +614,21 @@ func (s referenceTestStructure) ReadStructure(context.Context, int64) (graph.Str
 	return s.index, nil
 }
 
+type referenceTestSCIP struct {
+	artifact scipindex.Artifact
+}
+
+func (s referenceTestSCIP) Read(
+	_ context.Context,
+	repositoryID int64,
+	revision string,
+) (scipindex.Artifact, bool, error) {
+	if s.artifact.RepositoryID != repositoryID || s.artifact.Revision != revision {
+		return scipindex.Artifact{}, false, nil
+	}
+	return s.artifact, true, nil
+}
+
 func TestReferenceSearchUsesPersistedASTRelationsAndPinnedSource(t *testing.T) {
 	directory := t.TempDir()
 	sourceText := `package com.acme;
@@ -764,6 +780,62 @@ public class PaymentService extends BaseService {
 		len(references.Matches) != 1 ||
 		references.Matches[0].ResultType != "reference" {
 		t.Fatalf("typed reference results = %#v", references)
+	}
+
+	const semanticSave = "scip-java maven com.acme:payments 1.0.0 com/acme/store/PaymentStore#save()."
+	precise := New(referenceTestStore{repository: repository}, searcher, "http://localhost").
+		UseStructure(structure).
+		UseSCIP(referenceTestSCIP{artifact: scipindex.Artifact{
+			RepositoryID: 7,
+			Revision:     revision,
+			Symbols: []scipindex.Symbol{{
+				ID:          semanticSave,
+				DisplayName: "save",
+			}},
+			Documents: []scipindex.Document{{
+				Path:     "src/PaymentService.java",
+				Language: "java",
+				Occurrences: []scipindex.Occurrence{{
+					Symbol:    semanticSave,
+					StartLine: 3,
+				}},
+			}},
+		}})
+	preciseResult, err := precise.FindReferences(context.Background(), ReferenceRequest{
+		Symbol:       "save",
+		RepositoryID: 7,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preciseResult.ReferenceResolution != "scip-unique-name" ||
+		preciseResult.ReferenceIndex == nil ||
+		preciseResult.ReferenceIndex.Provider != "scip" ||
+		preciseResult.MatchCount != 1 ||
+		preciseResult.Matches[0].Lines[0].ReferenceTarget != semanticSave ||
+		preciseResult.Matches[0].Lines[0].ReferenceConfidence != "compiler" {
+		t.Fatalf("precise references = %#v", preciseResult)
+	}
+
+	ambiguous := precise.UseSCIP(referenceTestSCIP{artifact: scipindex.Artifact{
+		RepositoryID: 7,
+		Revision:     revision,
+		Symbols: []scipindex.Symbol{
+			{ID: semanticSave, DisplayName: "save"},
+			{ID: "scip-java maven com.acme:payments 1.0.0 com/acme/other/OtherStore#save().", DisplayName: "save"},
+		},
+	}})
+	ambiguousResult, err := ambiguous.FindReferences(context.Background(), ReferenceRequest{
+		Symbol:       "save",
+		RepositoryID: 7,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ambiguousResult.ReferenceResolution != "syntax-target-name" ||
+		ambiguousResult.ReferenceIndex == nil ||
+		ambiguousResult.ReferenceIndex.Provider != "tree-sitter" {
+		t.Fatalf("ambiguous SCIP fallback = %#v", ambiguousResult)
 	}
 }
 

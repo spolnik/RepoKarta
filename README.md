@@ -338,6 +338,7 @@ $version = go run ./cmd/repokarta version
 - [Enterprise identity and audit operations](./docs/enterprise-administration.md)
 - [Dependency advisory data and refresh behavior](./docs/dependency-advisories.md)
 - [Distributed dependency topology and runtime observations](./docs/distributed-topology.md)
+- [Compiler-precise SCIP index imports](./docs/scip-indexes.md)
 - [Pinned Zoekt revision and Windows portability](./docs/zoekt-windows-portability.md)
 
 RepoKarta vendors a pinned Zoekt revision under `third_party/zoekt`. Native

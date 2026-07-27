@@ -2437,7 +2437,7 @@ func TestSearchRendersSafeHighlightedCommitPinnedResult(t *testing.T) {
 		`/assets/repokarta-mark-192.png`,
 		`/assets/favicon.ico`,
 		`<option value="references"`,
-		`>AST references</option>`,
+		`>SCIP / AST references</option>`,
 		`/source/1?rev=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`,
 		`lines=1-200&focus=7-7#L7`,
 		`internal%2Fexample.go`,

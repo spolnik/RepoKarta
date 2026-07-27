@@ -105,7 +105,8 @@ func (c *Client) FindSymbol(ctx context.Context, request SymbolRequest) (SymbolR
 	return output, err
 }
 
-// FindReferences searches persisted AST relations through the shared search API.
+// FindReferences uses precise SCIP data when available and otherwise searches
+// persisted AST relations through the shared search API.
 func (c *Client) FindReferences(ctx context.Context, request ReferenceRequest) (ReferenceResponse, error) {
 	return c.Search(ctx, SearchRequest{
 		Query:              request.Symbol,

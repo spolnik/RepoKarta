@@ -17,6 +17,10 @@ mkdir -p "$license_directory"
 go build -tags "$grammar_tags" -trimpath -o "$output_directory/repokarta" ./cmd/repokarta
 cp "$repository_root/third_party/zoekt/LICENSE" \
     "$license_directory/zoekt-Apache-2.0.txt"
+cp "$repository_root/third_party/zoekt/LICENSE" \
+    "$license_directory/scip-Apache-2.0.txt"
+cp "$repository_root/third_party/zoekt/LICENSE" \
+    "$license_directory/sourcegraph-beaut-Apache-2.0.txt"
 cp "$repository_root/third_party/licenses/deps.dev-semver-Apache-2.0.txt" \
     "$license_directory/deps.dev-semver-Apache-2.0.txt"
 cp "$repository_root/third_party/licenses/gotreesitter-MIT.txt" \

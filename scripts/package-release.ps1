@@ -57,6 +57,14 @@ function Copy-ThirdPartyLicenses {
         -LiteralPath (Join-Path $repositoryRoot "third_party\licenses\deps.dev-semver-Apache-2.0.txt") `
         -Destination (Join-Path $Destination "deps.dev-semver-Apache-2.0.txt") `
         -Force
+    Copy-Item `
+        -LiteralPath (Join-Path $repositoryRoot "third_party\zoekt\LICENSE") `
+        -Destination (Join-Path $Destination "scip-Apache-2.0.txt") `
+        -Force
+    Copy-Item `
+        -LiteralPath (Join-Path $repositoryRoot "third_party\zoekt\LICENSE") `
+        -Destination (Join-Path $Destination "sourcegraph-beaut-Apache-2.0.txt") `
+        -Force
 }
 
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
@@ -107,6 +115,7 @@ try {
     Copy-Item -LiteralPath (Join-Path $repositoryRoot "docs\shared-deployment.md") -Destination (Join-Path $stageDirectory "docs\shared-deployment.md") -Force
     Copy-Item -LiteralPath (Join-Path $repositoryRoot "docs\enterprise-administration.md") -Destination (Join-Path $stageDirectory "docs\enterprise-administration.md") -Force
     Copy-Item -LiteralPath (Join-Path $repositoryRoot "docs\dependency-advisories.md") -Destination (Join-Path $stageDirectory "docs\dependency-advisories.md") -Force
+    Copy-Item -LiteralPath (Join-Path $repositoryRoot "docs\scip-indexes.md") -Destination (Join-Path $stageDirectory "docs\scip-indexes.md") -Force
     Copy-Item -Path (Join-Path $repositoryRoot "deploy\*") -Destination (Join-Path $stageDirectory "deploy") -Recurse -Force
     Copy-ThirdPartyLicenses -Destination (Join-Path $stageDirectory "licenses")
 
@@ -120,6 +129,12 @@ try {
     if (-not (Test-Path -LiteralPath (Join-Path $stageDirectory "licenses\deps.dev-semver-Apache-2.0.txt"))) {
         throw "packaged executable is missing the deps.dev semver Apache-2.0 license"
     }
+    if (-not (Test-Path -LiteralPath (Join-Path $stageDirectory "licenses\scip-Apache-2.0.txt"))) {
+        throw "packaged executable is missing the SCIP Apache-2.0 license"
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $stageDirectory "licenses\sourcegraph-beaut-Apache-2.0.txt"))) {
+        throw "packaged executable is missing the Sourcegraph beaut Apache-2.0 license"
+    }
     if (-not (Test-Path -LiteralPath (Join-Path $stageDirectory "docs\shared-deployment.md"))) {
         throw "package is missing the shared-deployment runbook"
     }
@@ -128,6 +143,9 @@ try {
     }
     if (-not (Test-Path -LiteralPath (Join-Path $stageDirectory "docs\dependency-advisories.md"))) {
         throw "package is missing the dependency-advisories runbook"
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $stageDirectory "docs\scip-indexes.md"))) {
+        throw "package is missing the SCIP index runbook"
     }
     if (-not (Test-Path -LiteralPath (Join-Path $stageDirectory "deploy\repokarta.env.example"))) {
         throw "package is missing the shared-deployment environment template"

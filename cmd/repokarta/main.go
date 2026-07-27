@@ -14,10 +14,12 @@ import (
 	"github.com/spolnik/RepoKarta/internal/app"
 	"github.com/spolnik/RepoKarta/internal/codeintel"
 	"github.com/spolnik/RepoKarta/internal/mcpserver"
+	"github.com/spolnik/RepoKarta/internal/scipindex"
 	"github.com/spolnik/RepoKarta/internal/security"
+	"github.com/spolnik/RepoKarta/internal/store"
 )
 
-var version = "0.70.0-dev"
+var version = "0.71.0-dev"
 
 type stringList []string
 
@@ -48,6 +50,8 @@ func run() error {
 		return serve(os.Args[2:])
 	case "mcp":
 		return serveMCP(os.Args[2:])
+	case "scip":
+		return runSCIP(os.Args[2:])
 	case "version", "--version", "-version":
 		fmt.Println(version)
 		return nil
@@ -58,6 +62,86 @@ func run() error {
 		printUsage()
 		return fmt.Errorf("unknown command %q", os.Args[1])
 	}
+}
+
+func runSCIP(args []string) error {
+	if len(args) == 0 || args[0] != "import" {
+		return errors.New("usage: repokarta scip import [options] index.scip")
+	}
+	defaults, err := app.DefaultConfig()
+	if err != nil {
+		return err
+	}
+	flags := flag.NewFlagSet("scip import", flag.ContinueOnError)
+	dataDirectory := flags.String("data-dir", defaults.DataDirectory, "RepoKarta data directory")
+	repositoryID := flags.Int64("repository-id", 0, "repository ID returned by RepoKarta")
+	revision := flags.String("revision", "", "exact indexed commit; defaults to the repository's indexed commit")
+	sourceRoot := flags.String("root", ".", "repository-relative project root used to produce the SCIP index")
+	if err := flags.Parse(args[1:]); err != nil {
+		return err
+	}
+	if flags.NArg() != 1 {
+		return errors.New("scip import requires exactly one index.scip path")
+	}
+	if *repositoryID <= 0 {
+		return errors.New("scip import requires -repository-id")
+	}
+	database, err := store.Open(filepath.Join(*dataDirectory, "repokarta.db"))
+	if err != nil {
+		return err
+	}
+	defer database.Close()
+	repository, err := database.RepositoryByID(context.Background(), *repositoryID)
+	if err != nil {
+		return fmt.Errorf("load repository %d: %w", *repositoryID, err)
+	}
+	indexedCommit := strings.TrimSpace(repository.IndexedCommit)
+	if indexedCommit == "" {
+		return fmt.Errorf("repository %d has no indexed commit", *repositoryID)
+	}
+	requestedRevision := strings.TrimSpace(*revision)
+	if requestedRevision == "" {
+		requestedRevision = indexedCommit
+	}
+	if requestedRevision != indexedCommit {
+		return fmt.Errorf(
+			"SCIP revision %q does not match repository %d indexed commit %q",
+			requestedRevision,
+			*repositoryID,
+			indexedCommit,
+		)
+	}
+	input, err := os.Open(flags.Arg(0))
+	if err != nil {
+		return fmt.Errorf("open SCIP index: %w", err)
+	}
+	defer input.Close()
+	semanticIndexes, err := scipindex.New(filepath.Join(*dataDirectory, "scip"))
+	if err != nil {
+		return err
+	}
+	summary, err := semanticIndexes.Import(
+		context.Background(),
+		*repositoryID,
+		requestedRevision,
+		*sourceRoot,
+		input,
+	)
+	if err != nil {
+		return err
+	}
+	fmt.Printf(
+		"Imported SCIP for repository %d at %s below %s: %d documents, %d symbols, %d occurrences (%s %s)\n",
+		summary.RepositoryID,
+		summary.Revision,
+		summary.SourceRoot,
+		summary.Documents,
+		summary.Symbols,
+		summary.Occurrences,
+		summary.Indexer.Name,
+		summary.Indexer.Version,
+	)
+	return nil
 }
 
 func serveMCP(args []string) error {
@@ -186,6 +270,7 @@ func printUsage() {
 Usage:
   repokarta serve [options] [repository-root]
   repokarta mcp [options]
+  repokarta scip import [options] index.scip
   repokarta version
 
 Serve options:
@@ -208,5 +293,11 @@ Serve options:
   -repository-sync-interval automatic managed-repository sync interval (default 0)
 
 MCP options:
-  -url string        running RepoKarta URL (default http://127.0.0.1:7331)`)
+  -url string        running RepoKarta URL (default http://127.0.0.1:7331)
+
+SCIP import options:
+  -data-dir string   RepoKarta data directory
+  -repository-id int repository ID returned by RepoKarta
+  -revision string   exact indexed commit (defaults to repository's indexed commit)
+  -root string       repository-relative project root used by the indexer (default .)`)
 }

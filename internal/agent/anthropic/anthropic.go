@@ -459,7 +459,7 @@ func toolDefinitions() []anthropicapi.ToolUnionParam {
 			"limit":         integerProperty("Maximum files, 1 to 500."),
 			"compact":       booleanProperty("Return paths, line numbers, and citations without snippet bodies."),
 		}, []string{"symbol"}),
-		tool("find_references", "Find syntax-backed sites by exact target name. Use for non-unique symbols or syntax precision; compact mode reads cached relations without reopening every matched source blob.", map[string]any{
+		tool("find_references", "Find compiler-precise SCIP references when complete exact-revision artifacts resolve one symbol, with labeled syntax-backed fallback. Compact mode reads cached artifacts without reopening every matched source blob.", map[string]any{
 			"symbol":        stringProperty("Exact source-level symbol name."),
 			"repository_id": integerProperty("Optional repository ID returned by list_repositories."),
 			"language":      stringProperty("Optional parser language filter."),
