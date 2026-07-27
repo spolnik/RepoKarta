@@ -343,6 +343,7 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 	mux.HandleFunc("GET /api/search", server.apiSearch)
 	mux.HandleFunc("POST /api/search", server.apiSearchJSON)
 	mux.HandleFunc("GET /api/contexts/suggest", server.apiContextSuggestions)
+	mux.HandleFunc("POST /api/contexts/resolve", server.apiContextResolution)
 	mux.HandleFunc("GET /api/symbol", server.apiSymbol)
 	mux.HandleFunc("GET /api/repositories", server.apiRepositories)
 	mux.HandleFunc("GET /api/whoami", server.apiWhoAmI)
@@ -851,6 +852,25 @@ func (s *Server) apiContextSuggestions(response http.ResponseWriter, request *ht
 		return
 	}
 	writeJSON(response, http.StatusOK, result)
+}
+
+func (s *Server) apiContextResolution(response http.ResponseWriter, request *http.Request) {
+	request.Body = http.MaxBytesReader(response, request.Body, 64<<10)
+	var input struct {
+		Contexts []contextscope.Selector `json:"contexts"`
+	}
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
+		writeAPIError(response, http.StatusBadRequest, errors.New("invalid structured context request"))
+		return
+	}
+	contexts, err := s.intelligence.ResolveContexts(request.Context(), input.Contexts)
+	if err != nil {
+		writeContextError(response, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, map[string]any{"contexts": contexts})
 }
 
 func writeSearchJSON(response http.ResponseWriter, result codeintel.SearchResponse) {

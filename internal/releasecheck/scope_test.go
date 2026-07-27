@@ -18,6 +18,7 @@ func TestRoadmapKeepsM7ScopeAndCompletedMilestones(t *testing.T) {
 		"- [x] Render repository and file mentions as removable context chips",
 		"- [x] Resolve repository and file mentions against the commit-pinned catalogue",
 		"- [x] Share the typed repository/file context contract across Chat",
+		"- [x] Support pasting a RepoKarta source",
 	} {
 		if !strings.Contains(m7, completed) {
 			t.Errorf("M7 completed scope is missing %q", completed)
@@ -28,7 +29,6 @@ func TestRoadmapKeepsM7ScopeAndCompletedMilestones(t *testing.T) {
 		"- [ ] Extend permission-aware autocomplete to `@directory` and `@symbol`",
 		"- [ ] Extend the same structured chip contract to directory and symbol identities",
 		"- [ ] Extend resolution to directory and symbol contexts",
-		"- [ ] Support pasting a RepoKarta source",
 		"- [ ] Add named search contexts",
 		"- [ ] Make every effective context visible",
 		"- [ ] Add one documented query grammar",

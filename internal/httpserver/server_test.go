@@ -1467,6 +1467,24 @@ func TestStructuredContextsFlowThroughJSONSearchAndChat(t *testing.T) {
 		Kind: contextscope.KindFile, RepositoryID: repository.ID,
 		Revision: revision, Path: "main.go",
 	}
+	resolveBody, err := json.Marshal(map[string]any{
+		"contexts": []contextscope.Selector{selector},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolveRequest := httptest.NewRequest(
+		http.MethodPost,
+		"http://127.0.0.1:7331/api/contexts/resolve",
+		bytes.NewReader(resolveBody),
+	)
+	resolveResponse := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(resolveResponse, resolveRequest)
+	if resolveResponse.Code != http.StatusOK ||
+		!strings.Contains(resolveResponse.Body.String(), `"label":"@fixture:main.go"`) {
+		t.Fatalf("structured context resolution = %d, body = %s", resolveResponse.Code, resolveResponse.Body.String())
+	}
+
 	searchBody, err := json.Marshal(codeintel.SearchRequest{
 		Query: "package", Contexts: []contextscope.Selector{selector},
 	})
@@ -1497,6 +1515,24 @@ func TestStructuredContextsFlowThroughJSONSearchAndChat(t *testing.T) {
 	if staleResponse.Code != http.StatusUnprocessableEntity ||
 		!strings.Contains(staleResponse.Body.String(), `"code":"stale"`) {
 		t.Fatalf("stale context response = %d, body = %s", staleResponse.Code, staleResponse.Body.String())
+	}
+	staleResolveBody, _ := json.Marshal(map[string]any{
+		"contexts": []contextscope.Selector{staleSelector},
+	})
+	staleResolveRequest := httptest.NewRequest(
+		http.MethodPost,
+		"http://127.0.0.1:7331/api/contexts/resolve",
+		bytes.NewReader(staleResolveBody),
+	)
+	staleResolveResponse := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(staleResolveResponse, staleResolveRequest)
+	if staleResolveResponse.Code != http.StatusUnprocessableEntity ||
+		!strings.Contains(staleResolveResponse.Body.String(), `"code":"stale"`) {
+		t.Fatalf(
+			"stale context resolution = %d, body = %s",
+			staleResolveResponse.Code,
+			staleResolveResponse.Body.String(),
+		)
 	}
 
 	chatBody, err := json.Marshal(map[string]any{

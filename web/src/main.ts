@@ -7,6 +7,7 @@ import {
   recommendedProviderEffort,
   recommendedProviderModel
 } from "./provider-defaults.mjs";
+import { parseRepoKartaContextURL } from "./context-url.mjs";
 import { wikiPrimaryAction } from "./wiki-run-state.mjs";
 import "./styles.css";
 
@@ -580,6 +581,7 @@ const providerModelEfforts = (
 const supportedImageTypes = new Set(["image/gif", "image/jpeg", "image/png", "image/webp"]);
 const maximumImagesPerTurn = 4;
 const maximumImageBytes = 8 * 1024 * 1024;
+const maximumStructuredContexts = 32;
 
 type DebugLevel = "info" | "warn" | "error";
 
@@ -2140,6 +2142,56 @@ function enableConversations(debug?: DebugLogger): void {
     }
   };
 
+  const addPastedContext = async (selector: ContextSelector): Promise<void> => {
+    if (selectedContexts.length >= maximumStructuredContexts) {
+      showContextError(`A turn can include at most ${maximumStructuredContexts} structured contexts.`);
+      return;
+    }
+    showContextError();
+    try {
+      const response = await fetch("/api/contexts/resolve", {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ contexts: [selector] })
+      });
+      if (!response.ok) {
+        throw new Error(await responseErrorMessage(response, "The pasted RepoKarta URL could not be resolved."));
+      }
+      const result = await response.json() as { contexts?: ResolvedContext[] };
+      const resolved = result.contexts?.[0];
+      if (!resolved) {
+        throw new Error("The pasted RepoKarta URL did not resolve to a structured context.");
+      }
+      const suggestion: ContextSuggestion = {
+        context: {
+          kind: resolved.kind,
+          repository_id: resolved.repository_id,
+          revision: resolved.revision,
+          ...(resolved.path ? { path: resolved.path } : {})
+        },
+        label: resolved.label,
+        detail: `${resolved.repository} @ ${resolved.revision.slice(0, 8)}`
+      };
+      if (!selectedContexts.some((context) => contextKey(context.context) === contextKey(suggestion.context))) {
+        selectedContexts.push(suggestion);
+      }
+      renderContextTray();
+      closeContextSuggestions();
+      debug?.add("info", "ui.context.url-resolved", {
+        kind: resolved.kind,
+        repository_id: resolved.repository_id,
+        revision: resolved.revision,
+        path: resolved.path || null
+      });
+    } catch (error: unknown) {
+      showContextError(error instanceof Error ? error.message : "The pasted RepoKarta URL could not be resolved.");
+      debug?.add("warn", "ui.context.url-resolution-failed", describeError(error));
+    }
+  };
+
   const configureImageControls = (): void => {
     const status = statuses.find((candidate) => candidate.id === provider.value);
     const ready = Boolean(status?.available && status.authenticated);
@@ -2833,6 +2885,14 @@ function enableConversations(debug?: DebugLogger): void {
     void updateContextSuggestions();
   });
   input.addEventListener("paste", (event) => {
+    const pastedContext = parseRepoKartaContextURL(
+      event.clipboardData?.getData("text/plain") ?? "",
+      window.location.href
+    );
+    if (pastedContext) {
+      event.preventDefault();
+      void addPastedContext(pastedContext);
+    }
     const images = Array.from(event.clipboardData?.files ?? []).filter((file) => file.type.startsWith("image/"));
     if (images.length > 0) {
       void addImageFiles(images);

@@ -568,7 +568,7 @@ search must remain fast and AI-free.
   `POST /api/search`, the JSON client, and MCP; persist resolved contexts with
   user turns and replay them without reconstructing identities from message
   text.
-- [ ] Support pasting a RepoKarta source, map, Wiki, repository, or search URL
+- [x] Support pasting a RepoKarta source, map, Wiki, repository, or search URL
   into a composer and converting it into an equivalent structured context chip.
 - [ ] Add named search contexts representing repositories and revisions for a
   team, product, service fleet, release, or personal task, with personal and
@@ -870,27 +870,27 @@ completion criteria include:
 
 ## Current implementation version
 
-`0.51.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
+`0.52.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
 The M9 dependency inventory, public registry refresh, lockfile resolution, and
 explicit private-registry routing are implemented; discrepancy filtering and
 fail-closed classification of unconfigured internal package prefixes remain.
 Linked-worktree discovery deduplication and M10 enterprise identity and
 administration are complete; M11 is complete. The implemented M7-M11 slices
-now enforce insight mutation permissions and revision staleness, paginate
-dependency declarations, cache immutable file context trees, open the
-administrator console directly in loopback-local mode, and support
-credential-backed acquisition from explicitly configured GitHub and GitLab
-HTTPS hosts with canonical checkout validation. Empty Git repositories now
-remain visible as terminal `empty` catalogue entries without inflating pending
-index or derived-artifact work.
+now resolve pasted same-origin source, map, Wiki, repository, and search URLs
+into permission-checked structured context chips, enforce insight mutation
+permissions and revision staleness, paginate dependency declarations, cache
+immutable file context trees, open the administrator console directly in
+loopback-local mode, and support credential-backed acquisition from explicitly
+configured GitHub and GitLab HTTPS hosts with canonical checkout validation.
+Empty Git repositories now remain visible as terminal `empty` catalogue entries
+without inflating pending index or derived-artifact work.
 
 ## Recommended next session
 
-Continue M7 by converting pasted RepoKarta source/search URLs into structured
-chips, then add `@directory` and `@symbol` resolution on the same typed
-contract. Preserve the current fail-closed permission, revision, and
-completeness behavior before adding named contexts, facets, or agentic Deep
-Search.
+Continue M7 with `@directory` and `@symbol` resolution on the same typed
+contract used by repository, file, and pasted-URL contexts. Preserve the
+current fail-closed permission, revision, and completeness behavior before
+adding named contexts, facets, or agentic Deep Search.
 
 Continue M9 afterward with discrepancy/status filters and a fail-closed way to
 classify internal package prefixes before public refresh. Preserve the current

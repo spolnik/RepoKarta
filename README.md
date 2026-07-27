@@ -436,6 +436,8 @@ The JSON API is the capability boundary used by non-browser clients:
 
 ```text
 GET /api/search?q=OpenFile&mode=literal&repo=RepoKarta&lang=Go&limit=100
+GET /api/contexts/suggest?kind=repository&q=RepoKarta&limit=12
+POST /api/contexts/resolve
 GET /api/symbol?symbol=OpenFile&repo=RepoKarta&lang=Go&limit=100
 GET /api/repositories
 GET /api/whoami
@@ -575,6 +577,12 @@ API start on Opus 5 with Medium effort unless you choose another model or
 effort. Each turn also has a bounded timeout and, for the direct API loop, an
 output-token budget.
 
+Chat accepts permission-aware `@repository` and `@file` chips. Pasting a
+same-origin RepoKarta source, map, Wiki, repository, or search URL into the
+composer resolves it through `POST /api/contexts/resolve`; invalid, unavailable,
+unindexed, missing, and stale targets remain visible errors rather than silently
+widening the question.
+
 Conversation titles, messages, citations, status, and usage are stored locally.
 Uploaded conversation images are stored as exact RepoKarta-owned files outside
 SQLite. Provider processes are intentionally disposable: after an idle period
@@ -657,11 +665,11 @@ Windows amd64 and Apple Silicon macOS. The workflow:
 Run the same packagers locally:
 
 ```powershell
-.\scripts\package-release.ps1 -Version 0.51.0-dev
+.\scripts\package-release.ps1 -Version 0.52.0-dev
 ```
 
 ```sh
-./scripts/package-release.sh 0.51.0-dev
+./scripts/package-release.sh 0.52.0-dev
 ```
 
 macOS packages are signed with the hardened runtime when
