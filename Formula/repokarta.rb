@@ -28,11 +28,13 @@ class Repokarta < Formula
     system "go", "build", "-tags", grammar_tags, "-trimpath", *std_go_args(output: bin/"repokarta"), "./cmd/repokarta"
 
     (share/"repokarta/licenses").install "third_party/zoekt/LICENSE" => "zoekt-Apache-2.0.txt"
+    (share/"repokarta/licenses").install "third_party/zoekt/LICENSE" => "deps.dev-semver-Apache-2.0.txt"
     (share/"repokarta/licenses").install Dir["third_party/licenses/*"]
   end
 
   test do
     assert_match(/\A\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?\n\z/, shell_output("#{bin}/repokarta version"))
     assert_path_exists share/"repokarta/licenses/zoekt-Apache-2.0.txt"
+    assert_path_exists share/"repokarta/licenses/deps.dev-semver-Apache-2.0.txt"
   end
 end

@@ -101,6 +101,13 @@ type Service struct {
 	startMu  sync.Mutex
 	mu       sync.RWMutex
 	progress RefreshProgress
+
+	advisoryDirectory string
+	advisoryBaseURL   string
+	advisoryStartMu   sync.Mutex
+	advisoryMu        sync.RWMutex
+	advisoryFileMu    sync.RWMutex
+	advisoryProgress  AdvisoryRefreshProgress
 }
 
 // ParseRegistryConfigs validates the optional JSON environment configuration.
@@ -177,13 +184,14 @@ func NewService(ctx context.Context, store ObservationStore, client *http.Client
 		client = &http.Client{Timeout: 20 * time.Second}
 	}
 	return &Service{
-		ctx:         ctx,
-		store:       store,
-		client:      client,
-		ttl:         defaultObservationTTL,
-		workerCount: defaultWorkerCount,
-		now:         time.Now,
-		progress:    RefreshProgress{State: "idle"},
+		ctx:              ctx,
+		store:            store,
+		client:           client,
+		ttl:              defaultObservationTTL,
+		workerCount:      defaultWorkerCount,
+		now:              time.Now,
+		progress:         RefreshProgress{State: "idle"},
+		advisoryProgress: AdvisoryRefreshProgress{State: "idle"},
 	}
 }
 

@@ -183,6 +183,7 @@ func (s *Service) Inventory(ctx context.Context) (Inventory, error) {
 			{ID: "indexes", Label: "Search indexes"},
 			{ID: "maps", Label: "Repository maps"},
 			{ID: "docs", Label: "Deep Wiki"},
+			{ID: "advisories", Label: "Dependency advisory snapshots"},
 			{ID: "conversations", Label: "Conversation attachments"},
 			{ID: "logs", Label: "Logs"},
 			{ID: "security", Label: "Security identity"},
@@ -584,6 +585,8 @@ func categoryForTopLevel(name string) string {
 		return "maps"
 	case "docs":
 		return "docs"
+	case "advisories":
+		return "advisories"
 	case "conversations":
 		return "conversations"
 	case "logs":
@@ -605,6 +608,8 @@ func protectedReason(category string) string {
 		return "Latest usable snapshot in each map scope is preserved."
 	case "docs":
 		return "Current Deep Wiki content is preserved; delete or regenerate it through its owning workflow."
+	case "advisories":
+		return "The current reproducible OSV snapshot is preserved; replace it through the dependency advisory refresh."
 	case "conversations":
 		return "Referenced conversation attachment is preserved."
 	case "security":

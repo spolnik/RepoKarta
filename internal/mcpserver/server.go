@@ -7,6 +7,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"sort"
@@ -19,6 +20,7 @@ import (
 	"github.com/spolnik/RepoKarta/internal/agent"
 	"github.com/spolnik/RepoKarta/internal/codeintel"
 	"github.com/spolnik/RepoKarta/internal/contextscope"
+	"github.com/spolnik/RepoKarta/internal/dependencies"
 	"github.com/spolnik/RepoKarta/internal/docs"
 	"github.com/spolnik/RepoKarta/internal/graph"
 	"github.com/spolnik/RepoKarta/internal/insights"
@@ -35,8 +37,15 @@ type Config struct {
 	Token         string
 	Artifacts     ArtifactReader
 	Insights      InsightReader
+	Dependencies  DependencyFindingReader
 	ResolveViewer func(context.Context, string) (access.Viewer, error)
 	AllowUnscoped func() bool
+}
+
+// DependencyFindingReader joins a persisted advisory snapshot onto a supplied
+// commit-pinned inventory without contacting OSV on an MCP read.
+type DependencyFindingReader interface {
+	Findings(context.Context, graph.Snapshot, dependencies.AdvisoryOptions) (dependencies.FindingResponse, error)
 }
 
 // InsightReader exposes normalized evidence without invoking AI or scanners.
@@ -64,6 +73,7 @@ type Intelligence interface {
 // ArtifactReader exposes the higher-level, evidence-backed M3/M4 artifacts.
 type ArtifactReader interface {
 	RepositoryMap(context.Context, int64) (graph.Snapshot, error)
+	DependencySnapshot(context.Context, int64) (graph.Snapshot, error)
 	GeneratedDocuments(context.Context, int64) (docs.Site, error)
 	GeneratedDocument(context.Context, int64, string) (docs.Page, error)
 }
@@ -71,6 +81,7 @@ type ArtifactReader interface {
 // MapReader supplies commit-pinned structural maps.
 type MapReader interface {
 	Snapshot(context.Context, int64, bool) (graph.Snapshot, error)
+	ReadDependencySnapshot(context.Context, int64) (graph.Snapshot, graph.ArtifactProgress, error)
 }
 
 // DocumentReader supplies generated repository pages.
@@ -88,6 +99,14 @@ type Artifacts struct {
 // RepositoryMap reads one cached or deterministically generated repository map.
 func (a Artifacts) RepositoryMap(ctx context.Context, repositoryID int64) (graph.Snapshot, error) {
 	return a.Maps.Snapshot(ctx, repositoryID, false)
+}
+
+// DependencySnapshot reads the cache-first dependency artifact path. A cold
+// fleet build remains explicit in the returned snapshot rather than running a
+// full synchronous graph build inside an MCP request.
+func (a Artifacts) DependencySnapshot(ctx context.Context, repositoryID int64) (graph.Snapshot, error) {
+	snapshot, _, err := a.Maps.ReadDependencySnapshot(ctx, repositoryID)
+	return snapshot, err
 }
 
 // GeneratedDocuments reads the persisted documentation plan and page metadata.
@@ -414,7 +433,7 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 			Description: "Read a compact, deterministic dependency inventory for one repository. Returns manifests, flattened declared coordinates with versions when statically available, outbound HTTP service calls, exact evidence, and explicit scope/truncation metadata. No AI is invoked.",
 			Annotations: readOnly,
 		}, func(ctx context.Context, _ *mcp.CallToolRequest, input readDependencyInventoryInput) (*mcp.CallToolResult, readDependencyInventoryOutput, error) {
-			snapshot, err := config.Artifacts.RepositoryMap(ctx, input.RepositoryID)
+			snapshot, err := config.Artifacts.DependencySnapshot(ctx, input.RepositoryID)
 			if err != nil {
 				return nil, readDependencyInventoryOutput{}, err
 			}
@@ -460,6 +479,44 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 				})
 			}
 			return nil, page, nil
+		})
+	}
+
+	if config.Artifacts != nil && config.Dependencies != nil {
+		mcp.AddTool(server, &mcp.Tool{
+			Name:        "read_dependency_findings",
+			Title:       "Read dependency advisory findings",
+			Description: "Read compact, scope-aware OSV findings from the persisted local advisory snapshot. Returns IDs, versions, severity, usage, and evidence citations without advisory prose bodies. Findings are advisory evidence, never an enforced CI gate.",
+			Annotations: readOnly,
+		}, func(ctx context.Context, _ *mcp.CallToolRequest, input readDependencyFindingsInput) (*mcp.CallToolResult, readDependencyFindingsOutput, error) {
+			if input.Limit < 0 || input.Limit > dependencies.MaximumFindingLimit {
+				return nil, readDependencyFindingsOutput{}, fmt.Errorf(
+					"limit must be between 1 and %d", dependencies.MaximumFindingLimit,
+				)
+			}
+			snapshot, err := config.Artifacts.DependencySnapshot(ctx, input.RepositoryID)
+			if err != nil {
+				return nil, readDependencyFindingsOutput{}, err
+			}
+			result, err := config.Dependencies.Findings(ctx, snapshot, dependencies.AdvisoryOptions{
+				Query: input.Query, Ecosystem: input.Ecosystem, Severity: input.Severity,
+				Usage: input.Usage, Package: input.Package, Limit: input.Limit,
+			})
+			if err != nil {
+				return nil, readDependencyFindingsOutput{}, err
+			}
+			output := compactDependencyFindings(result)
+			for _, finding := range output.Findings {
+				for _, evidence := range finding.Evidence {
+					if tracker != nil && evidence.URL != "" {
+						tracker.Record(conversationID, agent.Citation{
+							Label: evidence.Label,
+							URL:   evidence.URL,
+						})
+					}
+				}
+			}
+			return nil, output, nil
 		})
 	}
 
@@ -601,6 +658,62 @@ type readRepositoryMapOutput = graph.Snapshot
 
 type readDependencyInventoryInput struct {
 	RepositoryID int64 `json:"repository_id" jsonschema:"required,Repository ID returned by list_repositories."`
+}
+
+type readDependencyFindingsInput struct {
+	RepositoryID int64  `json:"repository_id,omitempty" jsonschema:"Optional repository ID returned by list_repositories. Omit for the accessible fleet."`
+	Query        string `json:"query,omitempty" jsonschema:"Optional advisory ID, alias, package, repository, or manifest substring."`
+	Ecosystem    string `json:"ecosystem,omitempty" jsonschema:"Optional ecosystem: maven, npm, pypi, go, cargo, or nuget."`
+	Severity     string `json:"severity,omitempty" jsonschema:"Optional severity: critical, high, medium, low, or unknown."`
+	Usage        string `json:"usage,omitempty" jsonschema:"Optional inventory usage such as production, implementation, test, development, or build."`
+	Package      string `json:"package,omitempty" jsonschema:"Optional package-name substring."`
+	Limit        int    `json:"limit,omitempty" jsonschema:"Maximum compact findings from 1 to 500. Defaults to 100."`
+}
+
+type compactDependencyEvidence struct {
+	Kind            string `json:"kind"`
+	Label           string `json:"label"`
+	URL             string `json:"url"`
+	Revision        string `json:"revision,omitempty"`
+	SnapshotVersion string `json:"snapshot_version,omitempty"`
+}
+
+type compactDependencyFinding struct {
+	ID              string                      `json:"id"`
+	AdvisoryID      string                      `json:"advisory_id"`
+	Aliases         []string                    `json:"aliases,omitempty"`
+	Ecosystem       string                      `json:"ecosystem"`
+	Package         string                      `json:"package"`
+	Version         string                      `json:"version"`
+	Severity        string                      `json:"severity"`
+	Usage           string                      `json:"usage"`
+	DeclaredScope   string                      `json:"declared_scope,omitempty"`
+	MatchBasis      string                      `json:"match_basis"`
+	MatchConfidence string                      `json:"match_confidence"`
+	FixedVersion    string                      `json:"fixed_version,omitempty"`
+	LatestStable    string                      `json:"latest_stable,omitempty"`
+	RepositoryID    int64                       `json:"repository_id"`
+	Repository      string                      `json:"repository"`
+	Revision        string                      `json:"revision"`
+	ManifestPath    string                      `json:"manifest_path"`
+	Evidence        []compactDependencyEvidence `json:"evidence"`
+}
+
+type readDependencyFindingsOutput struct {
+	CheckState                 string                              `json:"check_state"`
+	CheckMessage               string                              `json:"check_message,omitempty"`
+	AdvisoryOnly               bool                                `json:"advisory_only"`
+	Snapshot                   dependencies.AdvisorySnapshotStatus `json:"snapshot"`
+	CheckedDeclarationCount    int                                 `json:"checked_declaration_count"`
+	SkippedNoVersionCount      int                                 `json:"skipped_no_version_count"`
+	SkippedInvalidVersionCount int                                 `json:"skipped_invalid_version_count"`
+	NotInSnapshotCount         int                                 `json:"not_in_snapshot_count"`
+	UncoveredEcosystems        []dependencies.AdvisoryGap          `json:"uncovered_ecosystems,omitempty"`
+	SkippedDeclarations        []dependencies.DependencyCheckGap   `json:"skipped_declarations,omitempty"`
+	TotalFindingCount          int                                 `json:"total_finding_count"`
+	ReturnedCount              int                                 `json:"returned_count"`
+	HasMore                    bool                                `json:"has_more"`
+	Findings                   []compactDependencyFinding          `json:"findings"`
 }
 
 type declaredDependency struct {
@@ -805,6 +918,46 @@ func dependencyInventory(snapshot graph.Snapshot, repositoryID int64) readDepend
 	output.ManifestCount = len(output.Manifests)
 	output.DependencyCount = len(output.Dependencies)
 	output.ServiceCallCount = len(output.ServiceCalls)
+	return output
+}
+
+func compactDependencyFindings(result dependencies.FindingResponse) readDependencyFindingsOutput {
+	output := readDependencyFindingsOutput{
+		CheckState: result.CheckState, CheckMessage: result.CheckMessage,
+		AdvisoryOnly: result.AdvisoryOnly, Snapshot: result.Snapshot,
+		CheckedDeclarationCount:    result.CheckedDeclarationCount,
+		SkippedNoVersionCount:      result.SkippedNoVersionCount,
+		SkippedInvalidVersionCount: result.SkippedInvalidVersionCount,
+		NotInSnapshotCount:         result.NotInSnapshotCount,
+		UncoveredEcosystems:        append([]dependencies.AdvisoryGap(nil), result.UncoveredEcosystems...),
+		SkippedDeclarations:        append([]dependencies.DependencyCheckGap(nil), result.SkippedDeclarations...),
+		TotalFindingCount:          result.TotalFindingCount, ReturnedCount: result.ReturnedCount,
+		HasMore: result.HasMore, Findings: make([]compactDependencyFinding, 0, len(result.Findings)),
+	}
+	for _, finding := range result.Findings {
+		output.Findings = append(output.Findings, compactDependencyFinding{
+			ID: finding.ID, AdvisoryID: finding.AdvisoryID,
+			Aliases:   append([]string(nil), finding.Aliases...),
+			Ecosystem: finding.Ecosystem, Package: finding.Package, Version: finding.Version,
+			Severity: finding.Severity, Usage: finding.Usage, DeclaredScope: finding.DeclaredScope,
+			MatchBasis: finding.MatchBasis, MatchConfidence: finding.MatchConfidence,
+			FixedVersion: finding.FixedVersion, LatestStable: finding.LatestStable,
+			RepositoryID: finding.RepositoryID, Repository: finding.Repository,
+			Revision: finding.Revision, ManifestPath: finding.ManifestPath,
+			Evidence: []compactDependencyEvidence{
+				{
+					Kind:  "manifest",
+					Label: finding.Repository + "@" + shortRevision(finding.Revision) + ":" + finding.ManifestPath,
+					URL:   finding.ManifestEvidence.URL, Revision: finding.Revision,
+				},
+				{
+					Kind: "advisory_snapshot", Label: finding.AdvisoryID,
+					URL:             finding.AdvisoryEvidence.AdvisoryURL,
+					SnapshotVersion: finding.AdvisoryEvidence.SnapshotVersion,
+				},
+			},
+		})
+	}
 	return output
 }
 

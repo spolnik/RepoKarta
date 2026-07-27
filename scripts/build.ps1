@@ -66,6 +66,10 @@ try {
         -Destination (Join-Path $licenseDirectory "zoekt-Apache-2.0.txt") `
         -Force
     Copy-Item `
+        -LiteralPath (Join-Path $repositoryRoot "third_party\zoekt\LICENSE") `
+        -Destination (Join-Path $licenseDirectory "deps.dev-semver-Apache-2.0.txt") `
+        -Force
+    Copy-Item `
         -LiteralPath (Join-Path $repositoryRoot "third_party\licenses\gotreesitter-MIT.txt") `
         -Destination (Join-Path $licenseDirectory "gotreesitter-MIT.txt") `
         -Force

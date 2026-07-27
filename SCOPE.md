@@ -744,6 +744,18 @@ captured from committed manifests and build files.
   administrator explicitly configures that ecosystem and registry as safe.
 - [x] Keep the feature advisory and read-only: RepoKarta may explain an upgrade
   discrepancy, but it must not rewrite manifests, lockfiles, or repositories.
+- [x] Join exact resolved versions, or lower-confidence exact declared versions,
+  to a locally persisted, timestamped and content-versioned OSV.dev snapshot.
+  Evaluate affected ranges with ecosystem-correct ordering, including Maven
+  qualifiers, and preserve usage, scope, resolution, revision, and both source
+  and advisory-snapshot evidence on every finding.
+- [x] Refresh OSV data manually and on a paced daily schedule without blocking
+  reads; expose progress, snapshot age, uncovered ecosystems, declarations with
+  no usable version, invalid versions, and packages not covered by the current
+  snapshot.
+- [x] Expose scope-aware findings in the Dependencies UI, bounded JSON, compact
+  read-only MCP, and SARIF 2.1.0 for side-by-side Insights ingestion. Findings
+  are advisory-only and are never represented as an enforced CI gate.
 
 Exit condition: a user can see which captured dependencies are behind the
 latest public stable release, understand unresolved and private-package gaps,
@@ -870,10 +882,12 @@ completion criteria include:
 
 ## Current implementation version
 
-`0.66.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
-The M9 dependency inventory, public registry refresh, lockfile resolution, and
-explicit private-registry routing are implemented; discrepancy filtering and
-fail-closed classification of unconfigured internal package prefixes remain.
+`0.67.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
+The M9 dependency inventory, public registry refresh, lockfile resolution,
+explicit private-registry routing, reproducible OSV advisory snapshots,
+ecosystem-correct fleet CVE matching, scope-aware UI/JSON/MCP findings, and
+SARIF export are implemented; discrepancy filtering and fail-closed
+classification of unconfigured internal package prefixes remain.
 Linked-worktree discovery deduplication and M10 enterprise identity and
 administration are complete; M11 is complete. The implemented M7-M11 slices
 now resolve directory Git trees and exact syntax-backed symbol declarations

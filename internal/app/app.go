@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -210,6 +211,16 @@ func Run(ctx context.Context, cfg Config) error {
 	codeInsights.StartPolling(ctx)
 	dependencyRegistry := dependencies.NewService(ctx, database, nil)
 	dependencyRegistry.UseRegistries(cfg.DependencyRegistries)
+	if err := dependencyRegistry.UseAdvisoryDirectory(filepath.Join(cfg.DataDirectory, "advisories")); err != nil {
+		return fmt.Errorf("initialize dependency advisories: %w", err)
+	}
+	dependencyRegistry.StartAdvisoryScheduler(ctx, func(scheduleContext context.Context) (graph.Snapshot, error) {
+		snapshot, progress, err := maps.ReadDependencySnapshot(scheduleContext, 0)
+		if err == nil && progress.State == "building" {
+			return graph.Snapshot{}, errors.New("dependency artifacts are still building")
+		}
+		return snapshot, err
+	})
 	derivedEvidence := evidencesearch.New(
 		maps,
 		dependencyRegistry,
@@ -241,11 +252,12 @@ func Run(ctx context.Context, cfg Config) error {
 		derivedEvidence.SetBaseURL(updatedBaseURL)
 	})
 	mcpHandler := mcpserver.NewHandler(mcpserver.Config{
-		Version:   cfg.Version,
-		BaseURL:   baseURL,
-		Token:     mcpToken,
-		Artifacts: mcpserver.Artifacts{Maps: maps, Documents: documents},
-		Insights:  codeInsights,
+		Version:      cfg.Version,
+		BaseURL:      baseURL,
+		Token:        mcpToken,
+		Artifacts:    mcpserver.Artifacts{Maps: maps, Documents: documents},
+		Insights:     codeInsights,
+		Dependencies: dependencyRegistry,
 		ResolveViewer: func(ctx context.Context, conversationID string) (access.Viewer, error) {
 			if author, ok := conversations.AuthorForMCP(conversationID); ok {
 				return access.Viewer{

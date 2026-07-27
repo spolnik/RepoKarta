@@ -17,6 +17,7 @@ import (
 	"os/exec"
 	"path"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -80,6 +81,9 @@ type DependencyService interface {
 	Inventory(context.Context, graph.Snapshot, dependencies.Options) (dependencies.Inventory, error)
 	StartRefresh(graph.Snapshot, dependencies.Options, bool) (dependencies.RefreshProgress, error)
 	Progress() dependencies.RefreshProgress
+	Findings(context.Context, graph.Snapshot, dependencies.AdvisoryOptions) (dependencies.FindingResponse, error)
+	StartAdvisoryRefresh(graph.Snapshot, bool) (dependencies.AdvisoryRefreshProgress, error)
+	AdvisoryProgress() dependencies.AdvisoryRefreshProgress
 }
 
 // DocumentationService supplies durable, commit-aware repository pages.
@@ -312,14 +316,20 @@ type contextPageData struct {
 type dependencyPageData struct {
 	pageData
 	Inventory            dependencies.Inventory
+	Findings             dependencies.FindingResponse
+	AdvisoryOptions      dependencies.AdvisoryOptions
+	FindingsView         bool
 	SelectedRepositoryID int64
 	PreviousURL          string
 	NextURL              string
 	APIURL               string
+	SARIFURL             string
 	RefreshURL           string
+	AdvisoryRefreshURL   string
 	FirstRow             int
 	LastRow              int
 	RefreshProgress      dependencies.RefreshProgress
+	AdvisoryProgress     dependencies.AdvisoryRefreshProgress
 }
 
 // New builds the local HTTP server and parses embedded templates.
@@ -346,6 +356,9 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 		"nextSearchLimit": nextSearchLimit,
 		"indexProgress":   indexProgress,
 		"formatBytes":     formatBytes,
+		"formatAgeSeconds": func(seconds int64) string {
+			return formatDuration(time.Duration(seconds) * time.Second)
+		},
 		"formatMetric": func(value *float64) string {
 			if value == nil {
 				return "—"
@@ -497,6 +510,20 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 				server.refreshDependencies,
 			))
 			mux.HandleFunc("GET /api/dependencies/progress", server.dependencyRefreshProgress)
+			mux.HandleFunc("GET /api/dependencies/findings", server.apiDependencyFindings)
+			mux.HandleFunc("POST /api/dependencies/advisories/refresh", server.controlled(
+				identity.PermissionManageArtifacts,
+				"dependency.advisories.refresh",
+				"osv-advisories",
+				server.refreshDependencyAdvisories,
+			))
+			mux.HandleFunc("GET /api/dependencies/advisories/progress", server.dependencyAdvisoryProgress)
+			mux.HandleFunc("GET /api/dependencies/findings.sarif", server.controlled(
+				identity.PermissionExportArtifacts,
+				"artifact.export",
+				"dependency-findings-sarif",
+				server.exportDependencyFindingsSARIF,
+			))
 		}
 	}
 	if server.docs != nil {
@@ -1411,34 +1438,94 @@ func (s *Server) dependencyPage(response http.ResponseWriter, request *http.Requ
 		return
 	}
 	inventory.BuildProgress = progress
+	findingsView := strings.EqualFold(strings.TrimSpace(request.URL.Query().Get("view")), "findings")
+	advisoryOptions, err := dependencyAdvisoryOptions(request)
+	if err != nil {
+		http.Error(response, err.Error(), http.StatusBadRequest)
+		return
+	}
+	findings := dependencies.FindingResponse{}
+	if findingsView {
+		if s.dependencies == nil {
+			http.Error(response, "Dependency advisory service is unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		findings, err = s.dependencies.Findings(request.Context(), snapshot, advisoryOptions)
+		if err != nil {
+			slog.Error("join dependency advisories", "repository_id", repositoryID, "error", err)
+			http.Error(response, "Dependency findings could not be loaded", http.StatusInternalServerError)
+			return
+		}
+	}
 	previousURL := ""
-	if inventory.Offset > 0 {
-		previousURL = dependencyURL("/dependencies", repositoryID, options, max(0, inventory.Offset-inventory.Limit))
-	}
 	nextURL := ""
-	if inventory.HasMore {
-		nextURL = dependencyURL("/dependencies", repositoryID, options, inventory.Offset+inventory.ReturnedCount)
-	}
 	firstRow, lastRow := 0, 0
-	if inventory.ReturnedCount > 0 {
-		firstRow = inventory.Offset + 1
-		lastRow = inventory.Offset + inventory.ReturnedCount
+	if findingsView {
+		if findings.Offset > 0 {
+			previousURL = dependencyAdvisoryURL(
+				"/dependencies", repositoryID, advisoryOptions,
+				max(0, findings.Offset-findings.Limit), true,
+			)
+		}
+		if findings.HasMore {
+			nextURL = dependencyAdvisoryURL(
+				"/dependencies", repositoryID, advisoryOptions,
+				findings.Offset+findings.ReturnedCount, true,
+			)
+		}
+		if findings.ReturnedCount > 0 {
+			firstRow = findings.Offset + 1
+			lastRow = findings.Offset + findings.ReturnedCount
+		}
+	} else {
+		if inventory.Offset > 0 {
+			previousURL = dependencyURL("/dependencies", repositoryID, options, max(0, inventory.Offset-inventory.Limit))
+		}
+		if inventory.HasMore {
+			nextURL = dependencyURL("/dependencies", repositoryID, options, inventory.Offset+inventory.ReturnedCount)
+		}
+		if inventory.ReturnedCount > 0 {
+			firstRow = inventory.Offset + 1
+			lastRow = inventory.Offset + inventory.ReturnedCount
+		}
 	}
 	s.render(response, "dependencies", dependencyPageData{
 		pageData:             data,
 		Inventory:            inventory,
+		Findings:             findings,
+		AdvisoryOptions:      advisoryOptions,
+		FindingsView:         findingsView,
 		SelectedRepositoryID: repositoryID,
 		PreviousURL:          previousURL,
 		NextURL:              nextURL,
-		APIURL:               dependencyURL("/api/dependencies", repositoryID, options, inventory.Offset),
-		RefreshURL:           dependencyURL("/api/dependencies/refresh", repositoryID, options, 0),
-		FirstRow:             firstRow,
-		LastRow:              lastRow,
+		APIURL: func() string {
+			if findingsView {
+				return dependencyAdvisoryURL(
+					"/api/dependencies/findings", repositoryID, advisoryOptions, findings.Offset, false,
+				)
+			}
+			return dependencyURL("/api/dependencies", repositoryID, options, inventory.Offset)
+		}(),
+		SARIFURL: dependencyAdvisoryURL(
+			"/api/dependencies/findings.sarif", repositoryID, advisoryOptions, 0, false,
+		),
+		RefreshURL: dependencyURL("/api/dependencies/refresh", repositoryID, options, 0),
+		AdvisoryRefreshURL: dependencyAdvisoryURL(
+			"/api/dependencies/advisories/refresh", repositoryID, dependencies.AdvisoryOptions{}, 0, false,
+		),
+		FirstRow: firstRow,
+		LastRow:  lastRow,
 		RefreshProgress: func() dependencies.RefreshProgress {
 			if s.dependencies == nil {
 				return dependencies.RefreshProgress{State: "unavailable"}
 			}
 			return s.dependencies.Progress()
+		}(),
+		AdvisoryProgress: func() dependencies.AdvisoryRefreshProgress {
+			if s.dependencies == nil {
+				return dependencies.AdvisoryRefreshProgress{State: "unavailable"}
+			}
+			return s.dependencies.AdvisoryProgress()
 		}(),
 	})
 }
@@ -1676,6 +1763,120 @@ func (s *Server) dependencyRefreshProgress(response http.ResponseWriter, _ *http
 	writeJSON(response, http.StatusOK, s.dependencies.Progress())
 }
 
+func (s *Server) apiDependencyFindings(response http.ResponseWriter, request *http.Request) {
+	repositoryID, err := optionalRepositoryID(request.URL.Query().Get("repository"))
+	if err != nil {
+		writeAPIError(response, http.StatusBadRequest, err)
+		return
+	}
+	options, err := dependencyAdvisoryOptions(request)
+	if err != nil {
+		writeAPIError(response, http.StatusBadRequest, err)
+		return
+	}
+	snapshot, progress, err := s.maps.ReadDependencySnapshot(request.Context(), repositoryID)
+	if err != nil {
+		slog.Error("build dependency inventory for findings", "repository_id", repositoryID, "error", err)
+		writeAPIError(response, http.StatusInternalServerError, errors.New("dependency inventory could not be built"))
+		return
+	}
+	findings, err := s.dependencies.Findings(request.Context(), snapshot, options)
+	if err != nil {
+		slog.Error("join dependency advisories", "repository_id", repositoryID, "error", err)
+		writeAPIError(response, http.StatusInternalServerError, errors.New("dependency findings could not be loaded"))
+		return
+	}
+	status := http.StatusOK
+	if progress.State == "building" {
+		status = http.StatusAccepted
+		response.Header().Set("Retry-After", "2")
+	}
+	writeJSON(response, status, findings)
+}
+
+func (s *Server) refreshDependencyAdvisories(response http.ResponseWriter, request *http.Request) {
+	repositoryID, err := optionalRepositoryID(request.URL.Query().Get("repository"))
+	if err != nil {
+		writeAPIError(response, http.StatusBadRequest, err)
+		return
+	}
+	force, err := optionalBool(request.URL.Query().Get("force"))
+	if err != nil {
+		writeAPIError(response, http.StatusBadRequest, errors.New("force must be true or false"))
+		return
+	}
+	snapshot, _, err := s.maps.ReadDependencySnapshot(request.Context(), repositoryID)
+	if err != nil {
+		writeAPIError(response, http.StatusInternalServerError, errors.New("dependency inventory could not be built"))
+		return
+	}
+	progress, err := s.dependencies.StartAdvisoryRefresh(snapshot, force)
+	if err != nil {
+		writeAPIError(response, http.StatusInternalServerError, fmt.Errorf("advisory refresh could not be started: %w", err))
+		return
+	}
+	writeJSON(response, http.StatusAccepted, progress)
+}
+
+func (s *Server) dependencyAdvisoryProgress(response http.ResponseWriter, _ *http.Request) {
+	writeJSON(response, http.StatusOK, s.dependencies.AdvisoryProgress())
+}
+
+func (s *Server) exportDependencyFindingsSARIF(response http.ResponseWriter, request *http.Request) {
+	repositoryID, err := optionalRepositoryID(request.URL.Query().Get("repository"))
+	if err != nil {
+		writeAPIError(response, http.StatusBadRequest, err)
+		return
+	}
+	options, err := dependencyAdvisoryOptions(request)
+	if err != nil {
+		writeAPIError(response, http.StatusBadRequest, err)
+		return
+	}
+	options.Offset = 0
+	options.Limit = dependencies.MaximumFindingLimit
+	snapshot, progress, err := s.maps.ReadDependencySnapshot(request.Context(), repositoryID)
+	if err != nil {
+		writeAPIError(response, http.StatusInternalServerError, errors.New("dependency inventory could not be built"))
+		return
+	}
+	if progress.State == "building" {
+		response.Header().Set("Retry-After", "2")
+		writeAPIError(response, http.StatusConflict, errors.New("dependency inventory is still building"))
+		return
+	}
+	all, err := s.dependencies.Findings(request.Context(), snapshot, options)
+	if err != nil {
+		writeAPIError(response, http.StatusInternalServerError, errors.New("dependency findings could not be loaded"))
+		return
+	}
+	for all.HasMore {
+		options.Offset = all.Offset + all.ReturnedCount
+		page, err := s.dependencies.Findings(request.Context(), snapshot, options)
+		if err != nil {
+			writeAPIError(response, http.StatusInternalServerError, errors.New("dependency findings could not be loaded"))
+			return
+		}
+		all.Findings = append(all.Findings, page.Findings...)
+		all.ReturnedCount = len(all.Findings)
+		all.HasMore = page.HasMore
+		all.Offset = 0
+		if len(all.Findings) > 50_000 {
+			writeAPIError(response, http.StatusUnprocessableEntity, errors.New("SARIF export exceeds 50000 findings; narrow the filters"))
+			return
+		}
+	}
+	content, err := dependencies.FindingsSARIF(all, s.config.Version)
+	if err != nil {
+		writeAPIError(response, http.StatusInternalServerError, errors.New("dependency findings SARIF could not be generated"))
+		return
+	}
+	response.Header().Set("Content-Type", "application/sarif+json")
+	response.Header().Set("Content-Disposition", `attachment; filename="repokarta-dependency-findings.sarif"`)
+	response.WriteHeader(http.StatusOK)
+	_, _ = response.Write(content)
+}
+
 func (s *Server) apiArtifactProgress(response http.ResponseWriter, request *http.Request) {
 	progress, err := s.maps.StructureProgress(request.Context(), 0)
 	if err != nil {
@@ -1713,6 +1914,60 @@ func dependencyOptions(request *http.Request) (dependencies.Options, error) {
 		}
 		options.Limit = limit
 	}
+	options.Query = strings.TrimSpace(options.Query)
+	options.Ecosystem = strings.ToLower(strings.TrimSpace(options.Ecosystem))
+	options.Usage = strings.ToLower(strings.TrimSpace(options.Usage))
+	return options, nil
+}
+
+func dependencyAdvisoryOptions(request *http.Request) (dependencies.AdvisoryOptions, error) {
+	query := request.URL.Query()
+	options := dependencies.AdvisoryOptions{
+		Query: query.Get("query"), Ecosystem: query.Get("ecosystem"),
+		Severity: query.Get("severity"), Usage: query.Get("usage"),
+		Package: query.Get("package"), Limit: dependencies.DefaultFindingLimit,
+	}
+	if len(options.Query) > 200 || len(options.Ecosystem) > 50 ||
+		len(options.Severity) > 50 || len(options.Usage) > 50 || len(options.Package) > 200 {
+		return dependencies.AdvisoryOptions{}, errors.New("dependency finding filters are too long")
+	}
+	for _, check := range []struct {
+		name    string
+		value   string
+		allowed []string
+	}{
+		{"ecosystem", options.Ecosystem, []string{"maven", "npm", "pypi", "go", "cargo", "nuget"}},
+		{"severity", options.Severity, []string{"critical", "high", "medium", "low", "unknown"}},
+		{"usage", options.Usage, []string{"production", "implementation", "test", "development", "build", "unknown"}},
+	} {
+		value := strings.ToLower(strings.TrimSpace(check.value))
+		if value != "" && !slices.Contains(check.allowed, value) {
+			return dependencies.AdvisoryOptions{}, fmt.Errorf(
+				"%s must be one of %s", check.name, strings.Join(check.allowed, ", "),
+			)
+		}
+	}
+	if value := strings.TrimSpace(query.Get("offset")); value != "" {
+		offset, err := strconv.Atoi(value)
+		if err != nil || offset < 0 {
+			return dependencies.AdvisoryOptions{}, errors.New("offset must be a non-negative integer")
+		}
+		options.Offset = offset
+	}
+	if value := strings.TrimSpace(query.Get("limit")); value != "" {
+		limit, err := strconv.Atoi(value)
+		if err != nil || limit < 1 || limit > dependencies.MaximumFindingLimit {
+			return dependencies.AdvisoryOptions{}, fmt.Errorf(
+				"limit must be between 1 and %d", dependencies.MaximumFindingLimit,
+			)
+		}
+		options.Limit = limit
+	}
+	options.Query = strings.TrimSpace(options.Query)
+	options.Ecosystem = strings.ToLower(strings.TrimSpace(options.Ecosystem))
+	options.Severity = strings.ToLower(strings.TrimSpace(options.Severity))
+	options.Usage = strings.ToLower(strings.TrimSpace(options.Usage))
+	options.Package = strings.TrimSpace(options.Package)
 	return options, nil
 }
 
@@ -1741,6 +1996,47 @@ func dependencyURL(base string, repositoryID int64, options dependencies.Options
 		query.Set("offset", strconv.Itoa(offset))
 	}
 	return base + "?" + query.Encode()
+}
+
+func dependencyAdvisoryURL(
+	base string,
+	repositoryID int64,
+	options dependencies.AdvisoryOptions,
+	offset int,
+	view bool,
+) string {
+	query := url.Values{}
+	if repositoryID > 0 {
+		query.Set("repository", strconv.FormatInt(repositoryID, 10))
+	}
+	if view {
+		query.Set("view", "findings")
+	}
+	if value := strings.TrimSpace(options.Query); value != "" {
+		query.Set("query", value)
+	}
+	if value := strings.TrimSpace(options.Ecosystem); value != "" {
+		query.Set("ecosystem", value)
+	}
+	if value := strings.TrimSpace(options.Severity); value != "" {
+		query.Set("severity", value)
+	}
+	if value := strings.TrimSpace(options.Usage); value != "" {
+		query.Set("usage", value)
+	}
+	if value := strings.TrimSpace(options.Package); value != "" {
+		query.Set("package", value)
+	}
+	if options.Limit > 0 && options.Limit != dependencies.DefaultFindingLimit {
+		query.Set("limit", strconv.Itoa(options.Limit))
+	}
+	if offset > 0 {
+		query.Set("offset", strconv.Itoa(offset))
+	}
+	if encoded := query.Encode(); encoded != "" {
+		return base + "?" + encoded
+	}
+	return base
 }
 
 func (s *Server) exportMap(response http.ResponseWriter, request *http.Request) {
@@ -2179,6 +2475,7 @@ func buildMCPPageData(endpoint, token, command, stdioBaseURL string) mcpPageData
 			{Name: "git_diff", Description: "Resolved revisions and bounded unified patches."},
 			{Name: "read_repository_map", Description: "Complete static snapshot: structure, routes, entry points, dependencies, and edges."},
 			{Name: "read_dependency_inventory", Description: "Focused manifests, versioned coordinates, and outbound HTTP calls."},
+			{Name: "read_dependency_findings", Description: "Compact scope-aware OSV findings with manifest and advisory-snapshot evidence."},
 			{Name: "list_deep_wiki_pages", Description: "Persisted Wiki plan, page slugs, hierarchy, status, and provenance."},
 			{Name: "read_generated_document", Description: "Generated Deep Wiki pages and their grounded evidence."},
 			{Name: "read_code_insights", Description: "Normalized metrics, findings, history, provenance, and advisory thresholds without executing scanners."},

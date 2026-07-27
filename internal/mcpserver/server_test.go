@@ -15,6 +15,7 @@ import (
 	"github.com/spolnik/RepoKarta/internal/access"
 	"github.com/spolnik/RepoKarta/internal/catalog"
 	"github.com/spolnik/RepoKarta/internal/codeintel"
+	"github.com/spolnik/RepoKarta/internal/dependencies"
 	"github.com/spolnik/RepoKarta/internal/docs"
 	"github.com/spolnik/RepoKarta/internal/graph"
 	"github.com/spolnik/RepoKarta/internal/insights"
@@ -94,6 +95,10 @@ func (f fakeArtifacts) RepositoryMap(context.Context, int64) (graph.Snapshot, er
 	return f.snapshot, nil
 }
 
+func (f fakeArtifacts) DependencySnapshot(context.Context, int64) (graph.Snapshot, error) {
+	return f.snapshot, nil
+}
+
 func (f fakeArtifacts) GeneratedDocuments(context.Context, int64) (docs.Site, error) {
 	return f.site, nil
 }
@@ -107,6 +112,18 @@ type bearerTransport struct {
 }
 
 type testInsightReader struct{}
+
+type testDependencyFindingReader struct {
+	response dependencies.FindingResponse
+}
+
+func (reader testDependencyFindingReader) Findings(
+	context.Context,
+	graph.Snapshot,
+	dependencies.AdvisoryOptions,
+) (dependencies.FindingResponse, error) {
+	return reader.response, nil
+}
 
 func (testInsightReader) Query(context.Context, insights.Filter) (insights.QueryResponse, error) {
 	return insights.QueryResponse{}, nil
@@ -279,11 +296,30 @@ func TestMCPSearchReturnsPinnedCitation(t *testing.T) {
 		},
 	}
 	handler := NewHandler(Config{
-		Version:   "test",
-		BaseURL:   "http://ui",
-		Token:     "secret",
-		Artifacts: artifacts,
-		Insights:  testInsightReader{},
+		Version: "test", BaseURL: "http://ui", Token: "secret",
+		Artifacts: artifacts, Insights: testInsightReader{},
+		Dependencies: testDependencyFindingReader{response: dependencies.FindingResponse{
+			CheckState: "ready", AdvisoryOnly: true, TotalFindingCount: 1,
+			ReturnedCount: 1, CheckedDeclarationCount: 1,
+			Snapshot: dependencies.AdvisorySnapshotStatus{
+				State: "ready", Source: "OSV.dev", Version: "sha256:fixture",
+			},
+			Findings: []dependencies.Finding{{
+				ID: "finding-1", AdvisoryID: "GHSA-fixture",
+				Aliases: []string{"CVE-2026-0001"}, Ecosystem: "maven",
+				Package: "org.example:fixture", Version: "1.0.0",
+				Severity: "critical", Usage: "production", MatchBasis: "resolved",
+				MatchConfidence: "high", FixedVersion: "1.0.1", RepositoryID: 7,
+				Repository: "RepoKarta", Revision: revision, ManifestPath: "build.gradle",
+				ManifestEvidence: graph.Evidence{
+					URL: "http://ui/source/7?rev=" + revision + "&path=build.gradle&line=12",
+				},
+				AdvisoryEvidence: dependencies.AdvisoryEvidence{
+					AdvisoryURL:     "https://api.osv.dev/v1/vulns/GHSA-fixture",
+					SnapshotVersion: "sha256:fixture",
+				},
+			}},
+		}},
 	}, intelligence, tracker)
 	server := httptest.NewServer(handler)
 	defer server.Close()
@@ -304,8 +340,8 @@ func TestMCPSearchReturnsPinnedCitation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tools.Tools) != 16 {
-		t.Fatalf("got %d tools, want 16", len(tools.Tools))
+	if len(tools.Tools) != 17 {
+		t.Fatalf("got %d tools, want 17", len(tools.Tools))
 	}
 	toolNames := make(map[string]bool, len(tools.Tools))
 	for _, tool := range tools.Tools {
@@ -324,6 +360,7 @@ func TestMCPSearchReturnsPinnedCitation(t *testing.T) {
 		"git_diff",
 		"read_repository_map",
 		"read_dependency_inventory",
+		"read_dependency_findings",
 		"list_deep_wiki_pages",
 		"read_generated_document",
 		"read_code_insights",
@@ -436,6 +473,28 @@ func TestMCPSearchReturnsPinnedCitation(t *testing.T) {
 		dependencyOutput.ServiceCallCount != 1 ||
 		!dependencyOutput.Scope.Complete {
 		t.Fatalf("dependency output = %+v", dependencyOutput)
+	}
+
+	result, err = session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "read_dependency_findings",
+		Arguments: map[string]any{"repository_id": 7, "limit": 10},
+	})
+	if err != nil || result.IsError {
+		t.Fatalf("dependency findings tool error: %v %#v", err, result.Content)
+	}
+	encoded, err = json.Marshal(result.StructuredContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var findingOutput readDependencyFindingsOutput
+	if err := json.Unmarshal(encoded, &findingOutput); err != nil {
+		t.Fatal(err)
+	}
+	if findingOutput.CheckState != "ready" || len(findingOutput.Findings) != 1 ||
+		findingOutput.Findings[0].AdvisoryID != "GHSA-fixture" ||
+		len(findingOutput.Findings[0].Evidence) != 2 ||
+		strings.Contains(string(encoded), "Fixture advisory prose") {
+		t.Fatalf("dependency findings output = %s", encoded)
 	}
 
 	result, err = session.CallTool(context.Background(), &mcp.CallToolParams{

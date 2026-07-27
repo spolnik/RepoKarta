@@ -53,6 +53,7 @@ func TestEveryPackagePathCarriesRequiredLicensesAndVerification(t *testing.T) {
 	root := repositoryRoot(t)
 	required := []string{
 		"zoekt-Apache-2.0.txt",
+		"deps.dev-semver-Apache-2.0.txt",
 		"gotreesitter-MIT.txt",
 		"tree-sitter-grammars-MIT.txt",
 		"nvim-treesitter-Kotlin-query-NOTICE.txt",

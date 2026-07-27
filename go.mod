@@ -5,6 +5,7 @@ go 1.26
 replace github.com/sourcegraph/zoekt => ./third_party/zoekt
 
 require (
+	deps.dev/util/semver v0.0.0-20260727054525-2946ae4a6141
 	github.com/anthropics/anthropic-sdk-go v1.61.0
 	github.com/crewjam/saml v0.5.1
 	github.com/grafana/regexp v0.0.0-20240607082908-2cb410fa05da

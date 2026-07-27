@@ -950,11 +950,15 @@ type testMapService struct {
 }
 
 type testDependencyService struct {
-	inventory dependencies.Inventory
-	progress  dependencies.RefreshProgress
-	options   dependencies.Options
-	started   bool
-	force     bool
+	inventory        dependencies.Inventory
+	progress         dependencies.RefreshProgress
+	findings         dependencies.FindingResponse
+	advisoryProgress dependencies.AdvisoryRefreshProgress
+	options          dependencies.Options
+	advisoryOptions  dependencies.AdvisoryOptions
+	started          bool
+	advisoryStarted  bool
+	force            bool
 }
 
 func (s *testDependencyService) Inventory(
@@ -980,6 +984,29 @@ func (s *testDependencyService) StartRefresh(
 
 func (s *testDependencyService) Progress() dependencies.RefreshProgress {
 	return s.progress
+}
+
+func (s *testDependencyService) Findings(
+	_ context.Context,
+	_ graph.Snapshot,
+	options dependencies.AdvisoryOptions,
+) (dependencies.FindingResponse, error) {
+	s.advisoryOptions = options
+	return s.findings, nil
+}
+
+func (s *testDependencyService) StartAdvisoryRefresh(
+	_ graph.Snapshot,
+	force bool,
+) (dependencies.AdvisoryRefreshProgress, error) {
+	s.advisoryStarted = true
+	s.force = force
+	s.advisoryProgress = dependencies.AdvisoryRefreshProgress{State: "running"}
+	return s.advisoryProgress, nil
+}
+
+func (s *testDependencyService) AdvisoryProgress() dependencies.AdvisoryRefreshProgress {
+	return s.advisoryProgress
 }
 
 func (s *testMapService) Snapshot(_ context.Context, repositoryID int64, refresh bool) (graph.Snapshot, error) {
@@ -1081,9 +1108,10 @@ func TestMCPSetupPageProvidesCopyableReadOnlyConfiguration(t *testing.T) {
 		`resolve_effective_contexts`,
 		`find_references`,
 		`read_dependency_inventory`,
+		`read_dependency_findings`,
 		`list_deep_wiki_pages`,
 		`read_generated_document`,
-		`16 tools · no writes`,
+		`17 tools · no writes`,
 	} {
 		if !strings.Contains(response.Body.String(), expected) {
 			t.Fatalf("MCP setup page does not contain %q", expected)
@@ -1474,6 +1502,127 @@ func TestDependencyRefreshAPIStartsFilteredBackgroundWork(t *testing.T) {
 	if !strings.Contains(response.Body.String(), `"state":"running"`) ||
 		!strings.Contains(response.Body.String(), `"total":2`) {
 		t.Fatalf("refresh body = %s", response.Body.String())
+	}
+}
+
+func TestDependencyFindingsUIAPIRefreshAndDescriptiveLimitError(t *testing.T) {
+	revision := strings.Repeat("a", 40)
+	maps := &testMapService{snapshot: graph.Snapshot{
+		Repositories: []graph.Repository{{ID: 4, Name: "acme/service", Revision: revision}},
+	}}
+	registry := &testDependencyService{
+		findings: dependencies.FindingResponse{
+			CheckState: "ready", AdvisoryOnly: true, TotalFindingCount: 1,
+			FindingCount: 1, ReturnedCount: 1, Limit: 100,
+			CheckedDeclarationCount: 1,
+			Snapshot: dependencies.AdvisorySnapshotStatus{
+				State: "ready", Source: "OSV.dev", Version: "sha256:fixture",
+				RetrievedAt: time.Date(2026, 7, 27, 10, 0, 0, 0, time.UTC),
+			},
+			Findings: []dependencies.Finding{{
+				ID: "finding-1", AdvisoryID: "GHSA-fixture",
+				Aliases: []string{"CVE-2026-0001"}, Summary: "Fixture vulnerability",
+				Severity: "critical", Ecosystem: "npm", Package: "left-pad",
+				Version: "1.5.0", MatchBasis: "resolved", MatchConfidence: "high",
+				Usage: "production", RepositoryID: 4, Repository: "acme/service",
+				Revision: revision, ManifestPath: "package-lock.json",
+				ManifestEvidence: graph.Evidence{
+					Line: 12, URL: "http://127.0.0.1:7331/source/4#L12",
+				},
+				AdvisoryEvidence: dependencies.AdvisoryEvidence{
+					AdvisoryURL:     "https://api.osv.dev/v1/vulns/GHSA-fixture",
+					SnapshotVersion: "sha256:fixture",
+				},
+			}},
+		},
+		advisoryProgress: dependencies.AdvisoryRefreshProgress{State: "idle"},
+	}
+	server, err := New(
+		Config{Address: "127.0.0.1:7331", Maps: maps, Dependencies: registry},
+		codeintel.New(testStore{repositories: []catalog.Repository{{
+			ID: 4, Name: "acme/service", IndexState: "ready",
+		}}}, testSearcher{}, "http://127.0.0.1:7331"),
+		testRefresher{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	page := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(page, httptest.NewRequest(
+		http.MethodGet,
+		"http://127.0.0.1:7331/dependencies?view=findings&repository=4&severity=critical&usage=production",
+		nil,
+	))
+	if page.Code != http.StatusOK {
+		t.Fatalf("findings page status=%d body=%s", page.Code, page.Body.String())
+	}
+	for _, expected := range []string{
+		"Security findings", "GHSA-fixture", "CVE-2026-0001",
+		"critical", "production", "resolved (high confidence)",
+		"never represented as an enforced CI gate", "Export SARIF",
+	} {
+		if !strings.Contains(page.Body.String(), expected) {
+			t.Fatalf("findings page lacks %q: %s", expected, page.Body.String())
+		}
+	}
+	if registry.advisoryOptions.Severity != "critical" ||
+		registry.advisoryOptions.Usage != "production" || maps.repositoryID != 4 {
+		t.Fatalf("finding options=%#v repository=%d", registry.advisoryOptions, maps.repositoryID)
+	}
+
+	api := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(api, httptest.NewRequest(
+		http.MethodGet,
+		"http://127.0.0.1:7331/api/dependencies/findings?repository=4&limit=50",
+		nil,
+	))
+	if api.Code != http.StatusOK || !strings.Contains(api.Body.String(), `"check_state":"ready"`) ||
+		!strings.Contains(api.Body.String(), `"advisory_only":true`) {
+		t.Fatalf("findings API status=%d body=%s", api.Code, api.Body.String())
+	}
+
+	sarif := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(sarif, httptest.NewRequest(
+		http.MethodGet,
+		"http://127.0.0.1:7331/api/dependencies/findings.sarif?repository=4",
+		nil,
+	))
+	if sarif.Code != http.StatusOK ||
+		sarif.Header().Get("Content-Type") != "application/sarif+json" ||
+		!strings.Contains(sarif.Body.String(), `"ruleId": "GHSA-fixture"`) {
+		t.Fatalf("findings SARIF status=%d headers=%v body=%s", sarif.Code, sarif.Header(), sarif.Body.String())
+	}
+
+	invalid := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(invalid, httptest.NewRequest(
+		http.MethodGet,
+		"http://127.0.0.1:7331/api/dependencies/findings?limit=501",
+		nil,
+	))
+	if invalid.Code != http.StatusBadRequest ||
+		!strings.Contains(invalid.Body.String(), `"message":"limit must be between 1 and 500"`) {
+		t.Fatalf("invalid findings status=%d body=%s", invalid.Code, invalid.Body.String())
+	}
+	invalidSeverity := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(invalidSeverity, httptest.NewRequest(
+		http.MethodGet,
+		"http://127.0.0.1:7331/api/dependencies/findings?severity=urgent",
+		nil,
+	))
+	if invalidSeverity.Code != http.StatusBadRequest ||
+		!strings.Contains(invalidSeverity.Body.String(), `"message":"severity must be one of critical, high, medium, low, unknown"`) {
+		t.Fatalf("invalid severity status=%d body=%s", invalidSeverity.Code, invalidSeverity.Body.String())
+	}
+
+	refresh := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(refresh, httptest.NewRequest(
+		http.MethodPost,
+		"http://127.0.0.1:7331/api/dependencies/advisories/refresh?repository=4&force=true",
+		nil,
+	))
+	if refresh.Code != http.StatusAccepted || !registry.advisoryStarted || !registry.force {
+		t.Fatalf("advisory refresh status=%d service=%#v body=%s", refresh.Code, registry, refresh.Body.String())
 	}
 }
 
@@ -2569,7 +2718,7 @@ func TestHTTPBoundaryAndFormattingHelpers(t *testing.T) {
 	if dependencyURL("/dependencies", 7, options, 30) == "" {
 		t.Fatal("dependency URL is empty")
 	}
-	if data := buildMCPPageData("http://localhost/mcp", "secret-token-value", "repokarta", "http://localhost"); len(data.Tools) != 16 {
+	if data := buildMCPPageData("http://localhost/mcp", "secret-token-value", "repokarta", "http://localhost"); len(data.Tools) != 17 {
 		t.Fatalf("MCP page tools = %d", len(data.Tools))
 	}
 

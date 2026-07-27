@@ -45,9 +45,13 @@ cp "$repository_root/docs/shared-deployment.md" \
     "$stage_directory/docs/shared-deployment.md"
 cp "$repository_root/docs/enterprise-administration.md" \
     "$stage_directory/docs/enterprise-administration.md"
+cp "$repository_root/docs/dependency-advisories.md" \
+    "$stage_directory/docs/dependency-advisories.md"
 cp "$repository_root/deploy/"* "$stage_directory/deploy/"
 cp "$repository_root/third_party/zoekt/LICENSE" \
     "$stage_directory/licenses/zoekt-Apache-2.0.txt"
+cp "$repository_root/third_party/zoekt/LICENSE" \
+    "$stage_directory/licenses/deps.dev-semver-Apache-2.0.txt"
 cp "$repository_root/third_party/licenses/gotreesitter-MIT.txt" \
     "$stage_directory/licenses/gotreesitter-MIT.txt"
 cp "$repository_root/third_party/licenses/tree-sitter-grammars-MIT.txt" \
@@ -99,8 +103,10 @@ printf '%s  %s\n' "$hash" "$package_name.tar.gz" > "$checksum_path"
 mkdir -p "$verify_directory"
 tar -C "$verify_directory" -xzf "$archive_path"
 test -f "$verify_directory/$package_name/licenses/zoekt-Apache-2.0.txt"
+test -f "$verify_directory/$package_name/licenses/deps.dev-semver-Apache-2.0.txt"
 test -f "$verify_directory/$package_name/docs/shared-deployment.md"
 test -f "$verify_directory/$package_name/docs/enterprise-administration.md"
+test -f "$verify_directory/$package_name/docs/dependency-advisories.md"
 test -f "$verify_directory/$package_name/deploy/repokarta.env.example"
 if [ "$(uname -s)" = "Darwin" ]; then
     reported_version=$("$verify_directory/$package_name/repokarta" version)

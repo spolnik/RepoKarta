@@ -6392,7 +6392,7 @@ function enableDependencyRefresh(): void {
     }
     polling = true;
     try {
-      const response = await fetch("/api/dependencies/progress", {
+      const response = await fetch(button.dataset.dependencyProgressUrl || "/api/dependencies/progress", {
         cache: "no-store",
         headers: { Accept: "application/json" }
       });
@@ -6405,11 +6405,12 @@ function enableDependencyRefresh(): void {
         completed: number;
         failed: number;
         skipped: number;
+        error?: string;
       };
       if (progress.state === "running") {
         watching = true;
         button.disabled = true;
-        status.textContent = `Checking ${progress.completed} of ${progress.total} unique packages` +
+        status.textContent = `Checking ${progress.completed} of ${progress.total} items` +
           (progress.failed > 0 ? ` · ${progress.failed} failed` : "");
         window.setTimeout(() => {
           polling = false;
@@ -6423,6 +6424,8 @@ function enableDependencyRefresh(): void {
           (progress.failed > 0 ? ` · ${progress.failed} failed` : "") +
           ` · ${progress.skipped} cached or unsupported`;
         window.location.reload();
+      } else if (progress.state === "error") {
+        status.textContent = progress.error || "Dependency refresh failed";
       }
     } catch (error) {
       button.disabled = false;
