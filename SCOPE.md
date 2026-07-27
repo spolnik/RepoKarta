@@ -591,7 +591,7 @@ search must remain fast and AI-free.
 - [ ] Rank exact symbol and path matches ahead of fuzzy content matches and
   explain important ranking signals; never let personalization hide complete
   deterministic results.
-- [ ] Add one-click actions from a result to open source, focus the element in
+- [x] Add one-click actions from a result to open source, focus the element in
   Maps, inspect dependencies, find references or implementations, start a
   scoped conversation, or add the result to the current context.
 - [ ] Import optional SCIP indexes for compiler-accurate cross-repository
@@ -870,7 +870,7 @@ completion criteria include:
 
 ## Current implementation version
 
-`0.54.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
+`0.60.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
 The M9 dependency inventory, public registry refresh, lockfile resolution, and
 explicit private-registry routing are implemented; discrepancy filtering and
 fail-closed classification of unconfigured internal package prefixes remain.
@@ -883,6 +883,10 @@ chips. Revision-pinned named contexts cover team, product, service-fleet,
 release, and personal-task scopes with private personal and administrator-
 published defaults; Chat, JSON, and MCP expose every effective context,
 provenance source, and canonical copyable URL. The implemented slices also
+provide all twelve explicit search result types, grammar-compatible facets,
+deterministic ranking explanations, and permission-preserving result actions
+for source, Maps, dependencies, references, implementations, scoped Chat, and
+the last active conversation context. The implemented slices also
 enforce insight mutation permissions and revision staleness, paginate
 dependency declarations, cache immutable file context trees, open the
 administrator console directly in loopback-local mode, and support
@@ -893,11 +897,12 @@ or derived-artifact work.
 
 ## Recommended next session
 
-Continue M7 with the documented query grammar, typed result categories,
-facets, ranking signals, and result actions. Complete repository/file/
-directory/symbol parity when the Deep Search composer is introduced. Preserve
-the current fail-closed permission, revision, ambiguity, default-context, and
-completeness behavior before adding agentic Deep Search.
+Continue M7 with directory/symbol autocomplete, the remaining symbol-kind and
+ownership grammar filters, qualified programming-element search, mixed-result
+exact-match ranking, and optional SCIP-backed graph queries. Complete
+repository/file/directory/symbol parity when the Deep Search composer is
+introduced. Preserve the current fail-closed permission, revision, ambiguity,
+default-context, and completeness behavior before adding agentic Deep Search.
 
 Continue M9 afterward with discrepancy/status filters and a fail-closed way to
 classify internal package prefixes before public refresh. Preserve the current

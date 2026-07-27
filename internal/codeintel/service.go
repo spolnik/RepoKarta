@@ -229,6 +229,7 @@ type SearchItem struct {
 	Metadata     []SearchItemMetadata `json:"metadata,omitempty"`
 	Score        float64              `json:"score,omitempty"`
 	Ranking      []RankingSignal      `json:"ranking,omitempty"`
+	Actions      []SearchAction       `json:"actions,omitempty"`
 }
 
 // SearchItemMetadata is stable display metadata for a non-source result.
@@ -256,6 +257,14 @@ type RankingSignal struct {
 	Name   string  `json:"name"`
 	Weight float64 `json:"weight"`
 	Detail string  `json:"detail"`
+}
+
+// SearchAction is one permission-preserving transition from a result into a
+// RepoKarta evidence or context workflow.
+type SearchAction struct {
+	Kind  string `json:"kind"`
+	Label string `json:"label"`
+	URL   string `json:"url"`
 }
 
 // ReferenceIndex reports whether every requested repository has a persisted
@@ -303,16 +312,18 @@ type ReferenceResponse = SearchResponse
 
 // SearchMatch is one commit-pinned matched file.
 type SearchMatch struct {
-	ResultType string          `json:"result_type"`
-	Repository string          `json:"repository"`
-	Revision   string          `json:"revision"`
-	Path       string          `json:"path"`
-	Language   string          `json:"language,omitempty"`
-	Score      float64         `json:"score,omitempty"`
-	Lines      []SearchLine    `json:"lines"`
-	Citation   string          `json:"citation"`
-	SourceURL  string          `json:"source_url,omitempty"`
-	Ranking    []RankingSignal `json:"ranking,omitempty"`
+	ResultType   string          `json:"result_type"`
+	RepositoryID int64           `json:"repository_id,omitempty"`
+	Repository   string          `json:"repository"`
+	Revision     string          `json:"revision"`
+	Path         string          `json:"path"`
+	Language     string          `json:"language,omitempty"`
+	Score        float64         `json:"score,omitempty"`
+	Lines        []SearchLine    `json:"lines"`
+	Citation     string          `json:"citation"`
+	SourceURL    string          `json:"source_url,omitempty"`
+	Ranking      []RankingSignal `json:"ranking,omitempty"`
+	Actions      []SearchAction  `json:"actions,omitempty"`
 }
 
 // SearchLine is one line of source evidence.
@@ -877,12 +888,14 @@ func (s *Service) Search(ctx context.Context, request SearchRequest) (SearchResp
 		response, searchErr := s.searchEntityEvidence(ctx, request, parsedQuery, resultType)
 		if searchErr == nil {
 			finalizeSearchResponse(&response, parsedQuery)
+			s.addSearchActions(&response, parsedQuery)
 		}
 		return response, searchErr
 	case "dependency", "route", "wiki_page", "code_insight":
 		response, searchErr := s.searchDerivedEvidence(ctx, request, parsedQuery, resultType)
 		if searchErr == nil {
 			finalizeSearchResponse(&response, parsedQuery)
+			s.addSearchActions(&response, parsedQuery)
 		}
 		return response, searchErr
 	}
@@ -905,6 +918,7 @@ func (s *Service) Search(ctx context.Context, request SearchRequest) (SearchResp
 		response.QueryLanguage = &parsedQuery
 		if referenceErr == nil {
 			finalizeSearchResponse(&response, parsedQuery)
+			s.addSearchActions(&response, parsedQuery)
 		}
 		return response, referenceErr
 	}
@@ -995,6 +1009,7 @@ func (s *Service) Search(ctx context.Context, request SearchRequest) (SearchResp
 					ResultType:      resultType,
 				}
 				finalizeSearchResponse(&response, parsedQuery)
+				s.addSearchActions(&response, parsedQuery)
 				return response, nil
 			}
 		}
@@ -1019,6 +1034,7 @@ func (s *Service) Search(ctx context.Context, request SearchRequest) (SearchResp
 			ResultType:      resultType,
 		}
 		finalizeSearchResponse(&response, parsedQuery)
+		s.addSearchActions(&response, parsedQuery)
 		return response, nil
 	}
 	engineText := parsedQuery.Text
@@ -1082,6 +1098,7 @@ func (s *Service) Search(ctx context.Context, request SearchRequest) (SearchResp
 	response.QueryLanguage = &parsedQuery
 	setSearchResultType(&response, resultType)
 	finalizeSearchResponse(&response, parsedQuery)
+	s.addSearchActions(&response, parsedQuery)
 	return response, nil
 }
 
@@ -1159,6 +1176,7 @@ func (s *Service) searchResponse(ctx context.Context, result search.Result, limi
 		}
 		if visible {
 			start, end := lineRange(match.Lines)
+			outputMatch.RepositoryID = repository.ID
 			outputMatch.Repository = repository.Name
 			outputMatch.Citation = Citation(repository.Name, match.Revision, match.Path, start, end)
 			outputMatch.SourceURL = s.SourceURL(repository.ID, match.Revision, match.Path, start, end)

@@ -251,6 +251,7 @@ type searchMatchView struct {
 	FocusLine    int
 	Lines        []search.LineMatch
 	Ranking      []codeintel.RankingSignal
+	Actions      []codeintel.SearchAction
 }
 
 type sourcePageData struct {
@@ -2137,6 +2138,7 @@ func resolveSearchViews(matches []codeintel.SearchMatch, repositories []catalog.
 			Path:       match.Path,
 			Language:   match.Language,
 			Ranking:    match.Ranking,
+			Actions:    match.Actions,
 			Lines:      make([]search.LineMatch, 0, len(match.Lines)),
 		}
 		if len(match.Lines) > 0 {

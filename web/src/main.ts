@@ -1924,6 +1924,7 @@ function enableConversations(debug?: DebugLogger): void {
   }
 
   const runSettingsStorageKey = "repokarta:conversation-run-settings:v1";
+  const activeConversationStorageKey = "repokarta:active-conversation:v1";
   const restoreRunSettings = (): void => {
     try {
       const stored = window.localStorage.getItem(runSettingsStorageKey);
@@ -2122,6 +2123,15 @@ function enableConversations(debug?: DebugLogger): void {
   };
 
   const setConversationURL = (id: string): void => {
+    try {
+      if (id) {
+        window.localStorage.setItem(activeConversationStorageKey, id);
+      } else {
+        window.localStorage.removeItem(activeConversationStorageKey);
+      }
+    } catch {
+      // Deep links still work when the browser denies local storage.
+    }
     const url = new URL(window.location.href);
     if (id) {
       url.searchParams.set("conversation", id);
@@ -3261,26 +3271,10 @@ function enableConversations(debug?: DebugLogger): void {
   setSessionPanelOpen(false);
   setInspectorOpen(false);
   void configureNamedContextAdministration();
-  void loadNamedContexts().then(async () => {
-    const parameters = new URL(window.location.href).searchParams;
-    const requestedNamedContext = parameters.get("context")?.trim();
-    const requestedContextURL = parameters.get("context_url")?.trim();
-    if (requestedNamedContext) {
-      activeNamedContextIDs.add(requestedNamedContext);
-      await refreshEffectiveContexts();
-      return;
-    }
-    if (requestedContextURL) {
-      const parsed = parseRepoKartaContextURL(requestedContextURL, window.location.href);
-      if (parsed) {
-        await addPastedContext(parsed);
-        return;
-      }
-      showContextError("The requested context URL is not a supported RepoKarta context.");
-      return;
-    }
-    await refreshEffectiveContexts();
-  });
+  const requestedParameters = new URL(window.location.href).searchParams;
+  const requestedNamedContext = requestedParameters.get("context")?.trim();
+  const requestedContextURL = requestedParameters.get("context_url")?.trim();
+  const contextsReady = loadNamedContexts();
 
   debug?.add("info", "providers.request.started", { endpoint: "/api/providers" });
   void fetch("/api/providers", { headers: { Accept: "application/json" } })
@@ -3326,10 +3320,31 @@ function enableConversations(debug?: DebugLogger): void {
       headerStatus.textContent = "A provider could not be loaded";
     })
     .finally(() => {
-      void refreshConversationHistory().then(() => {
-        const requestedConversation = new URL(window.location.href).searchParams.get("conversation");
+      void Promise.all([refreshConversationHistory(), contextsReady]).then(async () => {
+        let requestedConversation = requestedParameters.get("conversation")?.trim() || "";
+        if (!requestedConversation && requestedParameters.get("reuse") === "current") {
+          try {
+            requestedConversation = window.localStorage.getItem(activeConversationStorageKey)?.trim() || "";
+          } catch {
+            requestedConversation = "";
+          }
+        }
         if (requestedConversation) {
-          void openConversation(requestedConversation);
+          await openConversation(requestedConversation);
+        }
+        if (requestedNamedContext) {
+          activeNamedContextIDs.add(requestedNamedContext);
+          await refreshEffectiveContexts();
+        }
+        if (requestedContextURL) {
+          const parsed = parseRepoKartaContextURL(requestedContextURL, window.location.href);
+          if (parsed) {
+            await addPastedContext(parsed);
+          } else {
+            showContextError("The requested context URL is not a supported RepoKarta context.");
+          }
+        } else if (!requestedNamedContext && !requestedConversation) {
+          await refreshEffectiveContexts();
         }
       });
     });
@@ -3968,6 +3983,8 @@ function enableRepositoryMaps(debug?: DebugLogger): void {
   let loadRevision = 0;
   let sharedDependencyIDs = new Set<string>();
   let currentRepositoryCount = 0;
+  const initialParameters = new URL(window.location.href).searchParams;
+  let requestedMapFocus = initialParameters.get("focus")?.trim() || "";
 
   const selectedRepositoryQuery = (): string => repository.value ? `repository=${encodeURIComponent(repository.value)}` : "";
 
@@ -4106,6 +4123,46 @@ function enableRepositoryMaps(debug?: DebugLogger): void {
       inspectorPath.textContent = fact.evidence[0]?.path || "—";
       showEvidence(fact.evidence);
     }
+  };
+
+  const focusMapTarget = (): void => {
+    const query = requestedMapFocus.trim().toLocaleLowerCase();
+    if (!graph || !query) {
+      return;
+    }
+    const ranked = graph.nodes().map((node) => {
+      const fact = node.data("fact") as MapNode;
+      const id = fact.id.toLocaleLowerCase();
+      const path = (fact.path || "").toLocaleLowerCase();
+      const label = fact.label.toLocaleLowerCase();
+      const evidencePath = fact.evidence.some(
+        (item) => item.path.toLocaleLowerCase() === query
+      );
+      let score = 0;
+      if (id === query) score = 6;
+      else if (path === query) score = 5;
+      else if (label === query) score = 4;
+      else if (evidencePath) score = 3;
+      else if (path.includes(query) || query.includes(path) && path !== "") score = 2;
+      else if (label.includes(query)) score = 1;
+      return { node, score };
+    }).filter((candidate) => candidate.score > 0)
+      .sort((left, right) => right.score - left.score);
+    const target = ranked[0]?.node;
+    requestedMapFocus = "";
+    if (!target) {
+      status.textContent = "Map ready · no structural element matched the requested result";
+      return;
+    }
+    target.removeClass("map-hidden map-search-muted");
+    graph.elements().unselect();
+    target.select();
+    inspectElement(target);
+    graph.animate({
+      center: { eles: target },
+      zoom: Math.max(graph.zoom(), 1.05),
+      duration: 180
+    });
   };
 
   const renderSearchResults = (): void => {
@@ -4565,6 +4622,7 @@ function enableRepositoryMaps(debug?: DebugLogger): void {
     });
     applyFilters();
     layoutGraph();
+    window.setTimeout(focusMapTarget, 40);
   };
 
   const loadMap = async (force = false): Promise<void> => {
@@ -4780,7 +4838,6 @@ function enableRepositoryMaps(debug?: DebugLogger): void {
   window.addEventListener("resize", () => graph?.resize());
 
   // Restore scope and view from the URL so a shared map link opens as sent.
-  const initialParameters = new URL(window.location.href).searchParams;
   const initialRepository = initialParameters.get("repository");
   if (initialRepository && Array.from(repository.options).some((option) => option.value === initialRepository)) {
     repository.value = initialRepository;

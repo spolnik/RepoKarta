@@ -337,6 +337,11 @@
           </ul>
         </details>
         {{end}}
+        {{if .Actions}}
+        <nav class="result-actions" aria-label="Actions for {{.Path}}">
+          {{range .Actions}}<a href="{{.URL}}" data-result-action="{{.Kind}}">{{.Label}}</a>{{end}}
+        </nav>
+        {{end}}
         <div class="divide-y divide-white/[0.035]">
           {{range .Lines}}
           {{if .Before}}
@@ -427,6 +432,11 @@
             {{range .Ranking}}<li><span class="font-mono text-emerald-300">{{.Name}}</span> · {{.Detail}}</li>{{end}}
           </ul>
         </details>
+        {{end}}
+        {{if .Actions}}
+        <nav class="result-actions" aria-label="Actions for {{.Title}}">
+          {{range .Actions}}<a href="{{.URL}}" data-result-action="{{.Kind}}">{{.Label}}</a>{{end}}
+        </nav>
         {{end}}
         {{if .Detail}}<pre class="max-h-96 overflow-auto whitespace-pre-wrap px-4 py-3 font-mono text-xs leading-5 text-ink-soft">{{.Detail}}</pre>{{end}}
         {{if .Citation}}<footer class="border-t border-white/[0.04] px-4 py-2 font-mono text-xs text-ink-faint">{{.Citation}}</footer>{{end}}

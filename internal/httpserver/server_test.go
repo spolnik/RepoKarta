@@ -2152,6 +2152,13 @@ func TestSearchRendersSafeHighlightedCommitPinnedResult(t *testing.T) {
 		`/source/1?rev=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`,
 		`lines=1-200&focus=7-7#L7`,
 		`internal%2Fexample.go`,
+		`data-result-action="source"`,
+		`data-result-action="map"`,
+		`data-result-action="dependencies"`,
+		`data-result-action="conversation"`,
+		`data-result-action="context"`,
+		`Start scoped conversation`,
+		`Add to current context`,
 	} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("expected response to contain %q\n%s", expected, body)
