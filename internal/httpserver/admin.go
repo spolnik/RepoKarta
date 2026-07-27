@@ -20,6 +20,7 @@ import (
 
 type adminPageData struct {
 	Version               string
+	Section               string
 	Authenticated         bool
 	CSRFToken             string
 	Error                 string
@@ -79,6 +80,7 @@ func (s *Server) discoverRepositories(response http.ResponseWriter, request *htt
 		Deny:            splitAccessSubjects(request.FormValue("deny")),
 	}
 	data := s.adminData(request.Context(), csrf)
+	data.Section = "repositories"
 	data.DiscoverProvider = discovery.Provider
 	data.DiscoverLocation = discovery.Location
 	data.DiscoverCredentialRef = discovery.CredentialRef
@@ -127,6 +129,7 @@ func (s *Server) acquireRepository(response http.ResponseWriter, request *http.R
 		request.FormValue("credential_ref"),
 	)
 	data := s.adminData(request.Context(), csrf)
+	data.Section = "repositories"
 	if err != nil {
 		data.Error = err.Error()
 		response.WriteHeader(http.StatusBadRequest)
@@ -149,6 +152,7 @@ func (s *Server) syncAcquiredRepository(response http.ResponseWriter, request *h
 	}
 	repository, err := s.repositoryAcquisition.Sync(request.Context(), id)
 	data := s.adminData(request.Context(), csrf)
+	data.Section = "repositories"
 	if err != nil {
 		data.Error = err.Error()
 		response.WriteHeader(http.StatusConflict)
@@ -175,6 +179,7 @@ func (s *Server) removeAcquiredRepository(response http.ResponseWriter, request 
 	}
 	removedPath, err := s.repositoryAcquisition.Remove(request.Context(), id)
 	data := s.adminData(request.Context(), csrf)
+	data.Section = "repositories"
 	if err != nil {
 		data.Error = err.Error()
 		response.WriteHeader(http.StatusConflict)
@@ -245,6 +250,7 @@ func (s *Server) updateRepositoryAccess(response http.ResponseWriter, request *h
 	if err := s.repositoryAccess.SetRepositoryAccess(request.Context(), policy); err != nil {
 		s.recordAdminEvent(request, "repository.access.update", "repository", strconv.FormatInt(repositoryID, 10), "failure", nil)
 		data := s.adminData(request.Context(), csrf)
+		data.Section = "access"
 		data.Error = err.Error()
 		response.WriteHeader(http.StatusBadRequest)
 		s.renderAdmin(response, data)
@@ -254,6 +260,7 @@ func (s *Server) updateRepositoryAccess(response http.ResponseWriter, request *h
 		"owner": policy.OwnerID, "visibility": policy.Visibility,
 	})
 	data := s.adminData(request.Context(), csrf)
+	data.Section = "access"
 	data.Notice = "Repository access saved. Source and every derived artifact now use this policy."
 	s.renderAdmin(response, data)
 }
@@ -311,7 +318,9 @@ func (s *Server) adminPage(response http.ResponseWriter, request *http.Request) 
 		http.Redirect(response, request, "/admin/login", http.StatusSeeOther)
 		return
 	}
-	s.renderAdmin(response, s.adminData(request.Context(), csrf))
+	data := s.adminData(request.Context(), csrf)
+	data.Section = normalizeAdminSection(request.URL.Query().Get("section"))
+	s.renderAdmin(response, data)
 }
 
 func (s *Server) updateSecurity(response http.ResponseWriter, request *http.Request) {
@@ -340,6 +349,7 @@ func (s *Server) updateSecurity(response http.ResponseWriter, request *http.Requ
 	if err := s.security.UpdateSettings(request.Context(), settings); err != nil {
 		s.recordAdminEvent(request, "security.settings.update", "security-configuration", string(settings.Mode), "failure", nil)
 		data := s.adminData(request.Context(), csrf)
+		data.Section = "security"
 		data.Error = err.Error()
 		data.Mode = string(settings.Mode)
 		data.PublicURL = strings.TrimSpace(settings.PublicURL)
@@ -355,6 +365,7 @@ func (s *Server) updateSecurity(response http.ResponseWriter, request *http.Requ
 		"mode": string(settings.Mode), "public_url": settings.PublicURL,
 	})
 	data := s.adminData(request.Context(), csrf)
+	data.Section = "security"
 	data.Notice = "Authentication settings saved and activated."
 	s.renderAdmin(response, data)
 }
@@ -375,6 +386,7 @@ func (s *Server) previewCleanup(response http.ResponseWriter, request *http.Requ
 		return
 	}
 	data := s.adminData(request.Context(), csrf)
+	data.Section = "storage"
 	plan, err := s.maintenance.Plan(request.Context(), request.Form["target"])
 	if err != nil {
 		s.recordAdminEvent(request, "owned-data.cleanup.preview", "storage", "cleanup-plan", "failure", nil)
@@ -408,6 +420,7 @@ func (s *Server) executeCleanup(response http.ResponseWriter, request *http.Requ
 		return
 	}
 	data := s.adminData(request.Context(), csrf)
+	data.Section = "storage"
 	if request.FormValue("confirm") != "remove" {
 		data.Error = "Confirm the reviewed cleanup plan before removing files."
 		response.WriteHeader(http.StatusBadRequest)
@@ -431,6 +444,7 @@ func (s *Server) executeCleanup(response http.ResponseWriter, request *http.Requ
 		"removed_bytes": strconv.FormatInt(result.RemovedBytes, 10),
 	})
 	data = s.adminData(request.Context(), csrf)
+	data.Section = "storage"
 	data.Notice = "Cleanup completed: removed " + formatItemCount(result.RemovedItems) +
 		" and reclaimed " + formatBytes(result.RemovedBytes) + "."
 	s.renderAdmin(response, data)
@@ -592,9 +606,19 @@ func (s *Server) renderAdmin(response http.ResponseWriter, data adminPageData) {
 	if !data.AdminEnabled && !data.Authenticated && data.Error == "" {
 		data.Error = security.ErrAdminUnavailable.Error()
 	}
+	data.Section = normalizeAdminSection(data.Section)
 	response.Header().Set("Cache-Control", "no-store")
 	response.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := s.templates.ExecuteTemplate(response, "admin", data); err != nil {
 		slog.Error("render administrator template", "error", err)
+	}
+}
+
+func normalizeAdminSection(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "security", "identity", "repositories", "access", "storage":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return "security"
 	}
 }

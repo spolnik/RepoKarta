@@ -114,7 +114,7 @@ public class PaymentService extends BaseService implements Chargeable {
 		kind   string
 		target string
 	}{
-		{kind: "import", target: "import com.acme.store.PaymentStore;"},
+		{kind: "import", target: "com.acme.store.PaymentStore"},
 		{kind: "call", target: "save"},
 		{kind: "extends", target: "BaseService"},
 		{kind: "implements", target: "Chargeable"},
@@ -126,6 +126,59 @@ public class PaymentService extends BaseService implements Chargeable {
 				relation.Range.StartLine > 0
 		}) {
 			t.Fatalf("relations = %#v, want %s %s", document.Relations, expected.kind, expected.target)
+		}
+	}
+}
+
+func TestAnalyzeExtractsJavaEnumAndQualifiedMemberReferences(t *testing.T) {
+	document, supported := Analyze(
+		"src/main/java/com/acme/PaymentState.java",
+		[]byte(`package com.acme;
+import com.acme.status.PaymentStatus;
+import static com.acme.status.PaymentStatus.APPROVED;
+public enum PaymentState {
+    PENDING,
+    COMPLETE;
+    boolean accepted(PaymentStatus status) {
+        return status == PaymentStatus.APPROVED || status == APPROVED;
+    }
+    PaymentStatus parse(String value) {
+        return PaymentStatus::valueOf;
+    }
+}`),
+	)
+	if !supported || !document.ParseComplete {
+		t.Fatalf("analysis = supported %v, document %#v", supported, document)
+	}
+	for _, expected := range []struct {
+		kind     string
+		target   string
+		receiver string
+	}{
+		{kind: "import", target: "com.acme.status.PaymentStatus"},
+		{kind: "import", target: "com.acme.status.PaymentStatus.APPROVED"},
+		{kind: "member", target: "APPROVED", receiver: "PaymentStatus"},
+		{kind: "method_reference", target: "valueOf", receiver: "PaymentStatus"},
+	} {
+		if !slices.ContainsFunc(document.Relations, func(relation Relation) bool {
+			return relation.Kind == expected.kind &&
+				relation.Target == expected.target &&
+				relation.Receiver == expected.receiver
+		}) {
+			t.Fatalf("relations = %#v, want %s %s receiver %s",
+				document.Relations, expected.kind, expected.target, expected.receiver)
+		}
+	}
+	if !slices.ContainsFunc(document.Symbols, func(symbol Symbol) bool {
+		return symbol.Kind == "enum" && symbol.Name == "PaymentState"
+	}) {
+		t.Fatalf("enum declaration missing from %#v", document.Symbols)
+	}
+	for _, member := range []string{"PENDING", "COMPLETE"} {
+		if !slices.ContainsFunc(document.Symbols, func(symbol Symbol) bool {
+			return symbol.Kind == "enum_member" && symbol.Name == member
+		}) {
+			t.Fatalf("enum member %s missing from %#v", member, document.Symbols)
 		}
 	}
 }

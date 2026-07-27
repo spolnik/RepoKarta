@@ -47,6 +47,17 @@
           </form>
         </div>
 
+        <details class="mt-6 rounded-xl border border-sky-300/20 bg-sky-400/[0.05] p-5" open>
+          <summary class="cursor-pointer font-semibold text-sky-100">Remote repositories and Maven Central: exact workflow</summary>
+          <div class="mt-4 grid gap-4 text-sm leading-6 text-ink-soft lg:grid-cols-4">
+            <div><strong class="block text-ink-strong">1. Acquire or sync</strong>Open <a class="text-emerald-300 hover:text-emerald-200" href="/admin#admin-repositories">Admin â†’ Repositories</a>. Approve a GitHub/GitLab repository, then use <strong>Sync</strong> whenever its remote HEAD changes.</div>
+            <div><strong class="block text-ink-strong">2. Wait for the pinned scan</strong>A successful clone/fetch queues normal indexing. This workspace reads the verified commit only; it never queries a remote worktree directly.</div>
+            <div><strong class="block text-ink-strong">3. Scope Maven declarations</strong>Select the repository and <strong>Maven</strong>. RepoKarta extracts <code>group:artifact</code> coordinates from committed Maven and Gradle files.</div>
+            <div><strong class="block text-ink-strong">4. Check Maven Central</strong>Choose <strong>Refresh stale package versions</strong>. Matching public coordinates go to <code>search.maven.org</code>; cached results then show the source registry and observation time per row.</div>
+          </div>
+          <p class="mt-4 text-xs leading-5 text-ink-faint">Remote sync and registry refresh are deliberately separate: sync changes the commit-pinned declarations; refresh updates only external version observations. Neither action modifies the repository.</p>
+        </details>
+
         <dl class="mt-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
           <div class="rounded-xl border border-white/[0.08] bg-surface-raised p-4">
             <dt class="text-xs uppercase tracking-[0.16em] text-ink-faint">Repositories</dt>
@@ -157,6 +168,7 @@
                     {{else if eq .CheckStatus "error"}}<span class="rounded-full border border-rose-300/20 bg-rose-400/[0.06] px-2 py-1 text-xs text-rose-100">Check failed</span>
                     {{else if eq .CheckStatus "not_comparable"}}<span class="rounded-full border border-white/10 px-2 py-1 text-xs text-ink-soft">Not comparable</span>
                     {{else}}<span class="rounded-full border border-amber-300/20 bg-amber-400/[0.06] px-2 py-1 text-xs text-amber-100">Not checked</span>{{end}}
+                    {{if .Registry}}<span class="mt-2 block max-w-64 break-all font-mono text-xs text-sky-200" title="Registry used for this observation">{{.Registry}}</span>{{end}}
                     {{if .ObservedAt}}<span class="mt-2 block text-xs text-ink-faint">{{.ObservedAt}}</span>{{end}}
                   </td>
                   <td class="px-4 py-4">

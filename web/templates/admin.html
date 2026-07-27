@@ -43,15 +43,24 @@
         {{end}}
       </section>
       {{else}}
+      <nav class="admin-domain-nav" aria-label="Administration areas">
+        <a href="/admin?section=security" {{if eq .Section "security"}}aria-current="page"{{end}}>Security</a>
+        <a href="/admin?section=identity" {{if eq .Section "identity"}}aria-current="page"{{end}}>Identity &amp; audit</a>
+        <a href="/admin?section=repositories" {{if eq .Section "repositories"}}aria-current="page"{{end}}>Repositories</a>
+        <a href="/admin?section=access" {{if eq .Section "access"}}aria-current="page"{{end}}>Repository access</a>
+        {{if .MaintenanceAvailable}}<a href="/admin?section=storage" {{if eq .Section "storage"}}aria-current="page"{{end}}>Storage</a>{{end}}
+      </nav>
+
+      {{if .Notice}}<p class="mb-6 rounded-lg border border-emerald-400/30 bg-emerald-400/10 px-4 py-3 text-sm text-emerald-100" role="status">{{.Notice}}</p>{{end}}
+      {{if .Error}}<p class="mb-6 rounded-lg border border-red-400/30 bg-red-400/10 px-4 py-3 text-sm text-red-200" role="alert">{{.Error}}</p>{{end}}
+      {{if .ProviderError}}<p class="mb-6 rounded-lg border border-amber-400/30 bg-amber-400/10 px-4 py-3 text-sm text-amber-100" role="alert"><strong>Provider unavailable:</strong> {{.ProviderError}}</p>{{end}}
+
+      {{if eq .Section "security"}}
       <div class="mb-8">
         <p class="mb-2 text-xs font-semibold uppercase tracking-[0.24em] text-emerald-400">Deployment security</p>
         <h1 class="text-3xl font-semibold tracking-[-0.04em] text-white">Authentication</h1>
         <p class="mt-3 max-w-3xl text-sm leading-6 text-ink-soft">Choose how application requests are authenticated. Loopback-local mode opens this console for the local administrator; shared modes retain the startup-only bootstrap boundary.</p>
       </div>
-
-      {{if .Notice}}<p class="mb-6 rounded-lg border border-emerald-400/30 bg-emerald-400/10 px-4 py-3 text-sm text-emerald-100" role="status">{{.Notice}}</p>{{end}}
-      {{if .Error}}<p class="mb-6 rounded-lg border border-red-400/30 bg-red-400/10 px-4 py-3 text-sm text-red-200" role="alert">{{.Error}}</p>{{end}}
-      {{if .ProviderError}}<p class="mb-6 rounded-lg border border-amber-400/30 bg-amber-400/10 px-4 py-3 text-sm text-amber-100" role="alert"><strong>Provider unavailable:</strong> {{.ProviderError}}</p>{{end}}
 
       <form action="/admin/security" method="post" class="grid gap-6">
         <input type="hidden" name="csrf" value="{{.CSRFToken}}">
@@ -96,8 +105,9 @@
 
         <div class="flex justify-end"><button class="search-button" type="submit">Save and activate</button></div>
       </form>
+      {{end}}
 
-      {{if .EnterpriseAvailable}}
+      {{if and .EnterpriseAvailable (eq .Section "identity")}}
       <section class="mt-12 border-t border-white/[0.08] pt-10" aria-labelledby="identity-title">
         <div>
           <p class="mb-2 text-xs font-semibold uppercase tracking-[0.24em] text-emerald-400">Enterprise administration</p>
@@ -206,6 +216,7 @@
         {{end}}
       </section>
       {{end}}
+      {{if eq .Section "repositories"}}
       <section class="mt-8 rounded-2xl border border-white/[0.08] bg-white/[0.025] p-6" aria-labelledby="repository-acquisition-title">
         <div>
           <p class="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-emerald-400">M11 intake</p>
@@ -332,7 +343,9 @@
           {{end}}
         </div>
       </section>
+      {{end}}
 
+      {{if eq .Section "access"}}
       <section class="mt-8 rounded-2xl border border-white/[0.08] bg-white/[0.025] p-6">
         <h2 class="text-lg font-semibold text-white">Repository and artifact access</h2>
         <p class="mt-2 text-sm leading-6 text-ink-soft">A private repository is visible only to its owner and explicit user or identity-provider group grants. Shared visibility is an explicit instance-wide grant. Maps, Wiki pages, dependency facts, source exports, and MCP reads inherit the same policy.</p>
@@ -362,8 +375,9 @@
         </div>
         {{end}}
       </section>
+      {{end}}
 
-      {{if .MaintenanceAvailable}}
+      {{if and .MaintenanceAvailable (eq .Section "storage")}}
       <section class="mt-12 border-t border-white/[0.08] pt-10" aria-labelledby="storage-title">
         <div class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div>

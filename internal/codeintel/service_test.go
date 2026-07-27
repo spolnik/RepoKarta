@@ -564,6 +564,7 @@ func TestReferenceSearchUsesPersistedASTRelationsAndPinnedSource(t *testing.T) {
 import com.acme.store.PaymentStore;
 public class PaymentService extends BaseService {
     public void charge() { store.save(); }
+    public boolean accepted() { return PaymentStatus.APPROVED.isTerminal(); }
 }
 `
 	if err := os.MkdirAll(filepath.Join(directory, "src"), 0o755); err != nil {
@@ -595,7 +596,7 @@ public class PaymentService extends BaseService {
 			Relations: []analysis.Relation{
 				{
 					Kind:       "import",
-					Target:     "import com.acme.store.PaymentStore;",
+					Target:     "com.acme.store.PaymentStore",
 					Confidence: "syntax",
 					Range:      analysis.Range{StartLine: 2, EndLine: 2},
 				},
@@ -612,6 +613,13 @@ public class PaymentService extends BaseService {
 					Receiver:   "store",
 					Confidence: "syntax",
 					Range:      analysis.Range{StartLine: 4, EndLine: 4},
+				},
+				{
+					Kind:       "member",
+					Target:     "APPROVED",
+					Receiver:   "PaymentStatus",
+					Confidence: "syntax",
+					Range:      analysis.Range{StartLine: 5, EndLine: 5},
 				},
 			},
 		}},
@@ -660,7 +668,7 @@ public class PaymentService extends BaseService {
 		t.Fatalf("reference citation = %#v", result.Matches[0])
 	}
 
-	for _, symbol := range []string{"PaymentStore", "BaseService"} {
+	for _, symbol := range []string{"PaymentStore", "BaseService", "PaymentStatus"} {
 		found, findErr := service.FindReferences(context.Background(), ReferenceRequest{
 			Symbol:       symbol,
 			RepositoryID: 7,

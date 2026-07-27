@@ -242,6 +242,10 @@ func extractSymbols(tree *gotreesitter.Tree, source []byte, lines []int) []Symbo
 
 func customSymbolKind(languageName, nodeType, text string) string {
 	switch languageName {
+	case "java":
+		if nodeType == "enum_constant" {
+			return "enum_member"
+		}
 	case "kotlin":
 		switch nodeType {
 		case "class_declaration":
@@ -361,12 +365,26 @@ func extractRelations(tree *gotreesitter.Tree, source []byte, lines []int) ([]Re
 	walk(tree.RootNode(), func(node *gotreesitter.Node) bool {
 		nodeType := node.Type(language)
 		if isImportNode(tree.Language().Name, nodeType) {
-			appendRelation("import", node.Text(source), "", node.StartByte(), node.EndByte())
+			appendRelation(
+				"import",
+				importTarget(tree.Language().Name, node.Text(source)),
+				"",
+				node.StartByte(),
+				node.EndByte(),
+			)
 		}
 		if target := typeReferenceTarget(tree.Language().Name, nodeType, node.Text(source)); target != "" &&
 			!isDeclarationName(node, language) &&
 			!hasImportAncestor(node, tree.Language().Name, language) {
 			appendRelation("type", target, "", node.StartByte(), node.EndByte())
+		}
+		if kind, target, receiver := memberReference(
+			tree.Language().Name,
+			node,
+			language,
+			source,
+		); target != "" && !hasImportAncestor(node, tree.Language().Name, language) {
+			appendRelation(kind, target, receiver, node.StartByte(), node.EndByte())
 		}
 		return true
 	})
@@ -401,6 +419,76 @@ func typeReferenceTarget(languageName, nodeType, text string) string {
 		}
 	}
 	return ""
+}
+
+func importTarget(languageName, text string) string {
+	text = strings.TrimSpace(text)
+	switch languageName {
+	case "java":
+		text = strings.TrimSpace(strings.TrimPrefix(text, "import"))
+		text = strings.TrimSpace(strings.TrimPrefix(text, "static"))
+		return strings.TrimSpace(strings.TrimSuffix(text, ";"))
+	default:
+		return text
+	}
+}
+
+// memberReference preserves qualified member and method-reference evidence that
+// generic call extraction does not represent. This matters especially for Java
+// enums: Status.APPROVED is a field access, not a call or a type node in every
+// grammar position, and Status::fromCode is a method reference. Keeping the
+// member as Target and the qualifier as Receiver lets reference search match
+// either source-level name without pretending to resolve a Java type.
+func memberReference(
+	languageName string,
+	node *gotreesitter.Node,
+	language *gotreesitter.Language,
+	source []byte,
+) (kind, target, receiver string) {
+	if languageName != "java" || node == nil {
+		return "", "", ""
+	}
+	switch node.Type(language) {
+	case "field_access":
+		target = childText(node, language, source, "field", "name")
+		receiver = childText(node, language, source, "object", "scope")
+		if target == "" {
+			receiver, target = splitQualifiedMember(node.Text(source), ".")
+		}
+		return "member", compactText(target, 120), compactText(receiver, 240)
+	case "method_reference":
+		target = childText(node, language, source, "method", "name")
+		receiver = childText(node, language, source, "object", "type", "scope")
+		if target == "" {
+			receiver, target = splitQualifiedMember(node.Text(source), "::")
+		}
+		return "method_reference", compactText(target, 120), compactText(receiver, 240)
+	default:
+		return "", "", ""
+	}
+}
+
+func childText(
+	node *gotreesitter.Node,
+	language *gotreesitter.Language,
+	source []byte,
+	fields ...string,
+) string {
+	for _, field := range fields {
+		if child := node.ChildByFieldName(field, language); child != nil {
+			return strings.TrimSpace(child.Text(source))
+		}
+	}
+	return ""
+}
+
+func splitQualifiedMember(text, separator string) (receiver, target string) {
+	text = strings.TrimSpace(text)
+	index := strings.LastIndex(text, separator)
+	if index < 0 {
+		return "", ""
+	}
+	return strings.TrimSpace(text[:index]), strings.TrimSpace(text[index+len(separator):])
 }
 
 func isDeclarationName(node *gotreesitter.Node, language *gotreesitter.Language) bool {

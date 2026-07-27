@@ -22,6 +22,7 @@ type insightsPageData struct {
 	pageData
 	Response         insights.QueryResponse
 	Filter           insights.Filter
+	View             string
 	Evaluations      []insights.ThresholdEvaluation
 	Connections      []insights.SonarConnection
 	Metrics          []insights.Observation
@@ -65,6 +66,7 @@ func (s *Server) insightsPage(response http.ResponseWriter, request *http.Reques
 	}
 	data := insightsPageData{
 		pageData: base, Response: result, Filter: filter, SelectedID: selected,
+		View:   normalizeInsightsView(request.URL.Query().Get("view")),
 		Notice: request.URL.Query().Get("notice"), Error: request.URL.Query().Get("error"),
 		CanManage:     canManage,
 		CanAdminister: viewer.Admin,
@@ -103,6 +105,15 @@ func (s *Server) insightsPage(response http.ResponseWriter, request *http.Reques
 		data.Connections, _ = s.insights.SonarConnections(request.Context())
 	}
 	s.render(response, "insights", data)
+}
+
+func normalizeInsightsView(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "overview", "trends", "ingestion", "integrations":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return "overview"
+	}
 }
 
 func (s *Server) apiInsights(response http.ResponseWriter, request *http.Request) {

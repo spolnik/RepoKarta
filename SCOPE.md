@@ -870,7 +870,7 @@ completion criteria include:
 
 ## Current implementation version
 
-`0.63.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
+`0.64.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
 The M9 dependency inventory, public registry refresh, lockfile resolution, and
 explicit private-registry routing are implemented; discrepancy filtering and
 fail-closed classification of unconfigured internal package prefixes remain.
@@ -891,6 +891,12 @@ the last active conversation context. Repository-scoped Git history search now
 filters commits and diffs by author, message, path, actual added or removed
 lines, inclusive date range, exact reachable branch, and bounded revision
 range. The implemented slices also
+capture Java enum members, qualified field accesses, method references, and
+normalized import targets for stronger AST reference recall; the search
+workspace defaults to Zoekt syntax and uses explicit multi-language highlighting.
+Dependency management documents the hosted-sync-to-registry workflow and shows
+the registry used for every observation. Administration and Insights are split
+into focused, directly navigable domain workspaces. The implemented slices also
 enforce insight mutation permissions and revision staleness, paginate
 dependency declarations, cache immutable file context trees, open the
 administrator console directly in loopback-local mode, and support

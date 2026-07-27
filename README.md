@@ -179,9 +179,11 @@ flag:
 go run ./cmd/repokarta serve -exclude archived -exclude vendor C:\Work\ghorg
 ```
 
-Search works without an AI provider or API key. Literal mode is the default;
-regular-expression mode treats the whole query as a regex; Zoekt mode exposes
-boolean, `repo:`, `lang:`, `file:`, `sym:`, and other native Zoekt syntax.
+Search works without an AI provider or API key. The browser and GET search API
+default to Zoekt syntax because it supports the most useful boolean, `repo:`,
+`lang:`, `file:`, `sym:`, and related operators. AST references, regular
+expressions, and literal text remain explicit modes, ordered by usefulness in
+the search workspace.
 The default search box, `GET`/`POST /api/search`, and MCP `search_code` also
 share a deterministic RepoKarta grammar:
 
@@ -279,6 +281,11 @@ an externally managed SonarQube Community Build through the
 environment-variable name at poll time; their values are never stored.
 RepoKarta does not include a local test or scanner execution endpoint.
 
+The `/insights` workspace is divided into Quality overview, Trends & runs,
+Evidence ingestion, and administrator-only Integrations areas. The shared
+filters stay available without presenting comparison, ingestion, SonarQube,
+and audit controls as one long page.
+
 Open `/dependencies` for the commit-pinned declaration inventory. Package,
 manifest, repository, ecosystem, production/test/development/build usage,
 relationship, and resolution filters are evaluated before returning a bounded
@@ -292,6 +299,16 @@ the API returns
 `202 Accepted` with ready and pending repository counts while the eight-worker
 background pool completes the fleet, and the HTML workspace shows the same
 progress instead of blocking on source analysis.
+
+For a hosted repository, first acquire it under **Admin â†’ Repositories**.
+Manual or scheduled synchronization verifies the remote HEAD and queues the
+same commit-pinned indexing used for local repositories. After the dependency
+artifact is ready, select that repository and ecosystem in `/dependencies`,
+then choose **Refresh stale package versions**. Maven and Gradle coordinates use
+Maven Central at `search.maven.org` by default. The page shows the exact
+registry URL and observation time separately from the source revision, making
+remote Git synchronization and registry freshness two explicit independent
+steps.
 
 When a supported lockfile is committed, the inventory keeps the manifest's
 declared constraint and the installed resolution as separate facts. It reads
@@ -442,6 +459,11 @@ The protected `/admin` page can preview and approve three repository sources:
   configured GitHub host;
 - a GitLab group, subgroup, or exact HTTPS project URL on the configured GitLab
   host.
+
+The administrator console is split into focused Security, Identity & audit,
+Repositories, Repository access, and Storage areas. Each form stays in the area
+it belongs to after validation or save, so acquisition and repository policy no
+longer compete with authentication and diagnostics on one page.
 
 Provider previews are bounded and show forks, archives, visibility, topic and
 allow/deny policy exclusions, and repositories already managed under either

@@ -31,7 +31,17 @@
       {{if .Notice}}<div class="insights-notice" role="status">{{.Notice}}</div>{{end}}
       {{if .Error}}<div class="insights-error" role="alert">{{.Error}}</div>{{end}}
 
+      <nav class="insights-domain-nav" aria-label="Insight areas">
+        <a href="/insights?view=overview{{if .SelectedID}}&repository={{.SelectedID}}{{end}}" {{if eq .View "overview"}}aria-current="page"{{end}}>Quality overview</a>
+        <a href="/insights?view=trends{{if .SelectedID}}&repository={{.SelectedID}}{{end}}" {{if eq .View "trends"}}aria-current="page"{{end}}>Trends &amp; runs</a>
+        <a href="/insights?view=ingestion{{if .SelectedID}}&repository={{.SelectedID}}{{end}}" {{if eq .View "ingestion"}}aria-current="page"{{end}}>Evidence ingestion</a>
+        {{if .CanAdminister}}<a href="/insights?view=integrations{{if .SelectedID}}&repository={{.SelectedID}}{{end}}" {{if eq .View "integrations"}}aria-current="page"{{end}}>Integrations</a>{{end}}
+      </nav>
+
+      <details class="insights-panel" {{if eq .View "overview"}}open{{end}}>
+        <summary class="cursor-pointer font-semibold text-ink-strong">Filters for this insight area</summary>
       <form id="insight-filters" class="insights-filter-panel" action="/insights" method="get">
+        <input type="hidden" name="view" value="{{.View}}">
         <label class="filter-field">
           <span>Repository</span>
           <select name="repository">
@@ -62,7 +72,9 @@
         <label class="insights-check-field"><input type="checkbox" name="include_quarantined" value="true" {{if .Filter.IncludeQuarantined}}checked{{end}}><span>Include quarantined evidence</span></label>
         <button class="insights-primary-button" type="submit">Apply filters</button>
       </form>
+      </details>
 
+      {{if eq .View "overview"}}
       <section class="insights-grid" aria-label="Current insight summary">
         <article class="insights-summary-card">
           <span>Current observations</span>
@@ -130,10 +142,13 @@
           {{end}}
         </section>
       </div>
+      {{end}}
 
+      {{if eq .View "trends"}}
       <section class="insights-panel">
         <header><div><p>Comparable revisions</p><h2>Trend and regression comparison</h2></div><span>Deterministic diff</span></header>
         <form class="insights-inline-form" action="/insights" method="get">
+          <input type="hidden" name="view" value="trends">
           <input type="hidden" name="repository" value="{{.SelectedID}}">
           <label class="filter-field"><span>Baseline revision</span><input name="from_revision" required placeholder="Exact stored commit"></label>
           <label class="filter-field"><span>Target revision</span><input name="to_revision" required value="{{.SelectedRevision}}" placeholder="Exact stored commit"></label>
@@ -147,7 +162,9 @@
         </div>
         {{end}}
       </section>
+      {{end}}
 
+      {{if eq .View "ingestion"}}
       {{if .CanManage}}
       <div class="insights-columns insights-operations">
         <section class="insights-panel">
@@ -196,8 +213,9 @@
         <p class="insights-panel-copy">You can inspect current and historical evidence, but importing reports and deriving new indicators requires the knowledge-maintainer or administrator role.</p>
       </section>
       {{end}}
+      {{end}}
 
-      {{if .CanAdminister}}
+      {{if and .CanAdminister (eq .View "integrations")}}
       <section class="insights-panel">
         <header><div><p>Externally managed</p><h2>SonarQube Community Build</h2></div><span>Read-only Web API</span></header>
         <p class="insights-panel-copy">RepoKarta stores the URL, project mapping, and environment-variable name only. The token value, SonarQube server, database, and scanner stay external.</p>
@@ -224,6 +242,7 @@
       </section>
       {{end}}
 
+      {{if eq .View "trends"}}
       <section class="insights-panel">
         <header><div><p>Audit trail</p><h2>Evidence runs</h2></div><span>{{len .Response.Runs}} retained in view</span></header>
         {{if .Response.Runs}}
@@ -235,6 +254,7 @@
         </div>
         {{else}}<div class="insights-empty"><strong>No evidence runs yet</strong><span>Import a report, sync an external system, or derive bounded committed-source indicators.</span></div>{{end}}
       </section>
+      {{end}}
     </main>
   </body>
 </html>

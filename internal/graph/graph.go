@@ -34,7 +34,7 @@ import (
 )
 
 const (
-	snapshotVersion       = 10
+	snapshotVersion       = 11
 	maximumFiles          = 20_000
 	maximumSourceFiles    = 5_000
 	maximumSourceFileSize = 1 << 20

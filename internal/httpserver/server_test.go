@@ -252,14 +252,12 @@ func TestAdministratorCanPreviewCleanupAndExportDiagnostics(t *testing.T) {
 	}
 	adminCookie := response.Result().Cookies()[0]
 
-	request = httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7331/admin", nil)
+	request = httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7331/admin?section=storage", nil)
 	request.AddCookie(adminCookie)
 	response = httptest.NewRecorder()
 	server.server.Handler.ServeHTTP(response, request)
 	if response.Code != http.StatusOK ||
 		!strings.Contains(response.Body.String(), "Storage and diagnostics") ||
-		!strings.Contains(response.Body.String(), "Repository acquisition") ||
-		!strings.Contains(response.Body.String(), "private-repository") ||
 		!strings.Contains(response.Body.String(), "logs/repokarta.log") {
 		t.Fatalf("admin storage response = %d, body %q", response.Code, response.Body.String())
 	}
@@ -267,6 +265,25 @@ func TestAdministratorCanPreviewCleanupAndExportDiagnostics(t *testing.T) {
 	targetMatch := regexp.MustCompile(`name="target" value="([^"]+)"`).FindStringSubmatch(response.Body.String())
 	if len(csrfMatch) != 2 || len(targetMatch) != 2 {
 		t.Fatalf("storage controls missing: %q", response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7331/admin?section=repositories", nil)
+	request.AddCookie(adminCookie)
+	response = httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK ||
+		!strings.Contains(response.Body.String(), "Repository acquisition") {
+		t.Fatalf("admin repositories response = %d, body %q", response.Code, response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7331/admin?section=access", nil)
+	request.AddCookie(adminCookie)
+	response = httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK ||
+		!strings.Contains(response.Body.String(), "Repository and artifact access") ||
+		!strings.Contains(response.Body.String(), "private-repository") {
+		t.Fatalf("admin access response = %d, body %q", response.Code, response.Body.String())
 	}
 
 	discoveryForm := url.Values{
@@ -1490,11 +1507,11 @@ func TestAPISearchReturnsCompletenessAndPinnedEvidence(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
 		t.Fatal(err)
 	}
-	if !result.Truncated || result.ReturnedFiles != 3 || result.MatchingFiles != 750 || result.TotalFilesExact {
+	if !result.Truncated || result.ReturnedFiles != 1 || result.MatchingFiles != 250 || !result.TotalFilesExact {
 		t.Fatalf("completeness = %#v", result)
 	}
-	if len(result.Matches) != 3 ||
-		result.Matches[0].ResultType != "symbol_definition" ||
+	if len(result.Matches) != 1 ||
+		result.Matches[0].ResultType != "content" ||
 		result.Matches[0].Citation == "" ||
 		result.Matches[0].SourceURL == "" {
 		t.Fatalf("evidence = %#v", result.Matches)
@@ -1514,7 +1531,7 @@ func TestAPISearchReturnsCompletenessAndPinnedEvidence(t *testing.T) {
 	if err := json.Unmarshal(compactResponse.Body.Bytes(), &compact); err != nil {
 		t.Fatal(err)
 	}
-	if !compact.Compact || len(compact.Matches) != 3 || len(compact.Matches[0].Lines) != 1 ||
+	if !compact.Compact || len(compact.Matches) != 1 || len(compact.Matches[0].Lines) != 1 ||
 		compact.Matches[0].Lines[0].Number != 7 || compact.Matches[0].Lines[0].Text != "" ||
 		len(compact.Matches[0].Ranking) != 0 || len(compact.Matches[0].Actions) != 0 ||
 		len(compact.Facets) != 0 {
@@ -2249,6 +2266,7 @@ func TestSearchAndChatRenderAsSeparatePages(t *testing.T) {
 		`data-expanded="false"`,
 		`aria-label="Open repositories"`,
 		`id="repository-drawer-panel" class="repository-drawer-panel" aria-hidden="true" inert`,
+		`<option value="zoekt" selected>Zoekt syntax</option>`,
 	} {
 		if !strings.Contains(searchBody, expected) {
 			t.Fatalf("search page does not contain %q", expected)

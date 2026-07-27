@@ -1,5 +1,28 @@
 import htmx from "htmx.org";
-import hljs from "highlight.js/lib/common";
+import hljs from "highlight.js/lib/core";
+import bash from "highlight.js/lib/languages/bash";
+import c from "highlight.js/lib/languages/c";
+import cpp from "highlight.js/lib/languages/cpp";
+import csharp from "highlight.js/lib/languages/csharp";
+import css from "highlight.js/lib/languages/css";
+import diff from "highlight.js/lib/languages/diff";
+import go from "highlight.js/lib/languages/go";
+import groovy from "highlight.js/lib/languages/groovy";
+import ini from "highlight.js/lib/languages/ini";
+import java from "highlight.js/lib/languages/java";
+import javascript from "highlight.js/lib/languages/javascript";
+import json from "highlight.js/lib/languages/json";
+import kotlin from "highlight.js/lib/languages/kotlin";
+import markdown from "highlight.js/lib/languages/markdown";
+import php from "highlight.js/lib/languages/php";
+import plaintext from "highlight.js/lib/languages/plaintext";
+import python from "highlight.js/lib/languages/python";
+import ruby from "highlight.js/lib/languages/ruby";
+import rust from "highlight.js/lib/languages/rust";
+import sql from "highlight.js/lib/languages/sql";
+import typescript from "highlight.js/lib/languages/typescript";
+import xml from "highlight.js/lib/languages/xml";
+import yaml from "highlight.js/lib/languages/yaml";
 import DOMPurify from "dompurify";
 import { marked } from "marked";
 import { createFrameBatcher } from "./frame-batcher.mjs";
@@ -12,6 +35,36 @@ import { parseRepoKartaContextURL } from "./context-url.mjs";
 import { applyQueryCompletion, type QueryCompletionEdit } from "./query-completion.mjs";
 import { wikiPrimaryAction } from "./wiki-run-state.mjs";
 import "./styles.css";
+
+const highlightedLanguages: Array<[string, typeof bash, string[]]> = [
+  ["bash", bash, ["sh", "shell", "zsh"]],
+  ["c", c, []],
+  ["cpp", cpp, ["cc", "cxx", "hpp"]],
+  ["csharp", csharp, ["cs"]],
+  ["css", css, []],
+  ["diff", diff, ["patch"]],
+  ["go", go, ["golang"]],
+  ["groovy", groovy, ["gradle"]],
+  ["ini", ini, ["toml", "properties"]],
+  ["java", java, []],
+  ["javascript", javascript, ["js", "jsx", "mjs", "cjs"]],
+  ["json", json, []],
+  ["kotlin", kotlin, ["kt", "kts"]],
+  ["markdown", markdown, ["md"]],
+  ["php", php, []],
+  ["plaintext", plaintext, ["text", "txt"]],
+  ["python", python, ["py"]],
+  ["ruby", ruby, ["rb"]],
+  ["rust", rust, ["rs"]],
+  ["sql", sql, []],
+  ["typescript", typescript, ["ts", "tsx"]],
+  ["xml", xml, ["html", "htm", "svg"]],
+  ["yaml", yaml, ["yml"]]
+];
+highlightedLanguages.forEach(([name, language, aliases]) => {
+  hljs.registerLanguage(name, language);
+  hljs.registerAliases(aliases, { languageName: name });
+});
 
 htmx.config.allowEval = false;
 

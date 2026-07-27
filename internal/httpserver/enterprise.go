@@ -453,6 +453,7 @@ func (s *Server) updateUserRole(response http.ResponseWriter, request *http.Requ
 	}
 	if err != nil {
 		data := s.adminData(request.Context(), csrf)
+		data.Section = "identity"
 		data.Error = err.Error()
 		response.WriteHeader(http.StatusBadRequest)
 		s.renderAdmin(response, data)
@@ -461,6 +462,7 @@ func (s *Server) updateUserRole(response http.ResponseWriter, request *http.Requ
 	}
 	s.recordAdminEvent(request, "role.user.assign", "identity", user.ID, "success", map[string]string{"role": string(user.Role)})
 	data := s.adminData(request.Context(), csrf)
+	data.Section = "identity"
 	data.Notice = "User role saved and effective for new requests."
 	s.renderAdmin(response, data)
 }
@@ -477,6 +479,7 @@ func (s *Server) updateGroupRole(response http.ResponseWriter, request *http.Req
 	}
 	if err != nil {
 		data := s.adminData(request.Context(), csrf)
+		data.Section = "identity"
 		data.Error = err.Error()
 		response.WriteHeader(http.StatusBadRequest)
 		s.renderAdmin(response, data)
@@ -485,6 +488,7 @@ func (s *Server) updateGroupRole(response http.ResponseWriter, request *http.Req
 	}
 	s.recordAdminEvent(request, "role.group.assign", "identity-group", group.ID, "success", map[string]string{"role": string(group.Role)})
 	data := s.adminData(request.Context(), csrf)
+	data.Section = "identity"
 	data.Notice = "SCIM group role saved and effective for new requests."
 	s.renderAdmin(response, data)
 }
@@ -500,6 +504,7 @@ func (s *Server) addRoleMapping(response http.ResponseWriter, request *http.Requ
 	}
 	if err := s.enterprise.SetRoleMapping(request.Context(), mapping); err != nil {
 		data := s.adminData(request.Context(), csrf)
+		data.Section = "identity"
 		data.Error = err.Error()
 		response.WriteHeader(http.StatusBadRequest)
 		s.renderAdmin(response, data)
@@ -508,6 +513,7 @@ func (s *Server) addRoleMapping(response http.ResponseWriter, request *http.Requ
 	}
 	s.recordAdminEvent(request, "role.mapping.set", "role-mapping", mapping.Provider+":"+mapping.GroupValue, "success", map[string]string{"role": string(mapping.Role)})
 	data := s.adminData(request.Context(), csrf)
+	data.Section = "identity"
 	data.Notice = "Identity-provider group mapping saved and effective for new requests."
 	s.renderAdmin(response, data)
 }
@@ -523,6 +529,7 @@ func (s *Server) deleteRoleMapping(response http.ResponseWriter, request *http.R
 	}
 	if err != nil {
 		data := s.adminData(request.Context(), csrf)
+		data.Section = "identity"
 		data.Error = "Invalid role mapping"
 		response.WriteHeader(http.StatusBadRequest)
 		s.renderAdmin(response, data)
@@ -530,6 +537,7 @@ func (s *Server) deleteRoleMapping(response http.ResponseWriter, request *http.R
 	}
 	s.recordAdminEvent(request, "role.mapping.delete", "role-mapping", strconv.FormatInt(id, 10), "success", nil)
 	data := s.adminData(request.Context(), csrf)
+	data.Section = "identity"
 	data.Notice = "Identity-provider group mapping removed."
 	s.renderAdmin(response, data)
 }
@@ -543,6 +551,7 @@ func (s *Server) updateAuditRetention(response http.ResponseWriter, request *htt
 	maxEvents, maxErr := strconv.Atoi(request.FormValue("max_events"))
 	if daysErr != nil || maxErr != nil {
 		data := s.adminData(request.Context(), csrf)
+		data.Section = "identity"
 		data.Error = "Retention values must be integers."
 		response.WriteHeader(http.StatusBadRequest)
 		s.renderAdmin(response, data)
@@ -551,6 +560,7 @@ func (s *Server) updateAuditRetention(response http.ResponseWriter, request *htt
 	removed, err := s.enterprise.SetAuditRetention(request.Context(), days, maxEvents)
 	if err != nil {
 		data := s.adminData(request.Context(), csrf)
+		data.Section = "identity"
 		data.Error = err.Error()
 		response.WriteHeader(http.StatusBadRequest)
 		s.renderAdmin(response, data)
@@ -561,6 +571,7 @@ func (s *Server) updateAuditRetention(response http.ResponseWriter, request *htt
 		"removed_events": strconv.FormatInt(removed, 10),
 	})
 	data := s.adminData(request.Context(), csrf)
+	data.Section = "identity"
 	data.Notice = "Audit retention saved; removed " + strconv.FormatInt(removed, 10) + " expired events."
 	s.renderAdmin(response, data)
 }

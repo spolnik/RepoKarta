@@ -148,7 +148,7 @@ func TestReaderCannotMutateInsightsAndDoesNotSeeMutationControls(t *testing.T) {
 		t.Fatalf("reader derive status = %d, calls = %d, body = %s", response.Code, evidence.deriveCalls, response.Body.String())
 	}
 
-	request = httptest.NewRequest(http.MethodGet, "https://repo.example.com/insights?repository=8", nil)
+	request = httptest.NewRequest(http.MethodGet, "https://repo.example.com/insights?repository=8&view=ingestion", nil)
 	response = httptest.NewRecorder()
 	server.server.Handler.ServeHTTP(response, request)
 	if response.Code != http.StatusOK ||

@@ -1383,7 +1383,8 @@ func (s *Service) referenceResult(
 			if len(request.RelationKinds) > 0 && !containsFold(request.RelationKinds, relation.Kind) {
 				continue
 			}
-			if !relationMatchesSymbol(relation.Target, symbol) {
+			if !relationMatchesSymbol(relation.Target, symbol) &&
+				!relationMatchesSymbol(relation.Receiver, symbol) {
 				continue
 			}
 			key := strconv.FormatInt(document.RepositoryID, 10) + "\x00" + document.Path

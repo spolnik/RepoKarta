@@ -837,6 +837,10 @@ func (s *Server) apiSearch(response http.ResponseWriter, request *http.Request) 
 		return
 	}
 	repositoryID, repositoryName := repositorySelector(request.URL.Query().Get("repo"))
+	mode := strings.TrimSpace(request.URL.Query().Get("mode"))
+	if mode == "" {
+		mode = "zoekt"
+	}
 	result, err := s.intelligence.Search(request.Context(), codeintel.SearchRequest{
 		Query:        request.URL.Query().Get("q"),
 		RepositoryID: repositoryID,
@@ -844,7 +848,7 @@ func (s *Server) apiSearch(response http.ResponseWriter, request *http.Request) 
 		Language:     request.URL.Query().Get("lang"),
 		Path:         request.URL.Query().Get("path"),
 		File:         request.URL.Query().Get("file"),
-		Mode:         request.URL.Query().Get("mode"),
+		Mode:         mode,
 		Limit:        limit,
 		Compact:      compact,
 	})
@@ -1749,13 +1753,17 @@ func (s *Server) search(response http.ResponseWriter, request *http.Request) {
 			break
 		}
 	}
+	mode := strings.TrimSpace(request.URL.Query().Get("mode"))
+	if mode == "" {
+		mode = "zoekt"
+	}
 	query := search.Query{
 		Text:       strings.TrimSpace(request.URL.Query().Get("q")),
 		Repository: repositoryName,
 		Language:   strings.TrimSpace(request.URL.Query().Get("lang")),
 		Path:       strings.TrimSpace(request.URL.Query().Get("path")),
 		File:       strings.TrimSpace(request.URL.Query().Get("file")),
-		Mode:       strings.TrimSpace(request.URL.Query().Get("mode")),
+		Mode:       mode,
 		Limit:      parseSearchLimit(request.URL.Query().Get("limit")),
 	}
 	data.Search.Query = query

@@ -482,7 +482,7 @@ func TestSnapshotRegeneratesUnsupportedCachedArtifact(t *testing.T) {
 	}
 	unsupported := bytes.ReplaceAll(
 		mustReadGraphFile(t, files[0]),
-		[]byte(`"version": 7`),
+		[]byte(fmt.Sprintf(`"version": %d`, ArtifactVersion)),
 		[]byte(`"version": 999`),
 	)
 	unsupported = append(unsupported, []byte("\nunsupported-marker")...)
@@ -498,7 +498,7 @@ func TestSnapshotRegeneratesUnsupportedCachedArtifact(t *testing.T) {
 	}
 	content := mustReadGraphFile(t, files[0])
 	if bytes.Contains(content, []byte("unsupported-marker")) ||
-		!bytes.Contains(content, []byte(`"version": 10`)) {
+		!bytes.Contains(content, []byte(fmt.Sprintf(`"version": %d`, ArtifactVersion))) {
 		t.Fatalf("unsupported cache was not regenerated: %s", content)
 	}
 }
