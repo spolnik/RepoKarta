@@ -259,7 +259,7 @@
 
 {{define "dependency-topology-content"}}
 <div class="mt-6" data-topology-workspace data-topology-api="{{.APIURL}}">
-  <dl class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8">
+  <dl class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-9">
     <div class="topology-metric"><dt>Components</dt><dd>{{.Topology.Summary.ComponentCount}}</dd></div>
     <div class="topology-metric"><dt>Connections</dt><dd>{{.Topology.Summary.ConnectionCount}}</dd></div>
     <div class="topology-metric topology-metric-confirmed"><dt>Confirmed</dt><dd>{{.Topology.Summary.ConfirmedCount}}</dd></div>
@@ -268,8 +268,16 @@
     <div class="topology-metric"><dt>Services</dt><dd>{{.Topology.Summary.ServiceCount}}</dd></div>
     <div class="topology-metric"><dt>Resources</dt><dd>{{.Topology.Summary.ResourceCount}}</dd></div>
     <div class="topology-metric topology-metric-unresolved"><dt>Unresolved peers</dt><dd>{{.Topology.Summary.UnresolvedCount}}</dd></div>
+    <div class="topology-metric topology-metric-unresolved"><dt>Unresolved placeholders</dt><dd>{{.Topology.Summary.UnresolvedPlaceholderCount}}</dd></div>
   </dl>
 
+  {{if .Topology.Summary.UnresolvedPlaceholderCount}}
+  <p class="mt-5 rounded-lg border border-amber-300/20 bg-amber-400/[0.06] px-4 py-3 text-sm text-amber-100">
+    <strong>{{.Topology.Summary.UnresolvedPlaceholderCount}}</strong>
+    environment-variable connection {{if eq .Topology.Summary.UnresolvedPlaceholderCount 1}}target remains{{else}}targets remain{{end}} unresolved.
+    Index the fleet's deployment-configuration repositories to resolve committed Kubernetes, Helm, Terraform/CDK, and Compose assignments.
+  </p>
+  {{end}}
   {{if .Topology.BuildProgress.PendingRepositories}}
   <p class="mt-5 rounded-lg border border-sky-300/20 bg-sky-400/[0.06] px-4 py-3 text-sm text-sky-100" role="status">
     Building topology artifacts in parallel:

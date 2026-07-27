@@ -15,6 +15,7 @@ import (
 
 	"github.com/spolnik/RepoKarta/internal/catalog"
 	"go.yaml.in/yaml/v4"
+	"golang.org/x/net/publicsuffix"
 )
 
 const topologyEvidenceLimit = 12
@@ -38,6 +39,12 @@ var (
 	topologyMCPServerIndicator = regexp.MustCompile(
 		`(?i)(?:@modelcontextprotocol/sdk|mcpserver|mcp\.newserver|servercapabilities|streamablehttpservertransport|handlefunc\(\s*["'` + "`" + `](?:post )?/mcp)`,
 	)
+	topologyPlaceholderPattern = regexp.MustCompile(
+		`\$\{([A-Z][A-Z0-9_]*)(?::([^}]+))?\}`,
+	)
+	genericExternalHostLabels = map[string]bool{
+		"api": true, "auth": true, "www": true, "app": true, "gateway": true,
+	}
 )
 
 // addDistributedTopology extracts service/resource interactions from committed
@@ -103,13 +110,15 @@ func (b *builder) addDistributedTopology(
 	}
 	b.addBackstageTopology(repository, revision, contents, defaultID)
 	b.addComposeTopology(repository, revision, contents, defaultID)
+	b.addEnvironmentAssignments(repository, revision, contents)
 
 	paths := make([]string, 0, len(contents))
 	for filePath := range contents {
-		if isTopologyTestArtifact(filePath) {
+		if isTopologyAssignmentExcluded(filePath) {
 			continue
 		}
-		if isAnalyzedSource(filePath) || isServiceConfiguration(filePath) || isTopologyFile(filePath) {
+		if isAnalyzedSource(filePath) || isServiceConfiguration(filePath) ||
+			isTopologyFile(filePath) || isPotentialEnvironmentAssignmentFile(filePath) {
 			paths = append(paths, filePath)
 		}
 	}
@@ -144,8 +153,24 @@ func (b *builder) addDetectedConnections(
 		}
 		lower := strings.ToLower(line)
 		confidence := sourceConfidence(filePath)
+		if topologyPlaceholderConsumerLine(line, filePath) {
+			for _, match := range topologyPlaceholderPattern.FindAllStringSubmatch(line, -1) {
+				defaultValue := ""
+				if len(match) > 2 {
+					defaultValue = strings.TrimSpace(match[2])
+				}
+				b.topologyPlaceholders = append(b.topologyPlaceholders, TopologyPlaceholder{
+					Source: sourceID, Variable: match[1], Default: defaultValue,
+					Protocol: "http", Interaction: "calls",
+					ConsumptionEvidence: b.evidence(
+						repository, revision, filePath, lineNumber, match[0],
+					),
+				})
+			}
+		}
+		literalLine := topologyPlaceholderPattern.ReplaceAllString(line, "")
 
-		for _, match := range topologyDatabaseURLPattern.FindAllStringSubmatch(line, -1) {
+		for _, match := range topologyDatabaseURLPattern.FindAllStringSubmatch(literalLine, -1) {
 			parsed, err := url.Parse(match[0])
 			if err != nil || parsed.Scheme == "" {
 				continue
@@ -168,7 +193,7 @@ func (b *builder) addDetectedConnections(
 			})
 		}
 
-		for _, match := range topologyGRPCTargetPattern.FindAllStringSubmatch(line, -1) {
+		for _, match := range topologyGRPCTargetPattern.FindAllStringSubmatch(literalLine, -1) {
 			targetName := topologyPeerName(match[1])
 			if targetName == "" {
 				continue
@@ -204,7 +229,7 @@ func (b *builder) addDetectedConnections(
 		if isMCPConfig || !httpClientLine(lower, filePath) {
 			continue
 		}
-		for _, raw := range topologyURLPattern.FindAllString(line, -1) {
+		for _, raw := range topologyURLPattern.FindAllString(literalLine, -1) {
 			parsed, err := url.Parse(raw)
 			if err != nil || parsed.Hostname() == "" {
 				continue
@@ -213,21 +238,48 @@ func (b *builder) addDetectedConnections(
 			if isLoopbackHost(host) {
 				continue
 			}
-			targetName := topologyPeerName(host)
-			if targetName == "" || infrastructureHosts[targetName] {
-				continue
+			target, targetResolved := b.knownServiceTarget(host, sourceID)
+			if !targetResolved {
+				targetName := topologyExternalPeerName(host)
+				if targetName == "" || infrastructureHosts[targetName] {
+					continue
+				}
+				target = b.externalSystemComponent(
+					"service", targetName, "HTTP",
+					[]string{targetName, host, normalizeServiceName(host)},
+				)
 			}
-			target := b.externalSystemComponent(
-				"service", targetName, "HTTP", []string{targetName, host},
-			)
 			b.addSystemConnection(SystemConnection{
 				Source: sourceID, Target: target, Protocol: "http",
 				Interaction: "calls", Transport: strings.ToLower(parsed.Scheme),
 				Confidence: confidence, EvidenceOrigin: "static",
-				Evidence: []Evidence{b.evidence(repository, revision, filePath, lineNumber, raw)},
+				TargetResolved: targetResolved,
+				Evidence:       []Evidence{b.evidence(repository, revision, filePath, lineNumber, raw)},
 			})
 		}
 	}
+}
+
+func topologyPlaceholderConsumerLine(line, filePath string) bool {
+	lower := strings.ToLower(line)
+	if !isServiceConfiguration(filePath) && !isTopologyFile(filePath) &&
+		!isPotentialEnvironmentAssignmentFile(filePath) {
+		return false
+	}
+	if httpClientLine(lower, filePath) {
+		return true
+	}
+	for _, match := range topologyPlaceholderPattern.FindAllStringSubmatch(line, -1) {
+		if len(match) > 1 && nameShapeServiceCandidate(strings.ToUpper(match[1])) != "" {
+			return true
+		}
+	}
+	for _, marker := range []string{"route", "upstream", "client", "peer"} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func isKafkaSource(filePath string, content []byte) bool {
@@ -335,6 +387,28 @@ func topologyPeerName(value string) string {
 		value = host
 	}
 	return normalizeServiceName(value)
+}
+
+func topologyExternalPeerName(host string) string {
+	host = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
+	if host == "" {
+		return ""
+	}
+	if net.ParseIP(host) != nil || !strings.Contains(host, ".") {
+		name := normalizeServiceName(host)
+		if genericExternalHostLabels[name] {
+			return ""
+		}
+		return name
+	}
+	if name, err := publicsuffix.EffectiveTLDPlusOne(host); err == nil && name != "" {
+		return name
+	}
+	labels := strings.Split(host, ".")
+	if len(labels) >= 2 {
+		return strings.Join(labels[len(labels)-2:], ".")
+	}
+	return host
 }
 
 func isLoopbackHost(host string) bool {
@@ -466,6 +540,20 @@ func (b *builder) addSystemConnection(connection SystemConnection) {
 			existing.Confidence = connection.Confidence
 		}
 		existing.TargetResolved = existing.TargetResolved || connection.TargetResolved
+		if existing.ResolutionTier == "" {
+			existing.ResolutionTier = connection.ResolutionTier
+		}
+		if existing.EnvironmentVariable == "" {
+			existing.EnvironmentVariable = connection.EnvironmentVariable
+		}
+		if existing.Environment == "" {
+			existing.Environment = connection.Environment
+		}
+		existing.ResolutionDivergent =
+			existing.ResolutionDivergent || connection.ResolutionDivergent
+		if existing.UnresolvedReason == "" {
+			existing.UnresolvedReason = connection.UnresolvedReason
+		}
 		b.connections[connection.ID] = existing
 		return
 	}
@@ -476,6 +564,7 @@ func systemConnectionID(connection SystemConnection) string {
 	return "connection:" + normalizeID(strings.Join([]string{
 		connection.Source, connection.Target, connection.Protocol,
 		connection.Interaction, connection.Transport, connection.EvidenceOrigin,
+		connection.Environment,
 	}, ":"))
 }
 
@@ -531,6 +620,20 @@ func (b *builder) resolveSystemConnections() {
 		if existing, ok := resolved[connection.ID]; ok {
 			existing.Evidence = appendUniqueEvidence(existing.Evidence, connection.Evidence...)
 			existing.TargetResolved = existing.TargetResolved || connection.TargetResolved
+			if existing.ResolutionTier == "" {
+				existing.ResolutionTier = connection.ResolutionTier
+			}
+			if existing.EnvironmentVariable == "" {
+				existing.EnvironmentVariable = connection.EnvironmentVariable
+			}
+			if existing.Environment == "" {
+				existing.Environment = connection.Environment
+			}
+			existing.ResolutionDivergent =
+				existing.ResolutionDivergent || connection.ResolutionDivergent
+			if existing.UnresolvedReason == "" {
+				existing.UnresolvedReason = connection.UnresolvedReason
+			}
 			if confidenceRank(connection.Confidence) > confidenceRank(existing.Confidence) {
 				existing.Confidence = connection.Confidence
 			}

@@ -14,6 +14,7 @@ require (
 	github.com/scip-code/scip/bindings/go/scip v0.9.0
 	github.com/sourcegraph/zoekt v0.0.0-20260724095353-2b2ce2e398e6
 	go.yaml.in/yaml/v4 v4.0.0-rc.2
+	golang.org/x/net v0.53.0
 	google.golang.org/protobuf v1.36.11
 	modernc.org/sqlite v1.54.0
 )
@@ -99,7 +100,6 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.27.0 // indirect
 	golang.org/x/crypto v0.50.0 // indirect
-	golang.org/x/net v0.53.0 // indirect
 	golang.org/x/oauth2 v0.35.0 // indirect
 	golang.org/x/sync v0.21.0 // indirect
 	golang.org/x/sys v0.46.0 // indirect

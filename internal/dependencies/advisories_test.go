@@ -117,6 +117,58 @@ func TestFindingsPreferResolvedVersionsAndPreserveTriageScope(t *testing.T) {
 	}
 }
 
+func TestGradleCatalogVulnerabilityCitesExactLibraryEntry(t *testing.T) {
+	inventory := graph.Snapshot{
+		Repositories: []graph.Repository{{ID: 1, Name: "service", Revision: "abc123"}},
+		Manifests: []graph.Manifest{{
+			RepositoryID: 1,
+			Repository:   "service",
+			Kind:         "Gradle project",
+			Path:         "build.gradle",
+			Declarations: []graph.DependencyDeclaration{{
+				Ecosystem:  "maven",
+				Package:    "org.apache.kafka:kafka-clients",
+				Declared:   "3.9.0",
+				Resolution: "exact",
+				Usage:      "production",
+				Evidence: findingEvidence(
+					"gradle/libs.versions.toml",
+					17,
+				),
+			}},
+		}},
+	}
+	advisories := fixtureSnapshot(
+		inventory,
+		OSVAdvisory{
+			ID:               "GHSA-gradle-catalog",
+			DatabaseSpecific: map[string]any{"severity": "HIGH"},
+			Affected: []OSVAffected{{
+				Package: OSVPackage{
+					Ecosystem: "Maven",
+					Name:      "org.apache.kafka:kafka-clients",
+				},
+				Ranges: []OSVRange{{
+					Type: "ECOSYSTEM",
+					Events: []OSVEvent{
+						{Introduced: "3.0.0"},
+						{Fixed: "4.0.0"},
+					},
+				}},
+			}},
+		},
+	)
+	response := buildFindings(
+		inventory, &advisories, nil, AdvisoryOptions{}, advisories.RetrievedAt,
+	)
+	if len(response.Findings) != 1 ||
+		response.Findings[0].ManifestPath != "gradle/libs.versions.toml" ||
+		response.Findings[0].ManifestEvidence.Path != "gradle/libs.versions.toml" ||
+		response.Findings[0].ManifestEvidence.Line != 17 {
+		t.Fatalf("Gradle catalog finding cites the accessor instead of its declaration: %#v", response.Findings)
+	}
+}
+
 func TestFindingsAreByteDeterministicForSnapshotAndInventory(t *testing.T) {
 	first := graph.DependencyDeclaration{
 		Ecosystem: "npm", Package: "alpha", Resolved: "1.0.0",

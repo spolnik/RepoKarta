@@ -1507,6 +1507,7 @@ func TestDependencyTopologyIsDefaultAndExposesDirectedProtocolEvidence(t *testin
 	}
 	for _, expected := range []string{
 		`System topology`, `Who talks to what, and how`, `HTTP`, `MCP`,
+		`Unresolved placeholders`,
 		`data-topology-workspace`, `/api/dependencies/topology?repository=4`,
 	} {
 		if !strings.Contains(pageResponse.Body.String(), expected) {

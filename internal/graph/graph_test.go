@@ -147,6 +147,101 @@ func TestReadRouteSnapshotUsesOnlyPreparedArtifacts(t *testing.T) {
 	}
 }
 
+func TestReadTopologySnapshotResolvesPlaceholderAcrossPreparedRepositoryArtifacts(t *testing.T) {
+	repositories := []catalog.Repository{
+		{ID: 71, Name: "checkout", IndexedCommit: strings.Repeat("a", 40)},
+		{ID: 72, Name: "fleet-infra", IndexedCommit: strings.Repeat("b", 40)},
+		{ID: 73, Name: "billing-service", IndexedCommit: strings.Repeat("c", 40)},
+	}
+	directory := filepath.Join(t.TempDir(), "maps")
+	service, err := New(
+		multiGraphStore{repositories: repositories},
+		directory,
+		"http://127.0.0.1:7331",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	builders := []*builder{
+		newBuilder("http://127.0.0.1:7331"),
+		newBuilder("http://127.0.0.1:7331"),
+		newBuilder("http://127.0.0.1:7331"),
+	}
+	builders[0].addDistributedTopology(
+		repositories[0], repositories[0].IndexedCommit, "README.md",
+		map[string][]byte{
+			"README.md": []byte("# Checkout"),
+			"src/main/resources/application.yml": []byte(`
+routes:
+  billing-service: ${BILLING_SERVICE_URL}
+`),
+		},
+	)
+	builders[1].addDistributedTopology(
+		repositories[1], repositories[1].IndexedCommit, "README.md",
+		map[string][]byte{
+			"README.md": []byte("# Fleet infrastructure"),
+			"deploy/production/values.yaml": []byte(`
+BILLING_SERVICE_URL: http://billing-service.production.svc.cluster.local
+`),
+		},
+	)
+	builders[2].addDistributedTopology(
+		repositories[2], repositories[2].IndexedCommit, "README.md",
+		map[string][]byte{"README.md": []byte("# Billing")},
+	)
+	for index, builder := range builders {
+		snapshot := builder.snapshot("repository-artifact")
+		snapshot.Scope = Scope{
+			Kind: "repository", Complete: true,
+			TotalRepositories: 1, AnalyzedRepositories: 1,
+			RequestedRepositoryID: repositories[index].ID,
+		}
+		content, marshalErr := json.Marshal(snapshot)
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		if writeErr := os.WriteFile(
+			service.repositorySnapshotPath(repositories[index]), content, 0o600,
+		); writeErr != nil {
+			t.Fatal(writeErr)
+		}
+	}
+
+	snapshot, progress, err := service.ReadTopologySnapshot(t.Context(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection, found := placeholderConnection(snapshot.Connections, "BILLING_SERVICE_URL")
+	if !found || connection.ResolutionTier != "cross_repository_assignment" ||
+		connection.Confidence != "high" || !connection.TargetResolved ||
+		componentByID(snapshot.Components, connection.Target).Name != "billing-service" ||
+		len(connection.Evidence) != 2 || progress.PendingRepositories != 0 {
+		t.Fatalf("fleet artifact resolution = %+v, progress = %+v", connection, progress)
+	}
+
+	selected, selectedProgress, err := service.ReadTopologySnapshot(
+		t.Context(), repositories[0].ID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selectedConnection, found := placeholderConnection(
+		selected.Connections, "BILLING_SERVICE_URL",
+	)
+	if !found || selectedConnection.ResolutionTier != "cross_repository_assignment" ||
+		!selectedConnection.TargetResolved ||
+		componentByID(selected.Components, selectedConnection.Target).Name != "billing-service" ||
+		selected.Scope.TotalRepositories != 1 ||
+		selectedProgress.RequestedRepositories != 1 {
+		t.Fatalf(
+			"repository-scoped fleet resolution = %+v, scope = %+v, progress = %+v",
+			selectedConnection, selected.Scope, selectedProgress,
+		)
+	}
+}
+
 func TestStructuralIndexIsPreparedInBackgroundAndReadWithoutBuilding(t *testing.T) {
 	root, revision := javaGraphFixture(t, map[string]string{
 		"src/main/java/com/acme/PaymentJob.java": `package com.acme;
@@ -659,6 +754,39 @@ spring:
 			t.Fatalf("Gradle dependencies %v do not contain %q", gradleManifest.Dependencies, coordinate)
 		}
 	}
+	for _, expected := range []struct {
+		pkg  string
+		path string
+		line int
+	}{
+		{
+			pkg:  "org.apache.kafka:kafka-clients",
+			path: "gradle/libs.versions.toml",
+			line: 5,
+		},
+		{
+			pkg:  "com.fasterxml.jackson.core:jackson-databind",
+			path: "build.gradle",
+			line: 7,
+		},
+	} {
+		declarationIndex := slices.IndexFunc(
+			gradleManifest.Declarations,
+			func(declaration DependencyDeclaration) bool {
+				return declaration.Package == expected.pkg
+			},
+		)
+		if declarationIndex < 0 {
+			t.Fatalf("missing declaration for %s: %#v", expected.pkg, gradleManifest.Declarations)
+		}
+		evidence := gradleManifest.Declarations[declarationIndex].Evidence
+		if evidence.Path != expected.path || evidence.Line != expected.line {
+			t.Fatalf(
+				"%s evidence = %s:%d, want %s:%d",
+				expected.pkg, evidence.Path, evidence.Line, expected.path, expected.line,
+			)
+		}
+	}
 	calls := make(map[string]Evidence)
 	for _, edge := range snapshot.Edges {
 		if edge.Kind != "service_call" {
@@ -826,9 +954,17 @@ dependencies {
     ksp(libs.moshi.codegen)
     testImplementation(project(":contract-tests"))
 }`)
-	catalog := map[string]string{
-		"jackson.bom":   "com.fasterxml.jackson:jackson-bom:2.18.4",
-		"moshi.codegen": "com.squareup.moshi:moshi-kotlin-codegen:1.15.2",
+	catalog := map[string]gradleCatalogReference{
+		"jackson.bom": {
+			coordinate: "com.fasterxml.jackson:jackson-bom:2.18.4",
+			path:       "gradle/libs.versions.toml",
+			line:       4,
+		},
+		"moshi.codegen": {
+			coordinate: "com.squareup.moshi:moshi-kotlin-codegen:1.15.2",
+			path:       "gradle/libs.versions.toml",
+			line:       5,
+		},
 	}
 	dependencies = parseGradleDependencies(kotlin, catalog, nil)
 	coordinates = coordinates[:0]

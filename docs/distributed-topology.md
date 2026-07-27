@@ -52,6 +52,27 @@ The current extractors recognize:
 - Backstage component `dependsOn` and `consumesApis` relations;
 - explicit `.repokarta.yml` topology declarations.
 
+Environment-variable targets are preserved and resolved before component
+naming. `${VAR:default}` uses its in-file default. Otherwise RepoKarta searches
+the indexed fleet for exact `VAR=value`, JSON, YAML, Kubernetes `name`/`value`,
+Terraform/CDK, Helm, and Compose assignments. Deployment configuration outranks
+application defaults, which outrank other recognized configuration. Test,
+fixture, snapshot, generated, history, changelog, and documentation paths never
+supply assignments.
+
+Each assignment-resolved connection cites both the placeholder consumption and
+the commit-pinned assignment. Equivalent staging and production values collapse
+to one target with the highest-ranked assignment; divergent targets remain
+separate, carry environment qualifiers when the path supplies one, and expose
+divergence metadata. Vault or secret-manager indirection remains an honest
+unresolved placeholder. Only an unassigned `<NAME>_URL`, `<NAME>_BASE_URL`, or
+`<NAME>_HOST` may fall back to a known service alias, at low confidence.
+
+Resolved values are named after fleet reconciliation. Known internal services
+retain their short name. External hosts use the registrable domain and retain
+the full host as an alias, so generic labels such as `api`, `auth`, `www`, `app`,
+and `gateway` do not become standalone component names.
+
 Only aliases with one kind-compatible target are reconciled. A database or
 Kafka topic called `orders` never resolves to an application service called
 `orders`. Ambiguous service aliases remain external and unresolved.

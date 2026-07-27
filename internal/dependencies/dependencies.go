@@ -196,7 +196,7 @@ func normalizedDeclarations(snapshot graph.Snapshot) []Declaration {
 				Repository:       manifest.Repository,
 				Revision:         firstNonEmpty(evidence.Revision, revisions[manifest.RepositoryID]),
 				ManifestKind:     manifest.Kind,
-				ManifestPath:     manifest.Path,
+				ManifestPath:     firstNonEmpty(evidence.Path, manifest.Path),
 				Ecosystem:        firstNonEmpty(dependency.Ecosystem, ecosystemForManifest(manifest.Kind)),
 				Package:          dependency.Package,
 				Declared:         dependency.Declared,

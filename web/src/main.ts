@@ -6506,6 +6506,11 @@ type TopologyConnectionPayload = {
   state: "confirmed" | "static_only" | "runtime_only";
   origins: string[];
   target_resolved: boolean;
+  environment_variable?: string;
+  resolution_tier?: string;
+  environment?: string;
+  resolution_divergent?: boolean;
+  unresolved_reason?: string;
   evidence?: TopologyEvidence[];
   runtime?: TopologyRuntimePayload;
 };
@@ -6613,8 +6618,12 @@ function enableDependencyTopology(debug?: DebugLogger): void {
     metadata([
       ["Confidence", edge.confidence],
       ["Peer identity", edge.target_resolved ? "Resolved" : "Unresolved"],
+      ["Placeholder", edge.environment_variable],
+      ["Resolution tier", edge.resolution_tier?.replaceAll("_", " ")],
+      ["Environment", edge.environment || runtime?.environment],
+      ["Divergent assignments", edge.resolution_divergent ? "Yes" : undefined],
+      ["Unresolved reason", edge.unresolved_reason?.replaceAll("_", " ")],
       ["Provider", runtime?.provider],
-      ["Environment", runtime?.environment],
       ["Requests", runtime?.request_count],
       ["Errors", runtime?.error_count],
       ["Error rate", runtime ? `${(runtime.error_rate * 100).toFixed(2)}%` : undefined],

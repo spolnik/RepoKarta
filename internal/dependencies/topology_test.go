@@ -2,6 +2,7 @@ package dependencies
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -180,5 +181,48 @@ func TestEmptyTopologyUsesJSONArrays(t *testing.T) {
 	if topology.Components == nil || topology.Connections == nil ||
 		topology.Protocols == nil || topology.Providers == nil || topology.Environments == nil {
 		t.Fatalf("empty topology must serialize collections as arrays: %+v", topology)
+	}
+}
+
+func TestTopologyReportsAndFiltersStaticPlaceholderMetadata(t *testing.T) {
+	snapshot := graph.Snapshot{
+		ID: "placeholder-summary",
+		Components: []graph.SystemComponent{
+			{ID: "checkout", Name: "checkout", Kind: "service"},
+			{ID: "unresolved", Name: "${BILLING_SERVICE_URL}", Kind: "service", External: true},
+			{ID: "stripe", Name: "stripe.com", Kind: "service", External: true},
+		},
+		Connections: []graph.SystemConnection{
+			{
+				ID: "unresolved-edge", Source: "checkout", Target: "unresolved",
+				Protocol: "http", Interaction: "calls", Confidence: "low",
+				EvidenceOrigin: "static", EnvironmentVariable: "BILLING_SERVICE_URL",
+				ResolutionTier: "unresolved", UnresolvedReason: "no_indexed_assignment",
+			},
+			{
+				ID: "staging-edge", Source: "checkout", Target: "stripe",
+				Protocol: "http", Interaction: "calls", Confidence: "high",
+				EvidenceOrigin: "static", EnvironmentVariable: "PAYMENTS_URL",
+				ResolutionTier: "cross_repository_assignment", Environment: "staging",
+				ResolutionDivergent: true,
+			},
+		},
+		Scope: graph.Scope{Complete: true, TotalRepositories: 1, AnalyzedRepositories: 1},
+	}
+	topology := buildTopology(
+		snapshot, graph.ArtifactProgress{State: "ready"}, nil,
+		TopologyOptions{}, time.Now(),
+	)
+	if topology.Summary.UnresolvedPlaceholderCount != 1 ||
+		!slices.Contains(topology.Environments, "staging") {
+		t.Fatalf("placeholder honesty summary = %+v, environments = %v", topology.Summary, topology.Environments)
+	}
+	filtered := buildTopology(
+		snapshot, graph.ArtifactProgress{State: "ready"}, nil,
+		TopologyOptions{Environment: "staging"}, time.Now(),
+	)
+	if len(filtered.Connections) != 1 ||
+		filtered.Connections[0].EnvironmentVariable != "PAYMENTS_URL" {
+		t.Fatalf("static environment filter = %+v", filtered.Connections)
 	}
 }

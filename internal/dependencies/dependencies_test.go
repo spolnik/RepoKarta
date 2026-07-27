@@ -72,6 +72,39 @@ func TestBuildKeepsLegacyManifestDependenciesHonest(t *testing.T) {
 	}
 }
 
+func TestBuildUsesExactDeclarationEvidencePathInsteadOfOwningManifest(t *testing.T) {
+	inventory := Build(graph.Snapshot{
+		Repositories: []graph.Repository{{ID: 8, Name: "service", Revision: "abc123"}},
+		Manifests: []graph.Manifest{{
+			RepositoryID: 8,
+			Repository:   "service",
+			Kind:         "Gradle project",
+			Path:         "build.gradle",
+			Declarations: []graph.DependencyDeclaration{{
+				Ecosystem:  "maven",
+				Package:    "org.apache.kafka:kafka-clients",
+				Declared:   "3.9.0",
+				Resolution: "exact",
+				Evidence: graph.Evidence{
+					RepositoryID: 8,
+					Repository:   "service",
+					Revision:     "abc123",
+					Path:         "gradle/libs.versions.toml",
+					Line:         17,
+					URL:          "http://ui/source/8?path=gradle%2Flibs.versions.toml#L17",
+				},
+			}},
+		}},
+	})
+
+	declaration := inventory.Declarations[0]
+	if declaration.ManifestPath != "gradle/libs.versions.toml" ||
+		declaration.Evidence.Path != declaration.ManifestPath ||
+		declaration.Evidence.Line != 17 {
+		t.Fatalf("declaration evidence path was replaced by owning manifest: %#v", declaration)
+	}
+}
+
 func TestBuildPageFiltersAndBoundsDeclarations(t *testing.T) {
 	snapshot := graph.Snapshot{
 		Repositories: []graph.Repository{{ID: 1, Name: "service", Revision: "abc"}},

@@ -86,31 +86,37 @@ type RuntimeMetrics struct {
 }
 
 type TopologyConnection struct {
-	ID             string           `json:"id"`
-	Source         string           `json:"source"`
-	SourceName     string           `json:"source_name"`
-	Target         string           `json:"target"`
-	TargetName     string           `json:"target_name"`
-	Protocol       string           `json:"protocol"`
-	Interaction    string           `json:"interaction"`
-	Transport      string           `json:"transport,omitempty"`
-	Confidence     string           `json:"confidence"`
-	State          string           `json:"state"`
-	Origins        []string         `json:"origins"`
-	TargetResolved bool             `json:"target_resolved"`
-	Evidence       []graph.Evidence `json:"evidence,omitempty"`
-	Runtime        *RuntimeMetrics  `json:"runtime,omitempty"`
+	ID                  string           `json:"id"`
+	Source              string           `json:"source"`
+	SourceName          string           `json:"source_name"`
+	Target              string           `json:"target"`
+	TargetName          string           `json:"target_name"`
+	Protocol            string           `json:"protocol"`
+	Interaction         string           `json:"interaction"`
+	Transport           string           `json:"transport,omitempty"`
+	Confidence          string           `json:"confidence"`
+	State               string           `json:"state"`
+	Origins             []string         `json:"origins"`
+	TargetResolved      bool             `json:"target_resolved"`
+	EnvironmentVariable string           `json:"environment_variable,omitempty"`
+	ResolutionTier      string           `json:"resolution_tier,omitempty"`
+	Environment         string           `json:"environment,omitempty"`
+	ResolutionDivergent bool             `json:"resolution_divergent,omitempty"`
+	UnresolvedReason    string           `json:"unresolved_reason,omitempty"`
+	Evidence            []graph.Evidence `json:"evidence,omitempty"`
+	Runtime             *RuntimeMetrics  `json:"runtime,omitempty"`
 }
 
 type TopologySummary struct {
-	ComponentCount   int `json:"component_count"`
-	ConnectionCount  int `json:"connection_count"`
-	ServiceCount     int `json:"service_count"`
-	ResourceCount    int `json:"resource_count"`
-	ConfirmedCount   int `json:"confirmed_count"`
-	StaticOnlyCount  int `json:"static_only_count"`
-	RuntimeOnlyCount int `json:"runtime_only_count"`
-	UnresolvedCount  int `json:"unresolved_count"`
+	ComponentCount             int `json:"component_count"`
+	ConnectionCount            int `json:"connection_count"`
+	ServiceCount               int `json:"service_count"`
+	ResourceCount              int `json:"resource_count"`
+	ConfirmedCount             int `json:"confirmed_count"`
+	StaticOnlyCount            int `json:"static_only_count"`
+	RuntimeOnlyCount           int `json:"runtime_only_count"`
+	UnresolvedCount            int `json:"unresolved_count"`
+	UnresolvedPlaceholderCount int `json:"unresolved_placeholder_count"`
 }
 
 type Topology struct {
@@ -311,6 +317,11 @@ func buildTopology(
 			Transport: connection.Transport, Confidence: connection.Confidence,
 			State: "static_only", Origins: []string{connection.EvidenceOrigin},
 			TargetResolved: connection.TargetResolved, Evidence: connection.Evidence,
+			EnvironmentVariable: connection.EnvironmentVariable,
+			ResolutionTier:      connection.ResolutionTier,
+			Environment:         connection.Environment,
+			ResolutionDivergent: connection.ResolutionDivergent,
+			UnresolvedReason:    connection.UnresolvedReason,
 		}
 		view.ID = topologyConnectionKey(view)
 		connections[view.ID] = view
@@ -334,9 +345,16 @@ func buildTopology(
 			Interaction: observation.Interaction, Transport: observation.Transport,
 			Confidence: "observed", State: "runtime_only",
 			Origins: []string{"runtime"}, TargetResolved: !strings.HasPrefix(target, "runtime:"),
+			Environment: observation.Environment,
 		}
 		view.ID = topologyConnectionKey(view)
-		if existing, ok := connections[view.ID]; ok {
+		existing, ok := connections[view.ID]
+		if !ok && observation.Environment != "" {
+			unqualified := view
+			unqualified.Environment = ""
+			existing, ok = connections[topologyConnectionKey(unqualified)]
+		}
+		if ok {
 			view = existing
 			view.State = "confirmed"
 			if !slices.Contains(view.Origins, "runtime") {
@@ -383,6 +401,9 @@ func buildTopology(
 			continue
 		}
 		protocols[connection.Protocol] = true
+		if connection.Environment != "" {
+			environments[connection.Environment] = true
+		}
 		visibleNodeIDs[connection.Source], visibleNodeIDs[connection.Target] = true, true
 		output.Connections = append(output.Connections, connection)
 		switch connection.State {
@@ -398,6 +419,10 @@ func buildTopology(
 			[]string{"service", "external_service", "mcp_server"}, targetKind,
 		) {
 			output.Summary.UnresolvedCount++
+		}
+		if connection.EnvironmentVariable != "" &&
+			connection.ResolutionTier == "unresolved" {
+			output.Summary.UnresolvedPlaceholderCount++
 		}
 	}
 	for id, component := range nodes {
@@ -466,6 +491,10 @@ func topologyConnectionMatches(
 			}
 		}
 	}
+	if options.Environment != "" &&
+		!strings.EqualFold(options.Environment, connection.Environment) {
+		return false
+	}
 	query := strings.ToLower(strings.TrimSpace(options.Query))
 	if query == "" {
 		return true
@@ -474,6 +503,8 @@ func topologyConnectionMatches(
 	haystack := strings.Join([]string{
 		source.Name, target.Name, connection.Protocol, connection.Interaction,
 		connection.Transport, connection.State,
+		connection.EnvironmentVariable, connection.ResolutionTier,
+		connection.Environment, connection.UnresolvedReason,
 	}, " ")
 	return strings.Contains(strings.ToLower(haystack), query)
 }
@@ -482,6 +513,7 @@ func topologyConnectionKey(connection TopologyConnection) string {
 	return "connection:" + strings.Join([]string{
 		connection.Source, connection.Target, strings.ToLower(connection.Protocol),
 		strings.ToLower(connection.Interaction), strings.ToLower(connection.Transport),
+		strings.ToLower(connection.Environment),
 	}, "|")
 }
 

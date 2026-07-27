@@ -34,7 +34,7 @@ import (
 )
 
 const (
-	snapshotVersion       = 14
+	snapshotVersion       = 16
 	maximumFiles          = 20_000
 	maximumSourceFiles    = 5_000
 	maximumSourceFileSize = 1 << 20
@@ -168,16 +168,45 @@ type SystemComponent struct {
 // Protocol and interaction are separate because, for example, Kafka publish
 // and consume edges share a protocol but flow in opposite directions.
 type SystemConnection struct {
-	ID             string     `json:"id"`
-	Source         string     `json:"source"`
-	Target         string     `json:"target"`
-	Protocol       string     `json:"protocol"`
-	Interaction    string     `json:"interaction"`
-	Transport      string     `json:"transport,omitempty"`
-	Confidence     string     `json:"confidence"`
-	EvidenceOrigin string     `json:"evidence_origin"`
-	TargetResolved bool       `json:"target_resolved"`
-	Evidence       []Evidence `json:"evidence,omitempty"`
+	ID                  string     `json:"id"`
+	Source              string     `json:"source"`
+	Target              string     `json:"target"`
+	Protocol            string     `json:"protocol"`
+	Interaction         string     `json:"interaction"`
+	Transport           string     `json:"transport,omitempty"`
+	Confidence          string     `json:"confidence"`
+	EvidenceOrigin      string     `json:"evidence_origin"`
+	TargetResolved      bool       `json:"target_resolved"`
+	EnvironmentVariable string     `json:"environment_variable,omitempty"`
+	ResolutionTier      string     `json:"resolution_tier,omitempty"`
+	Environment         string     `json:"environment,omitempty"`
+	ResolutionDivergent bool       `json:"resolution_divergent,omitempty"`
+	UnresolvedReason    string     `json:"unresolved_reason,omitempty"`
+	Evidence            []Evidence `json:"evidence,omitempty"`
+}
+
+// TopologyPlaceholder is an indexed configuration consumption site. It stays
+// in the per-repository artifact so a fleet read can resolve it from an
+// assignment indexed in a different repository.
+type TopologyPlaceholder struct {
+	Source              string   `json:"source"`
+	Variable            string   `json:"variable"`
+	Default             string   `json:"default,omitempty"`
+	Protocol            string   `json:"protocol"`
+	Interaction         string   `json:"interaction"`
+	ConsumptionEvidence Evidence `json:"consumption_evidence"`
+}
+
+// EnvironmentAssignment is an exact configuration-key assignment found in a
+// recognized committed configuration format. Rank preserves the preference
+// for deployment configuration over application defaults and other config.
+type EnvironmentAssignment struct {
+	Variable    string   `json:"variable"`
+	Value       string   `json:"value,omitempty"`
+	Rank        int      `json:"rank"`
+	Environment string   `json:"environment,omitempty"`
+	Indirect    bool     `json:"indirect,omitempty"`
+	Evidence    Evidence `json:"evidence"`
 }
 
 // Scope makes collection bounding part of the public map contract. Truncated
@@ -223,21 +252,24 @@ type StructuralDocument struct {
 
 // Snapshot is an immutable map derived from one or more catalogue revisions.
 type Snapshot struct {
-	Version            int                  `json:"version"`
-	ID                 string               `json:"id"`
-	GeneratedAt        time.Time            `json:"generated_at"`
-	Repositories       []Repository         `json:"repositories"`
-	Languages          []Language           `json:"languages"`
-	Manifests          []Manifest           `json:"manifests"`
-	Nodes              []Node               `json:"nodes"`
-	Edges              []Edge               `json:"edges"`
-	Components         []SystemComponent    `json:"components,omitempty"`
-	Connections        []SystemConnection   `json:"connections,omitempty"`
-	Structure          []StructuralDocument `json:"structure,omitempty"`
-	StructureTruncated bool                 `json:"structure_truncated"`
-	FileCount          int                  `json:"file_count"`
-	Truncated          bool                 `json:"truncated"`
-	Scope              Scope                `json:"scope"`
+	Version                      int                     `json:"version"`
+	ID                           string                  `json:"id"`
+	GeneratedAt                  time.Time               `json:"generated_at"`
+	Repositories                 []Repository            `json:"repositories"`
+	Languages                    []Language              `json:"languages"`
+	Manifests                    []Manifest              `json:"manifests"`
+	Nodes                        []Node                  `json:"nodes"`
+	Edges                        []Edge                  `json:"edges"`
+	Components                   []SystemComponent       `json:"components,omitempty"`
+	Connections                  []SystemConnection      `json:"connections,omitempty"`
+	TopologyPlaceholders         []TopologyPlaceholder   `json:"topology_placeholders,omitempty"`
+	EnvironmentAssignments       []EnvironmentAssignment `json:"environment_assignments,omitempty"`
+	ExcludedEnvironmentVariables []string                `json:"excluded_environment_variables,omitempty"`
+	Structure                    []StructuralDocument    `json:"structure,omitempty"`
+	StructureTruncated           bool                    `json:"structure_truncated"`
+	FileCount                    int                     `json:"file_count"`
+	Truncated                    bool                    `json:"truncated"`
+	Scope                        Scope                   `json:"scope"`
 }
 
 // StructuralIndex is the compact, persisted syntax inventory consumed by
@@ -283,6 +315,22 @@ func rebaseSnapshotEvidence(snapshot *Snapshot, baseURL string) {
 		for evidenceIndex := range snapshot.Edges[edgeIndex].Evidence {
 			rebase(&snapshot.Edges[edgeIndex].Evidence[evidenceIndex])
 		}
+	}
+	for componentIndex := range snapshot.Components {
+		for evidenceIndex := range snapshot.Components[componentIndex].Evidence {
+			rebase(&snapshot.Components[componentIndex].Evidence[evidenceIndex])
+		}
+	}
+	for connectionIndex := range snapshot.Connections {
+		for evidenceIndex := range snapshot.Connections[connectionIndex].Evidence {
+			rebase(&snapshot.Connections[connectionIndex].Evidence[evidenceIndex])
+		}
+	}
+	for placeholderIndex := range snapshot.TopologyPlaceholders {
+		rebase(&snapshot.TopologyPlaceholders[placeholderIndex].ConsumptionEvidence)
+	}
+	for assignmentIndex := range snapshot.EnvironmentAssignments {
+		rebase(&snapshot.EnvironmentAssignments[assignmentIndex].Evidence)
 	}
 }
 
@@ -500,18 +548,26 @@ func (s *Service) ReadTopologySnapshot(
 	ctx context.Context,
 	repositoryID int64,
 ) (Snapshot, ArtifactProgress, error) {
-	repositories, err := s.repositories(ctx, repositoryID)
+	requestedRepositories, err := s.repositories(ctx, repositoryID)
 	if err != nil {
 		return Snapshot{}, ArtifactProgress{}, err
 	}
-	type result struct {
-		snapshot Snapshot
-		ok       bool
+	resolutionRepositories := requestedRepositories
+	if repositoryID > 0 {
+		resolutionRepositories, err = s.repositories(ctx, 0)
+		if err != nil {
+			return Snapshot{}, ArtifactProgress{}, err
+		}
 	}
-	results := make([]result, len(repositories))
+	type result struct {
+		repository catalog.Repository
+		snapshot   Snapshot
+		ok         bool
+	}
+	results := make([]result, len(resolutionRepositories))
 	workers := make(chan struct{}, maximumStructuralReadConcurrency)
 	var wait sync.WaitGroup
-	for index, repository := range repositories {
+	for index, repository := range resolutionRepositories {
 		wait.Add(1)
 		go func() {
 			defer wait.Done()
@@ -522,7 +578,7 @@ func (s *Service) ReadTopologySnapshot(
 				return
 			}
 			snapshot, ok := s.readCachedSnapshot(s.repositorySnapshotPath(repository))
-			results[index] = result{snapshot: snapshot, ok: ok}
+			results[index] = result{repository: repository, snapshot: snapshot, ok: ok}
 		}()
 	}
 	wait.Wait()
@@ -532,35 +588,59 @@ func (s *Service) ReadTopologySnapshot(
 
 	output := Snapshot{
 		Version:      snapshotVersion,
-		ID:           snapshotSignature(repositories),
+		ID:           snapshotSignature(requestedRepositories),
 		GeneratedAt:  time.Now().UTC(),
 		Repositories: []Repository{},
 		Components:   []SystemComponent{},
 		Connections:  []SystemConnection{},
 		Scope: Scope{
 			Kind:                  "repository",
-			TotalRepositories:     len(repositories),
+			TotalRepositories:     len(requestedRepositories),
 			RequestedRepositoryID: repositoryID,
 		},
 	}
 	if repositoryID == 0 {
 		output.Scope.Kind = "collection"
 	}
+	inScope := make(map[int64]bool, len(requestedRepositories))
+	for _, repository := range requestedRepositories {
+		inScope[repository.ID] = true
+	}
 	merged := newBuilder(s.currentBaseURL())
 	for _, result := range results {
 		if !result.ok {
 			continue
 		}
-		output.Repositories = append(output.Repositories, result.snapshot.Repositories...)
+		selected := inScope[result.repository.ID]
+		if selected {
+			output.Repositories = append(output.Repositories, result.snapshot.Repositories...)
+		}
 		for _, component := range result.snapshot.Components {
 			merged.addSystemComponent(component)
 		}
-		for _, connection := range result.snapshot.Connections {
-			merged.addSystemConnection(connection)
+		if selected {
+			for _, connection := range result.snapshot.Connections {
+				if connection.EnvironmentVariable != "" {
+					continue
+				}
+				merged.addSystemConnection(connection)
+			}
+			merged.topologyPlaceholders = append(
+				merged.topologyPlaceholders, result.snapshot.TopologyPlaceholders...,
+			)
 		}
-		output.Truncated = output.Truncated || result.snapshot.Truncated
-		output.Scope.AnalyzedRepositories++
+		merged.environmentAssignments = append(
+			merged.environmentAssignments, result.snapshot.EnvironmentAssignments...,
+		)
+		for _, variable := range result.snapshot.ExcludedEnvironmentVariables {
+			merged.excludedEnvironmentVariables[variable] = true
+		}
+		if selected {
+			output.Truncated = output.Truncated || result.snapshot.Truncated
+			output.Scope.AnalyzedRepositories++
+		}
 	}
+	merged.resolveTopologyPlaceholders()
 	merged.resolveSystemConnections()
 	for _, component := range merged.components {
 		component.Aliases = uniqueSorted(component.Aliases)
@@ -899,25 +979,28 @@ func snapshotSignature(repositories []catalog.Repository) string {
 }
 
 type builder struct {
-	baseURL                   string
-	repositories              []Repository
-	languages                 map[string]int
-	manifests                 []Manifest
-	nodes                     map[string]Node
-	edges                     map[string]Edge
-	components                map[string]SystemComponent
-	connections               map[string]SystemConnection
-	serviceTargets            map[string]string
-	clientReferences          []clientReference
-	structure                 []StructuralDocument
-	structuralSymbols         int
-	structuralTypedRelations  int
-	structuralImportRelations int
-	structuralCallRelations   int
-	structuralBuildFacts      int
-	structureTruncated        bool
-	fileCount                 int
-	truncated                 bool
+	baseURL                      string
+	repositories                 []Repository
+	languages                    map[string]int
+	manifests                    []Manifest
+	nodes                        map[string]Node
+	edges                        map[string]Edge
+	components                   map[string]SystemComponent
+	connections                  map[string]SystemConnection
+	serviceTargets               map[string]string
+	clientReferences             []clientReference
+	structure                    []StructuralDocument
+	structuralSymbols            int
+	structuralTypedRelations     int
+	structuralImportRelations    int
+	structuralCallRelations      int
+	structuralBuildFacts         int
+	topologyPlaceholders         []TopologyPlaceholder
+	environmentAssignments       []EnvironmentAssignment
+	excludedEnvironmentVariables map[string]bool
+	structureTruncated           bool
+	fileCount                    int
+	truncated                    bool
 }
 
 type clientReference struct {
@@ -929,18 +1012,20 @@ type clientReference struct {
 
 func newBuilder(baseURL string) *builder {
 	return &builder{
-		baseURL:        baseURL,
-		languages:      make(map[string]int),
-		nodes:          make(map[string]Node),
-		edges:          make(map[string]Edge),
-		components:     make(map[string]SystemComponent),
-		connections:    make(map[string]SystemConnection),
-		serviceTargets: make(map[string]string),
+		baseURL:                      baseURL,
+		languages:                    make(map[string]int),
+		nodes:                        make(map[string]Node),
+		edges:                        make(map[string]Edge),
+		components:                   make(map[string]SystemComponent),
+		connections:                  make(map[string]SystemConnection),
+		serviceTargets:               make(map[string]string),
+		excludedEnvironmentVariables: make(map[string]bool),
 	}
 }
 
 func (b *builder) snapshot(signature string) Snapshot {
 	b.resolveClientReferences()
+	b.resolveTopologyPlaceholders()
 	b.resolveSystemConnections()
 	nodes := make([]Node, 0, len(b.nodes))
 	for _, node := range b.nodes {
@@ -992,20 +1077,23 @@ func (b *builder) snapshot(signature string) Snapshot {
 		return strings.Compare(left.Path, right.Path)
 	})
 	return Snapshot{
-		Version:            snapshotVersion,
-		ID:                 signature,
-		GeneratedAt:        time.Now().UTC(),
-		Repositories:       b.repositories,
-		Languages:          languageSummary(b.languages),
-		Manifests:          b.manifests,
-		Nodes:              nodes,
-		Edges:              edges,
-		Components:         components,
-		Connections:        connections,
-		Structure:          b.structure,
-		StructureTruncated: b.structureTruncated,
-		FileCount:          b.fileCount,
-		Truncated:          b.truncated,
+		Version:                      snapshotVersion,
+		ID:                           signature,
+		GeneratedAt:                  time.Now().UTC(),
+		Repositories:                 b.repositories,
+		Languages:                    languageSummary(b.languages),
+		Manifests:                    b.manifests,
+		Nodes:                        nodes,
+		Edges:                        edges,
+		Components:                   components,
+		Connections:                  connections,
+		TopologyPlaceholders:         append([]TopologyPlaceholder(nil), b.topologyPlaceholders...),
+		EnvironmentAssignments:       append([]EnvironmentAssignment(nil), b.environmentAssignments...),
+		ExcludedEnvironmentVariables: sortedEnvironmentVariables(b.excludedEnvironmentVariables),
+		Structure:                    b.structure,
+		StructureTruncated:           b.structureTruncated,
+		FileCount:                    b.fileCount,
+		Truncated:                    b.truncated,
 	}
 }
 
@@ -1059,7 +1147,8 @@ func (b *builder) analyzeRepository(ctx context.Context, repository catalog.Repo
 	sourceCount := 0
 	for _, filePath := range files {
 		if !isManifest(filePath) && !isAnalyzedSource(filePath) &&
-			!isServiceConfiguration(filePath) && !isTopologyFile(filePath) {
+			!isServiceConfiguration(filePath) && !isTopologyFile(filePath) &&
+			!isPotentialEnvironmentAssignmentFile(filePath) {
 			continue
 		}
 		if isAnalyzedSource(filePath) {
@@ -1701,6 +1790,13 @@ type gradleDependency struct {
 	coordinate    string
 	line          int
 	configuration string
+	evidencePath  string
+}
+
+type gradleCatalogReference struct {
+	coordinate string
+	path       string
+	line       int
 }
 
 // gradleConfigurations lists the dependency configurations RepoKarta reads from
@@ -1845,7 +1941,6 @@ func (b *builder) addGradleManifests(
 			paths = append(paths, filePath)
 		}
 	}
-	versionCatalog := parseGradleVersionCatalogs(contents)
 	versionVariables := parseGradleVersionVariables(contents)
 	sort.Strings(paths)
 	for _, filePath := range paths {
@@ -1853,6 +1948,7 @@ func (b *builder) addGradleManifests(
 		if match := gradleProjectName.FindSubmatch(content); len(match) == 2 {
 			b.registerServiceTarget(string(match[1]), repositoryNodeID)
 		}
+		versionCatalog := gradleVersionCatalogReferences(contents, filePath)
 		dependencies := parseGradleDependencies(content, versionCatalog, versionVariables)
 		if path.Base(filePath) == "libs.versions.toml" {
 			dependencies = catalogDependencies(content)
@@ -1863,6 +1959,7 @@ func (b *builder) addGradleManifests(
 		for _, dependency := range dependencies {
 			labels = append(labels, dependency.coordinate)
 			label, version := gradleCoordinateParts(dependency.coordinate)
+			declarationPath := firstNonEmpty(dependency.evidencePath, filePath)
 			resolved := lockVersions[label]
 			resolutionSource := ""
 			if resolved != "" {
@@ -1881,7 +1978,7 @@ func (b *builder) addGradleManifests(
 				Evidence: b.evidence(
 					repository,
 					revision,
-					filePath,
+					declarationPath,
 					dependency.line,
 					dependency.coordinate,
 				),
@@ -1924,10 +2021,11 @@ func (b *builder) addGradleManifests(
 			Evidence:     evidence,
 		})
 		for _, dependency := range dependencies {
+			declarationPath := firstNonEmpty(dependency.evidencePath, filePath)
 			dependencyEvidence := b.evidence(
 				repository,
 				revision,
-				filePath,
+				declarationPath,
 				dependency.line,
 				dependency.coordinate,
 			)
@@ -1959,7 +2057,7 @@ func (b *builder) addGradleManifests(
 
 func parseGradleDependencies(
 	content []byte,
-	catalog map[string]string,
+	catalog map[string]gradleCatalogReference,
 	versionVariables map[string]string,
 ) []gradleDependency {
 	byCoordinate := make(map[string]gradleDependency)
@@ -2005,15 +2103,16 @@ func parseGradleDependencies(
 	}
 	for _, match := range gradleCatalogDependency.FindAllSubmatchIndex(content, -1) {
 		alias := normalizeCatalogAlias(string(content[match[2]:match[3]]))
-		coordinate := catalog[alias]
-		if coordinate == "" {
+		reference, ok := catalog[alias]
+		if !ok || reference.coordinate == "" {
 			continue
 		}
 		configuration := gradleConfigurationAt(content[match[0]:match[1]])
-		byCoordinate[coordinate+"\x00"+configuration] = gradleDependency{
-			coordinate:    coordinate,
-			line:          lineAtOffset(content, match[0]),
+		byCoordinate[reference.coordinate+"\x00"+configuration] = gradleDependency{
+			coordinate:    reference.coordinate,
+			line:          reference.line,
 			configuration: configuration,
+			evidencePath:  reference.path,
 		}
 	}
 	output := make([]gradleDependency, 0, len(byCoordinate))
@@ -2134,6 +2233,34 @@ func parseGradleVersionCatalogs(contents map[string][]byte) map[string]string {
 		}
 		for alias, entry := range catalogCoordinates(content) {
 			output[alias] = entry.value
+		}
+	}
+	return output
+}
+
+// gradleVersionCatalogReferences resolves the catalog visible to one Gradle
+// manifest and retains the exact library-entry location. The build-script
+// accessor proves usage, but the catalog entry is the package/version
+// declaration that dependency freshness and advisory findings must cite.
+func gradleVersionCatalogReferences(
+	contents map[string][]byte,
+	manifestPath string,
+) map[string]gradleCatalogReference {
+	catalogPath := nearestDependencyFile(
+		contents,
+		path.Dir(manifestPath),
+		"libs.versions.toml",
+		"gradle/libs.versions.toml",
+	)
+	if catalogPath == "" {
+		return nil
+	}
+	output := make(map[string]gradleCatalogReference)
+	for alias, entry := range catalogCoordinates(contents[catalogPath]) {
+		output[alias] = gradleCatalogReference{
+			coordinate: entry.value,
+			path:       catalogPath,
+			line:       entry.line,
 		}
 	}
 	return output
