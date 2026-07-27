@@ -206,6 +206,11 @@
                 <button type="button" class="conversation-tool-button" data-context-add aria-label="Add repository, file, directory, or symbol context, or paste a RepoKarta URL" title="Add repository, file, directory, or symbol context, or paste a RepoKarta URL">
                   <span aria-hidden="true">@</span>
                 </button>
+                <button type="button" class="conversation-tool-button" data-named-contexts aria-label="Choose or manage named contexts" title="Choose or manage named contexts">
+                  <svg viewBox="0 0 20 20" aria-hidden="true">
+                    <path d="M3.5 5.5h5l1.5 2h6.5v7h-13z"></path>
+                  </svg>
+                </button>
 
                 <details class="conversation-settings">
                   <summary>
@@ -374,6 +379,99 @@
     </main>
 
     {{template "debug-window" "Chat debug log"}}
+
+    <dialog id="named-context-dialog" class="named-context-dialog" aria-labelledby="named-context-title">
+      <div class="named-context-shell">
+        <header class="named-context-header">
+          <div>
+            <p>Reusable deterministic scope</p>
+            <h2 id="named-context-title">Named contexts</h2>
+          </div>
+          <button type="button" data-named-context-close aria-label="Close named contexts">×</button>
+        </header>
+        <div class="named-context-layout">
+          <section class="named-context-library" aria-labelledby="named-context-library-title">
+            <div class="named-context-section-heading">
+              <div>
+                <p>Visible to you</p>
+                <h3 id="named-context-library-title">Saved scopes</h3>
+              </div>
+              <button type="button" class="secondary-button" data-named-context-new>New</button>
+            </div>
+            <p class="named-context-feedback" data-named-context-feedback role="status"></p>
+            <div class="named-context-list" data-named-context-list></div>
+          </section>
+          <form class="named-context-editor" data-named-context-form>
+            <input type="hidden" name="id">
+            <div class="named-context-section-heading">
+              <div>
+                <p>Revision-pinned definition</p>
+                <h3 data-named-context-editor-title>New named context</h3>
+              </div>
+              <span class="conversation-read-only-badge">Deterministic</span>
+            </div>
+            <label>
+              <span>Title</span>
+              <input name="title" maxlength="120" required placeholder="Payments release">
+            </label>
+            <label>
+              <span>Description</span>
+              <textarea name="description" maxlength="500" rows="2" placeholder="Repositories included in the current release."></textarea>
+            </label>
+            <div class="named-context-editor-grid">
+              <label>
+                <span>Purpose</span>
+                <select name="category" required>
+                  <option value="personal_task">Personal task</option>
+                  <option value="team">Team</option>
+                  <option value="product">Product</option>
+                  <option value="service_fleet">Service fleet</option>
+                  <option value="release">Release</option>
+                </select>
+              </label>
+              <label>
+                <span>Default</span>
+                <select name="default_scope">
+                  <option value="none">Not a default</option>
+                  <option value="personal">My default</option>
+                  <option value="administrator" data-admin-context-option disabled>Administrator default</option>
+                </select>
+              </label>
+            </div>
+            <label>
+              <span>Visibility</span>
+              <select name="visibility">
+                <option value="personal">Personal</option>
+                <option value="shared" data-admin-context-option disabled>Shared, administrator-managed</option>
+              </select>
+            </label>
+            <fieldset class="named-context-repositories">
+              <legend>Repositories and current indexed revisions</legend>
+              {{range .Repositories}}
+              <label>
+                <input
+                  type="checkbox"
+                  name="repository"
+                  value="{{.ID}}"
+                  data-revision="{{.IndexedCommit}}"
+                  {{if ne .IndexState "ready"}}disabled{{end}}
+                >
+                <span>{{index $.RepositoryLabels .ID}}</span>
+                <code>{{if .IndexedCommit}}{{shortCommit .IndexedCommit}}{{else}}{{statusLabel .IndexState}}{{end}}</code>
+              </label>
+              {{else}}
+              <p>No indexed repositories are available.</p>
+              {{end}}
+            </fieldset>
+            <p class="named-context-editor-error" data-named-context-editor-error role="alert" hidden></p>
+            <div class="named-context-editor-actions">
+              <button type="button" class="secondary-button" data-named-context-cancel>Cancel</button>
+              <button type="submit" class="primary-button">Save context</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </dialog>
 
     <dialog id="token-budget-help" class="settings-help-dialog" aria-labelledby="token-budget-help-title">
       <div class="settings-help-card">

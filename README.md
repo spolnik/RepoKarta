@@ -486,7 +486,10 @@ Open the **MCP** tab or `/mcp/setup` for the current Streamable HTTP endpoint,
 masked bearer token, copyable client configuration, and the exact read-only
 tool catalog. The page is never cached. Its process-scoped token rotates when
 RepoKarta restarts, so refresh the configuration after a restart. Streamable
-HTTP exposes all fourteen tools. `find_references` searches persisted,
+HTTP exposes all sixteen tools. `list_named_contexts` discovers reusable
+personal and administrator-published scopes, while
+`resolve_effective_contexts` expands explicit, named, and default contexts with
+their provenance and canonical URLs. `find_references` searches persisted,
 commit-pinned AST calls, type usages, imports, and heritage relations without
 invoking AI. Structural artifacts are prepared in the background after code
 indexing; an incomplete API request returns `202 Accepted`, `Retry-After`, and
@@ -589,6 +592,32 @@ errors rather than silently widening the question. Pasting a same-origin
 RepoKarta source, map, Wiki, repository, or search URL resolves through
 `POST /api/contexts/resolve`.
 
+The folder button beside `@` opens named contexts. A personal context is
+private to its author and can be made that author's default. Administrators
+can publish shared read-only contexts and administrator defaults for a team,
+product, service fleet, or release. Definitions store repository IDs and exact
+indexed revisions; a stale, unavailable, or unauthorized member fails closed
+instead of reverting to a fleet-wide search. Effective chips show whether they
+came from an explicit selection, a named context, a personal default, or an
+administrator default. Every chip and named definition has a copyable
+permission-checked `/contexts` URL.
+
+The same behavior is available without the UI:
+
+```http
+GET /api/contexts/named
+POST /api/contexts/resolve
+POST /api/contexts/named
+PUT /api/contexts/named/{id}
+DELETE /api/contexts/named/{id}
+```
+
+`POST /api/search`, `POST /api/symbol`, Chat, and the corresponding MCP tools
+accept `named_context_ids` and `use_default_contexts`. Omitted default handling
+means defaults are applied; set `use_default_contexts` to `false` for an
+explicitly unscoped request. Existing simple searches with an explicit legacy
+repository selector continue treating that selector as an override.
+
 Conversation titles, messages, citations, status, and usage are stored locally.
 Uploaded conversation images are stored as exact RepoKarta-owned files outside
 SQLite. Provider processes are intentionally disposable: after an idle period
@@ -671,11 +700,11 @@ Windows amd64 and Apple Silicon macOS. The workflow:
 Run the same packagers locally:
 
 ```powershell
-.\scripts\package-release.ps1 -Version 0.53.0-dev
+.\scripts\package-release.ps1 -Version 0.54.0-dev
 ```
 
 ```sh
-./scripts/package-release.sh 0.53.0-dev
+./scripts/package-release.sh 0.54.0-dev
 ```
 
 macOS packages are signed with the hardened runtime when

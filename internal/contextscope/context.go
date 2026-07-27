@@ -33,17 +33,27 @@ type Selector struct {
 // Context is a selector resolved against the viewer's current, commit-pinned
 // catalogue. Repository and Label are presentation-only output fields.
 type Context struct {
-	Kind         string `json:"kind"`
-	RepositoryID int64  `json:"repository_id"`
-	Repository   string `json:"repository"`
-	Revision     string `json:"revision"`
-	Path         string `json:"path,omitempty"`
-	Symbol       string `json:"symbol,omitempty"`
-	SymbolKind   string `json:"symbol_kind,omitempty"`
-	Line         int    `json:"line,omitempty"`
-	StartLine    int    `json:"start_line,omitempty"`
-	EndLine      int    `json:"end_line,omitempty"`
-	Label        string `json:"label"`
+	Kind         string   `json:"kind"`
+	RepositoryID int64    `json:"repository_id"`
+	Repository   string   `json:"repository"`
+	Revision     string   `json:"revision"`
+	Path         string   `json:"path,omitempty"`
+	Symbol       string   `json:"symbol,omitempty"`
+	SymbolKind   string   `json:"symbol_kind,omitempty"`
+	Line         int      `json:"line,omitempty"`
+	StartLine    int      `json:"start_line,omitempty"`
+	EndLine      int      `json:"end_line,omitempty"`
+	Label        string   `json:"label"`
+	URL          string   `json:"url"`
+	Sources      []Source `json:"sources,omitempty"`
+}
+
+// Source explains why a context is effective for a request. Named and default
+// sources remain visible after exact selectors have been de-duplicated.
+type Source struct {
+	Kind  string `json:"kind"`
+	ID    string `json:"id,omitempty"`
+	Title string `json:"title,omitempty"`
 }
 
 // Issue reports one context that could not be resolved without broadening the

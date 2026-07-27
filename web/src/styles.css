@@ -5152,11 +5152,17 @@ a.brand-mark:hover,
   font-size: var(--fs-meta);
 }
 
-.conversation-context-chip > span {
+.conversation-context-chip > span,
+.conversation-context-chip > a {
   overflow: hidden;
   max-width: min(30rem, 58vw);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.conversation-context-chip > a:hover {
+  text-decoration: underline;
+  text-underline-offset: 0.15rem;
 }
 
 .conversation-context-chip button {
@@ -5173,7 +5179,7 @@ a.brand-mark:hover,
 }
 
 .conversation-context-chip-readonly {
-  padding-right: 0.55rem;
+  padding-right: 0.42rem;
 }
 
 .conversation-message-contexts {
@@ -5236,6 +5242,242 @@ a.brand-mark:hover,
   color: var(--color-ink-faint);
   font-family: var(--font-mono);
   font-size: var(--fs-meta);
+}
+
+.named-context-dialog {
+  width: min(1040px, calc(100vw - 2rem));
+  max-height: min(780px, calc(100vh - 2rem));
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid rgb(255 255 255 / 0.1);
+  border-radius: 1rem;
+  background: #101319;
+  color: var(--color-ink-strong);
+  box-shadow: 0 24px 80px rgb(0 0 0 / 0.55);
+}
+
+.named-context-dialog::backdrop {
+  background: rgb(0 0 0 / 0.72);
+  backdrop-filter: blur(5px);
+}
+
+.named-context-shell {
+  display: grid;
+  max-height: inherit;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.named-context-header,
+.named-context-section-heading,
+.named-context-editor-actions,
+.named-context-card-header,
+.named-context-card-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.named-context-header {
+  padding: 1.1rem 1.25rem;
+  border-bottom: 1px solid rgb(255 255 255 / 0.08);
+}
+
+.named-context-header p,
+.named-context-section-heading p {
+  margin: 0 0 0.15rem;
+  color: var(--color-ink-faint);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.named-context-header h2,
+.named-context-section-heading h3 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 650;
+}
+
+.named-context-header > button {
+  width: 2rem;
+  height: 2rem;
+  border-radius: 0.5rem;
+  color: var(--color-ink);
+}
+
+.named-context-layout {
+  display: grid;
+  min-height: 0;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+}
+
+.named-context-library,
+.named-context-editor {
+  min-height: 0;
+  padding: 1.2rem;
+  overflow: auto;
+}
+
+.named-context-library {
+  border-right: 1px solid rgb(255 255 255 / 0.08);
+}
+
+.named-context-feedback {
+  margin: 0.85rem 0;
+  color: var(--color-ink);
+  font-size: 0.8rem;
+}
+
+.named-context-list {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.named-context-card {
+  padding: 0.85rem;
+  border: 1px solid rgb(255 255 255 / 0.08);
+  border-radius: 0.75rem;
+  background: rgb(255 255 255 / 0.025);
+}
+
+.named-context-card[data-active="true"] {
+  border-color: rgb(52 211 153 / 0.35);
+  background: rgb(52 211 153 / 0.06);
+}
+
+.named-context-card h4 {
+  margin: 0;
+  font-size: 0.88rem;
+}
+
+.named-context-card p {
+  margin: 0.35rem 0 0;
+  color: var(--color-ink);
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+.named-context-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.55rem;
+  color: var(--color-ink-faint);
+  font-size: 0.68rem;
+}
+
+.named-context-card-actions {
+  justify-content: flex-start;
+  margin-top: 0.7rem;
+}
+
+.named-context-card-actions button,
+.named-context-card-actions a {
+  min-height: 1.8rem;
+  padding: 0.25rem 0.55rem;
+  border: 1px solid rgb(255 255 255 / 0.09);
+  border-radius: 0.45rem;
+  color: var(--color-ink);
+  font-size: 0.7rem;
+}
+
+.named-context-editor {
+  display: grid;
+  align-content: start;
+  gap: 0.85rem;
+}
+
+.named-context-editor > label,
+.named-context-editor-grid > label {
+  display: grid;
+  gap: 0.35rem;
+  color: var(--color-ink);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.named-context-editor input:not([type="checkbox"]),
+.named-context-editor textarea,
+.named-context-editor select {
+  width: 100%;
+  border: 1px solid rgb(255 255 255 / 0.1);
+  border-radius: 0.55rem;
+  background: rgb(0 0 0 / 0.18);
+  color: var(--color-ink-strong);
+  padding: 0.6rem 0.7rem;
+  font-size: 0.8rem;
+}
+
+.named-context-editor textarea {
+  resize: vertical;
+}
+
+.named-context-editor-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+
+.named-context-repositories {
+  display: grid;
+  max-height: 13rem;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0.75rem;
+  overflow: auto;
+  border: 1px solid rgb(255 255 255 / 0.08);
+  border-radius: 0.65rem;
+}
+
+.named-context-repositories legend {
+  padding: 0 0.25rem;
+  color: var(--color-ink);
+  font-size: 0.72rem;
+  font-weight: 650;
+}
+
+.named-context-repositories label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.4rem;
+  border-radius: 0.4rem;
+  color: var(--color-ink);
+  font-size: 0.75rem;
+}
+
+.named-context-repositories label:hover {
+  background: rgb(255 255 255 / 0.035);
+}
+
+.named-context-repositories code {
+  color: var(--color-ink-faint);
+  font-size: 0.68rem;
+}
+
+.named-context-editor-error {
+  margin: 0;
+  color: #fca5a5;
+  font-size: 0.75rem;
+}
+
+@media (max-width: 760px) {
+  .named-context-layout {
+    grid-template-columns: 1fr;
+    overflow: auto;
+  }
+
+  .named-context-library {
+    border-right: 0;
+    border-bottom: 1px solid rgb(255 255 255 / 0.08);
+  }
+
+  .named-context-editor-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .conversation-input {

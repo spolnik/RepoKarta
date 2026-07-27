@@ -15,10 +15,15 @@ const repositoryScopedPaths = new Set([
  * @param {string} value
  * @param {string} baseURL
  * @returns {{
- *   kind: "repository" | "file",
+ *   kind: "repository" | "file" | "directory" | "symbol",
  *   repository_id: number,
  *   revision?: string,
- *   path?: string
+ *   path?: string,
+ *   symbol?: string,
+ *   symbol_kind?: string,
+ *   line?: number
+ * } | {
+ *   named_context_id: string
  * } | undefined}
  */
 export function parseRepoKartaContextURL(value, baseURL) {
@@ -35,6 +40,35 @@ export function parseRepoKartaContextURL(value, baseURL) {
   }
 
   const pathname = candidate.pathname.replace(/\/+$/, "") || "/";
+  const namedContextMatch = /^\/contexts\/([^/]+)$/.exec(pathname);
+  if (namedContextMatch) {
+    try {
+      return { named_context_id: decodeURIComponent(namedContextMatch[1]) };
+    } catch {
+      return undefined;
+    }
+  }
+  if (pathname === "/contexts") {
+    const repositoryID = positiveInteger(candidate.searchParams.get("repository") || "");
+    const kind = candidate.searchParams.get("kind")?.trim().toLowerCase() || "";
+    if (!repositoryID || !["repository", "file", "directory", "symbol"].includes(kind)) {
+      return undefined;
+    }
+    const revision = candidate.searchParams.get("revision")?.trim() || "";
+    const path = candidate.searchParams.get("path")?.trim() || "";
+    const symbol = candidate.searchParams.get("symbol")?.trim() || "";
+    const symbolKind = candidate.searchParams.get("symbol_kind")?.trim() || "";
+    const line = positiveInteger(candidate.searchParams.get("line") || "");
+    return {
+      kind,
+      repository_id: repositoryID,
+      ...(revision ? { revision } : {}),
+      ...(path ? { path } : {}),
+      ...(symbol ? { symbol } : {}),
+      ...(symbolKind ? { symbol_kind: symbolKind } : {}),
+      ...(line ? { line } : {})
+    };
+  }
   const sourceMatch = /^\/source\/([1-9]\d*)$/.exec(pathname);
   if (sourceMatch) {
     const repositoryID = positiveInteger(sourceMatch[1]);

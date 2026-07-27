@@ -50,6 +50,8 @@ type InsightReader interface {
 // service and the JSON API client.
 type Intelligence interface {
 	Repositories(context.Context) (codeintel.RepositoryList, error)
+	ListNamedContexts(context.Context) (contextscope.NamedContextList, error)
+	ResolveEffectiveContexts(context.Context, contextscope.EffectiveRequest) (contextscope.EffectiveResponse, error)
 	Search(context.Context, codeintel.SearchRequest) (codeintel.SearchResponse, error)
 	FindSymbol(context.Context, codeintel.SymbolRequest) (codeintel.SymbolResponse, error)
 	FindReferences(context.Context, codeintel.ReferenceRequest) (codeintel.ReferenceResponse, error)
@@ -199,20 +201,48 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
+		Name:        "list_named_contexts",
+		Title:       "List reusable search contexts",
+		Description: "List permission-checked personal and administrator-published search contexts. Each definition exposes its exact repository revisions, default scope, canonical URL, and current validity.",
+		Annotations: readOnly,
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ listNamedContextsInput) (*mcp.CallToolResult, listNamedContextsOutput, error) {
+		contexts, err := intelligence.ListNamedContexts(ctx)
+		if err != nil {
+			return nil, listNamedContextsOutput{}, err
+		}
+		return nil, contexts, nil
+	})
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "resolve_effective_contexts",
+		Title:       "Resolve effective search context",
+		Description: "Expand explicit selectors, selected named contexts, and personal/administrator defaults into the exact fail-closed context set a search will use. Every item includes provenance and a canonical copyable URL.",
+		Annotations: readOnly,
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input resolveEffectiveContextsInput) (*mcp.CallToolResult, resolveEffectiveContextsOutput, error) {
+		result, err := intelligence.ResolveEffectiveContexts(ctx, contextscope.EffectiveRequest(input))
+		if err != nil {
+			return nil, resolveEffectiveContextsOutput{}, err
+		}
+		return nil, result, nil
+	})
+
+	mcp.AddTool(server, &mcp.Tool{
 		Name:        "search_code",
 		Title:       "Search indexed code",
 		Description: "Search committed source across local repositories. Supports literal, regex, and Zoekt syntax (repo:, lang:, file:, sym:, booleans, and negation). Completeness, skipped work, warnings, and pinned source URLs are explicit.",
 		Annotations: readOnly,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input searchCodeInput) (*mcp.CallToolResult, searchCodeOutput, error) {
 		result, err := intelligence.Search(ctx, codeintel.SearchRequest{
-			Query:        input.Query,
-			RepositoryID: input.RepositoryID,
-			Language:     input.Language,
-			Path:         input.Path,
-			File:         input.File,
-			Mode:         input.Mode,
-			Limit:        input.Limit,
-			Contexts:     input.Contexts,
+			Query:              input.Query,
+			RepositoryID:       input.RepositoryID,
+			Language:           input.Language,
+			Path:               input.Path,
+			File:               input.File,
+			Mode:               input.Mode,
+			Limit:              input.Limit,
+			Contexts:           input.Contexts,
+			NamedContextIDs:    input.NamedContextIDs,
+			UseDefaultContexts: input.UseDefaultContexts,
 		})
 		if err != nil {
 			return nil, searchCodeOutput{}, err
@@ -250,11 +280,13 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 		Annotations: readOnly,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input findSymbolInput) (*mcp.CallToolResult, findSymbolOutput, error) {
 		result, err := intelligence.FindSymbol(ctx, codeintel.SymbolRequest{
-			Symbol:       input.Symbol,
-			RepositoryID: input.RepositoryID,
-			Language:     input.Language,
-			Limit:        input.Limit,
-			Contexts:     input.Contexts,
+			Symbol:             input.Symbol,
+			RepositoryID:       input.RepositoryID,
+			Language:           input.Language,
+			Limit:              input.Limit,
+			Contexts:           input.Contexts,
+			NamedContextIDs:    input.NamedContextIDs,
+			UseDefaultContexts: input.UseDefaultContexts,
 		})
 		if err != nil {
 			return nil, findSymbolOutput{}, err
@@ -272,13 +304,15 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 		Annotations: readOnly,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input findReferencesInput) (*mcp.CallToolResult, findReferencesOutput, error) {
 		result, err := intelligence.FindReferences(ctx, codeintel.ReferenceRequest{
-			Symbol:       input.Symbol,
-			RepositoryID: input.RepositoryID,
-			Language:     input.Language,
-			Path:         input.Path,
-			File:         input.File,
-			Limit:        input.Limit,
-			Contexts:     input.Contexts,
+			Symbol:             input.Symbol,
+			RepositoryID:       input.RepositoryID,
+			Language:           input.Language,
+			Path:               input.Path,
+			File:               input.File,
+			Limit:              input.Limit,
+			Contexts:           input.Contexts,
+			NamedContextIDs:    input.NamedContextIDs,
+			UseDefaultContexts: input.UseDefaultContexts,
 		})
 		if err != nil {
 			return nil, findReferencesOutput{}, err
@@ -500,15 +534,23 @@ func RunStdio(ctx context.Context, config Config, intelligence Intelligence) err
 type listRepositoriesInput struct{}
 type listRepositoriesOutput = codeintel.RepositoryList
 
+type listNamedContextsInput struct{}
+type listNamedContextsOutput = contextscope.NamedContextList
+
+type resolveEffectiveContextsInput contextscope.EffectiveRequest
+type resolveEffectiveContextsOutput = contextscope.EffectiveResponse
+
 type searchCodeInput struct {
-	Query        string                  `json:"query" jsonschema:"required,The source text symbol or regular expression to find."`
-	RepositoryID int64                   `json:"repository_id,omitempty" jsonschema:"Optional repository ID returned by list_repositories. Omit to search every indexed repository."`
-	Language     string                  `json:"language,omitempty" jsonschema:"Optional programming language filter."`
-	Path         string                  `json:"path,omitempty" jsonschema:"Optional substring required in the path."`
-	File         string                  `json:"file,omitempty" jsonschema:"Optional substring required in the filename."`
-	Mode         string                  `json:"mode,omitempty" jsonschema:"Search mode: literal regex zoekt or references. References uses persisted AST relations."`
-	Limit        int                     `json:"limit,omitempty" jsonschema:"Maximum files to return from 1 to 500. Defaults to 100."`
-	Contexts     []contextscope.Selector `json:"contexts,omitempty" jsonschema:"Optional structured repository file directory or symbol contexts. Each uses a stable repository ID and pinned revision; path and symbol identity fields are required by their context kind."`
+	Query              string                  `json:"query" jsonschema:"required,The source text symbol or regular expression to find."`
+	RepositoryID       int64                   `json:"repository_id,omitempty" jsonschema:"Optional repository ID returned by list_repositories. Omit to search every indexed repository."`
+	Language           string                  `json:"language,omitempty" jsonschema:"Optional programming language filter."`
+	Path               string                  `json:"path,omitempty" jsonschema:"Optional substring required in the path."`
+	File               string                  `json:"file,omitempty" jsonschema:"Optional substring required in the filename."`
+	Mode               string                  `json:"mode,omitempty" jsonschema:"Search mode: literal regex zoekt or references. References uses persisted AST relations."`
+	Limit              int                     `json:"limit,omitempty" jsonschema:"Maximum files to return from 1 to 500. Defaults to 100."`
+	Contexts           []contextscope.Selector `json:"contexts,omitempty" jsonschema:"Optional structured repository file directory or symbol contexts. Each uses a stable repository ID and pinned revision; path and symbol identity fields are required by their context kind."`
+	NamedContextIDs    []string                `json:"named_context_ids,omitempty" jsonschema:"Optional IDs returned by list_named_contexts. Definitions are permission rechecked and expanded at their pinned revisions."`
+	UseDefaultContexts *bool                   `json:"use_default_contexts,omitempty" jsonschema:"Apply personal and administrator defaults. Defaults to true; set false for an explicitly unscoped search."`
 }
 type searchCodeOutput = codeintel.SearchResponse
 
@@ -622,23 +664,27 @@ type readGeneratedDocumentInput struct {
 type readGeneratedDocumentOutput = docs.Page
 
 type findSymbolInput struct {
-	Symbol       string                  `json:"symbol" jsonschema:"required,Exact symbol name to find."`
-	RepositoryID int64                   `json:"repository_id,omitempty" jsonschema:"Optional repository ID returned by list_repositories. Omit to search every indexed repository."`
-	Language     string                  `json:"language,omitempty" jsonschema:"Optional programming language filter."`
-	Limit        int                     `json:"limit,omitempty" jsonschema:"Maximum files to return from 1 to 500. Defaults to 100."`
-	Contexts     []contextscope.Selector `json:"contexts,omitempty" jsonschema:"Optional structured repository file directory or symbol contexts."`
+	Symbol             string                  `json:"symbol" jsonschema:"required,Exact symbol name to find."`
+	RepositoryID       int64                   `json:"repository_id,omitempty" jsonschema:"Optional repository ID returned by list_repositories. Omit to search every indexed repository."`
+	Language           string                  `json:"language,omitempty" jsonschema:"Optional programming language filter."`
+	Limit              int                     `json:"limit,omitempty" jsonschema:"Maximum files to return from 1 to 500. Defaults to 100."`
+	Contexts           []contextscope.Selector `json:"contexts,omitempty" jsonschema:"Optional structured repository file directory or symbol contexts."`
+	NamedContextIDs    []string                `json:"named_context_ids,omitempty" jsonschema:"Optional IDs returned by list_named_contexts."`
+	UseDefaultContexts *bool                   `json:"use_default_contexts,omitempty" jsonschema:"Apply personal and administrator defaults. Defaults to true."`
 }
 
 type findSymbolOutput = codeintel.SymbolResponse
 
 type findReferencesInput struct {
-	Symbol       string                  `json:"symbol" jsonschema:"required,Exact source-level symbol name to find in persisted AST relations."`
-	RepositoryID int64                   `json:"repository_id,omitempty" jsonschema:"Optional repository ID returned by list_repositories. Omit to search every repository covered by the bounded structural snapshot."`
-	Language     string                  `json:"language,omitempty" jsonschema:"Optional parser language filter."`
-	Path         string                  `json:"path,omitempty" jsonschema:"Optional substring required in the repository-relative path."`
-	File         string                  `json:"file,omitempty" jsonschema:"Optional substring required in the filename."`
-	Limit        int                     `json:"limit,omitempty" jsonschema:"Maximum files to return from 1 to 500. Defaults to 100."`
-	Contexts     []contextscope.Selector `json:"contexts,omitempty" jsonschema:"Optional structured repository file directory or symbol contexts."`
+	Symbol             string                  `json:"symbol" jsonschema:"required,Exact source-level symbol name to find in persisted AST relations."`
+	RepositoryID       int64                   `json:"repository_id,omitempty" jsonschema:"Optional repository ID returned by list_repositories. Omit to search every repository covered by the bounded structural snapshot."`
+	Language           string                  `json:"language,omitempty" jsonschema:"Optional parser language filter."`
+	Path               string                  `json:"path,omitempty" jsonschema:"Optional substring required in the repository-relative path."`
+	File               string                  `json:"file,omitempty" jsonschema:"Optional substring required in the filename."`
+	Limit              int                     `json:"limit,omitempty" jsonschema:"Maximum files to return from 1 to 500. Defaults to 100."`
+	Contexts           []contextscope.Selector `json:"contexts,omitempty" jsonschema:"Optional structured repository file directory or symbol contexts."`
+	NamedContextIDs    []string                `json:"named_context_ids,omitempty" jsonschema:"Optional IDs returned by list_named_contexts."`
+	UseDefaultContexts *bool                   `json:"use_default_contexts,omitempty" jsonschema:"Apply personal and administrator defaults. Defaults to true."`
 }
 
 type findReferencesOutput = codeintel.ReferenceResponse

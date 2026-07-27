@@ -496,18 +496,44 @@ type ContextSelector = {
   line?: number;
 };
 
+type ContextSource = {
+  kind: "explicit" | "named" | "personal_default" | "administrator_default";
+  id?: string;
+  title?: string;
+};
+
 type ResolvedContext = ContextSelector & {
   repository: string;
   revision: string;
   start_line?: number;
   end_line?: number;
   label: string;
+  url: string;
+  sources?: ContextSource[];
 };
 
 type ContextSuggestion = {
   context: ContextSelector;
   label: string;
   detail?: string;
+  url?: string;
+  sources?: ContextSource[];
+};
+
+type NamedContext = {
+  id: string;
+  title: string;
+  description?: string;
+  category: "team" | "product" | "service_fleet" | "release" | "personal_task";
+  visibility: "personal" | "shared";
+  default_scope: "none" | "personal" | "administrator";
+  owner_id: string;
+  managed: boolean;
+  editable: boolean;
+  state: "ready" | "invalid";
+  url: string;
+  contexts: ResolvedContext[];
+  issues?: Array<{ code: string; message: string }>;
 };
 
 type TokenUsage = {
@@ -1631,6 +1657,16 @@ function enableConversations(debug?: DebugLogger): void {
   const contextError = document.querySelector<HTMLElement>("#conversation-context-error");
   const contextSuggestions = document.querySelector<HTMLElement>("#conversation-context-suggestions");
   const contextAdd = document.querySelector<HTMLButtonElement>("[data-context-add]");
+  const namedContextButton = document.querySelector<HTMLButtonElement>("[data-named-contexts]");
+  const namedContextDialog = document.querySelector<HTMLDialogElement>("#named-context-dialog");
+  const namedContextClose = document.querySelector<HTMLButtonElement>("[data-named-context-close]");
+  const namedContextNew = document.querySelector<HTMLButtonElement>("[data-named-context-new]");
+  const namedContextCancel = document.querySelector<HTMLButtonElement>("[data-named-context-cancel]");
+  const namedContextList = document.querySelector<HTMLElement>("[data-named-context-list]");
+  const namedContextFeedback = document.querySelector<HTMLElement>("[data-named-context-feedback]");
+  const namedContextForm = document.querySelector<HTMLFormElement>("[data-named-context-form]");
+  const namedContextEditorTitle = document.querySelector<HTMLElement>("[data-named-context-editor-title]");
+  const namedContextEditorError = document.querySelector<HTMLElement>("[data-named-context-editor-error]");
   const composerActivity = document.querySelector<HTMLElement>("#conversation-activity");
   const imageSupportDetail = document.querySelector<HTMLElement>("#image-support-detail");
   const submit = document.querySelector<HTMLButtonElement>("#conversation-submit");
@@ -1683,6 +1719,16 @@ function enableConversations(debug?: DebugLogger): void {
     !contextError ||
     !contextSuggestions ||
     !contextAdd ||
+    !namedContextButton ||
+    !namedContextDialog ||
+    !namedContextClose ||
+    !namedContextNew ||
+    !namedContextCancel ||
+    !namedContextList ||
+    !namedContextFeedback ||
+    !namedContextForm ||
+    !namedContextEditorTitle ||
+    !namedContextEditorError ||
     !composerActivity ||
     !imageSupportDetail ||
     !submit ||
@@ -1757,7 +1803,12 @@ function enableConversations(debug?: DebugLogger): void {
   let conversationID = "";
   let busy = false;
   let attachedImages: ConversationImage[] = [];
+  let explicitContexts: ContextSuggestion[] = [];
   let selectedContexts: ContextSuggestion[] = [];
+  let namedContexts: NamedContext[] = [];
+  const activeNamedContextIDs = new Set<string>();
+  let defaultContextsEnabled = true;
+  let namedContextViewerIsAdmin = false;
   let suggestedContexts: ContextSuggestion[] = [];
   let activeContextSuggestion = -1;
   let contextRequestSequence = 0;
@@ -1985,6 +2036,95 @@ function enableConversations(debug?: DebugLogger): void {
     ].join(":");
   };
 
+  const contextSourceText = (sources: ContextSource[] = []): string => {
+    if (sources.length === 0) {
+      return "explicit";
+    }
+    return sources.map((source) => {
+      const kind = source.kind.replaceAll("_", " ");
+      return source.title ? `${source.title} (${kind})` : kind;
+    }).join(", ");
+  };
+
+  const contextSuggestionFromResolved = (context: ResolvedContext): ContextSuggestion => ({
+    context: {
+      kind: context.kind,
+      repository_id: context.repository_id,
+      revision: context.revision,
+      ...(context.path ? { path: context.path } : {}),
+      ...(context.symbol ? { symbol: context.symbol } : {}),
+      ...(context.symbol_kind ? { symbol_kind: context.symbol_kind } : {}),
+      ...(context.line ? { line: context.line } : {})
+    },
+    label: context.label,
+    detail: `${context.repository} @ ${context.revision.slice(0, 8)}`,
+    url: context.url,
+    sources: context.sources ?? []
+  });
+
+  const copyContextURL = async (value: string, button: HTMLButtonElement): Promise<void> => {
+    if (!value) {
+      return;
+    }
+    const original = button.textContent;
+    try {
+      await navigator.clipboard.writeText(value);
+      button.textContent = "✓";
+    } catch {
+      showContextError("The context URL could not be copied. Open the context and copy it from the address bar.");
+    } finally {
+      window.setTimeout(() => {
+        button.textContent = original;
+      }, 1200);
+    }
+  };
+
+  const refreshEffectiveContexts = async (): Promise<void> => {
+    try {
+      const response = await fetch("/api/contexts/resolve", {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          contexts: explicitContexts.map((context) => context.context),
+          named_context_ids: Array.from(activeNamedContextIDs),
+          use_default_contexts: defaultContextsEnabled
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await responseErrorMessage(response, "Effective contexts could not be resolved."));
+      }
+      const result = await response.json() as {
+        contexts?: ResolvedContext[];
+        named_contexts?: NamedContext[];
+      };
+      selectedContexts = (result.contexts ?? []).map(contextSuggestionFromResolved);
+      renderContextTray();
+      renderNamedContextList();
+      showContextError();
+    } catch (error: unknown) {
+      selectedContexts = [];
+      renderContextTray();
+      showContextError(error instanceof Error ? error.message : "Effective contexts could not be resolved.");
+    }
+  };
+
+  const removeEffectiveContext = (context: ContextSuggestion): void => {
+    const key = contextKey(context.context);
+    explicitContexts = explicitContexts.filter((candidate) => contextKey(candidate.context) !== key);
+    for (const source of context.sources ?? []) {
+      if (source.kind === "named" && source.id) {
+        activeNamedContextIDs.delete(source.id);
+      }
+      if (source.kind === "personal_default" || source.kind === "administrator_default") {
+        defaultContextsEnabled = false;
+      }
+    }
+    void refreshEffectiveContexts();
+  };
+
   const appendMessageContexts = (
     message: HTMLElement,
     contexts: Array<ResolvedContext | ContextSuggestion> = []
@@ -1997,10 +2137,25 @@ function enableConversations(debug?: DebugLogger): void {
     for (const context of contexts) {
       const chip = document.createElement("span");
       chip.className = "conversation-context-chip conversation-context-chip-readonly";
-      chip.textContent = context.label;
-      chip.title = "context" in context
-        ? `${context.context.kind} context at ${(context.context.revision ?? "").slice(0, 8)}`
-        : `${context.kind} context at ${context.revision.slice(0, 8)}`;
+      const selector = "context" in context ? context.context : context;
+      const contextURL = context.url;
+      const label = document.createElement(contextURL ? "a" : "span");
+      label.textContent = context.label;
+      if (label instanceof HTMLAnchorElement && contextURL) {
+        label.href = contextURL;
+        label.target = "_blank";
+        label.rel = "noreferrer";
+      }
+      chip.title = `${selector.kind} context at ${(selector.revision ?? "").slice(0, 8)} · ${contextSourceText(context.sources)}`;
+      chip.append(label);
+      if (contextURL) {
+        const copy = document.createElement("button");
+        copy.type = "button";
+        copy.textContent = "⧉";
+        copy.setAttribute("aria-label", `Copy ${context.label} context URL`);
+        copy.addEventListener("click", () => void copyContextURL(contextURL, copy));
+        chip.append(copy);
+      }
       container.append(chip);
     }
     message.append(container);
@@ -2024,22 +2179,36 @@ function enableConversations(debug?: DebugLogger): void {
   const renderContextTray = (): void => {
     contextTray.replaceChildren();
     contextTray.hidden = selectedContexts.length === 0;
-    for (const [index, context] of selectedContexts.entries()) {
+    for (const context of selectedContexts) {
       const chip = document.createElement("span");
       chip.className = "conversation-context-chip";
-      const label = document.createElement("span");
+      const label = document.createElement(context.url ? "a" : "span");
       label.textContent = context.label;
+      if (label instanceof HTMLAnchorElement && context.url) {
+        label.href = context.url;
+        label.target = "_blank";
+        label.rel = "noreferrer";
+      }
+      chip.title = `${context.context.kind} context · ${contextSourceText(context.sources)}`;
+      if (context.url) {
+        const copy = document.createElement("button");
+        copy.type = "button";
+        copy.setAttribute("aria-label", `Copy ${context.label} context URL`);
+        copy.textContent = "⧉";
+        copy.addEventListener("click", () => void copyContextURL(context.url ?? "", copy));
+        chip.append(label, copy);
+      } else {
+        chip.append(label);
+      }
       const remove = document.createElement("button");
       remove.type = "button";
       remove.setAttribute("aria-label", `Remove ${context.label}`);
       remove.textContent = "\u00d7";
       remove.addEventListener("click", () => {
-        selectedContexts.splice(index, 1);
-        renderContextTray();
-        showContextError();
+        removeEffectiveContext(context);
         input.focus();
       });
-      chip.append(label, remove);
+      chip.append(remove);
       contextTray.append(chip);
     }
   };
@@ -2075,8 +2244,8 @@ function enableConversations(debug?: DebugLogger): void {
     if (!suggestion || !contextMention) {
       return;
     }
-    if (!selectedContexts.some((context) => contextKey(context.context) === contextKey(suggestion.context))) {
-      selectedContexts.push(suggestion);
+    if (!explicitContexts.some((context) => contextKey(context.context) === contextKey(suggestion.context))) {
+      explicitContexts.push(suggestion);
     }
     const before = input.value.slice(0, contextMention.start);
     const after = input.value.slice(contextMention.end);
@@ -2084,7 +2253,7 @@ function enableConversations(debug?: DebugLogger): void {
     input.value = before + separator + after;
     const caret = before.length + separator.length;
     input.setSelectionRange(caret, caret);
-    renderContextTray();
+    void refreshEffectiveContexts();
     closeContextSuggestions();
     showContextError();
     input.focus();
@@ -2141,7 +2310,14 @@ function enableConversations(debug?: DebugLogger): void {
     }
   };
 
-  const addPastedContext = async (selector: ContextSelector): Promise<void> => {
+  const addPastedContext = async (
+    selector: ContextSelector | { named_context_id: string }
+  ): Promise<void> => {
+    if ("named_context_id" in selector) {
+      activeNamedContextIDs.add(selector.named_context_id);
+      await refreshEffectiveContexts();
+      return;
+    }
     if (selectedContexts.length >= maximumStructuredContexts) {
       showContextError(`A turn can include at most ${maximumStructuredContexts} structured contexts.`);
       return;
@@ -2154,7 +2330,7 @@ function enableConversations(debug?: DebugLogger): void {
           Accept: "application/json",
           "Content-Type": "application/json"
         },
-        body: JSON.stringify({ contexts: [selector] })
+        body: JSON.stringify({ contexts: [selector], use_default_contexts: false })
       });
       if (!response.ok) {
         throw new Error(await responseErrorMessage(response, "The pasted RepoKarta URL could not be resolved."));
@@ -2164,23 +2340,11 @@ function enableConversations(debug?: DebugLogger): void {
       if (!resolved) {
         throw new Error("The pasted RepoKarta URL did not resolve to a structured context.");
       }
-      const suggestion: ContextSuggestion = {
-        context: {
-          kind: resolved.kind,
-          repository_id: resolved.repository_id,
-          revision: resolved.revision,
-          ...(resolved.path ? { path: resolved.path } : {}),
-          ...(resolved.symbol ? { symbol: resolved.symbol } : {}),
-          ...(resolved.symbol_kind ? { symbol_kind: resolved.symbol_kind } : {}),
-          ...(resolved.line ? { line: resolved.line } : {})
-        },
-        label: resolved.label,
-        detail: `${resolved.repository} @ ${resolved.revision.slice(0, 8)}`
-      };
-      if (!selectedContexts.some((context) => contextKey(context.context) === contextKey(suggestion.context))) {
-        selectedContexts.push(suggestion);
+      const suggestion = contextSuggestionFromResolved(resolved);
+      if (!explicitContexts.some((context) => contextKey(context.context) === contextKey(suggestion.context))) {
+        explicitContexts.push(suggestion);
       }
-      renderContextTray();
+      await refreshEffectiveContexts();
       closeContextSuggestions();
       debug?.add("info", "ui.context.url-resolved", {
         kind: resolved.kind,
@@ -2195,6 +2359,238 @@ function enableConversations(debug?: DebugLogger): void {
       debug?.add("warn", "ui.context.url-resolution-failed", describeError(error));
     }
   };
+
+  const namedField = <ElementType extends HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>(
+    name: string
+  ): ElementType => namedContextForm.elements.namedItem(name) as ElementType;
+
+  const resetNamedContextEditor = (): void => {
+    namedContextForm.reset();
+    namedField<HTMLInputElement>("id").value = "";
+    namedField<HTMLSelectElement>("category").value = "personal_task";
+    namedField<HTMLSelectElement>("visibility").value = "personal";
+    namedField<HTMLSelectElement>("default_scope").value = "none";
+    namedContextEditorTitle.textContent = "New named context";
+    namedContextEditorError.hidden = true;
+    namedContextEditorError.textContent = "";
+    for (const checkbox of namedContextForm.querySelectorAll<HTMLInputElement>('input[name="repository"]')) {
+      checkbox.checked = false;
+    }
+  };
+
+  const editNamedContext = (context: NamedContext): void => {
+    resetNamedContextEditor();
+    namedField<HTMLInputElement>("id").value = context.id;
+    namedField<HTMLInputElement>("title").value = context.title;
+    namedField<HTMLTextAreaElement>("description").value = context.description ?? "";
+    namedField<HTMLSelectElement>("category").value = context.category;
+    namedField<HTMLSelectElement>("visibility").value = context.visibility;
+    namedField<HTMLSelectElement>("default_scope").value = context.default_scope;
+    namedContextEditorTitle.textContent = `Edit ${context.title}`;
+    const repositoryIDs = new Set(context.contexts.map((item) => item.repository_id));
+    for (const checkbox of namedContextForm.querySelectorAll<HTMLInputElement>('input[name="repository"]')) {
+      checkbox.checked = repositoryIDs.has(Number.parseInt(checkbox.value, 10));
+    }
+    namedField<HTMLInputElement>("title").focus();
+  };
+
+  const loadNamedContexts = async (): Promise<void> => {
+    namedContextFeedback.textContent = "Loading named contexts…";
+    try {
+      const response = await fetch("/api/contexts/named", {
+        headers: { Accept: "application/json" }
+      });
+      if (!response.ok) {
+        throw new Error(await responseErrorMessage(response, "Named contexts could not be loaded."));
+      }
+      const result = await response.json() as { named_contexts?: NamedContext[] };
+      namedContexts = result.named_contexts ?? [];
+      namedContextFeedback.textContent = namedContexts.length === 0
+        ? "No named contexts yet. Create a revision-pinned reusable scope."
+        : `${namedContexts.length} visible named context${namedContexts.length === 1 ? "" : "s"}.`;
+      renderNamedContextList();
+    } catch (error: unknown) {
+      namedContexts = [];
+      namedContextFeedback.textContent = error instanceof Error ? error.message : "Named contexts could not be loaded.";
+      renderNamedContextList();
+    }
+  };
+
+  const applyNamedContext = async (context: NamedContext): Promise<void> => {
+    if (context.state !== "ready") {
+      namedContextFeedback.textContent = context.issues?.[0]?.message ?? "This named context is invalid.";
+      return;
+    }
+    const activeAsDefault = defaultContextsEnabled && context.default_scope !== "none";
+    if (activeNamedContextIDs.has(context.id)) {
+      activeNamedContextIDs.delete(context.id);
+    } else if (activeAsDefault) {
+      defaultContextsEnabled = false;
+    } else if (context.default_scope !== "none" && !defaultContextsEnabled) {
+      defaultContextsEnabled = true;
+    } else {
+      activeNamedContextIDs.add(context.id);
+    }
+    await refreshEffectiveContexts();
+  };
+
+  const deleteNamedContext = async (context: NamedContext): Promise<void> => {
+    if (!context.editable || !window.confirm(`Delete named context "${context.title}"?`)) {
+      return;
+    }
+    try {
+      const response = await fetch(`/api/contexts/named/${encodeURIComponent(context.id)}`, {
+        method: "DELETE",
+        headers: { Accept: "application/json" }
+      });
+      if (!response.ok) {
+        throw new Error(await responseErrorMessage(response, "Named context could not be deleted."));
+      }
+      activeNamedContextIDs.delete(context.id);
+      await loadNamedContexts();
+      await refreshEffectiveContexts();
+      resetNamedContextEditor();
+    } catch (error: unknown) {
+      namedContextFeedback.textContent = error instanceof Error ? error.message : "Named context could not be deleted.";
+    }
+  };
+
+  function renderNamedContextList(): void {
+    namedContextList!.replaceChildren();
+    for (const context of namedContexts) {
+      const active = activeNamedContextIDs.has(context.id) ||
+        (defaultContextsEnabled && context.default_scope !== "none");
+      const card = document.createElement("article");
+      card.className = "named-context-card";
+      card.dataset.active = String(active);
+      const header = document.createElement("div");
+      header.className = "named-context-card-header";
+      const heading = document.createElement("h4");
+      heading.textContent = context.title;
+      const state = document.createElement("span");
+      state.className = context.state === "ready" ? "status-ready" : "status-error";
+      state.textContent = context.state;
+      header.append(heading, state);
+      card.append(header);
+      if (context.description) {
+        const description = document.createElement("p");
+        description.textContent = context.description;
+        card.append(description);
+      }
+      const meta = document.createElement("div");
+      meta.className = "named-context-card-meta";
+      meta.textContent = [
+        context.category.replaceAll("_", " "),
+        `${context.contexts.length} repositor${context.contexts.length === 1 ? "y" : "ies"}`,
+        context.default_scope === "none" ? context.visibility : `${context.default_scope} default`
+      ].join(" · ");
+      card.append(meta);
+      if (context.state !== "ready" && context.issues?.length) {
+        const issue = document.createElement("p");
+        issue.textContent = context.issues[0].message;
+        card.append(issue);
+      }
+      const actions = document.createElement("div");
+      actions.className = "named-context-card-actions";
+      const apply = document.createElement("button");
+      apply.type = "button";
+      apply.textContent = active ? "Remove" : "Apply";
+      apply.disabled = context.state !== "ready";
+      apply.addEventListener("click", () => void applyNamedContext(context));
+      const open = document.createElement("a");
+      open.href = context.url;
+      open.target = "_blank";
+      open.rel = "noreferrer";
+      open.textContent = "Open";
+      const copy = document.createElement("button");
+      copy.type = "button";
+      copy.textContent = "Copy URL";
+      copy.addEventListener("click", () => void copyContextURL(context.url, copy));
+      actions.append(apply, open, copy);
+      if (context.editable) {
+        const edit = document.createElement("button");
+        edit.type = "button";
+        edit.textContent = "Edit";
+        edit.addEventListener("click", () => editNamedContext(context));
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.textContent = "Delete";
+        remove.addEventListener("click", () => void deleteNamedContext(context));
+        actions.append(edit, remove);
+      }
+      card.append(actions);
+      namedContextList!.append(card);
+    }
+  }
+
+  const configureNamedContextAdministration = async (): Promise<void> => {
+    try {
+      const response = await fetch("/api/whoami", { headers: { Accept: "application/json" } });
+      if (response.ok) {
+        const result = await response.json() as { admin?: boolean };
+        namedContextViewerIsAdmin = Boolean(result.admin);
+      }
+    } catch {
+      namedContextViewerIsAdmin = false;
+    }
+    for (const option of namedContextForm.querySelectorAll<HTMLOptionElement>("[data-admin-context-option]")) {
+      option.disabled = !namedContextViewerIsAdmin;
+    }
+  };
+
+  namedContextForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const id = namedField<HTMLInputElement>("id").value.trim();
+    const visibility = namedField<HTMLSelectElement>("visibility").value;
+    const defaultScope = namedField<HTMLSelectElement>("default_scope").value;
+    if (defaultScope === "administrator") {
+      namedField<HTMLSelectElement>("visibility").value = "shared";
+    } else if (defaultScope === "personal") {
+      namedField<HTMLSelectElement>("visibility").value = "personal";
+    }
+    const selectors = Array.from(
+      namedContextForm.querySelectorAll<HTMLInputElement>('input[name="repository"]:checked')
+    ).map((checkbox) => ({
+      kind: "repository" as const,
+      repository_id: Number.parseInt(checkbox.value, 10),
+      revision: checkbox.dataset.revision ?? ""
+    }));
+    if (selectors.length === 0) {
+      namedContextEditorError.textContent = "Choose at least one indexed repository.";
+      namedContextEditorError.hidden = false;
+      return;
+    }
+    namedContextEditorError.hidden = true;
+    try {
+      const response = await fetch(
+        id ? `/api/contexts/named/${encodeURIComponent(id)}` : "/api/contexts/named",
+        {
+          method: id ? "PUT" : "POST",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            title: namedField<HTMLInputElement>("title").value,
+            description: namedField<HTMLTextAreaElement>("description").value,
+            category: namedField<HTMLSelectElement>("category").value,
+            visibility: defaultScope === "administrator" ? "shared" : defaultScope === "personal" ? "personal" : visibility,
+            default_scope: defaultScope,
+            selectors
+          })
+        }
+      );
+      if (!response.ok) {
+        throw new Error(await responseErrorMessage(response, "Named context could not be saved."));
+      }
+      resetNamedContextEditor();
+      await loadNamedContexts();
+      await refreshEffectiveContexts();
+    } catch (error: unknown) {
+      namedContextEditorError.textContent = error instanceof Error ? error.message : "Named context could not be saved.";
+      namedContextEditorError.hidden = false;
+    }
+  });
 
   const configureImageControls = (): void => {
     const status = statuses.find((candidate) => candidate.id === provider.value);
@@ -2582,6 +2978,25 @@ function enableConversations(debug?: DebugLogger): void {
         total_tokens: stored.input_tokens + stored.output_tokens
       });
       runtime.textContent = "Restored";
+      const lastContextMessage = [...(stored.messages ?? [])].reverse().find(
+        (message) => message.role === "user" && (message.contexts?.length ?? 0) > 0
+      );
+      explicitContexts = [];
+      activeNamedContextIDs.clear();
+      defaultContextsEnabled = true;
+      for (const context of lastContextMessage?.contexts ?? []) {
+        const suggestion = contextSuggestionFromResolved(context);
+        const sources = context.sources ?? [];
+        if (sources.length === 0 || sources.some((source) => source.kind === "explicit")) {
+          explicitContexts.push(suggestion);
+        }
+        for (const source of sources) {
+          if (source.kind === "named" && source.id) {
+            activeNamedContextIDs.add(source.id);
+          }
+        }
+      }
+      void refreshEffectiveContexts();
       headerStatus.textContent = `${stored.message_count} messages · restored locally`;
       setConversationURL(stored.id);
       renderConversationHistory();
@@ -2659,7 +3074,10 @@ function enableConversations(debug?: DebugLogger): void {
     model.disabled = !status?.available || !status.authenticated;
     effort.disabled = !status?.available || !status.authenticated || !status.efforts?.length;
     attachedImages = [];
+    explicitContexts = [];
     selectedContexts = [];
+    activeNamedContextIDs.clear();
+    defaultContextsEnabled = true;
     attachmentFeedback = "";
     runtime.textContent = "Ready";
     headerStatus.textContent = "Ready for a grounded question";
@@ -2669,6 +3087,7 @@ function enableConversations(debug?: DebugLogger): void {
     renderTokenUsage();
     renderAttachmentTray();
     renderContextTray();
+    void refreshEffectiveContexts();
     closeContextSuggestions();
     showContextError();
     configureImageControls();
@@ -2684,6 +3103,27 @@ function enableConversations(debug?: DebugLogger): void {
   renderEvidenceSources();
   setSessionPanelOpen(false);
   setInspectorOpen(false);
+  void configureNamedContextAdministration();
+  void loadNamedContexts().then(async () => {
+    const parameters = new URL(window.location.href).searchParams;
+    const requestedNamedContext = parameters.get("context")?.trim();
+    const requestedContextURL = parameters.get("context_url")?.trim();
+    if (requestedNamedContext) {
+      activeNamedContextIDs.add(requestedNamedContext);
+      await refreshEffectiveContexts();
+      return;
+    }
+    if (requestedContextURL) {
+      const parsed = parseRepoKartaContextURL(requestedContextURL, window.location.href);
+      if (parsed) {
+        await addPastedContext(parsed);
+        return;
+      }
+      showContextError("The requested context URL is not a supported RepoKarta context.");
+      return;
+    }
+    await refreshEffectiveContexts();
+  });
 
   debug?.add("info", "providers.request.started", { endpoint: "/api/providers" });
   void fetch("/api/providers", { headers: { Accept: "application/json" } })
@@ -2888,6 +3328,19 @@ function enableConversations(debug?: DebugLogger): void {
     input.focus();
     void updateContextSuggestions();
   });
+  namedContextButton.addEventListener("click", () => {
+    resetNamedContextEditor();
+    void loadNamedContexts();
+    namedContextDialog.showModal();
+  });
+  namedContextClose.addEventListener("click", () => namedContextDialog.close());
+  namedContextCancel.addEventListener("click", resetNamedContextEditor);
+  namedContextNew.addEventListener("click", resetNamedContextEditor);
+  namedContextDialog.addEventListener("click", (event) => {
+    if (event.target === namedContextDialog) {
+      namedContextDialog.close();
+    }
+  });
   input.addEventListener("paste", (event) => {
     const pastedContext = parseRepoKartaContextURL(
       event.clipboardData?.getData("text/plain") ?? "",
@@ -2973,7 +3426,8 @@ function enableConversations(debug?: DebugLogger): void {
       return;
     }
     const requestImages = attachedImages.slice();
-    const requestContexts = selectedContexts.map((context) => context.context);
+    const requestContexts = explicitContexts.map((context) => context.context);
+    const requestNamedContextIDs = Array.from(activeNamedContextIDs);
     const requestContextViews = selectedContexts.slice();
     const requestStarted = performance.now();
     let deltaEvents = 0;
@@ -3041,6 +3495,8 @@ function enableConversations(debug?: DebugLogger): void {
           message: question,
           images: requestImages,
           contexts: requestContexts,
+          named_context_ids: requestNamedContextIDs,
+          use_default_contexts: defaultContextsEnabled,
           timeout_seconds: Number.parseInt(timeout.value, 10),
           token_budget: providerStatus?.token_budget ? Number.parseInt(tokenBudget.value, 10) : 0
         })
@@ -3057,8 +3513,6 @@ function enableConversations(debug?: DebugLogger): void {
       if (!response.body) {
         throw new Error("Conversation failed because the streaming response was empty.");
       }
-      selectedContexts = [];
-      renderContextTray();
       closeContextSuggestions();
       showContextError();
       const reader = response.body.getReader();

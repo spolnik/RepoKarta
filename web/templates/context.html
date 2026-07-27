@@ -1,0 +1,75 @@
+{{define "context"}}
+<!doctype html>
+<html lang="en" class="h-full bg-surface-base">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Permission-checked, revision-pinned RepoKarta search context.">
+    <meta name="theme-color" content="#090b0f">
+    <link rel="icon" href="/assets/favicon.ico" sizes="any">
+    <link rel="icon" type="image/png" href="/assets/favicon-32.png" sizes="32x32">
+    <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+    <title>{{.Title}} · RepoKarta context</title>
+    <link rel="stylesheet" href="/assets/app.css">
+    <script type="module" src="/assets/app.js"></script>
+  </head>
+  <body class="min-h-full bg-surface-base text-ink-strong antialiased">
+    {{template "app-header" .}}
+    <main class="mx-auto max-w-5xl px-5 py-10 lg:px-8">
+      <section class="rounded-2xl border border-white/[0.08] bg-white/[0.025] p-6 shadow-2xl shadow-black/20">
+        <div class="flex flex-wrap items-start justify-between gap-4">
+          <div class="min-w-0">
+            <p class="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-emerald-300">Effective context</p>
+            <h1 class="break-words text-2xl font-semibold text-ink-strong">{{.Title}}</h1>
+            {{if .Description}}<p class="mt-2 max-w-3xl text-sm leading-6 text-ink-soft">{{.Description}}</p>{{end}}
+            {{if .Category}}
+            <div class="mt-3 flex flex-wrap gap-2 text-xs text-ink-soft">
+              <span class="rounded-full border border-white/[0.08] px-2.5 py-1">{{.Category}}</span>
+              {{if ne .DefaultScope "none"}}<span class="rounded-full border border-emerald-400/20 bg-emerald-400/[0.06] px-2.5 py-1 text-emerald-200">{{.DefaultScope}} default</span>{{end}}
+            </div>
+            {{end}}
+          </div>
+          <div class="flex flex-wrap gap-2">
+            <button class="secondary-button" type="button" data-copy="{{.ShareURL}}">Copy context URL</button>
+            <a class="primary-button" href="{{.UseURL}}">Use in Chat</a>
+          </div>
+        </div>
+
+        {{if .Issues}}
+        <div class="mt-6 rounded-xl border border-red-400/20 bg-red-400/[0.06] p-4">
+          <h2 class="text-sm font-semibold text-red-200">This context is not currently usable</h2>
+          <ul class="mt-2 space-y-2 text-sm text-red-100/80">
+            {{range .Issues}}<li><strong>{{.Code}}</strong> · {{.Message}}</li>{{end}}
+          </ul>
+        </div>
+        {{end}}
+
+        <div class="mt-7 space-y-3">
+          {{range .Contexts}}
+          <article class="rounded-xl border border-white/[0.07] bg-black/10 p-4">
+            <div class="flex flex-wrap items-center justify-between gap-3">
+              <div class="min-w-0">
+                <h2 class="truncate text-sm font-semibold text-ink-strong">{{.Label}}</h2>
+                <p class="mt-1 font-mono text-xs text-ink-soft">{{.Kind}} · {{shortCommit .Revision}}</p>
+                {{if .Sources}}
+                <p class="mt-2 text-xs text-ink-faint">
+                  Effective through
+                  {{range $index, $source := .Sources}}{{if $index}}, {{end}}{{if $source.Title}}{{$source.Title}}{{else}}{{$source.Kind}}{{end}}{{end}}
+                </p>
+                {{end}}
+              </div>
+              <div class="flex gap-2">
+                <a class="secondary-button" href="{{.URL}}">Open</a>
+                <button class="secondary-button" type="button" data-copy="{{.URL}}">Copy</button>
+              </div>
+            </div>
+          </article>
+          {{else}}
+          {{if not .Issues}}<p class="rounded-xl border border-dashed border-white/[0.1] p-8 text-center text-sm text-ink-soft">No effective contexts.</p>{{end}}
+          {{end}}
+        </div>
+      </section>
+    </main>
+  </body>
+</html>
+{{end}}

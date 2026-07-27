@@ -161,19 +161,21 @@ type Adapter interface {
 
 // TurnRequest starts or continues a conversation.
 type TurnRequest struct {
-	ConversationID   string                  `json:"conversation_id"`
-	Provider         string                  `json:"provider"`
-	Model            string                  `json:"model"`
-	Effort           string                  `json:"effort"`
-	Message          string                  `json:"message"`
-	Images           []Image                 `json:"images,omitempty"`
-	ContextSelectors []contextscope.Selector `json:"contexts,omitempty"`
-	TimeoutSeconds   int                     `json:"timeout_seconds,omitempty"`
-	TokenBudget      int64                   `json:"token_budget,omitempty"`
-	ResumeCursor     string                  `json:"-"`
-	Author           ConversationAuthor      `json:"-"`
-	AuthorCanViewAll bool                    `json:"-"`
-	Contexts         []contextscope.Context  `json:"-"`
+	ConversationID     string                  `json:"conversation_id"`
+	Provider           string                  `json:"provider"`
+	Model              string                  `json:"model"`
+	Effort             string                  `json:"effort"`
+	Message            string                  `json:"message"`
+	Images             []Image                 `json:"images,omitempty"`
+	ContextSelectors   []contextscope.Selector `json:"contexts,omitempty"`
+	NamedContextIDs    []string                `json:"named_context_ids,omitempty"`
+	UseDefaultContexts *bool                   `json:"use_default_contexts,omitempty"`
+	TimeoutSeconds     int                     `json:"timeout_seconds,omitempty"`
+	TokenBudget        int64                   `json:"token_budget,omitempty"`
+	ResumeCursor       string                  `json:"-"`
+	Author             ConversationAuthor      `json:"-"`
+	AuthorCanViewAll   bool                    `json:"-"`
+	Contexts           []contextscope.Context  `json:"-"`
 }
 
 // Turn is the provider-neutral content sent to one local harness.

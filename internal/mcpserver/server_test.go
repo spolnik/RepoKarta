@@ -304,8 +304,8 @@ func TestMCPSearchReturnsPinnedCitation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tools.Tools) != 14 {
-		t.Fatalf("got %d tools, want 14", len(tools.Tools))
+	if len(tools.Tools) != 16 {
+		t.Fatalf("got %d tools, want 16", len(tools.Tools))
 	}
 	toolNames := make(map[string]bool, len(tools.Tools))
 	for _, tool := range tools.Tools {
@@ -313,6 +313,8 @@ func TestMCPSearchReturnsPinnedCitation(t *testing.T) {
 	}
 	for _, name := range []string{
 		"list_repositories",
+		"list_named_contexts",
+		"resolve_effective_contexts",
 		"search_code",
 		"find_symbol",
 		"find_references",
@@ -332,6 +334,33 @@ func TestMCPSearchReturnsPinnedCitation(t *testing.T) {
 		}
 	}
 	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "resolve_effective_contexts",
+		Arguments: map[string]any{
+			"use_default_contexts": false,
+			"contexts": []any{map[string]any{
+				"kind":          "repository",
+				"repository_id": 7,
+				"revision":      revision,
+			}},
+		},
+	})
+	if err != nil || result.IsError {
+		t.Fatalf("effective context tool error: %v %#v", err, result.Content)
+	}
+	encoded, err := json.Marshal(result.StructuredContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var effectiveOutput resolveEffectiveContextsOutput
+	if err := json.Unmarshal(encoded, &effectiveOutput); err != nil {
+		t.Fatal(err)
+	}
+	if len(effectiveOutput.Contexts) != 1 ||
+		effectiveOutput.Contexts[0].Sources[0].Kind != "explicit" ||
+		effectiveOutput.Contexts[0].URL == "" {
+		t.Fatalf("effective context output = %#v", effectiveOutput)
+	}
+	result, err = session.CallTool(context.Background(), &mcp.CallToolParams{
 		Name:      "search_code",
 		Arguments: map[string]any{"query": "OpenFile", "limit": 100},
 	})
@@ -341,7 +370,7 @@ func TestMCPSearchReturnsPinnedCitation(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("tool error: %#v", result.Content)
 	}
-	encoded, err := json.Marshal(result.StructuredContent)
+	encoded, err = json.Marshal(result.StructuredContent)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -70,13 +70,13 @@ jobs:
       - name: Package Windows
         if: matrix.name == 'windows-amd64'
         shell: pwsh
-        run: ./scripts/package-release.ps1 -Version 0.53.0-dev -OutputDirectory dist/ci-release -SkipValidation
+        run: ./scripts/package-release.ps1 -Version 0.54.0-dev -OutputDirectory dist/ci-release -SkipValidation
       - name: Package macOS
         if: matrix.name == 'macos-arm64'
         shell: bash
         env:
           REPOKARTA_SKIP_VALIDATION: "1"
-        run: ./scripts/package-release.sh 0.53.0-dev dist/ci-release
+        run: ./scripts/package-release.sh 0.54.0-dev dist/ci-release
 
   homebrew:
     name: homebrew-head

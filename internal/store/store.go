@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	currentSchemaVersion = 16
+	currentSchemaVersion = 17
 
 	schemaV1 = `
 CREATE TABLE IF NOT EXISTS repositories (
@@ -449,6 +449,31 @@ CREATE TABLE IF NOT EXISTS dependency_registry_observations (
 );
 CREATE INDEX IF NOT EXISTS dependency_registry_observations_expiry_index
 ON dependency_registry_observations(expires_at);`
+
+	// Version 17 persists revision-pinned named search contexts. Personal
+	// definitions remain private to their owner; shared and administrator
+	// defaults are immutable to non-administrators.
+	schemaV17 = `
+CREATE TABLE IF NOT EXISTS named_contexts (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    category TEXT NOT NULL
+        CHECK(category IN ('team', 'product', 'service_fleet', 'release', 'personal_task')),
+    visibility TEXT NOT NULL
+        CHECK(visibility IN ('personal', 'shared')),
+    default_scope TEXT NOT NULL DEFAULT 'none'
+        CHECK(default_scope IN ('none', 'personal', 'administrator')),
+    owner_id TEXT NOT NULL,
+    managed INTEGER NOT NULL DEFAULT 0,
+    selectors_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS named_contexts_owner_title_index
+ON named_contexts(owner_id, title COLLATE NOCASE);
+CREATE INDEX IF NOT EXISTS named_contexts_visibility_default_index
+ON named_contexts(visibility, default_scope, updated_at DESC);`
 )
 
 // SchemaVersion is the current durable SQLite format. Diagnostics and upgrade
@@ -531,6 +556,8 @@ func migrate(db *sql.DB) error {
 			migration = schemaV15
 		case 16:
 			migration = schemaV16
+		case 17:
+			migration = schemaV17
 		default:
 			return fmt.Errorf("missing migration for schema version %d", next)
 		}

@@ -259,6 +259,18 @@ type sourcePageData struct {
 	FocusEnd      int
 }
 
+type contextPageData struct {
+	pageData
+	Title        string
+	Description  string
+	Category     string
+	DefaultScope string
+	Contexts     []contextscope.Context
+	Issues       []contextscope.Issue
+	ShareURL     string
+	UseURL       string
+}
+
 type dependencyPageData struct {
 	pageData
 	Inventory            dependencies.Inventory
@@ -339,11 +351,18 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 		identity.PermissionAcquireRepositories, "repository.refresh", "repository-catalogue", server.refreshRepositories,
 	))
 	mux.HandleFunc("GET /search", server.search)
+	mux.HandleFunc("GET /contexts", server.contextPage)
+	mux.HandleFunc("GET /contexts/{contextID}", server.namedContextPage)
 	mux.HandleFunc("GET /source/{repositoryID}", server.source)
 	mux.HandleFunc("GET /api/search", server.apiSearch)
 	mux.HandleFunc("POST /api/search", server.apiSearchJSON)
 	mux.HandleFunc("GET /api/contexts/suggest", server.apiContextSuggestions)
 	mux.HandleFunc("POST /api/contexts/resolve", server.apiContextResolution)
+	mux.HandleFunc("GET /api/contexts/named", server.apiNamedContexts)
+	mux.HandleFunc("POST /api/contexts/named", server.createNamedContext)
+	mux.HandleFunc("GET /api/contexts/named/{contextID}", server.apiNamedContext)
+	mux.HandleFunc("PUT /api/contexts/named/{contextID}", server.updateNamedContext)
+	mux.HandleFunc("DELETE /api/contexts/named/{contextID}", server.deleteNamedContext)
 	mux.HandleFunc("GET /api/symbol", server.apiSymbol)
 	mux.HandleFunc("POST /api/symbol", server.apiSymbolJSON)
 	mux.HandleFunc("GET /api/repositories", server.apiRepositories)
@@ -657,12 +676,19 @@ func (s *Server) chat(response http.ResponseWriter, request *http.Request) {
 	turn.Model = strings.TrimSpace(turn.Model)
 	turn.Effort = strings.TrimSpace(turn.Effort)
 	turn.ConversationID = strings.TrimSpace(turn.ConversationID)
-	contexts, err := s.intelligence.ResolveContexts(request.Context(), turn.ContextSelectors)
+	effective, err := s.intelligence.ResolveEffectiveContexts(
+		request.Context(),
+		contextscope.EffectiveRequest{
+			Contexts:        turn.ContextSelectors,
+			NamedContextIDs: turn.NamedContextIDs,
+			UseDefaults:     turn.UseDefaultContexts,
+		},
+	)
 	if err != nil {
-		writeContextError(response, err)
+		writeContextOrAPIError(response, err)
 		return
 	}
-	turn.Contexts = contexts
+	turn.Contexts = effective.Contexts
 	viewer := s.conversationViewer(request.Context())
 	turn.Author = viewer.Author
 	turn.AuthorCanViewAll = viewer.Admin
@@ -857,21 +883,91 @@ func (s *Server) apiContextSuggestions(response http.ResponseWriter, request *ht
 
 func (s *Server) apiContextResolution(response http.ResponseWriter, request *http.Request) {
 	request.Body = http.MaxBytesReader(response, request.Body, 64<<10)
-	var input struct {
-		Contexts []contextscope.Selector `json:"contexts"`
-	}
+	var input contextscope.EffectiveRequest
 	decoder := json.NewDecoder(request.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&input); err != nil {
 		writeAPIError(response, http.StatusBadRequest, errors.New("invalid structured context request"))
 		return
 	}
-	contexts, err := s.intelligence.ResolveContexts(request.Context(), input.Contexts)
+	effective, err := s.intelligence.ResolveEffectiveContexts(request.Context(), input)
 	if err != nil {
-		writeContextError(response, err)
+		writeContextOrAPIError(response, err)
 		return
 	}
-	writeJSON(response, http.StatusOK, map[string]any{"contexts": contexts})
+	writeJSON(response, http.StatusOK, effective)
+}
+
+func (s *Server) apiNamedContexts(response http.ResponseWriter, request *http.Request) {
+	contexts, err := s.intelligence.ListNamedContexts(request.Context())
+	if err != nil {
+		writeNamedContextError(response, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, contexts)
+}
+
+func (s *Server) apiNamedContext(response http.ResponseWriter, request *http.Request) {
+	context, err := s.intelligence.GetNamedContext(request.Context(), request.PathValue("contextID"))
+	if err != nil {
+		writeNamedContextError(response, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, context)
+}
+
+func (s *Server) createNamedContext(response http.ResponseWriter, request *http.Request) {
+	input, err := decodeNamedContextInput(response, request)
+	if err != nil {
+		writeAPIError(response, http.StatusBadRequest, err)
+		return
+	}
+	context, err := s.intelligence.CreateNamedContext(request.Context(), input)
+	if err != nil {
+		writeNamedContextError(response, err)
+		return
+	}
+	writeJSON(response, http.StatusCreated, context)
+}
+
+func (s *Server) updateNamedContext(response http.ResponseWriter, request *http.Request) {
+	input, err := decodeNamedContextInput(response, request)
+	if err != nil {
+		writeAPIError(response, http.StatusBadRequest, err)
+		return
+	}
+	context, err := s.intelligence.UpdateNamedContext(
+		request.Context(),
+		request.PathValue("contextID"),
+		input,
+	)
+	if err != nil {
+		writeNamedContextError(response, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, context)
+}
+
+func (s *Server) deleteNamedContext(response http.ResponseWriter, request *http.Request) {
+	if err := s.intelligence.DeleteNamedContext(request.Context(), request.PathValue("contextID")); err != nil {
+		writeNamedContextError(response, err)
+		return
+	}
+	response.WriteHeader(http.StatusNoContent)
+}
+
+func decodeNamedContextInput(
+	response http.ResponseWriter,
+	request *http.Request,
+) (contextscope.NamedContextInput, error) {
+	request.Body = http.MaxBytesReader(response, request.Body, 128<<10)
+	var input contextscope.NamedContextInput
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
+		return input, errors.New("invalid named context request")
+	}
+	return input, nil
 }
 
 func writeSearchJSON(response http.ResponseWriter, result codeintel.SearchResponse) {
@@ -1092,6 +1188,92 @@ func (s *Server) chatPage(response http.ResponseWriter, request *http.Request) {
 	}
 	data.ActivePage = "chat"
 	s.render(response, "chat", data)
+}
+
+func (s *Server) contextPage(response http.ResponseWriter, request *http.Request) {
+	repositoryID, err := optionalRepositoryID(request.URL.Query().Get("repository"))
+	if err != nil || repositoryID <= 0 {
+		http.Error(response, "A positive repository context is required", http.StatusBadRequest)
+		return
+	}
+	line, err := strconv.Atoi(request.URL.Query().Get("line"))
+	if err != nil && request.URL.Query().Get("line") != "" {
+		http.Error(response, "Context line must be a positive integer", http.StatusBadRequest)
+		return
+	}
+	useDefaults := false
+	effective, err := s.intelligence.ResolveEffectiveContexts(
+		request.Context(),
+		contextscope.EffectiveRequest{
+			Contexts: []contextscope.Selector{{
+				Kind:         request.URL.Query().Get("kind"),
+				RepositoryID: repositoryID,
+				Revision:     request.URL.Query().Get("revision"),
+				Path:         request.URL.Query().Get("path"),
+				Symbol:       request.URL.Query().Get("symbol"),
+				SymbolKind:   request.URL.Query().Get("symbol_kind"),
+				Line:         line,
+			}},
+			UseDefaults: &useDefaults,
+		},
+	)
+	if err != nil {
+		writeContextPageError(response, err)
+		return
+	}
+	base, err := s.pageData(request.Context())
+	if err != nil {
+		http.Error(response, "Could not load context", http.StatusInternalServerError)
+		return
+	}
+	title := "Structured context"
+	if len(effective.Contexts) > 0 {
+		title = effective.Contexts[0].Label
+	}
+	s.render(response, "context", contextPageData{
+		pageData: base,
+		Title:    title,
+		Contexts: effective.Contexts,
+		ShareURL: effective.Contexts[0].URL,
+		UseURL:   "/chat?context_url=" + url.QueryEscape(effective.Contexts[0].URL),
+	})
+}
+
+func (s *Server) namedContextPage(response http.ResponseWriter, request *http.Request) {
+	named, err := s.intelligence.GetNamedContext(request.Context(), request.PathValue("contextID"))
+	if err != nil {
+		if errors.Is(err, contextscope.ErrNamedContextNotFound) {
+			http.NotFound(response, request)
+			return
+		}
+		http.Error(response, "Could not load named context", http.StatusInternalServerError)
+		return
+	}
+	base, err := s.pageData(request.Context())
+	if err != nil {
+		http.Error(response, "Could not load context", http.StatusInternalServerError)
+		return
+	}
+	s.render(response, "context", contextPageData{
+		pageData:     base,
+		Title:        named.Title,
+		Description:  named.Description,
+		Category:     named.Category,
+		DefaultScope: named.DefaultScope,
+		Contexts:     named.Contexts,
+		Issues:       named.Issues,
+		ShareURL:     named.URL,
+		UseURL:       "/chat?context=" + url.QueryEscape(named.ID),
+	})
+}
+
+func writeContextPageError(response http.ResponseWriter, err error) {
+	var resolution *contextscope.ResolutionError
+	if errors.As(err, &resolution) {
+		http.Error(response, resolution.Error(), http.StatusUnprocessableEntity)
+		return
+	}
+	http.Error(response, err.Error(), http.StatusBadRequest)
 }
 
 func (s *Server) mapPage(response http.ResponseWriter, request *http.Request) {
@@ -1801,6 +1983,8 @@ func buildMCPPageData(endpoint, token, command, stdioBaseURL string) mcpPageData
 		StdioConfig:    string(stdioConfiguration),
 		Tools: []mcpToolView{
 			{Name: "list_repositories", Description: "Indexed repositories, stable IDs, and pinned commits."},
+			{Name: "list_named_contexts", Description: "Permission-checked personal and administrator-published reusable scopes."},
+			{Name: "resolve_effective_contexts", Description: "Exact explicit, named, and default contexts with provenance and canonical URLs."},
 			{Name: "search_code", Description: "Literal, regex, Zoekt, or AST-reference search with explicit completeness metadata."},
 			{Name: "find_symbol", Description: "Commit-pinned symbol definitions from the Zoekt/ctags index."},
 			{Name: "find_references", Description: "Syntax-backed calls, type usages, imports, and heritage sites from persisted AST relations."},
@@ -2006,6 +2190,34 @@ func writeAPIError(response http.ResponseWriter, status int, err error) {
 }
 
 func writeContextOrAPIError(response http.ResponseWriter, err error) {
+	var resolutionError *contextscope.ResolutionError
+	if errors.As(err, &resolutionError) {
+		writeContextError(response, resolutionError)
+		return
+	}
+	if errors.Is(err, contextscope.ErrNamedContextNotFound) ||
+		errors.Is(err, contextscope.ErrNamedContextForbidden) ||
+		errors.Is(err, contextscope.ErrNamedContextConflict) {
+		writeNamedContextError(response, err)
+		return
+	}
+	writeAPIError(response, http.StatusBadRequest, err)
+}
+
+func writeNamedContextError(response http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, contextscope.ErrNamedContextNotFound):
+		writeAPIError(response, http.StatusNotFound, err)
+	case errors.Is(err, contextscope.ErrNamedContextForbidden):
+		writeAPIError(response, http.StatusForbidden, err)
+	case errors.Is(err, contextscope.ErrNamedContextConflict):
+		writeAPIError(response, http.StatusConflict, err)
+	default:
+		writeContextOrAPIErrorWithoutNamedContext(response, err)
+	}
+}
+
+func writeContextOrAPIErrorWithoutNamedContext(response http.ResponseWriter, err error) {
 	var resolutionError *contextscope.ResolutionError
 	if errors.As(err, &resolutionError) {
 		writeContextError(response, resolutionError)

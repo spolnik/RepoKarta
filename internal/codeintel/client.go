@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/spolnik/RepoKarta/internal/contextscope"
 	"github.com/spolnik/RepoKarta/internal/docs"
 	"github.com/spolnik/RepoKarta/internal/graph"
 )
@@ -39,7 +40,7 @@ func (c *Client) Repositories(ctx context.Context) (RepositoryList, error) {
 
 // Search calls GET /api/search.
 func (c *Client) Search(ctx context.Context, request SearchRequest) (SearchResponse, error) {
-	if len(request.Contexts) > 0 {
+	if len(request.Contexts) > 0 || len(request.NamedContextIDs) > 0 || request.UseDefaultContexts != nil {
 		var output SearchResponse
 		err := c.post(ctx, "/api/search", request, &output)
 		return output, err
@@ -80,7 +81,7 @@ func (c *Client) post(ctx context.Context, endpoint string, input, output any) e
 
 // FindSymbol calls GET /api/symbol.
 func (c *Client) FindSymbol(ctx context.Context, request SymbolRequest) (SymbolResponse, error) {
-	if len(request.Contexts) > 0 {
+	if len(request.Contexts) > 0 || len(request.NamedContextIDs) > 0 || request.UseDefaultContexts != nil {
 		var output SymbolResponse
 		err := c.post(ctx, "/api/symbol", request, &output)
 		return output, err
@@ -101,16 +102,35 @@ func (c *Client) FindSymbol(ctx context.Context, request SymbolRequest) (SymbolR
 // FindReferences searches persisted AST relations through the shared search API.
 func (c *Client) FindReferences(ctx context.Context, request ReferenceRequest) (ReferenceResponse, error) {
 	return c.Search(ctx, SearchRequest{
-		Query:        request.Symbol,
-		RepositoryID: request.RepositoryID,
-		Repository:   request.Repository,
-		Language:     request.Language,
-		Path:         request.Path,
-		File:         request.File,
-		Mode:         "references",
-		Limit:        request.Limit,
-		Contexts:     request.Contexts,
+		Query:              request.Symbol,
+		RepositoryID:       request.RepositoryID,
+		Repository:         request.Repository,
+		Language:           request.Language,
+		Path:               request.Path,
+		File:               request.File,
+		Mode:               "references",
+		Limit:              request.Limit,
+		Contexts:           request.Contexts,
+		NamedContextIDs:    request.NamedContextIDs,
+		UseDefaultContexts: request.UseDefaultContexts,
 	})
+}
+
+// ListNamedContexts calls GET /api/contexts/named.
+func (c *Client) ListNamedContexts(ctx context.Context) (contextscope.NamedContextList, error) {
+	var output contextscope.NamedContextList
+	err := c.get(ctx, "/api/contexts/named", nil, &output)
+	return output, err
+}
+
+// ResolveEffectiveContexts expands explicit, named, and default contexts.
+func (c *Client) ResolveEffectiveContexts(
+	ctx context.Context,
+	request contextscope.EffectiveRequest,
+) (contextscope.EffectiveResponse, error) {
+	var output contextscope.EffectiveResponse
+	err := c.post(ctx, "/api/contexts/resolve", request, &output)
+	return output, err
 }
 
 // GetFile calls GET /api/file/{repository}.

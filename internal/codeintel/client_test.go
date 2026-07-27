@@ -34,6 +34,16 @@ func TestClientCoversReadOnlyJSONSurface(t *testing.T) {
 	if _, err := client.Repositories(ctx); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := client.ListNamedContexts(ctx); err != nil {
+		t.Fatal(err)
+	}
+	useDefaults := false
+	if _, err := client.ResolveEffectiveContexts(ctx, contextscope.EffectiveRequest{
+		NamedContextIDs: []string{"release"},
+		UseDefaults:     &useDefaults,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := client.Search(ctx, SearchRequest{Query: "needle", RepositoryID: 7, Limit: 25}); err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +97,7 @@ func TestClientCoversReadOnlyJSONSurface(t *testing.T) {
 		!strings.Contains(err.Error(), "bounded failure") {
 		t.Fatalf("API error = %v", err)
 	}
-	if len(requests) != 13 {
+	if len(requests) != 15 {
 		t.Fatalf("requests = %#v", requests)
 	}
 	foundPost := false

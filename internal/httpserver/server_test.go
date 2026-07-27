@@ -83,6 +83,91 @@ func TestReaderPermissionDenialIsAudited(t *testing.T) {
 	}
 }
 
+func TestNamedContextJSONAndCanonicalPageExposeEffectiveScope(t *testing.T) {
+	database, err := store.Open(filepath.Join(t.TempDir(), "repokarta.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	revision := "0123456789012345678901234567890123456789"
+	if err := database.ReplaceRepositories(t.Context(), []catalog.Repository{{
+		Name:          "payments",
+		Path:          t.TempDir(),
+		ScanState:     "ready",
+		IndexState:    "ready",
+		HeadCommit:    revision,
+		IndexedCommit: revision,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	repositories, err := database.ListRepositories(t.Context())
+	if err != nil || len(repositories) != 1 {
+		t.Fatalf("repositories = %#v, %v", repositories, err)
+	}
+	repositoryID := repositories[0].ID
+	if err := database.UpdateIndexState(t.Context(), repositoryID, "ready", revision, ""); err != nil {
+		t.Fatal(err)
+	}
+	intelligence := codeintel.New(database, testSearcher{}, "https://repo.example.com").
+		UseNamedContexts(database)
+	server, err := New(
+		Config{Address: "127.0.0.1:7331", Version: "test"},
+		intelligence,
+		testRefresher{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := contextscope.NamedContextInput{
+		Title:        "Payments release",
+		Description:  "Pinned release repositories",
+		Category:     contextscope.CategoryRelease,
+		Visibility:   contextscope.VisibilityShared,
+		DefaultScope: contextscope.DefaultAdministrator,
+		Selectors: []contextscope.Selector{{
+			Kind: contextscope.KindRepository, RepositoryID: repositoryID, Revision: revision,
+		}},
+	}
+	body, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:7331/api/contexts/named", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, body = %s", response.Code, response.Body.String())
+	}
+	var created contextscope.NamedContext
+	if err := json.Unmarshal(response.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if created.State != "ready" || len(created.Contexts) != 1 ||
+		created.Contexts[0].URL == "" || created.URL == "" {
+		t.Fatalf("created context = %#v", created)
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "http://127.0.0.1:7331/api/contexts/resolve", strings.NewReader(`{}`))
+	request.Header.Set("Content-Type", "application/json")
+	response = httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK ||
+		!strings.Contains(response.Body.String(), `"administrator_default"`) ||
+		!strings.Contains(response.Body.String(), `"https://repo.example.com/contexts?`) {
+		t.Fatalf("effective response status = %d, body = %s", response.Code, response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7331/contexts/"+created.ID, nil)
+	response = httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK ||
+		!strings.Contains(response.Body.String(), "Payments release") ||
+		!strings.Contains(response.Body.String(), "Copy context URL") {
+		t.Fatalf("context page status = %d, body = %s", response.Code, response.Body.String())
+	}
+}
+
 func TestAdministratorCanPreviewCleanupAndExportDiagnostics(t *testing.T) {
 	root := t.TempDir()
 	dataDirectory := filepath.Join(root, "data")
@@ -963,11 +1048,13 @@ func TestMCPSetupPageProvidesCopyableReadOnlyConfiguration(t *testing.T) {
 		`Bearer ` + token,
 		`C:\\Tools\\RepoKarta\\repokarta.exe`,
 		`read_repository_map`,
+		`list_named_contexts`,
+		`resolve_effective_contexts`,
 		`find_references`,
 		`read_dependency_inventory`,
 		`list_deep_wiki_pages`,
 		`read_generated_document`,
-		`14 tools · no writes`,
+		`16 tools · no writes`,
 	} {
 		if !strings.Contains(response.Body.String(), expected) {
 			t.Fatalf("MCP setup page does not contain %q", expected)
@@ -2419,7 +2506,7 @@ func TestHTTPBoundaryAndFormattingHelpers(t *testing.T) {
 	if dependencyURL("/dependencies", 7, options, 30) == "" {
 		t.Fatal("dependency URL is empty")
 	}
-	if data := buildMCPPageData("http://localhost/mcp", "secret-token-value", "repokarta", "http://localhost"); len(data.Tools) != 14 {
+	if data := buildMCPPageData("http://localhost/mcp", "secret-token-value", "repokarta", "http://localhost"); len(data.Tools) != 16 {
 		t.Fatalf("MCP page tools = %d", len(data.Tools))
 	}
 

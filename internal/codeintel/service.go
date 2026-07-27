@@ -69,11 +69,12 @@ type StructuralReader interface {
 
 // Service owns the shared behavior exposed by all external adapters.
 type Service struct {
-	store     RepositoryStore
-	searcher  CodeSearcher
-	structure StructuralReader
-	mu        sync.RWMutex
-	baseURL   string
+	store         RepositoryStore
+	searcher      CodeSearcher
+	structure     StructuralReader
+	namedContexts NamedContextStore
+	mu            sync.RWMutex
+	baseURL       string
 
 	contextFileMu     sync.Mutex
 	contextFileCache  map[string]contextFileCacheEntry
@@ -162,35 +163,38 @@ type ContextSuggestionList struct {
 
 // SearchRequest is the shared query contract.
 type SearchRequest struct {
-	Query        string                  `json:"query"`
-	RepositoryID int64                   `json:"repository_id,omitempty"`
-	Repository   string                  `json:"repository,omitempty"`
-	Language     string                  `json:"language,omitempty"`
-	Path         string                  `json:"path,omitempty"`
-	File         string                  `json:"file,omitempty"`
-	Mode         string                  `json:"mode,omitempty"`
-	Limit        int                     `json:"limit,omitempty"`
-	Contexts     []contextscope.Selector `json:"contexts,omitempty"`
+	Query              string                  `json:"query"`
+	RepositoryID       int64                   `json:"repository_id,omitempty"`
+	Repository         string                  `json:"repository,omitempty"`
+	Language           string                  `json:"language,omitempty"`
+	Path               string                  `json:"path,omitempty"`
+	File               string                  `json:"file,omitempty"`
+	Mode               string                  `json:"mode,omitempty"`
+	Limit              int                     `json:"limit,omitempty"`
+	Contexts           []contextscope.Selector `json:"contexts,omitempty"`
+	NamedContextIDs    []string                `json:"named_context_ids,omitempty"`
+	UseDefaultContexts *bool                   `json:"use_default_contexts,omitempty"`
 }
 
 // SearchResponse explicitly reports evidence completeness.
 type SearchResponse struct {
-	MatchCount          int                    `json:"match_count"`
-	MatchingFiles       int                    `json:"matching_files"`
-	EstimatedTotalFiles int                    `json:"estimated_total_files"`
-	ReturnedFiles       int                    `json:"returned_files"`
-	Limit               int                    `json:"limit"`
-	Truncated           bool                   `json:"truncated"`
-	TotalFilesExact     bool                   `json:"total_files_exact"`
-	FilesSkipped        int                    `json:"files_skipped"`
-	ShardsSkipped       int                    `json:"shards_skipped"`
-	DurationMS          float64                `json:"duration_ms"`
-	Warnings            []search.Warning       `json:"warnings,omitempty"`
-	Matches             []SearchMatch          `json:"matches"`
-	SearchKind          string                 `json:"search_kind,omitempty"`
-	ReferenceResolution string                 `json:"reference_resolution,omitempty"`
-	ReferenceIndex      *ReferenceIndex        `json:"reference_index,omitempty"`
-	Contexts            []contextscope.Context `json:"contexts,omitempty"`
+	MatchCount          int                         `json:"match_count"`
+	MatchingFiles       int                         `json:"matching_files"`
+	EstimatedTotalFiles int                         `json:"estimated_total_files"`
+	ReturnedFiles       int                         `json:"returned_files"`
+	Limit               int                         `json:"limit"`
+	Truncated           bool                        `json:"truncated"`
+	TotalFilesExact     bool                        `json:"total_files_exact"`
+	FilesSkipped        int                         `json:"files_skipped"`
+	ShardsSkipped       int                         `json:"shards_skipped"`
+	DurationMS          float64                     `json:"duration_ms"`
+	Warnings            []search.Warning            `json:"warnings,omitempty"`
+	Matches             []SearchMatch               `json:"matches"`
+	SearchKind          string                      `json:"search_kind,omitempty"`
+	ReferenceResolution string                      `json:"reference_resolution,omitempty"`
+	ReferenceIndex      *ReferenceIndex             `json:"reference_index,omitempty"`
+	Contexts            []contextscope.Context      `json:"contexts,omitempty"`
+	NamedContexts       []contextscope.NamedContext `json:"named_contexts,omitempty"`
 }
 
 // ReferenceIndex reports whether every requested repository has a persisted
@@ -204,12 +208,14 @@ type ReferenceIndex struct {
 
 // SymbolRequest selects bounded symbol-index matches.
 type SymbolRequest struct {
-	Symbol       string                  `json:"symbol"`
-	RepositoryID int64                   `json:"repository_id,omitempty"`
-	Repository   string                  `json:"repository,omitempty"`
-	Language     string                  `json:"language,omitempty"`
-	Limit        int                     `json:"limit,omitempty"`
-	Contexts     []contextscope.Selector `json:"contexts,omitempty"`
+	Symbol             string                  `json:"symbol"`
+	RepositoryID       int64                   `json:"repository_id,omitempty"`
+	Repository         string                  `json:"repository,omitempty"`
+	Language           string                  `json:"language,omitempty"`
+	Limit              int                     `json:"limit,omitempty"`
+	Contexts           []contextscope.Selector `json:"contexts,omitempty"`
+	NamedContextIDs    []string                `json:"named_context_ids,omitempty"`
+	UseDefaultContexts *bool                   `json:"use_default_contexts,omitempty"`
 }
 
 // SymbolResponse uses the same explicit completeness and citation contract as
@@ -218,14 +224,16 @@ type SymbolResponse = SearchResponse
 
 // ReferenceRequest selects bounded syntax-backed target-name matches.
 type ReferenceRequest struct {
-	Symbol       string                  `json:"symbol"`
-	RepositoryID int64                   `json:"repository_id,omitempty"`
-	Repository   string                  `json:"repository,omitempty"`
-	Language     string                  `json:"language,omitempty"`
-	Path         string                  `json:"path,omitempty"`
-	File         string                  `json:"file,omitempty"`
-	Limit        int                     `json:"limit,omitempty"`
-	Contexts     []contextscope.Selector `json:"contexts,omitempty"`
+	Symbol             string                  `json:"symbol"`
+	RepositoryID       int64                   `json:"repository_id,omitempty"`
+	Repository         string                  `json:"repository,omitempty"`
+	Language           string                  `json:"language,omitempty"`
+	Path               string                  `json:"path,omitempty"`
+	File               string                  `json:"file,omitempty"`
+	Limit              int                     `json:"limit,omitempty"`
+	Contexts           []contextscope.Selector `json:"contexts,omitempty"`
+	NamedContextIDs    []string                `json:"named_context_ids,omitempty"`
+	UseDefaultContexts *bool                   `json:"use_default_contexts,omitempty"`
 }
 
 // ReferenceResponse uses the normal search evidence and completeness contract.
@@ -594,7 +602,7 @@ func (s *Service) ResolveContexts(ctx context.Context, selectors []contextscope.
 				},
 			})
 		}
-		resolved = append(resolved, contextscope.Context{
+		context := contextscope.Context{
 			Kind:         selector.Kind,
 			RepositoryID: repository.ID,
 			Repository:   repository.Name,
@@ -606,7 +614,10 @@ func (s *Service) ResolveContexts(ctx context.Context, selectors []contextscope.
 			StartLine:    symbolStart,
 			EndLine:      symbolEnd,
 			Label:        label,
-		})
+			Sources:      []contextscope.Source{{Kind: contextscope.SourceExplicit}},
+		}
+		context.URL = s.ContextURL(context)
+		resolved = append(resolved, context)
 	}
 	if len(issues) > 0 {
 		return nil, &contextscope.ResolutionError{Issues: issues}
@@ -791,21 +802,36 @@ func (s *Service) RepositoryByID(ctx context.Context, id int64) (catalog.Reposit
 func (s *Service) Search(ctx context.Context, request SearchRequest) (SearchResponse, error) {
 	if strings.EqualFold(strings.TrimSpace(request.Mode), "references") {
 		return s.FindReferences(ctx, ReferenceRequest{
-			Symbol:       request.Query,
-			RepositoryID: request.RepositoryID,
-			Repository:   request.Repository,
-			Language:     request.Language,
-			Path:         request.Path,
-			File:         request.File,
-			Limit:        request.Limit,
-			Contexts:     request.Contexts,
+			Symbol:             request.Query,
+			RepositoryID:       request.RepositoryID,
+			Repository:         request.Repository,
+			Language:           request.Language,
+			Path:               request.Path,
+			File:               request.File,
+			Limit:              request.Limit,
+			Contexts:           request.Contexts,
+			NamedContextIDs:    request.NamedContextIDs,
+			UseDefaultContexts: request.UseDefaultContexts,
 		})
 	}
 	limit := normalizeLimit(request.Limit, DefaultSearchLimit, MaximumSearchLimit)
-	resolvedContexts, err := s.ResolveContexts(ctx, request.Contexts)
+	useDefaultContexts := request.UseDefaultContexts
+	if useDefaultContexts == nil &&
+		len(request.Contexts) == 0 &&
+		len(request.NamedContextIDs) == 0 &&
+		(request.RepositoryID > 0 || strings.TrimSpace(request.Repository) != "") {
+		disabled := false
+		useDefaultContexts = &disabled
+	}
+	effective, err := s.ResolveEffectiveContexts(ctx, contextscope.EffectiveRequest{
+		Contexts:        request.Contexts,
+		NamedContextIDs: request.NamedContextIDs,
+		UseDefaults:     useDefaultContexts,
+	})
 	if err != nil {
 		return SearchResponse{}, err
 	}
+	resolvedContexts := effective.Contexts
 	if len(resolvedContexts) > 0 &&
 		(request.RepositoryID > 0 || strings.TrimSpace(request.Repository) != "") {
 		return SearchResponse{}, errors.New("structured contexts cannot be combined with the legacy repository selector")
@@ -890,6 +916,7 @@ func (s *Service) Search(ctx context.Context, request SearchRequest) (SearchResp
 		return SearchResponse{}, err
 	}
 	response.Contexts = resolvedContexts
+	response.NamedContexts = effective.NamedContexts
 	return response, nil
 }
 
@@ -992,13 +1019,15 @@ func (s *Service) FindSymbol(ctx context.Context, request SymbolRequest) (Symbol
 	escaped := strings.ReplaceAll(symbol, `\`, `\\`)
 	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
 	return s.Search(ctx, SearchRequest{
-		Query:        `sym:"` + escaped + `"`,
-		RepositoryID: request.RepositoryID,
-		Repository:   request.Repository,
-		Language:     request.Language,
-		Mode:         "zoekt",
-		Limit:        request.Limit,
-		Contexts:     request.Contexts,
+		Query:              `sym:"` + escaped + `"`,
+		RepositoryID:       request.RepositoryID,
+		Repository:         request.Repository,
+		Language:           request.Language,
+		Mode:               "zoekt",
+		Limit:              request.Limit,
+		Contexts:           request.Contexts,
+		NamedContextIDs:    request.NamedContextIDs,
+		UseDefaultContexts: request.UseDefaultContexts,
 	})
 }
 
@@ -1015,10 +1044,23 @@ func (s *Service) FindReferences(ctx context.Context, request ReferenceRequest) 
 		return ReferenceResponse{}, errors.New("AST reference search is not configured")
 	}
 	repositoryID := request.RepositoryID
-	resolvedContexts, err := s.ResolveContexts(ctx, request.Contexts)
+	useDefaultContexts := request.UseDefaultContexts
+	if useDefaultContexts == nil &&
+		len(request.Contexts) == 0 &&
+		len(request.NamedContextIDs) == 0 &&
+		(repositoryID > 0 || strings.TrimSpace(request.Repository) != "") {
+		disabled := false
+		useDefaultContexts = &disabled
+	}
+	effective, err := s.ResolveEffectiveContexts(ctx, contextscope.EffectiveRequest{
+		Contexts:        request.Contexts,
+		NamedContextIDs: request.NamedContextIDs,
+		UseDefaults:     useDefaultContexts,
+	})
 	if err != nil {
 		return ReferenceResponse{}, err
 	}
+	resolvedContexts := effective.Contexts
 	if len(resolvedContexts) > 0 &&
 		(repositoryID > 0 || strings.TrimSpace(request.Repository) != "") {
 		return ReferenceResponse{}, errors.New("structured contexts cannot be combined with the legacy repository selector")
@@ -1077,6 +1119,7 @@ func (s *Service) FindReferences(ctx context.Context, request ReferenceRequest) 
 		output.ReferenceIndex.State = "building"
 	}
 	output.Contexts = resolvedContexts
+	output.NamedContexts = effective.NamedContexts
 	return output, nil
 }
 

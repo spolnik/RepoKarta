@@ -35,6 +35,42 @@ test("repository-scoped pages become repository contexts", () => {
   }
 });
 
+test("canonical effective-context URLs round-trip every structured identity", () => {
+  assert.deepEqual(
+    parseRepoKartaContextURL(
+      "/contexts?kind=directory&repository=12&revision=abc123&path=internal%2Fcodeintel",
+      baseURL
+    ),
+    {
+      kind: "directory",
+      repository_id: 12,
+      revision: "abc123",
+      path: "internal/codeintel"
+    }
+  );
+  assert.deepEqual(
+    parseRepoKartaContextURL(
+      "/contexts?kind=symbol&repository=12&revision=abc123&path=internal%2Fcodeintel%2Fservice.go&symbol=Search&symbol_kind=method&line=805",
+      baseURL
+    ),
+    {
+      kind: "symbol",
+      repository_id: 12,
+      revision: "abc123",
+      path: "internal/codeintel/service.go",
+      symbol: "Search",
+      symbol_kind: "method",
+      line: 805
+    }
+  );
+});
+
+test("named context URLs preserve their stable identity", () => {
+  assert.deepEqual(parseRepoKartaContextURL("/contexts/team-release", baseURL), {
+    named_context_id: "team-release"
+  });
+});
+
 test("only one supported same-origin RepoKarta URL is converted", () => {
   for (const value of [
     "",

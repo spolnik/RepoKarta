@@ -570,10 +570,10 @@ search must remain fast and AI-free.
   text.
 - [x] Support pasting a RepoKarta source, map, Wiki, repository, or search URL
   into a composer and converting it into an equivalent structured context chip.
-- [ ] Add named search contexts representing repositories and revisions for a
+- [x] Add named search contexts representing repositories and revisions for a
   team, product, service fleet, release, or personal task, with personal and
   administrator-managed defaults.
-- [ ] Make every effective context visible, URL-addressable, copyable, and
+- [x] Make every effective context visible, URL-addressable, copyable, and
   reusable through the JSON API and MCP surface.
 
 #### Query and result experience
@@ -870,7 +870,7 @@ completion criteria include:
 
 ## Current implementation version
 
-`0.53.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
+`0.54.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
 The M9 dependency inventory, public registry refresh, lockfile resolution, and
 explicit private-registry routing are implemented; discrepancy filtering and
 fail-closed classification of unconfigured internal package prefixes remain.
@@ -878,8 +878,12 @@ Linked-worktree discovery deduplication and M10 enterprise identity and
 administration are complete; M11 is complete. The implemented M7-M11 slices
 now resolve directory Git trees and exact syntax-backed symbol declarations
 alongside repository/file identities, scope deterministic matches to symbol
-line ranges, turn pasted same-origin RepoKarta URLs into permission-checked
-chips, enforce insight mutation permissions and revision staleness, paginate
+line ranges, and turn pasted same-origin RepoKarta URLs into permission-checked
+chips. Revision-pinned named contexts cover team, product, service-fleet,
+release, and personal-task scopes with private personal and administrator-
+published defaults; Chat, JSON, and MCP expose every effective context,
+provenance source, and canonical copyable URL. The implemented slices also
+enforce insight mutation permissions and revision staleness, paginate
 dependency declarations, cache immutable file context trees, open the
 administrator console directly in loopback-local mode, and support
 credential-backed acquisition from explicitly configured GitHub and GitLab
@@ -889,10 +893,11 @@ or derived-artifact work.
 
 ## Recommended next session
 
-Continue M7 with named search contexts and complete repository/file/directory/
-symbol parity when the Deep Search composer is introduced. Preserve the current
-fail-closed permission, revision, ambiguity, and completeness behavior before
-adding facets or agentic Deep Search.
+Continue M7 with the documented query grammar, typed result categories,
+facets, ranking signals, and result actions. Complete repository/file/
+directory/symbol parity when the Deep Search composer is introduced. Preserve
+the current fail-closed permission, revision, ambiguity, default-context, and
+completeness behavior before adding agentic Deep Search.
 
 Continue M9 afterward with discrepancy/status filters and a fail-closed way to
 classify internal package prefixes before public refresh. Preserve the current
