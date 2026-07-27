@@ -8,11 +8,13 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spolnik/RepoKarta/internal/catalog"
 	"github.com/spolnik/RepoKarta/internal/contextscope"
 	"github.com/spolnik/RepoKarta/internal/querylang"
 	"github.com/spolnik/RepoKarta/internal/search"
+	"github.com/spolnik/RepoKarta/internal/source"
 )
 
 const (
@@ -21,12 +23,25 @@ const (
 )
 
 type entitySearchSelection struct {
-	repositories []catalog.Repository
-	contexts     []contextscope.Context
-	named        []contextscope.NamedContext
-	includeText  []string
-	excludeText  []string
-	path         string
+	repositories   []catalog.Repository
+	contexts       []contextscope.Context
+	named          []contextscope.NamedContext
+	includeText    []string
+	excludeText    []string
+	path           string
+	includeAuthor  []string
+	excludeAuthor  []string
+	includeMessage []string
+	excludeMessage []string
+	includeAdded   []string
+	excludeAdded   []string
+	includeRemoved []string
+	excludeRemoved []string
+	after          *time.Time
+	before         *time.Time
+	branch         string
+	fromRevision   string
+	toRevision     string
 }
 
 func (s *Service) searchEntityEvidence(
@@ -144,6 +159,65 @@ func (s *Service) selectEntitySearchEvidence(
 				)
 			}
 			paths = append(paths, filter.Value)
+		case querylang.FieldAuthor:
+			if resultType != "commit" && resultType != "diff" {
+				return entitySearchSelection{}, fmt.Errorf("author filters do not apply to %s results", resultType)
+			}
+			target(&selection.includeAuthor, &selection.excludeAuthor)
+		case querylang.FieldMessage:
+			if resultType != "commit" && resultType != "diff" {
+				return entitySearchSelection{}, fmt.Errorf("message filters do not apply to %s results", resultType)
+			}
+			target(&selection.includeMessage, &selection.excludeMessage)
+		case querylang.FieldAdded:
+			if resultType != "diff" {
+				return entitySearchSelection{}, fmt.Errorf("added filters apply only to diff results")
+			}
+			target(&selection.includeAdded, &selection.excludeAdded)
+		case querylang.FieldRemoved:
+			if resultType != "diff" {
+				return entitySearchSelection{}, fmt.Errorf("removed filters apply only to diff results")
+			}
+			target(&selection.includeRemoved, &selection.excludeRemoved)
+		case querylang.FieldAfter, querylang.FieldBefore:
+			if resultType != "commit" && resultType != "diff" {
+				return entitySearchSelection{}, fmt.Errorf("%s filters do not apply to %s results", filter.Field, resultType)
+			}
+			if filter.Negative {
+				return entitySearchSelection{}, fmt.Errorf("negative %s filters are not supported", filter.Field)
+			}
+			bound, parseErr := parseHistoryDate(filter.Value, filter.Field == querylang.FieldBefore)
+			if parseErr != nil {
+				return entitySearchSelection{}, parseErr
+			}
+			if filter.Field == querylang.FieldAfter {
+				if selection.after != nil {
+					return entitySearchSelection{}, errors.New("history search accepts one after filter")
+				}
+				selection.after = &bound
+			} else {
+				if selection.before != nil {
+					return entitySearchSelection{}, errors.New("history search accepts one before filter")
+				}
+				selection.before = &bound
+			}
+		case querylang.FieldBranch, querylang.FieldFrom, querylang.FieldTo:
+			if resultType != "commit" && resultType != "diff" {
+				return entitySearchSelection{}, fmt.Errorf("%s filters do not apply to %s results", filter.Field, resultType)
+			}
+			if filter.Negative {
+				return entitySearchSelection{}, fmt.Errorf("negative %s filters are not supported", filter.Field)
+			}
+			fieldTarget := &selection.branch
+			if filter.Field == querylang.FieldFrom {
+				fieldTarget = &selection.fromRevision
+			} else if filter.Field == querylang.FieldTo {
+				fieldTarget = &selection.toRevision
+			}
+			if *fieldTarget != "" {
+				return entitySearchSelection{}, fmt.Errorf("history search accepts one %s filter", filter.Field)
+			}
+			*fieldTarget = strings.TrimSpace(filter.Value)
 		case querylang.FieldLanguage, querylang.FieldSymbolKind, querylang.FieldOwner:
 			return entitySearchSelection{}, fmt.Errorf(
 				"%s filters do not apply to %s results",
@@ -155,6 +229,12 @@ func (s *Service) selectEntitySearchEvidence(
 		default:
 			return entitySearchSelection{}, fmt.Errorf("unsupported query field %q", filter.Field)
 		}
+	}
+	if selection.after != nil && selection.before != nil && selection.after.After(*selection.before) {
+		return entitySearchSelection{}, errors.New("after must not be later than before")
+	}
+	if selection.branch != "" && selection.toRevision != "" {
+		return entitySearchSelection{}, errors.New("branch and to filters cannot be combined")
 	}
 	paths = compactFoldedStrings(paths)
 	if len(paths) > 1 {
@@ -280,47 +360,43 @@ func (s *Service) searchCommits(
 	limit int,
 ) (SearchResponse, error) {
 	items := make([]SearchItem, 0, limit)
+	warnings := []search.Warning{}
 	truncated := false
 	for _, repository := range selection.repositories {
+		fromRevision, toRevision, err := resolveHistoryRange(ctx, repository, selection)
+		if err != nil {
+			return SearchResponse{}, fmt.Errorf("resolve history range in %s: %w", repository.Name, err)
+		}
 		history, err := s.GitLog(ctx, GitLogRequest{
 			RepositoryID: repository.ID,
+			Revision:     toRevision,
 			Path:         selection.path,
-			Limit:        min(MaximumGitLogLimit, limit+1),
+			Limit:        MaximumGitLogLimit,
 		})
 		if err != nil {
 			return SearchResponse{}, fmt.Errorf("search commits in %s: %w", repository.Name, err)
 		}
 		truncated = truncated || history.Truncated || history.OutputTruncated
+		foundLowerBound := fromRevision == ""
 		for _, commit := range history.Commits {
-			haystack := strings.Join([]string{
-				commit.Revision,
-				commit.AuthorName,
-				commit.AuthorEmail,
-				commit.AuthoredAt,
-				commit.Subject,
-				commit.Body,
-			}, "\n")
-			if !matchesEntityText(haystack, parsed.Text, selection.includeText, selection.excludeText) {
+			if fromRevision != "" && strings.EqualFold(commit.Revision, fromRevision) {
+				foundLowerBound = true
+				break
+			}
+			if !matchesHistoryCommit(commit, parsed, selection) {
 				continue
 			}
-			items = append(items, SearchItem{
-				ResultType:   "commit",
-				RepositoryID: repository.ID,
-				Repository:   repository.Name,
-				Revision:     commit.Revision,
-				Path:         selection.path,
-				Title:        commit.Subject,
-				Summary:      commit.Body,
-				Citation:     entityCitation(repository.Name, commit.Revision, "commit"),
-				SourceURL: s.entityURL(
-					"/api/git/log/"+strconv.FormatInt(repository.ID, 10),
-					url.Values{"revision": {commit.Revision}, "limit": {"1"}},
+			items = append(items, s.commitSearchItem(repository, commit, selection.path))
+		}
+		if !foundLowerBound {
+			truncated = true
+			warnings = append(warnings, search.Warning{
+				Code: "history_range_partial",
+				Message: fmt.Sprintf(
+					"The lower revision boundary was not reached within the bounded %d-commit history for %s.",
+					MaximumGitLogLimit,
+					repository.Name,
 				),
-				Metadata: []SearchItemMetadata{
-					{Label: "author", Value: commit.AuthorName + " <" + commit.AuthorEmail + ">"},
-					{Label: "authored", Value: commit.AuthoredAt},
-					{Label: "parents", Value: strings.Join(commit.Parents, " ")},
-				},
 			})
 		}
 	}
@@ -331,7 +407,7 @@ func (s *Service) searchCommits(
 		items = items[:limit]
 		truncated = true
 	}
-	return entitySearchResponse("commit", parsed, selection, items, limit, truncated, nil), nil
+	return entitySearchResponse("commit", parsed, selection, items, limit, truncated, warnings), nil
 }
 
 func (s *Service) searchDiffs(
@@ -354,9 +430,43 @@ func (s *Service) searchDiffs(
 	items := make([]SearchItem, 0, effectiveLimit)
 	truncated := limit > effectiveLimit
 	for _, repository := range selection.repositories {
-		historyLimit := min(MaximumGitLogLimit, max(20, effectiveLimit*4))
+		fromRevision, toRevision, err := resolveHistoryRange(ctx, repository, selection)
+		if err != nil {
+			return SearchResponse{}, fmt.Errorf("resolve diff range in %s: %w", repository.Name, err)
+		}
+		if fromRevision != "" {
+			history, err := s.GitLog(ctx, GitLogRequest{
+				RepositoryID: repository.ID,
+				Revision:     toRevision,
+				Limit:        1,
+			})
+			if err != nil {
+				return SearchResponse{}, fmt.Errorf("read range endpoint in %s: %w", repository.Name, err)
+			}
+			if len(history.Commits) == 0 {
+				continue
+			}
+			commit := history.Commits[0]
+			diff, err := s.GitDiff(ctx, GitDiffRequest{
+				RepositoryID: repository.ID,
+				FromRevision: fromRevision,
+				ToRevision:   toRevision,
+				Path:         selection.path,
+				ContextLines: DefaultDiffContext,
+			})
+			if err != nil {
+				return SearchResponse{}, fmt.Errorf("search revision range in %s: %w", repository.Name, err)
+			}
+			if matchesHistoryDiff(commit, diff, parsed, selection) {
+				items = append(items, s.diffSearchItem(repository, commit, diff, selection.path))
+				truncated = truncated || diff.Truncated
+			}
+			continue
+		}
+		historyLimit := MaximumGitLogLimit
 		history, err := s.GitLog(ctx, GitLogRequest{
 			RepositoryID: repository.ID,
+			Revision:     toRevision,
 			Path:         selection.path,
 			Limit:        historyLimit,
 		})
@@ -383,55 +493,11 @@ func (s *Service) searchDiffs(
 					err,
 				)
 			}
-			haystack := strings.Join([]string{
-				commit.Revision,
-				commit.AuthorName,
-				commit.AuthorEmail,
-				commit.Subject,
-				commit.Body,
-				diff.Patch,
-			}, "\n")
-			if !matchesEntityText(haystack, parsed.Text, selection.includeText, selection.excludeText) {
+			if !matchesHistoryDiff(commit, diff, parsed, selection) {
 				continue
 			}
 			truncated = truncated || diff.Truncated
-			title := commit.Subject
-			if title == "" {
-				title = "Diff " + itemShortRevision(commit.Revision)
-			}
-			values := url.Values{"to": {commit.Revision}}
-			if diff.FromRevision != "" {
-				values.Set("from", diff.FromRevision)
-			}
-			if selection.path != "" {
-				values.Set("path", selection.path)
-			}
-			items = append(items, SearchItem{
-				ResultType:   "diff",
-				RepositoryID: repository.ID,
-				Repository:   repository.Name,
-				Revision:     commit.Revision,
-				Path:         selection.path,
-				Title:        title,
-				Summary: fmt.Sprintf(
-					"%d files changed, %d insertions, %d deletions",
-					diff.FilesChanged,
-					diff.Insertions,
-					diff.Deletions,
-				),
-				Detail:   boundedItemDetail(diff.Patch),
-				Citation: entityCitation(repository.Name, commit.Revision, "diff"),
-				SourceURL: s.entityURL(
-					"/api/git/diff/"+strconv.FormatInt(repository.ID, 10),
-					values,
-				),
-				Metadata: []SearchItemMetadata{
-					{Label: "author", Value: commit.AuthorName + " <" + commit.AuthorEmail + ">"},
-					{Label: "authored", Value: commit.AuthoredAt},
-					{Label: "from", Value: diff.FromRevision},
-					{Label: "to", Value: diff.ToRevision},
-				},
-			})
+			items = append(items, s.diffSearchItem(repository, commit, diff, selection.path))
 		}
 	}
 	return entitySearchResponse(
@@ -443,6 +509,218 @@ func (s *Service) searchDiffs(
 		truncated,
 		warnings,
 	), nil
+}
+
+func parseHistoryDate(value string, endOfDay bool) (time.Time, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}, errors.New("history date filters require a value")
+	}
+	if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+		return parsed, nil
+	}
+	parsed, err := time.Parse("2006-01-02", value)
+	if err != nil {
+		return time.Time{}, fmt.Errorf(
+			"history date %q must use YYYY-MM-DD or RFC3339",
+			value,
+		)
+	}
+	if endOfDay {
+		return parsed.Add(24*time.Hour - time.Nanosecond), nil
+	}
+	return parsed, nil
+}
+
+func resolveHistoryRange(
+	ctx context.Context,
+	repository catalog.Repository,
+	selection entitySearchSelection,
+) (string, string, error) {
+	var (
+		toRevision string
+		err        error
+	)
+	if selection.branch != "" {
+		toRevision, err = source.ResolveBranch(ctx, repository, selection.branch)
+	} else {
+		toRevision, err = source.ResolveCommit(ctx, repository, selection.toRevision)
+	}
+	if err != nil {
+		return "", "", err
+	}
+	fromRevision := ""
+	if selection.fromRevision != "" {
+		fromRevision, err = source.ResolveCommit(ctx, repository, selection.fromRevision)
+		if err != nil {
+			return "", "", err
+		}
+	}
+	return fromRevision, toRevision, nil
+}
+
+func matchesHistoryCommit(
+	commit GitCommit,
+	parsed querylang.Query,
+	selection entitySearchSelection,
+) bool {
+	if !matchesHistoryCommitFilters(commit, selection) {
+		return false
+	}
+	return matchesEntityText(
+		historyCommitText(commit),
+		parsed.Text,
+		selection.includeText,
+		selection.excludeText,
+	)
+}
+
+func matchesHistoryCommitFilters(commit GitCommit, selection entitySearchSelection) bool {
+	if !matchesEntityText(
+		strings.Join([]string{commit.AuthorName, commit.AuthorEmail}, "\n"),
+		"",
+		selection.includeAuthor,
+		selection.excludeAuthor,
+	) {
+		return false
+	}
+	if !matchesEntityText(
+		strings.Join([]string{commit.Subject, commit.Body}, "\n"),
+		"",
+		selection.includeMessage,
+		selection.excludeMessage,
+	) {
+		return false
+	}
+	authoredAt, err := time.Parse(time.RFC3339, commit.AuthoredAt)
+	if err != nil {
+		return false
+	}
+	if selection.after != nil && authoredAt.Before(*selection.after) {
+		return false
+	}
+	return selection.before == nil || !authoredAt.After(*selection.before)
+}
+
+func matchesHistoryDiff(
+	commit GitCommit,
+	diff GitDiffResponse,
+	parsed querylang.Query,
+	selection entitySearchSelection,
+) bool {
+	if !matchesHistoryCommitFilters(commit, selection) {
+		return false
+	}
+	added, removed := historyDiffSides(diff.Patch)
+	if !matchesEntityText(added, "", selection.includeAdded, selection.excludeAdded) ||
+		!matchesEntityText(removed, "", selection.includeRemoved, selection.excludeRemoved) {
+		return false
+	}
+	return matchesEntityText(
+		historyCommitText(commit)+"\n"+diff.Patch,
+		parsed.Text,
+		selection.includeText,
+		selection.excludeText,
+	)
+}
+
+func historyCommitText(commit GitCommit) string {
+	return strings.Join([]string{
+		commit.Revision,
+		commit.AuthorName,
+		commit.AuthorEmail,
+		commit.AuthoredAt,
+		commit.Subject,
+		commit.Body,
+	}, "\n")
+}
+
+func historyDiffSides(patch string) (string, string) {
+	var added, removed strings.Builder
+	for line := range strings.SplitSeq(patch, "\n") {
+		switch {
+		case strings.HasPrefix(line, "+++") || strings.HasPrefix(line, "---"):
+			continue
+		case strings.HasPrefix(line, "+"):
+			added.WriteString(strings.TrimPrefix(line, "+"))
+			added.WriteByte('\n')
+		case strings.HasPrefix(line, "-"):
+			removed.WriteString(strings.TrimPrefix(line, "-"))
+			removed.WriteByte('\n')
+		}
+	}
+	return added.String(), removed.String()
+}
+
+func (s *Service) commitSearchItem(
+	repository catalog.Repository,
+	commit GitCommit,
+	filePath string,
+) SearchItem {
+	return SearchItem{
+		ResultType:   "commit",
+		RepositoryID: repository.ID,
+		Repository:   repository.Name,
+		Revision:     commit.Revision,
+		Path:         filePath,
+		Title:        commit.Subject,
+		Summary:      commit.Body,
+		Citation:     entityCitation(repository.Name, commit.Revision, "commit"),
+		SourceURL: s.entityURL(
+			"/api/git/log/"+strconv.FormatInt(repository.ID, 10),
+			url.Values{"revision": {commit.Revision}, "limit": {"1"}},
+		),
+		Metadata: []SearchItemMetadata{
+			{Label: "author", Value: commit.AuthorName + " <" + commit.AuthorEmail + ">"},
+			{Label: "authored", Value: commit.AuthoredAt},
+			{Label: "parents", Value: strings.Join(commit.Parents, " ")},
+		},
+	}
+}
+
+func (s *Service) diffSearchItem(
+	repository catalog.Repository,
+	commit GitCommit,
+	diff GitDiffResponse,
+	filePath string,
+) SearchItem {
+	title := commit.Subject
+	if title == "" {
+		title = "Diff " + itemShortRevision(commit.Revision)
+	}
+	values := url.Values{"to": {diff.ToRevision}}
+	if diff.FromRevision != "" {
+		values.Set("from", diff.FromRevision)
+	}
+	if filePath != "" {
+		values.Set("path", filePath)
+	}
+	return SearchItem{
+		ResultType:   "diff",
+		RepositoryID: repository.ID,
+		Repository:   repository.Name,
+		Revision:     diff.ToRevision,
+		Path:         filePath,
+		Title:        title,
+		Summary: fmt.Sprintf(
+			"%d files changed, %d insertions, %d deletions",
+			diff.FilesChanged,
+			diff.Insertions,
+			diff.Deletions,
+		),
+		Detail:   boundedItemDetail(diff.Patch),
+		Citation: entityCitation(repository.Name, diff.ToRevision, "diff"),
+		SourceURL: s.entityURL(
+			"/api/git/diff/"+strconv.FormatInt(repository.ID, 10),
+			values,
+		),
+		Metadata: []SearchItemMetadata{
+			{Label: "author", Value: commit.AuthorName + " <" + commit.AuthorEmail + ">"},
+			{Label: "authored", Value: commit.AuthoredAt},
+			{Label: "from", Value: diff.FromRevision},
+			{Label: "to", Value: diff.ToRevision},
+		},
+	}
 }
 
 func entitySearchResponse(

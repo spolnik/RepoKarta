@@ -68,6 +68,35 @@ func ResolveCommit(ctx context.Context, repository catalog.Repository, revision 
 	if !isHex(resolved) {
 		return "", ErrUnknownRevision
 	}
+	return requireReachableCommit(ctx, repository, resolved)
+}
+
+// ResolveBranch resolves an exact local or remote-tracking branch and permits
+// its tip only when it is reachable from RepoKarta's recorded indexed or HEAD
+// commit. Branch names are passed as Git arguments, never shell text.
+func ResolveBranch(ctx context.Context, repository catalog.Repository, branch string) (string, error) {
+	branch = strings.TrimSpace(strings.ReplaceAll(branch, "\\", "/"))
+	if !safeBranchName(branch) {
+		return "", ErrUnknownRevision
+	}
+	var resolved string
+	for _, prefix := range []string{"refs/heads/", "refs/remotes/"} {
+		output, err := gitOutput(ctx, repository, "rev-parse", "--verify", prefix+branch+"^{commit}")
+		if err != nil {
+			continue
+		}
+		resolved = strings.TrimSpace(string(output))
+		if isHex(resolved) {
+			break
+		}
+	}
+	if !isHex(resolved) {
+		return "", ErrUnknownRevision
+	}
+	return requireReachableCommit(ctx, repository, resolved)
+}
+
+func requireReachableCommit(ctx context.Context, repository catalog.Repository, resolved string) (string, error) {
 	for _, root := range []string{repository.IndexedCommit, repository.HeadCommit} {
 		root = strings.TrimSpace(root)
 		if !isHex(root) {
@@ -81,6 +110,18 @@ func ResolveCommit(ctx context.Context, repository catalog.Repository, revision 
 		}
 	}
 	return "", ErrUnknownRevision
+}
+
+func safeBranchName(value string) bool {
+	return value != "" &&
+		len(value) <= 255 &&
+		!strings.HasPrefix(value, "-") &&
+		!strings.HasPrefix(value, "/") &&
+		!strings.HasSuffix(value, "/") &&
+		!strings.HasSuffix(value, ".") &&
+		!strings.Contains(value, "..") &&
+		!strings.Contains(value, "@{") &&
+		!strings.ContainsAny(value, " \t\r\n~^:?*[\\\x00")
 }
 
 // Log returns newest-first commits reachable from a recorded revision. Both

@@ -601,7 +601,7 @@ search must remain fast and AI-free.
 - [ ] Add graph queries for upstream and downstream impact, shortest evidenced
   connection paths between two repositories, files, or symbols, and bounded
   traversal by relation type and depth.
-- [ ] Search commits and diffs by author, message, path, added or removed text,
+- [x] Search commits and diffs by author, message, path, added or removed text,
   date range, branch, and revision range without pretending unindexed history is
   part of the default-branch content index.
 - [ ] Ingest CODEOWNERS as commit-pinned metadata for owner display and filters,
@@ -870,7 +870,7 @@ completion criteria include:
 
 ## Current implementation version
 
-`0.61.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
+`0.62.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
 The M9 dependency inventory, public registry refresh, lockfile resolution, and
 explicit private-registry routing are implemented; discrepancy filtering and
 fail-closed classification of unconfigured internal package prefixes remain.
@@ -887,7 +887,10 @@ provide all twelve explicit search result types, grammar-compatible facets,
 mixed exact-path and exact-symbol ranking ahead of fuzzy content with
 deterministic explanations, and permission-preserving result actions
 for source, Maps, dependencies, references, implementations, scoped Chat, and
-the last active conversation context. The implemented slices also
+the last active conversation context. Repository-scoped Git history search now
+filters commits and diffs by author, message, path, actual added or removed
+lines, inclusive date range, exact reachable branch, and bounded revision
+range. The implemented slices also
 enforce insight mutation permissions and revision staleness, paginate
 dependency declarations, cache immutable file context trees, open the
 administrator console directly in loopback-local mode, and support
@@ -899,8 +902,8 @@ or derived-artifact work.
 ## Recommended next session
 
 Continue M7 with directory/symbol autocomplete, the remaining symbol-kind and
-ownership grammar filters, qualified programming-element search, mixed-result
-exact-match ranking, and optional SCIP-backed graph queries. Complete
+ownership grammar filters, qualified programming-element search, and optional
+SCIP-backed graph queries. Complete
 repository/file/directory/symbol parity when the Deep Search composer is
 introduced. Preserve the current fail-closed permission, revision, ambiguity,
 default-context, and completeness behavior before adding agentic Deep Search.

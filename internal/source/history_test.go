@@ -37,6 +37,13 @@ func TestHistoryAndDiffStayBoundedToRecordedAncestry(t *testing.T) {
 	}
 	repository := repositories[0]
 	repository.IndexedCommit = second
+	branch := strings.TrimSpace(runGitOutput(t, repositoryPath, "symbolic-ref", "--short", "HEAD"))
+	if resolved, err := ResolveBranch(context.Background(), repository, branch); err != nil || resolved != second {
+		t.Fatalf("ResolveBranch(%q) = %q, %v", branch, resolved, err)
+	}
+	if _, err := ResolveBranch(context.Background(), repository, "../unsafe"); !errors.Is(err, ErrUnknownRevision) {
+		t.Fatalf("expected unsafe branch to be rejected, got %v", err)
+	}
 
 	commits, truncated, outputTruncated, _, err := Log(context.Background(), repository, "", "", 1, 1<<20)
 	if err != nil {
@@ -109,10 +116,23 @@ func TestHistoryAndDiffStayBoundedToRecordedAncestry(t *testing.T) {
 	if _, err := ResolveCommit(context.Background(), repository, unrelated); !errors.Is(err, ErrUnknownRevision) {
 		t.Fatalf("expected unrelated revision to be rejected, got %v", err)
 	}
+	if _, err := ResolveBranch(context.Background(), repository, "unrelated"); !errors.Is(err, ErrUnknownRevision) {
+		t.Fatalf("expected unrelated branch to be rejected, got %v", err)
+	}
 
 	if _, err := ResolveCommit(context.Background(), repository, strings.Repeat("a", 40)); !errors.Is(err, ErrUnknownRevision) {
 		t.Fatalf("expected unknown revision, got %v", err)
 	}
+}
+
+func runGitOutput(t *testing.T, repositoryPath string, arguments ...string) string {
+	t.Helper()
+	command := exec.Command("git", append([]string{"-C", repositoryPath}, arguments...)...)
+	output, err := command.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(output)
 }
 
 func writeHistoryFile(t *testing.T, repositoryPath, content string) {

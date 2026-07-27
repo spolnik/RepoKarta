@@ -188,8 +188,8 @@ Service result_type:file_path
 PaymentService result_type:symbol_definition
 BaseService result_type:implementation repository:RepoKarta
 RepoKarta result_type:repository
-"Search Author" result_type:commit repository:RepoKarta path:internal
-needle result_type:diff repository:RepoKarta file:service.go
+result_type:commit repository:RepoKarta author:"Search Author" message:needle after:2026-01-01 branch:main path:internal
+result_type:diff repository:RepoKarta added:"func Needle" removed:"func Legacy" from:8f42c0a to:9a51d10 file:service.go
 mux result_type:dependency repository:RepoKarta
 "/api/search" result_type:route repository:RepoKarta
 architecture result_type:wiki_page repository:RepoKarta
@@ -197,9 +197,11 @@ coverage result_type:code_insight repository:RepoKarta
 ```
 
 The canonical fields are `content`, `repository`, `revision`, `language`,
-`path`, `file`, `symbol_kind`, `result_type`, and `owner`; `repo`, `rev`,
-`lang`, `filename`, `kind`, and `type` are accepted aliases. Prefix a field or
-bare content term with `-` to exclude it. Quote values containing whitespace.
+`path`, `file`, `symbol_kind`, `result_type`, `owner`, `author`, `message`,
+`added`, `removed`, `after`, `before`, `branch`, `from`, and `to`; `repo`,
+`rev`, `lang`, `filename`, `kind`, `type`, `date-from`, and `date-to` are
+accepted aliases. Prefix a field or bare content term with `-` to exclude it.
+Quote values containing whitespace.
 Multiple values of the same field are alternatives, while different fields
 are combined. Repository names and stable IDs resolve only against repositories
 visible to the caller, revision prefixes resolve only against their exact
@@ -213,10 +215,13 @@ all twelve documented result types: `content`, `file_path`, `repository`,
 `symbol_definition`, `reference`, `implementation`, `dependency`, `route`,
 `commit`, `diff`, `wiki_page`, and `code_insight`. Repository results come from
 the permission-filtered catalogue. Commit and diff results walk only history
-reachable from each recorded indexed or HEAD commit, accept one
-repository-relative path or filename constraint, and report bounded or
-truncated coverage explicitly. Diff responses are capped at 25 patches and
-each displayed patch excerpt is bounded. Dependency and route searches read
+reachable from each recorded indexed or HEAD commit. They support author,
+message, inclusive date bounds, an exact reachable branch or revision range,
+and one repository-relative path or filename constraint. Diff searches also
+match only actual added or removed lines for those respective filters. History
+coverage is bounded and reports truncation explicitly. Diff responses are
+capped at 25 patches and each displayed patch excerpt is bounded. Dependency
+and route searches read
 only prepared commit-keyed map artifacts; a cold artifact returns immediately
 with a visible building/partial warning rather than analyzing source inside
 the request. Wiki results search generated ready or stale pages and their
@@ -761,11 +766,11 @@ Windows amd64 and Apple Silicon macOS. The workflow:
 Run the same packagers locally:
 
 ```powershell
-.\scripts\package-release.ps1 -Version 0.61.0-dev
+.\scripts\package-release.ps1 -Version 0.62.0-dev
 ```
 
 ```sh
-./scripts/package-release.sh 0.61.0-dev
+./scripts/package-release.sh 0.62.0-dev
 ```
 
 macOS packages are signed with the hardened runtime when

@@ -18,6 +18,15 @@ const (
 	FieldSymbolKind = "symbol_kind"
 	FieldResultType = "result_type"
 	FieldOwner      = "owner"
+	FieldAuthor     = "author"
+	FieldMessage    = "message"
+	FieldAdded      = "added"
+	FieldRemoved    = "removed"
+	FieldAfter      = "after"
+	FieldBefore     = "before"
+	FieldBranch     = "branch"
+	FieldFrom       = "from"
+	FieldTo         = "to"
 )
 
 var fieldAliases = map[string]string{
@@ -38,6 +47,19 @@ var fieldAliases = map[string]string{
 	"result-type": FieldResultType,
 	"result_type": FieldResultType,
 	"owner":       FieldOwner,
+	"author":      FieldAuthor,
+	"message":     FieldMessage,
+	"added":       FieldAdded,
+	"removed":     FieldRemoved,
+	"after":       FieldAfter,
+	"date-from":   FieldAfter,
+	"date_from":   FieldAfter,
+	"before":      FieldBefore,
+	"date-to":     FieldBefore,
+	"date_to":     FieldBefore,
+	"branch":      FieldBranch,
+	"from":        FieldFrom,
+	"to":          FieldTo,
 }
 
 // Filter is one canonical positive or negative query constraint.

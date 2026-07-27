@@ -57,6 +57,15 @@ var completionFields = []fieldDefinition{
 	{name: "owner", detail: "CODEOWNERS identity or explicit state", values: options(
 		"owned", "unavailable", "unowned", "unresolved",
 	)},
+	{name: "author", detail: "Git author name or email contains"},
+	{name: "message", detail: "Git subject or body contains"},
+	{name: "added", detail: "Added diff line contains"},
+	{name: "removed", detail: "Removed diff line contains"},
+	{name: "after", detail: "Authored on or after YYYY-MM-DD"},
+	{name: "before", detail: "Authored on or before YYYY-MM-DD"},
+	{name: "branch", detail: "Reachable local or remote branch"},
+	{name: "from", detail: "Reachable range start revision"},
+	{name: "to", detail: "Reachable range end revision"},
 }
 
 // Complete returns deterministic field/value completions at the browser caret.
@@ -162,6 +171,24 @@ func canonicalFieldName(field string) string {
 		return "result_type"
 	case FieldOwner:
 		return "owner"
+	case FieldAuthor:
+		return "author"
+	case FieldMessage:
+		return "message"
+	case FieldAdded:
+		return "added"
+	case FieldRemoved:
+		return "removed"
+	case FieldAfter:
+		return "after"
+	case FieldBefore:
+		return "before"
+	case FieldBranch:
+		return "branch"
+	case FieldFrom:
+		return "from"
+	case FieldTo:
+		return "to"
 	default:
 		return field
 	}
