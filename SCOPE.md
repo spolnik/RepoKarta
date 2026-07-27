@@ -137,6 +137,7 @@ repositories on managed Windows and Apple Silicon macOS laptops.
   - `git_diff`
   - `read_repository_map`
   - `read_dependency_inventory`
+  - `read_system_topology`
   - `list_deep_wiki_pages`
   - `read_generated_document`
 - Stream answer progress and citations to the browser.
@@ -209,8 +210,17 @@ repositories on managed Windows and Apple Silicon macOS laptops.
   configuration. Prefer production configuration and `src/main` evidence;
   retain test-only edges only as explicit low-confidence facts. Only targets
   that resolve to a discovered repository, Gradle `rootProject.name`, or
-  `spring.application.name` become edges; unresolved variables and
-  infrastructure hosts are dropped.
+  `spring.application.name` become legacy map edges; unresolved variables and
+  infrastructure hosts are dropped from that repository-map layer.
+- Maintain a separate distributed-system topology over deployable components,
+  not package/source-file nodes. Preserve directed HTTP, gRPC, Kafka,
+  database, MCP, and explicitly declared relationships with protocol,
+  interaction, transport, confidence, source/runtime origin, peer-resolution
+  state, and bounded evidence.
+- Reconcile component aliases across repositories and monorepo application
+  roots without resolving queues or databases to same-named services. Preserve
+  unresolved service peers and inferred external resources visibly instead of
+  inventing ownership.
 - Provide repository, package, component, and dependency views.
 - Use a small TypeScript visualization island within the otherwise
   server-rendered HTMX application.
@@ -831,6 +841,45 @@ Exit condition: an administrator can discover, approve, acquire, synchronize,
 and safely remove a bounded repository fleet while every indexed revision has
 clear acquisition provenance and failures never silently shrink coverage.
 
+### M12: distributed dependency topology
+
+Redesign Dependencies around deployable components and communication flows
+while preserving the package inventory and advisory workspace as focused
+secondary views.
+
+- [x] Make the component-level system topology the default Dependencies view;
+  keep package declarations and security findings on explicit tabs.
+- [x] Detect directed HTTP, gRPC, Kafka publish/consume, database, and MCP
+  relationships from committed source and configuration without executing
+  repository code. MCP retains protocol identity and transport (`stdio` or
+  Streamable HTTP) rather than collapsing into generic HTTP.
+- [x] Model services, databases, queues, brokers, MCP servers, and external
+  services with stable aliases, technology, repository/path ownership,
+  capabilities, and exact revision-pinned evidence.
+- [x] Recognize multiple deployable components through Spring application
+  roots, Docker Compose services, Backstage catalog entities, and an explicit
+  `.repokarta.yml` topology correction layer.
+- [x] Reconcile fleet peers with kind-aware alias matching; represent Kafka
+  flow as publisher to topic and topic to consumer; never resolve a same-named
+  database/topic to an application service.
+- [x] Persist bounded runtime observations independently from static artifacts
+  with provider, environment, observation window, request/error counts, p95
+  latency, import time, and 90-day retention.
+- [x] Merge equivalent static and runtime edges into `confirmed` relationships
+  while keeping `static_only`, `runtime_only`, and unresolved peers visible as
+  architecture drift.
+- [x] Expose filtering, focus-neighbor interaction, accessible connection
+  inventory, evidence/telemetry inspection, bounded JSON read/import APIs, and
+  the read-only `read_system_topology` MCP tool.
+- [x] Require artifact-management permission for runtime imports; keep reads
+  cache-only and return explicit `202 Accepted` progress for cold topology
+  artifacts.
+
+Exit condition: a user can answer which component communicates with which
+service or resource, in which direction and over which protocol, distinguish
+declared/static architecture from observed runtime traffic, and open the exact
+evidence without treating package imports as distributed-system calls.
+
 ## Definition of quality
 
 A capability is not complete merely because its happy path renders. Relevant
@@ -882,12 +931,17 @@ completion criteria include:
 
 ## Current implementation version
 
-`0.68.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
+`0.69.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
 The M9 dependency inventory, public registry refresh, lockfile resolution,
 explicit private-registry routing, reproducible OSV advisory snapshots,
 ecosystem-correct fleet CVE matching, scope-aware UI/JSON/MCP findings, and
 SARIF export are implemented; discrepancy filtering and fail-closed
 classification of unconfigured internal package prefixes remain.
+M12 distributed dependency topology is complete: the Dependencies landing view
+now models deployable components and directed HTTP, gRPC, Kafka, database, and
+MCP relationships; type-aware fleet reconciliation, explicit declarations,
+runtime observation import/retention, static-vs-runtime drift, JSON, MCP, and
+the interactive evidence view are implemented.
 Linked-worktree discovery deduplication and M10 enterprise identity and
 administration are complete; M11 is complete. The implemented M7-M11 slices
 now resolve directory Git trees and exact syntax-backed symbol declarations

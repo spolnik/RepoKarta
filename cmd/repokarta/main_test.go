@@ -8,8 +8,8 @@ import (
 // TestVersionIsTheCurrentImplementationVersion keeps the reported version in
 // step with the completed milestone recorded in SCOPE.md.
 func TestVersionIsTheCurrentImplementationVersion(t *testing.T) {
-	if version != "0.68.0-dev" {
-		t.Fatalf("version = %q, want %q", version, "0.68.0-dev")
+	if version != "0.69.0-dev" {
+		t.Fatalf("version = %q, want %q", version, "0.69.0-dev")
 	}
 	if !regexp.MustCompile(`^\d+\.\d+\.\d+(-[a-z]+)?$`).MatchString(version) {
 		t.Fatalf("version %q is not a semantic version", version)

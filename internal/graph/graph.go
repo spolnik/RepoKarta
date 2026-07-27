@@ -34,7 +34,7 @@ import (
 )
 
 const (
-	snapshotVersion       = 11
+	snapshotVersion       = 13
 	maximumFiles          = 20_000
 	maximumSourceFiles    = 5_000
 	maximumSourceFileSize = 1 << 20
@@ -146,6 +146,40 @@ type Edge struct {
 	Evidence   []Evidence `json:"evidence"`
 }
 
+// SystemComponent is a deployable service or infrastructure resource in the
+// distributed-system topology. Unlike Node, it deliberately stays above the
+// source-file/package level and can be reconciled across repositories by its
+// stable aliases.
+type SystemComponent struct {
+	ID           string     `json:"id"`
+	Name         string     `json:"name"`
+	Kind         string     `json:"kind"`
+	Technology   string     `json:"technology,omitempty"`
+	RepositoryID int64      `json:"repository_id,omitempty"`
+	Repository   string     `json:"repository,omitempty"`
+	Path         string     `json:"path,omitempty"`
+	Aliases      []string   `json:"aliases,omitempty"`
+	Capabilities []string   `json:"capabilities,omitempty"`
+	External     bool       `json:"external"`
+	Evidence     []Evidence `json:"evidence,omitempty"`
+}
+
+// SystemConnection is a directed interaction between deployable components.
+// Protocol and interaction are separate because, for example, Kafka publish
+// and consume edges share a protocol but flow in opposite directions.
+type SystemConnection struct {
+	ID             string     `json:"id"`
+	Source         string     `json:"source"`
+	Target         string     `json:"target"`
+	Protocol       string     `json:"protocol"`
+	Interaction    string     `json:"interaction"`
+	Transport      string     `json:"transport,omitempty"`
+	Confidence     string     `json:"confidence"`
+	EvidenceOrigin string     `json:"evidence_origin"`
+	TargetResolved bool       `json:"target_resolved"`
+	Evidence       []Evidence `json:"evidence,omitempty"`
+}
+
 // Scope makes collection bounding part of the public map contract. Truncated
 // still reports any bounded analysis; Scope says specifically whether every
 // repository requested by the caller was analyzed.
@@ -196,6 +230,8 @@ type Snapshot struct {
 	Manifests          []Manifest           `json:"manifests"`
 	Nodes              []Node               `json:"nodes"`
 	Edges              []Edge               `json:"edges"`
+	Components         []SystemComponent    `json:"components,omitempty"`
+	Connections        []SystemConnection   `json:"connections,omitempty"`
 	Structure          []StructuralDocument `json:"structure,omitempty"`
 	StructureTruncated bool                 `json:"structure_truncated"`
 	FileCount          int                  `json:"file_count"`
@@ -448,6 +484,103 @@ func (s *Service) ReadDependencySnapshot(
 		output.StructureTruncated = output.StructureTruncated || result.snapshot.StructureTruncated
 		output.Scope.AnalyzedRepositories++
 	}
+	output.Scope.OmittedRepositories = output.Scope.TotalRepositories - output.Scope.AnalyzedRepositories
+	output.Scope.Complete = output.Scope.OmittedRepositories == 0
+	output.Truncated = output.Truncated || !output.Scope.Complete
+	progress := artifactProgress(output.Scope.TotalRepositories, output.Scope.AnalyzedRepositories)
+	return output, progress, nil
+}
+
+// ReadTopologySnapshot composes distributed-system components and connections
+// from already-prepared per-repository artifacts. The final fleet pass
+// reconciles inferred external peers against aliases from every visible
+// repository, which is impossible while a repository is indexed in isolation.
+func (s *Service) ReadTopologySnapshot(
+	ctx context.Context,
+	repositoryID int64,
+) (Snapshot, ArtifactProgress, error) {
+	repositories, err := s.repositories(ctx, repositoryID)
+	if err != nil {
+		return Snapshot{}, ArtifactProgress{}, err
+	}
+	type result struct {
+		snapshot Snapshot
+		ok       bool
+	}
+	results := make([]result, len(repositories))
+	workers := make(chan struct{}, maximumStructuralReadConcurrency)
+	var wait sync.WaitGroup
+	for index, repository := range repositories {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			select {
+			case workers <- struct{}{}:
+				defer func() { <-workers }()
+			case <-ctx.Done():
+				return
+			}
+			snapshot, ok := s.readCachedSnapshot(s.repositorySnapshotPath(repository))
+			results[index] = result{snapshot: snapshot, ok: ok}
+		}()
+	}
+	wait.Wait()
+	if err := ctx.Err(); err != nil {
+		return Snapshot{}, ArtifactProgress{}, err
+	}
+
+	output := Snapshot{
+		Version:      snapshotVersion,
+		ID:           snapshotSignature(repositories),
+		GeneratedAt:  time.Now().UTC(),
+		Repositories: []Repository{},
+		Components:   []SystemComponent{},
+		Connections:  []SystemConnection{},
+		Scope: Scope{
+			Kind:                  "repository",
+			TotalRepositories:     len(repositories),
+			RequestedRepositoryID: repositoryID,
+		},
+	}
+	if repositoryID == 0 {
+		output.Scope.Kind = "collection"
+	}
+	merged := newBuilder(s.currentBaseURL())
+	for _, result := range results {
+		if !result.ok {
+			continue
+		}
+		output.Repositories = append(output.Repositories, result.snapshot.Repositories...)
+		for _, component := range result.snapshot.Components {
+			merged.addSystemComponent(component)
+		}
+		for _, connection := range result.snapshot.Connections {
+			merged.addSystemConnection(connection)
+		}
+		output.Truncated = output.Truncated || result.snapshot.Truncated
+		output.Scope.AnalyzedRepositories++
+	}
+	merged.resolveSystemConnections()
+	for _, component := range merged.components {
+		component.Aliases = uniqueSorted(component.Aliases)
+		component.Capabilities = uniqueSorted(component.Capabilities)
+		output.Components = append(output.Components, component)
+	}
+	for _, connection := range merged.connections {
+		output.Connections = append(output.Connections, connection)
+	}
+	slices.SortFunc(output.Components, func(left, right SystemComponent) int {
+		if left.External != right.External {
+			if left.External {
+				return 1
+			}
+			return -1
+		}
+		return strings.Compare(strings.ToLower(left.Name), strings.ToLower(right.Name))
+	})
+	slices.SortFunc(output.Connections, func(left, right SystemConnection) int {
+		return strings.Compare(left.ID, right.ID)
+	})
 	output.Scope.OmittedRepositories = output.Scope.TotalRepositories - output.Scope.AnalyzedRepositories
 	output.Scope.Complete = output.Scope.OmittedRepositories == 0
 	output.Truncated = output.Truncated || !output.Scope.Complete
@@ -768,6 +901,8 @@ type builder struct {
 	manifests                 []Manifest
 	nodes                     map[string]Node
 	edges                     map[string]Edge
+	components                map[string]SystemComponent
+	connections               map[string]SystemConnection
 	serviceTargets            map[string]string
 	clientReferences          []clientReference
 	structure                 []StructuralDocument
@@ -794,12 +929,15 @@ func newBuilder(baseURL string) *builder {
 		languages:      make(map[string]int),
 		nodes:          make(map[string]Node),
 		edges:          make(map[string]Edge),
+		components:     make(map[string]SystemComponent),
+		connections:    make(map[string]SystemConnection),
 		serviceTargets: make(map[string]string),
 	}
 }
 
 func (b *builder) snapshot(signature string) Snapshot {
 	b.resolveClientReferences()
+	b.resolveSystemConnections()
 	nodes := make([]Node, 0, len(b.nodes))
 	for _, node := range b.nodes {
 		nodes = append(nodes, node)
@@ -815,6 +953,28 @@ func (b *builder) snapshot(signature string) Snapshot {
 		edges = append(edges, edge)
 	}
 	slices.SortFunc(edges, func(left, right Edge) int { return strings.Compare(left.ID, right.ID) })
+	components := make([]SystemComponent, 0, len(b.components))
+	for _, component := range b.components {
+		component.Aliases = uniqueSorted(component.Aliases)
+		component.Capabilities = uniqueSorted(component.Capabilities)
+		components = append(components, component)
+	}
+	slices.SortFunc(components, func(left, right SystemComponent) int {
+		if left.External != right.External {
+			if left.External {
+				return 1
+			}
+			return -1
+		}
+		return strings.Compare(strings.ToLower(left.Name), strings.ToLower(right.Name))
+	})
+	connections := make([]SystemConnection, 0, len(b.connections))
+	for _, connection := range b.connections {
+		connections = append(connections, connection)
+	}
+	slices.SortFunc(connections, func(left, right SystemConnection) int {
+		return strings.Compare(left.ID, right.ID)
+	})
 	slices.SortFunc(b.manifests, func(left, right Manifest) int {
 		if left.RepositoryID != right.RepositoryID {
 			return int(left.RepositoryID - right.RepositoryID)
@@ -836,6 +996,8 @@ func (b *builder) snapshot(signature string) Snapshot {
 		Manifests:          b.manifests,
 		Nodes:              nodes,
 		Edges:              edges,
+		Components:         components,
+		Connections:        connections,
 		Structure:          b.structure,
 		StructureTruncated: b.structureTruncated,
 		FileCount:          b.fileCount,
@@ -893,7 +1055,7 @@ func (b *builder) analyzeRepository(ctx context.Context, repository catalog.Repo
 	sourceCount := 0
 	for _, filePath := range files {
 		if !isManifest(filePath) && !isAnalyzedSource(filePath) &&
-			!isServiceConfiguration(filePath) {
+			!isServiceConfiguration(filePath) && !isTopologyFile(filePath) {
 			continue
 		}
 		if isAnalyzedSource(filePath) {
@@ -930,6 +1092,7 @@ func (b *builder) analyzeRepository(ctx context.Context, repository catalog.Repo
 	b.addJavaStructure(repository, revision, repositoryNodeID, contents)
 	b.addGradleManifests(repository, revision, repositoryNodeID, contents)
 	b.addOtherManifests(repository, revision, repositoryNodeID, contents)
+	b.addDistributedTopology(repository, revision, evidencePath, contents)
 	return nil
 }
 

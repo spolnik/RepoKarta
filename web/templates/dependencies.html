@@ -4,30 +4,49 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="description" content="Review commit-pinned dependency declarations without modifying repositories.">
+    <meta name="description" content="Explore directed service, API, messaging, database, and MCP dependencies across distributed systems.">
     <meta name="theme-color" content="#090b0f">
     <link rel="icon" href="/assets/favicon.ico" sizes="any">
     <link rel="icon" type="image/png" href="/assets/favicon-32.png" sizes="32x32">
     <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
-    <title>RepoKarta · Dependency management</title>
+    <title>RepoKarta · Distributed dependencies</title>
     <link rel="stylesheet" href="/assets/app.css">
     <script type="module" src="/assets/app.js"></script>
   </head>
   <body class="min-h-full bg-surface-base text-ink antialiased">
-    <a class="skip-link" href="#dependency-inventory">Skip to dependency inventory</a>
+    <a class="skip-link" href="#dependency-workspace">Skip to dependencies</a>
     {{template "app-header" .}}
 
-    <main id="dependency-inventory" class="mx-auto max-w-[1500px] px-5 py-8 lg:px-8 lg:py-10">
+    <main id="dependency-workspace" class="mx-auto max-w-[1600px] px-5 py-8 lg:px-8 lg:py-10">
       <section aria-labelledby="dependency-heading">
         <div class="flex flex-col justify-between gap-5 lg:flex-row lg:items-end">
           <div>
-            <p class="mb-2 text-xs font-semibold uppercase tracking-[0.24em] text-emerald-400">Read-only workspace</p>
-            <h1 id="dependency-heading" class="text-3xl font-semibold tracking-[-0.04em] text-white sm:text-4xl">Dependency management</h1>
+            <p class="mb-2 text-xs font-semibold uppercase tracking-[0.24em] text-emerald-400">Distributed architecture</p>
+            <h1 id="dependency-heading" class="text-3xl font-semibold tracking-[-0.04em] text-white sm:text-4xl">Dependencies</h1>
             <p class="mt-3 max-w-3xl text-sm leading-6 text-ink-soft sm:text-base">
-              Declared packages are extracted from committed manifests. Security findings join those exact revisions to a local, reproducible OSV snapshot and remain advisory-only.
+              Follow directed communication between deployable components over HTTP, gRPC, Kafka, databases, and MCP. Static source evidence stays distinct from timestamped runtime observations.
             </p>
           </div>
-          {{if .FindingsView}}
+          {{if .TopologyView}}
+          <form action="/dependencies" method="get" class="grid min-w-72 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <input type="hidden" name="view" value="topology">
+            <label class="filter-field min-w-64 flex-1">
+              <span>System scope</span>
+              <select name="repository">
+                <option value="">All visible components</option>
+                {{range .Repositories}}
+                <option value="{{.ID}}" {{if eq $.SelectedRepositoryID .ID}}selected{{end}}>{{index $.RepositoryLabels .ID}}</option>
+                {{end}}
+              </select>
+            </label>
+            <label class="filter-field lg:col-span-2"><span>Component or connection</span><input name="query" value="{{.Topology.Options.Query}}" placeholder="checkout, payments, orders"></label>
+            <label class="filter-field"><span>Protocol</span><select name="protocol"><option value="">All protocols</option><option value="http" {{if eq .Topology.Options.Protocol "http"}}selected{{end}}>HTTP</option><option value="grpc" {{if eq .Topology.Options.Protocol "grpc"}}selected{{end}}>gRPC</option><option value="kafka" {{if eq .Topology.Options.Protocol "kafka"}}selected{{end}}>Kafka</option><option value="database" {{if eq .Topology.Options.Protocol "database"}}selected{{end}}>Database</option><option value="mcp" {{if eq .Topology.Options.Protocol "mcp"}}selected{{end}}>MCP</option><option value="unknown" {{if eq .Topology.Options.Protocol "unknown"}}selected{{end}}>Declared / unknown</option></select></label>
+            <label class="filter-field"><span>Evidence</span><select name="origin"><option value="">Static + runtime</option><option value="confirmed" {{if eq .Topology.Options.Origin "confirmed"}}selected{{end}}>Confirmed by runtime</option><option value="static" {{if eq .Topology.Options.Origin "static"}}selected{{end}}>Static evidence</option><option value="runtime" {{if eq .Topology.Options.Origin "runtime"}}selected{{end}}>Observed runtime</option></select></label>
+            <label class="filter-field"><span>Environment</span><input name="environment" value="{{.Topology.Options.Environment}}" placeholder="prod"></label>
+            <label class="filter-field"><span>Runtime provider</span><input name="provider" value="{{.Topology.Options.Provider}}" placeholder="Tempo, Datadog, OTel"></label>
+            <button class="search-button px-5 py-3" type="submit">Apply topology filters</button>
+          </form>
+          {{else if .FindingsView}}
           <form action="/dependencies" method="get" class="grid min-w-72 gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <input type="hidden" name="view" value="findings">
             <label class="filter-field min-w-64 flex-1">
@@ -49,6 +68,7 @@
           </form>
           {{else}}
           <form action="/dependencies" method="get" class="grid min-w-72 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <input type="hidden" name="view" value="inventory">
             <label class="filter-field min-w-64 flex-1">
               <span>Repository scope</span>
               <select name="repository">
@@ -70,11 +90,14 @@
         </div>
 
         <nav class="mt-6 flex flex-wrap gap-3" aria-label="Dependency workspace views">
-          <a class="{{if not .FindingsView}}search-button{{else}}app-nav-link{{end}} px-4 py-2" href="/dependencies{{if .SelectedRepositoryID}}?repository={{.SelectedRepositoryID}}{{end}}">Inventory</a>
+          <a class="{{if .TopologyView}}search-button{{else}}app-nav-link{{end}} px-4 py-2" href="/dependencies{{if .SelectedRepositoryID}}?repository={{.SelectedRepositoryID}}{{end}}">System topology</a>
+          <a class="{{if and (not .TopologyView) (not .FindingsView)}}search-button{{else}}app-nav-link{{end}} px-4 py-2" href="/dependencies?view=inventory{{if .SelectedRepositoryID}}&amp;repository={{.SelectedRepositoryID}}{{end}}">Package inventory</a>
           <a class="{{if .FindingsView}}search-button{{else}}app-nav-link{{end}} px-4 py-2" href="/dependencies?view=findings{{if .SelectedRepositoryID}}&amp;repository={{.SelectedRepositoryID}}{{end}}">Security findings</a>
         </nav>
 
-        {{if .FindingsView}}
+        {{if .TopologyView}}
+        {{template "dependency-topology-content" .}}
+        {{else if .FindingsView}}
         {{template "dependency-findings-content" .}}
         {{else}}
         <details class="mt-6 rounded-xl border border-sky-300/20 bg-sky-400/[0.05] p-5" open>
@@ -232,4 +255,118 @@
     </main>
   </body>
 </html>
+{{end}}
+
+{{define "dependency-topology-content"}}
+<div class="mt-6" data-topology-workspace data-topology-api="{{.APIURL}}">
+  <dl class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8">
+    <div class="topology-metric"><dt>Components</dt><dd>{{.Topology.Summary.ComponentCount}}</dd></div>
+    <div class="topology-metric"><dt>Connections</dt><dd>{{.Topology.Summary.ConnectionCount}}</dd></div>
+    <div class="topology-metric topology-metric-confirmed"><dt>Confirmed</dt><dd>{{.Topology.Summary.ConfirmedCount}}</dd></div>
+    <div class="topology-metric"><dt>Static only</dt><dd>{{.Topology.Summary.StaticOnlyCount}}</dd></div>
+    <div class="topology-metric topology-metric-runtime"><dt>Runtime only</dt><dd>{{.Topology.Summary.RuntimeOnlyCount}}</dd></div>
+    <div class="topology-metric"><dt>Services</dt><dd>{{.Topology.Summary.ServiceCount}}</dd></div>
+    <div class="topology-metric"><dt>Resources</dt><dd>{{.Topology.Summary.ResourceCount}}</dd></div>
+    <div class="topology-metric topology-metric-unresolved"><dt>Unresolved peers</dt><dd>{{.Topology.Summary.UnresolvedCount}}</dd></div>
+  </dl>
+
+  {{if .Topology.BuildProgress.PendingRepositories}}
+  <p class="mt-5 rounded-lg border border-sky-300/20 bg-sky-400/[0.06] px-4 py-3 text-sm text-sky-100" role="status">
+    Building topology artifacts in parallel:
+    <strong>{{.Topology.BuildProgress.ReadyRepositories}} of {{.Topology.BuildProgress.RequestedRepositories}}</strong>
+    repositories ready. The API returns <code>202 Accepted</code> while this view is partial.
+  </p>
+  {{end}}
+  {{if .Topology.Partial}}
+  <p class="mt-5 rounded-lg border border-amber-300/20 bg-amber-400/[0.06] px-4 py-3 text-sm text-amber-100">
+    This topology is explicitly partial. {{.Topology.Scope.AnalyzedRepositories}} of {{.Topology.Scope.TotalRepositories}} requested repositories contributed current artifacts.
+  </p>
+  {{end}}
+
+  <div class="topology-shell mt-6">
+    <section class="topology-stage" aria-labelledby="topology-graph-heading">
+      <div class="topology-toolbar">
+        <div>
+          <p class="text-xs uppercase tracking-[0.16em] text-ink-faint">Directed component graph</p>
+          <h2 id="topology-graph-heading" class="mt-1 font-semibold text-white">Who talks to what, and how</h2>
+        </div>
+        <div class="flex flex-wrap gap-2">
+          <button type="button" class="map-secondary-action" data-topology-focus disabled>Focus neighbors</button>
+          <button type="button" class="map-secondary-action" data-topology-reset>Reset</button>
+          <button type="button" class="map-secondary-action" data-topology-list aria-pressed="false">Connection table</button>
+          <a class="map-secondary-action" href="{{.APIURL}}">JSON API</a>
+        </div>
+      </div>
+      <div class="topology-canvas" data-topology-canvas role="img" aria-label="Directed distributed-system dependency graph"></div>
+      <div class="topology-empty" data-topology-empty hidden>
+        <strong>No component connections match this scope.</strong>
+        <p>Static detection ignores package imports. Add deployment/client evidence, import runtime observations, or declare precise relationships under <code>topology</code> in <code>.repokarta.yml</code>.</p>
+      </div>
+      <div class="topology-legend" aria-label="Topology legend">
+        <span data-protocol="http">HTTP</span>
+        <span data-protocol="grpc">gRPC</span>
+        <span data-protocol="kafka">Kafka</span>
+        <span data-protocol="database">Database</span>
+        <span data-protocol="mcp">MCP</span>
+        <span data-state="confirmed">Static + runtime</span>
+        <span data-state="runtime_only">Runtime only</span>
+        <span data-state="static_only">Static only</span>
+      </div>
+    </section>
+
+    <aside class="topology-inspector" aria-labelledby="topology-inspector-heading">
+      <div data-topology-inspector-empty>
+        <p class="text-xs uppercase tracking-[0.16em] text-emerald-300">Evidence and telemetry</p>
+        <h2 id="topology-inspector-heading" class="mt-2 text-xl font-semibold text-white">Select a component or arrow</h2>
+        <p class="mt-3 text-sm leading-6 text-ink-soft">Arrows follow actual communication flow. Select one to see protocol, confidence, immutable source locations, and runtime RED-style metrics when imported.</p>
+      </div>
+      <div data-topology-inspector hidden>
+        <span class="topology-inspector-kind" data-topology-inspector-kind></span>
+        <h2 class="mt-3 text-xl font-semibold text-white" data-topology-inspector-title></h2>
+        <p class="mt-2 text-sm leading-6 text-ink-soft" data-topology-inspector-subtitle></p>
+        <dl class="topology-inspector-meta" data-topology-inspector-meta></dl>
+        <section class="mt-6">
+          <h3 class="text-xs font-semibold uppercase tracking-[0.16em] text-ink-faint">Evidence</h3>
+          <ol class="mt-3 grid gap-2" data-topology-evidence></ol>
+        </section>
+      </div>
+    </aside>
+  </div>
+
+  <section class="topology-table mt-6" data-topology-table hidden aria-labelledby="topology-table-heading">
+    <div class="flex flex-wrap items-end justify-between gap-3 border-b border-white/[0.08] px-5 py-4">
+      <div>
+        <h2 id="topology-table-heading" class="font-semibold text-white">Connection inventory</h2>
+        <p class="mt-1 text-xs text-ink-faint">The accessible tabular form of every edge currently rendered above.</p>
+      </div>
+      <span class="text-xs text-ink-faint">{{.Topology.Summary.ConnectionCount}} connections</span>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="w-full min-w-[1100px] border-collapse text-left text-sm">
+        <thead><tr><th>Source</th><th>Flow</th><th>Target</th><th>Protocol</th><th>Evidence state</th><th>Runtime window</th></tr></thead>
+        <tbody>
+          {{range .Topology.Connections}}
+          <tr>
+            <td><strong>{{.SourceName}}</strong><code class="mt-1 block text-xs text-ink-faint">{{.Source}}</code></td>
+            <td><strong>{{.Interaction}} →</strong></td>
+            <td><strong>{{.TargetName}}</strong><code class="mt-1 block text-xs text-ink-faint">{{.Target}}</code></td>
+            <td><span class="topology-protocol topology-protocol-{{.Protocol}}">{{.Protocol}}{{if .Transport}} · {{.Transport}}{{end}}</span></td>
+            <td><span class="topology-state topology-state-{{.State}}">{{.State}}</span></td>
+            <td>{{if .Runtime}}{{formatTime .Runtime.ObservedFrom}} – {{formatTime .Runtime.ObservedTo}}<span class="block text-xs text-ink-faint">{{.Runtime.RequestCount}} requests · {{.Runtime.ErrorCount}} errors · p95 {{printf "%.1f" .Runtime.LatencyP95MS}} ms</span>{{else}}<span class="text-ink-faint">Not observed in selected window</span>{{end}}</td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <details class="mt-6 rounded-xl border border-sky-300/20 bg-sky-400/[0.05] p-5">
+    <summary class="cursor-pointer font-semibold text-sky-100">Model and runtime ingestion contract</summary>
+    <div class="mt-4 grid gap-5 text-sm leading-6 text-ink-soft lg:grid-cols-3">
+      <div><strong class="block text-ink-strong">Static, commit-pinned</strong>HTTP/gRPC clients, Kafka producers and consumers, database DSNs, MCP server configurations, Docker Compose, Backstage relations, Spring service identities, and explicit <code>.repokarta.yml</code> topology declarations are extracted without running repository code.</div>
+      <div><strong class="block text-ink-strong">Runtime, timestamped</strong>Administrators can POST bounded aggregate service-graph observations to <code>/api/dependencies/topology/observations</code>. Provider, environment, time window, request/error counts, and p95 latency remain visibly separate from source evidence and are retained for 90 days.</div>
+      <div><strong class="block text-ink-strong">Identity and drift</strong>Stable aliases reconcile peers across repositories. A matching static and runtime edge is <em>confirmed</em>; static-only and runtime-only edges stay visible as architecture drift, while ambiguous peers remain explicitly unresolved.</div>
+    </div>
+  </details>
+</div>
 {{end}}

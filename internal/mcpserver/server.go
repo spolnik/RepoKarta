@@ -37,15 +37,16 @@ type Config struct {
 	Token         string
 	Artifacts     ArtifactReader
 	Insights      InsightReader
-	Dependencies  DependencyFindingReader
+	Dependencies  DependencyReader
 	ResolveViewer func(context.Context, string) (access.Viewer, error)
 	AllowUnscoped func() bool
 }
 
-// DependencyFindingReader joins a persisted advisory snapshot onto a supplied
-// commit-pinned inventory without contacting OSV on an MCP read.
-type DependencyFindingReader interface {
+// DependencyReader joins mutable, timestamped observations onto immutable
+// dependency artifacts without contacting external services on an MCP read.
+type DependencyReader interface {
 	Findings(context.Context, graph.Snapshot, dependencies.AdvisoryOptions) (dependencies.FindingResponse, error)
+	Topology(context.Context, graph.Snapshot, graph.ArtifactProgress, dependencies.TopologyOptions) (dependencies.Topology, error)
 }
 
 // InsightReader exposes normalized evidence without invoking AI or scanners.
@@ -74,6 +75,7 @@ type Intelligence interface {
 type ArtifactReader interface {
 	RepositoryMap(context.Context, int64) (graph.Snapshot, error)
 	DependencySnapshot(context.Context, int64) (graph.Snapshot, error)
+	TopologySnapshot(context.Context, int64) (graph.Snapshot, graph.ArtifactProgress, error)
 	GeneratedDocuments(context.Context, int64) (docs.Site, error)
 	GeneratedDocument(context.Context, int64, string) (docs.Page, error)
 }
@@ -82,6 +84,7 @@ type ArtifactReader interface {
 type MapReader interface {
 	Snapshot(context.Context, int64, bool) (graph.Snapshot, error)
 	ReadDependencySnapshot(context.Context, int64) (graph.Snapshot, graph.ArtifactProgress, error)
+	ReadTopologySnapshot(context.Context, int64) (graph.Snapshot, graph.ArtifactProgress, error)
 }
 
 // DocumentReader supplies generated repository pages.
@@ -107,6 +110,13 @@ func (a Artifacts) RepositoryMap(ctx context.Context, repositoryID int64) (graph
 func (a Artifacts) DependencySnapshot(ctx context.Context, repositoryID int64) (graph.Snapshot, error) {
 	snapshot, _, err := a.Maps.ReadDependencySnapshot(ctx, repositoryID)
 	return snapshot, err
+}
+
+func (a Artifacts) TopologySnapshot(
+	ctx context.Context,
+	repositoryID int64,
+) (graph.Snapshot, graph.ArtifactProgress, error) {
+	return a.Maps.ReadTopologySnapshot(ctx, repositoryID)
 }
 
 // GeneratedDocuments reads the persisted documentation plan and page metadata.
@@ -484,6 +494,32 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 
 	if config.Artifacts != nil && config.Dependencies != nil {
 		mcp.AddTool(server, &mcp.Tool{
+			Name:        "read_system_topology",
+			Title:       "Read distributed system topology",
+			Description: "Read a directed component-level dependency graph across one repository or the visible fleet. Returns HTTP, gRPC, Kafka, database, MCP, and declared relationships; static source evidence and timestamped runtime observations remain distinct, with confirmed/static-only/runtime-only drift states and explicit unresolved peers. No external service is contacted.",
+			Annotations: readOnly,
+		}, func(ctx context.Context, _ *mcp.CallToolRequest, input readSystemTopologyInput) (*mcp.CallToolResult, dependencies.Topology, error) {
+			options, err := topologyToolOptions(input)
+			if err != nil {
+				return nil, dependencies.Topology{}, err
+			}
+			snapshot, progress, err := config.Artifacts.TopologySnapshot(ctx, input.RepositoryID)
+			if err != nil {
+				return nil, dependencies.Topology{}, err
+			}
+			output, err := config.Dependencies.Topology(ctx, snapshot, progress, options)
+			if err != nil {
+				return nil, dependencies.Topology{}, err
+			}
+			for _, connection := range output.Connections {
+				for _, evidence := range connection.Evidence {
+					recordEvidence(tracker, conversationID, evidence)
+				}
+			}
+			return nil, output, nil
+		})
+
+		mcp.AddTool(server, &mcp.Tool{
 			Name:        "read_dependency_findings",
 			Title:       "Read dependency advisory findings",
 			Description: "Read compact, scope-aware OSV findings from the persisted local advisory snapshot. Returns IDs, versions, severity, usage, and evidence citations without advisory prose bodies. Findings are advisory evidence, never an enforced CI gate.",
@@ -714,6 +750,43 @@ type readDependencyFindingsOutput struct {
 	ReturnedCount              int                                 `json:"returned_count"`
 	HasMore                    bool                                `json:"has_more"`
 	Findings                   []compactDependencyFinding          `json:"findings"`
+}
+
+type readSystemTopologyInput struct {
+	RepositoryID int64  `json:"repository_id,omitempty" jsonschema:"Optional repository ID returned by list_repositories. Omit for the bounded visible fleet."`
+	Query        string `json:"query,omitempty" jsonschema:"Optional component connection protocol or state substring."`
+	Protocol     string `json:"protocol,omitempty" jsonschema:"Optional protocol: http grpc kafka database mcp amqp or unknown."`
+	Origin       string `json:"origin,omitempty" jsonschema:"Optional evidence filter: static runtime or confirmed."`
+	Environment  string `json:"environment,omitempty" jsonschema:"Optional exact runtime environment such as prod."`
+	Provider     string `json:"provider,omitempty" jsonschema:"Optional exact runtime provider such as tempo or datadog."`
+	ObservedFrom string `json:"observed_from,omitempty" jsonschema:"Optional RFC3339 runtime window start. Defaults to 24 hours before observed_to."`
+	ObservedTo   string `json:"observed_to,omitempty" jsonschema:"Optional RFC3339 runtime window end. Defaults to now."`
+}
+
+func topologyToolOptions(input readSystemTopologyInput) (dependencies.TopologyOptions, error) {
+	options := dependencies.TopologyOptions{
+		Query: strings.TrimSpace(input.Query), Protocol: strings.ToLower(strings.TrimSpace(input.Protocol)),
+		Origin:      strings.ToLower(strings.TrimSpace(input.Origin)),
+		Environment: strings.TrimSpace(input.Environment), Provider: strings.TrimSpace(input.Provider),
+	}
+	for _, timestamp := range []struct {
+		value  string
+		target *time.Time
+	}{
+		{input.ObservedFrom, &options.ObservedFrom},
+		{input.ObservedTo, &options.ObservedTo},
+	} {
+		value := strings.TrimSpace(timestamp.value)
+		if value == "" {
+			continue
+		}
+		parsed, err := time.Parse(time.RFC3339, value)
+		if err != nil {
+			return dependencies.TopologyOptions{}, errors.New("runtime topology window must use RFC3339 timestamps")
+		}
+		*timestamp.target = parsed.UTC()
+	}
+	return options, nil
 }
 
 type declaredDependency struct {

@@ -87,3 +87,127 @@ ON CONFLICT(ecosystem, registry, package) DO UPDATE SET
 	}
 	return nil
 }
+
+// ListRuntimeTopologyObservations returns observations whose recorded window
+// overlaps the requested interval.
+func (s *Store) ListRuntimeTopologyObservations(
+	ctx context.Context,
+	observedFrom, observedTo time.Time,
+) ([]dependencies.RuntimeTopologyObservation, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT provider, environment, source_name, source_kind, target_name, target_kind,
+       protocol, interaction, transport, observed_from, observed_to,
+       request_count, error_count, latency_p95_ms, imported_at
+FROM runtime_topology_observations
+WHERE observed_to >= ? AND observed_from <= ?
+ORDER BY observed_to DESC, source_name, target_name`,
+		observedFrom.UTC().Format(time.RFC3339Nano),
+		observedTo.UTC().Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list runtime topology observations: %w", err)
+	}
+	defer rows.Close()
+	output := make([]dependencies.RuntimeTopologyObservation, 0)
+	for rows.Next() {
+		var observation dependencies.RuntimeTopologyObservation
+		var from, to, importedAt string
+		if err := rows.Scan(
+			&observation.Provider,
+			&observation.Environment,
+			&observation.SourceName,
+			&observation.SourceKind,
+			&observation.TargetName,
+			&observation.TargetKind,
+			&observation.Protocol,
+			&observation.Interaction,
+			&observation.Transport,
+			&from,
+			&to,
+			&observation.RequestCount,
+			&observation.ErrorCount,
+			&observation.LatencyP95MS,
+			&importedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan runtime topology observation: %w", err)
+		}
+		observation.ObservedFrom, err = time.Parse(time.RFC3339Nano, from)
+		if err != nil {
+			return nil, fmt.Errorf("parse runtime topology start: %w", err)
+		}
+		observation.ObservedTo, err = time.Parse(time.RFC3339Nano, to)
+		if err != nil {
+			return nil, fmt.Errorf("parse runtime topology end: %w", err)
+		}
+		observation.ImportedAt, err = time.Parse(time.RFC3339Nano, importedAt)
+		if err != nil {
+			return nil, fmt.Errorf("parse runtime topology import time: %w", err)
+		}
+		output = append(output, observation)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate runtime topology observations: %w", err)
+	}
+	return output, nil
+}
+
+// UpsertRuntimeTopologyObservations imports one bounded provider window and
+// prunes expired windows in the same transaction.
+func (s *Store) UpsertRuntimeTopologyObservations(
+	ctx context.Context,
+	observations []dependencies.RuntimeTopologyObservation,
+	retainAfter time.Time,
+) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin runtime topology import: %w", err)
+	}
+	defer tx.Rollback()
+	for _, observation := range observations {
+		if _, err := tx.ExecContext(ctx, `
+INSERT INTO runtime_topology_observations (
+    provider, environment, source_name, source_kind, target_name, target_kind,
+    protocol, interaction, transport, observed_from, observed_to,
+    request_count, error_count, latency_p95_ms, imported_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(
+    provider, environment, source_name, target_name, protocol,
+    interaction, transport, observed_from, observed_to
+) DO UPDATE SET
+    source_kind = excluded.source_kind,
+    target_kind = excluded.target_kind,
+    request_count = excluded.request_count,
+    error_count = excluded.error_count,
+    latency_p95_ms = excluded.latency_p95_ms,
+    imported_at = excluded.imported_at`,
+			observation.Provider,
+			observation.Environment,
+			observation.SourceName,
+			observation.SourceKind,
+			observation.TargetName,
+			observation.TargetKind,
+			observation.Protocol,
+			observation.Interaction,
+			observation.Transport,
+			observation.ObservedFrom.UTC().Format(time.RFC3339Nano),
+			observation.ObservedTo.UTC().Format(time.RFC3339Nano),
+			observation.RequestCount,
+			observation.ErrorCount,
+			observation.LatencyP95MS,
+			observation.ImportedAt.UTC().Format(time.RFC3339Nano),
+		); err != nil {
+			return fmt.Errorf("upsert runtime topology observation: %w", err)
+		}
+	}
+	if _, err := tx.ExecContext(
+		ctx,
+		"DELETE FROM runtime_topology_observations WHERE observed_to < ?",
+		retainAfter.UTC().Format(time.RFC3339Nano),
+	); err != nil {
+		return fmt.Errorf("prune runtime topology observations: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit runtime topology import: %w", err)
+	}
+	return nil
+}
