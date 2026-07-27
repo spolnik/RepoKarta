@@ -77,11 +77,15 @@ export function parseRepoKartaContextURL(value, baseURL) {
     }
     const revision = candidate.searchParams.get("rev")?.trim() || "";
     const path = candidate.searchParams.get("path")?.trim() || "";
+    const focusLine = positiveInteger(candidate.searchParams.get("focus")?.split("-", 1)[0] || "");
+    const hashLine = /^#L([1-9]\d*)$/.exec(candidate.hash)?.[1] || "";
+    const line = focusLine || positiveInteger(hashLine);
     return {
       kind: path ? "file" : "repository",
       repository_id: repositoryID,
       ...(revision ? { revision } : {}),
-      ...(path ? { path } : {})
+      ...(path ? { path } : {}),
+      ...(path && line ? { line } : {})
     };
   }
 

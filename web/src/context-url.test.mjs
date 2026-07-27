@@ -15,7 +15,24 @@ test("pinned source URLs become file contexts", () => {
       kind: "file",
       repository_id: 42,
       revision: "abc123",
-      path: "internal/app/app.go"
+      path: "internal/app/app.go",
+      line: 7
+    }
+  );
+});
+
+test("source focus ranges attach their first line to file context", () => {
+  assert.deepEqual(
+    parseRepoKartaContextURL(
+      "/source/42?rev=abc123&path=internal%2Fapp.go&focus=17-23",
+      baseURL
+    ),
+    {
+      kind: "file",
+      repository_id: 42,
+      revision: "abc123",
+      path: "internal/app.go",
+      line: 17
     }
   );
 });

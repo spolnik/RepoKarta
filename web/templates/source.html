@@ -26,6 +26,7 @@
           <span class="truncate font-mono text-xs text-ink-soft">{{.File.Path}}</span>
         </div>
         <div class="flex items-center gap-2">
+          {{if .ChatEnabled}}<button class="secondary-button" type="button" data-contextual-chat-open data-contextual-chat-mode="source">Ask about this file</button>{{end}}
           {{if .RemoteURL}}<a class="secondary-button" href="{{.RemoteURL}}" target="_blank" rel="noreferrer">Open remote ↗</a>{{end}}
           <button class="secondary-button" type="button" data-copy="{{.Citation}}">Copy citation</button>
         </div>
@@ -62,6 +63,7 @@
         </div>
       </nav>
     </main>
+    {{if .ChatEnabled}}{{template "contextual-chat-dialog" .}}{{end}}
   </body>
 </html>
 {{end}}

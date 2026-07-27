@@ -32,6 +32,7 @@ import {
 } from "./provider-defaults.mjs";
 import { activeContextMention } from "./context-mention.mjs";
 import { parseRepoKartaContextURL } from "./context-url.mjs";
+import { buildContextualChatURL, normaliseContextMode } from "./contextual-chat.mjs";
 import { applyQueryCompletion, type QueryCompletionEdit } from "./query-completion.mjs";
 import { wikiPrimaryAction } from "./wiki-run-state.mjs";
 import "./styles.css";
@@ -67,6 +68,56 @@ highlightedLanguages.forEach(([name, language, aliases]) => {
 });
 
 htmx.config.allowEval = false;
+
+function enableContextualChatLauncher(): void {
+  const dialog = document.querySelector<HTMLDialogElement>("#contextual-chat-dialog");
+  const form = dialog?.querySelector<HTMLFormElement>("[data-contextual-chat-form]");
+  const input = dialog?.querySelector<HTMLTextAreaElement>("[data-contextual-chat-question]");
+  const close = dialog?.querySelector<HTMLButtonElement>("[data-contextual-chat-close]");
+  const modeLabel = dialog?.querySelector<HTMLElement>("[data-contextual-chat-mode]");
+  const scopeLabel = dialog?.querySelector<HTMLElement>("[data-contextual-chat-scope]");
+  const triggers = document.querySelectorAll<HTMLButtonElement>("[data-contextual-chat-open]");
+  if (!dialog || !form || !input || !close || !modeLabel || !scopeLabel || triggers.length === 0) {
+    return;
+  }
+
+  let mode = "context";
+  let contextURL = "";
+  const open = (trigger: HTMLButtonElement): void => {
+    mode = normaliseContextMode(trigger.dataset.contextualChatMode);
+    const parsedContext = parseRepoKartaContextURL(window.location.href, window.location.href);
+    contextURL = parsedContext ? window.location.href : "";
+    modeLabel.textContent = `${mode.charAt(0).toUpperCase()}${mode.slice(1)} context`;
+    scopeLabel.textContent = contextURL
+      ? "The current repository, revision, file, or line will be attached."
+      : "No single repository is selected, so this chat will search every repository you can access.";
+    dialog.showModal();
+    window.requestAnimationFrame(() => input.focus());
+  };
+
+  for (const trigger of triggers) {
+    trigger.addEventListener("click", () => open(trigger));
+  }
+  close.addEventListener("click", () => dialog.close());
+  dialog.addEventListener("click", (event) => {
+    if (event.target === dialog) {
+      dialog.close();
+    }
+  });
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const prompt = input.value.trim();
+    if (!prompt) {
+      input.focus();
+      return;
+    }
+    window.location.assign(buildContextualChatURL(window.location.href, {
+      mode,
+      prompt,
+      ...(contextURL ? { contextURL } : {})
+    }));
+  });
+}
 
 function connectIndexEvents(): void {
   const repositoryList = document.querySelector<HTMLElement>("#repository-list");
@@ -3327,6 +3378,9 @@ function enableConversations(debug?: DebugLogger): void {
   const requestedParameters = new URL(window.location.href).searchParams;
   const requestedNamedContext = requestedParameters.get("context")?.trim();
   const requestedContextURL = requestedParameters.get("context_url")?.trim();
+  const requestedPrompt = requestedParameters.get("prompt")?.trim() || "";
+  const requestedMode = normaliseContextMode(requestedParameters.get("mode"));
+  const requestedAutostart = requestedParameters.get("autostart") === "true";
   const contextsReady = loadNamedContexts();
 
   debug?.add("info", "providers.request.started", { endpoint: "/api/providers" });
@@ -3398,6 +3452,14 @@ function enableConversations(debug?: DebugLogger): void {
           }
         } else if (!requestedNamedContext && !requestedConversation) {
           await refreshEffectiveContexts();
+        }
+        if (requestedPrompt && !requestedConversation) {
+          input.value = requestedPrompt;
+          headerStatus.textContent = `${requestedMode.charAt(0).toUpperCase()}${requestedMode.slice(1)} context ready`;
+          input.focus();
+          if (requestedAutostart && provider.value && !busy) {
+            form.requestSubmit();
+          }
         }
       });
     });
@@ -6396,6 +6458,7 @@ function enableDependencyRefresh(): void {
 }
 
 connectIndexEvents();
+enableContextualChatLauncher();
 enableArtifactProgress();
 enableDependencyRefresh();
 enableRepositoryDrawer();

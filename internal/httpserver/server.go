@@ -256,6 +256,7 @@ type searchMatchView struct {
 
 type sourcePageData struct {
 	Version       string
+	ChatEnabled   bool
 	File          source.File
 	RemoteURL     string
 	Citation      string
@@ -1270,6 +1271,7 @@ func (s *Server) contextPage(response http.ResponseWriter, request *http.Request
 		http.Error(response, "Could not load context", http.StatusInternalServerError)
 		return
 	}
+	base.ActivePage = "context"
 	title := "Structured context"
 	if len(effective.Contexts) > 0 {
 		title = effective.Contexts[0].Label
@@ -1298,6 +1300,7 @@ func (s *Server) namedContextPage(response http.ResponseWriter, request *http.Re
 		http.Error(response, "Could not load context", http.StatusInternalServerError)
 		return
 	}
+	base.ActivePage = "context"
 	s.render(response, "context", contextPageData{
 		pageData:     base,
 		Title:        named.Title,
@@ -1870,6 +1873,7 @@ func (s *Server) source(response http.ResponseWriter, request *http.Request) {
 
 	data := sourcePageData{
 		Version:       s.config.Version,
+		ChatEnabled:   s.agents != nil,
 		File:          file,
 		RemoteURL:     remoteFileURL(repository.OriginURL, file.Revision, file.Path, citationStart, citationEnd),
 		Citation:      fmt.Sprintf("%s@%s:%s#L%d-L%d", repository.Name, shortCommit(file.Revision), file.Path, citationStart, citationEnd),

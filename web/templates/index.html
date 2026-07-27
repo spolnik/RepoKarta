@@ -148,6 +148,7 @@
       {{end}}
       {{if .ChatEnabled}}
       <a href="/chat" class="app-nav-link{{if eq .ActivePage "chat"}} app-nav-link-active{{end}}" {{if eq .ActivePage "chat"}}aria-current="page"{{end}}>Chat</a>
+      {{if ne .ActivePage "chat"}}<button class="app-nav-link contextual-chat-trigger" type="button" data-contextual-chat-open data-contextual-chat-mode="{{.ActivePage}}">Ask this view</button>{{end}}
       {{end}}
       {{if .MCPEnabled}}
       <a href="/mcp/setup" class="app-nav-link{{if eq .ActivePage "mcp"}} app-nav-link-active{{end}}" {{if eq .ActivePage "mcp"}}aria-current="page"{{end}}>MCP</a>
@@ -165,6 +166,36 @@
     </div>
   </div>
 </header>
+{{if and .ChatEnabled (ne .ActivePage "chat")}}{{template "contextual-chat-dialog" .}}{{end}}
+{{end}}
+
+{{define "contextual-chat-dialog"}}
+<dialog id="contextual-chat-dialog" class="contextual-chat-dialog" aria-labelledby="contextual-chat-title">
+  <form class="contextual-chat-shell" data-contextual-chat-form>
+    <header class="contextual-chat-header">
+      <div>
+        <p data-contextual-chat-mode>Current context</p>
+        <h2 id="contextual-chat-title">Ask RepoKarta about this view</h2>
+      </div>
+      <button class="icon-button" type="button" data-contextual-chat-close aria-label="Close contextual chat">&times;</button>
+    </header>
+    <div class="contextual-chat-body">
+      <p class="contextual-chat-scope" data-contextual-chat-scope></p>
+      <label for="contextual-chat-question">Question</label>
+      <textarea
+        id="contextual-chat-question"
+        data-contextual-chat-question
+        rows="5"
+        required
+        placeholder="What should RepoKarta explain, trace, or compare?"
+      ></textarea>
+    </div>
+    <footer class="contextual-chat-actions">
+      <span>The conversation opens with this view as grounded context.</span>
+      <button class="primary-button" type="submit">Start conversation</button>
+    </footer>
+  </form>
+</dialog>
 {{end}}
 
 {{/*
