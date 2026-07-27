@@ -246,9 +246,10 @@ For clients that launch a stdio adapter:
 }
 ```
 
-The tools cover repository discovery, search, symbols, references, files,
-trees, Git history, diffs, maps, dependencies, Wiki pages, insights, and named
-contexts. They use the same permission and completeness rules as the browser.
+The tools cover repository discovery, text and structural AST search, symbols,
+references, files, trees, Git history, diffs, maps, dependencies, Wiki pages,
+insights, and named contexts. They use the same permission and completeness
+rules as the browser.
 
 ### JSON API
 
@@ -258,6 +259,7 @@ boundary. A few useful read-only endpoints are:
 ```text
 GET /api/repositories
 GET /api/search?q=OpenFile&repo=RepoKarta
+POST /api/ast/search
 GET /api/symbol?symbol=OpenFile&repo=RepoKarta
 GET /api/file/{repository}?rev={commit}&path={path}&lines=1-200
 GET /api/git/log/{repository}?rev={commit}&limit=50
@@ -339,6 +341,7 @@ $version = go run ./cmd/repokarta version
 - [Dependency advisory data and refresh behavior](./docs/dependency-advisories.md)
 - [Distributed dependency topology and runtime observations](./docs/distributed-topology.md)
 - [Compiler-precise SCIP index imports](./docs/scip-indexes.md)
+- [Structural AST query syntax and completeness](./docs/ast-search.md)
 - [Pinned Zoekt revision and Windows portability](./docs/zoekt-windows-portability.md)
 
 RepoKarta vendors a pinned Zoekt revision under `third_party/zoekt`. Native

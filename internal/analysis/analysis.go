@@ -71,6 +71,7 @@ type Document struct {
 	Parser        string       `json:"parser"`
 	ParseComplete bool         `json:"parse_complete"`
 	Truncated     bool         `json:"truncated"`
+	NodeKinds     []string     `json:"node_kinds,omitempty"`
 	Symbols       []Symbol     `json:"symbols,omitempty"`
 	Relations     []Relation   `json:"relations,omitempty"`
 	BuildFacts    []BuildFact  `json:"build_facts,omitempty"`
@@ -180,6 +181,7 @@ func Analyze(filePath string, source []byte) (document Document, supported bool)
 			Message:  "syntax tree contains recovery nodes; extracted facts may be partial",
 		})
 	}
+	document.NodeKinds = collectNodeKinds(tree)
 	document.Symbols = extractSymbols(tree, source, lines)
 	var relationsTruncated bool
 	document.Relations, relationsTruncated = extractRelations(tree, source, lines)
@@ -191,6 +193,36 @@ func Analyze(filePath string, source []byte) (document Document, supported bool)
 			relationsTruncated ||
 			len(document.BuildFacts) >= maximumBuildFactsPerDocument
 	return document, true
+}
+
+func collectNodeKinds(tree *gotreesitter.Tree) []string {
+	if tree == nil || tree.RootNode() == nil || tree.Language() == nil {
+		return nil
+	}
+	language := tree.Language()
+	seen := make(map[string]struct{})
+	stack := []*gotreesitter.Node{tree.RootNode()}
+	for len(stack) > 0 {
+		node := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if node == nil {
+			continue
+		}
+		if node.IsNamed() {
+			if kind := strings.TrimSpace(node.Type(language)); kind != "" {
+				seen[kind] = struct{}{}
+			}
+		}
+		for index := node.ChildCount() - 1; index >= 0; index-- {
+			stack = append(stack, node.Child(index))
+		}
+	}
+	kinds := make([]string, 0, len(seen))
+	for kind := range seen {
+		kinds = append(kinds, kind)
+	}
+	sort.Strings(kinds)
+	return kinds
 }
 
 func extractSymbols(tree *gotreesitter.Tree, source []byte, lines []int) []Symbol {

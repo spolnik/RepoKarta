@@ -75,6 +75,14 @@ func TestClientCoversReadOnlyJSONSurface(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := client.SearchAST(ctx, ASTSearchRequest{
+		RepositoryID: 7,
+		Language:     "go",
+		Query:        `(function_declaration name: (identifier) @name)`,
+		Limit:        10,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := client.GetFile(ctx, FileRequest{RepositoryID: 7, Revision: "abc", Path: "main.go", StartLine: 2, EndLine: 4}); err != nil {
 		t.Fatal(err)
 	}
@@ -99,16 +107,20 @@ func TestClientCoversReadOnlyJSONSurface(t *testing.T) {
 		!strings.Contains(err.Error(), "bounded failure") {
 		t.Fatalf("API error = %v", err)
 	}
-	if len(requests) != 15 {
+	if len(requests) != 16 {
 		t.Fatalf("requests = %#v", requests)
 	}
 	foundPost := false
+	foundASTPost := false
 	foundSymbolPost := false
 	foundCompactGet := false
 	foundTreeOffset := false
 	for _, request := range requests {
 		if request == "POST /api/search" {
 			foundPost = true
+		}
+		if request == "POST /api/ast/search" {
+			foundASTPost = true
 		}
 		if request == "POST /api/symbol" {
 			foundSymbolPost = true
@@ -122,6 +134,9 @@ func TestClientCoversReadOnlyJSONSurface(t *testing.T) {
 	}
 	if !foundPost {
 		t.Fatalf("structured search did not use POST: %#v", requests)
+	}
+	if !foundASTPost {
+		t.Fatalf("AST search did not use POST: %#v", requests)
 	}
 	if !foundSymbolPost {
 		t.Fatalf("structured symbol search did not use POST: %#v", requests)

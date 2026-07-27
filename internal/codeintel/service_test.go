@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -1006,6 +1007,110 @@ func TestReferenceSearchPreservesTypedRecallAcrossTwoThousandJavaFiles(t *testin
 	}
 	if len(expected) != 0 {
 		t.Fatalf("missing typed reference consumers: %#v", expected)
+	}
+}
+
+func TestASTSearchUsesNodeKindCandidatesAndStablePagination(t *testing.T) {
+	root := t.TempDir()
+	files := map[string]string{
+		"a.go": "package fixture\n\nfunc Alpha() {}\n",
+		"b.go": "package fixture\n\nfunc Beta() {}\n",
+		"c.go": "package fixture\n\nvar Value = 1\n",
+	}
+	for filePath, content := range files {
+		if err := os.WriteFile(filepath.Join(root, filePath), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runGit(t, root, "init", "-q")
+	runGit(t, root, "add", ".")
+	runGit(t, root, "-c", "user.name=RepoKarta Test", "-c", "user.email=test@repokarta.local", "commit", "-qm", "fixture")
+	revision := strings.TrimSpace(runGit(t, root, "rev-parse", "HEAD"))
+	repository := catalog.Repository{
+		ID: 31, Name: "ast-fixture", Path: root,
+		HeadCommit: revision, IndexedCommit: revision, IndexState: "ready",
+	}
+	documents := make([]graph.StructuralDocument, 0, len(files))
+	for _, filePath := range []string{"a.go", "b.go", "c.go"} {
+		analyzed, supported := analysis.Analyze(filePath, []byte(files[filePath]))
+		if !supported {
+			t.Fatalf("%s was not analyzed", filePath)
+		}
+		documents = append(documents, graph.StructuralDocument{
+			RepositoryID:  repository.ID,
+			Repository:    repository.Name,
+			Revision:      revision,
+			Path:          filePath,
+			Language:      analyzed.Language,
+			Parser:        analyzed.Parser,
+			ParseComplete: analyzed.ParseComplete,
+			NodeKinds:     analyzed.NodeKinds,
+		})
+	}
+	structure := referenceTestStructure{index: graph.StructuralIndex{
+		ID: "ast-index-v1",
+		Scope: graph.Scope{
+			Complete: true, TotalRepositories: 1, AnalyzedRepositories: 1,
+		},
+		Structure: documents,
+	}}
+	service := New(referenceTestStore{repository: repository}, &capturingSearcher{}, "http://localhost").
+		UseStructure(structure)
+	request := ASTSearchRequest{
+		RepositoryID: repository.ID,
+		Language:     "go",
+		Query:        `(function_declaration name: (identifier) @name) @function`,
+		Limit:        1,
+	}
+	first, err := service.SearchAST(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.CandidateFiles != 2 || first.ScannedFiles != 1 ||
+		len(first.Matches) != 1 || !slices.ContainsFunc(first.Matches[0].Captures, func(capture analysis.QueryCapture) bool {
+		return capture.Name == "name" && capture.Text == "Alpha"
+	}) ||
+		first.NextCursor == "" || !first.Complete {
+		t.Fatalf("first AST page = %#v", first)
+	}
+	request.Cursor = first.NextCursor
+	second, err := service.SearchAST(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.CandidateFiles != 2 || len(second.Matches) != 1 ||
+		!slices.ContainsFunc(second.Matches[0].Captures, func(capture analysis.QueryCapture) bool {
+			return capture.Name == "name" && capture.Text == "Beta"
+		}) || second.NextCursor != "" ||
+		!second.Complete {
+		t.Fatalf("second AST page = %#v", second)
+	}
+	request.Query = `(identifier) @identifier`
+	if _, err := service.SearchAST(t.Context(), request); err == nil ||
+		!strings.Contains(err.Error(), "stale") {
+		t.Fatalf("changed query cursor error = %v, want stale cursor", err)
+	}
+}
+
+func TestASTSearchReportsBuildingArtifactAsIncomplete(t *testing.T) {
+	service := New(symbolTestStore{}, &capturingSearcher{}, "http://localhost").UseStructure(
+		referenceTestStructure{index: graph.StructuralIndex{
+			ID: "building",
+			Scope: graph.Scope{
+				Complete: false, TotalRepositories: 3,
+				AnalyzedRepositories: 1, OmittedRepositories: 2,
+			},
+		}},
+	)
+	result, err := service.SearchAST(t.Context(), ASTSearchRequest{
+		Language: "go",
+		Query:    `(function_declaration) @function`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Index.State != "building" || result.Index.PendingRepositories != 2 || result.Complete {
+		t.Fatalf("building AST result = %#v", result)
 	}
 }
 

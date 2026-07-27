@@ -1836,6 +1836,38 @@ func TestAPIReferenceSearchReturnsAcceptedWithIndexProgress(t *testing.T) {
 	}
 }
 
+func TestAPIASTSearchReturnsExplicitIndexProgress(t *testing.T) {
+	intelligence := codeintel.New(testStore{}, testSearcher{}, "http://127.0.0.1:7331").
+		UseStructure(pendingReferenceStructure{})
+	server, err := New(
+		Config{Address: "127.0.0.1:7331"},
+		intelligence,
+		testRefresher{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"http://127.0.0.1:7331/api/ast/search",
+		strings.NewReader(`{"language":"go","query":"(function_declaration) @function"}`),
+	)
+	response := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusAccepted || response.Header().Get("Retry-After") != "2" {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	var result codeintel.ASTSearchResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Resolution != "tree-sitter-query" || result.Index.State != "building" ||
+		result.Index.ReadyRepositories != 1 || result.Index.PendingRepositories != 2 ||
+		result.Complete {
+		t.Fatalf("AST progress = %#v", result)
+	}
+}
+
 func TestStructuredContextsFlowThroughJSONSearchAndChat(t *testing.T) {
 	directory := t.TempDir()
 	if err := os.WriteFile(filepath.Join(directory, "main.go"), []byte("package main\n"), 0o644); err != nil {

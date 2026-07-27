@@ -65,6 +65,7 @@ type Intelligence interface {
 	Search(context.Context, codeintel.SearchRequest) (codeintel.SearchResponse, error)
 	FindSymbol(context.Context, codeintel.SymbolRequest) (codeintel.SymbolResponse, error)
 	FindReferences(context.Context, codeintel.ReferenceRequest) (codeintel.ReferenceResponse, error)
+	SearchAST(context.Context, codeintel.ASTSearchRequest) (codeintel.ASTSearchResponse, error)
 	GetFile(context.Context, codeintel.FileRequest) (codeintel.FileResponse, error)
 	ListTree(context.Context, codeintel.TreeRequest) (codeintel.TreeResponse, error)
 	GitLog(context.Context, codeintel.GitLogRequest) (codeintel.GitLogResponse, error)
@@ -353,6 +354,22 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 		})
 		if err != nil {
 			return nil, findReferencesOutput{}, err
+		}
+		for _, match := range result.Matches {
+			tracker.Record(conversationID, agent.Citation{Label: match.Citation, URL: match.SourceURL})
+		}
+		return nil, result, nil
+	})
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "search_ast",
+		Title:       "Search source structure",
+		Description: "Run a bounded Tree-sitter query with named captures and predicates over Java or Go. Persisted node-kind inventories prune impossible files; cursors, index readiness, truncation, and completeness are explicit.",
+		Annotations: readOnly,
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input searchASTInput) (*mcp.CallToolResult, searchASTOutput, error) {
+		result, err := intelligence.SearchAST(ctx, codeintel.ASTSearchRequest(input))
+		if err != nil {
+			return nil, searchASTOutput{}, err
 		}
 		for _, match := range result.Matches {
 			tracker.Record(conversationID, agent.Citation{Label: match.Citation, URL: match.SourceURL})
@@ -886,6 +903,17 @@ type findReferencesInput struct {
 }
 
 type findReferencesOutput = codeintel.ReferenceResponse
+
+type searchASTInput struct {
+	RepositoryID int64  `json:"repository_id,omitempty" jsonschema:"Optional repository ID returned by list_repositories. Omit for the accessible fleet."`
+	Language     string `json:"language" jsonschema:"required,Tree-sitter language: java or go."`
+	Query        string `json:"query" jsonschema:"required,Tree-sitter S-expression query with named captures and optional predicates such as #eq? #match? #has-parent? or #has-ancestor?."`
+	PathPrefix   string `json:"path_prefix,omitempty" jsonschema:"Optional repository-relative directory or exact file prefix."`
+	Limit        int    `json:"limit,omitempty" jsonschema:"Maximum pattern matches from 1 to 200. Defaults to 50."`
+	Cursor       string `json:"cursor,omitempty" jsonschema:"Opaque next_cursor from the preceding response for the identical query and index."`
+}
+
+type searchASTOutput = codeintel.ASTSearchResponse
 
 type openFileInput struct {
 	RepositoryID int64  `json:"repository_id" jsonschema:"required,Repository ID returned by list_repositories."`
