@@ -133,6 +133,7 @@ repositories on managed Windows and Apple Silicon macOS laptops.
   - `list_tree`
   - `find_symbol`
   - `find_references`
+  - `search_ast`
   - `git_log`
   - `git_diff`
   - `read_repository_map`
@@ -190,6 +191,11 @@ repositories on managed Windows and Apple Silicon macOS laptops.
   SQL, Bash, and Python. Record declarations, imports, inheritance, type usages,
   call sites, Gradle DSL calls, exact byte/line ranges, parser diagnostics, and
   confidence without executing repository code.
+- Expose bounded Java and Go Tree-sitter queries through the shared JSON and
+  MCP capability layer. Persist per-document node-kind inventories for
+  conservative candidate pruning, preserve named captures and structural/text
+  predicates, bind opaque cursors to the artifact and query, and report
+  pagination separately from artifact and matcher completeness.
 - Feed a curated subset of parsed types, functions, and build facts into the
   Deep Wiki survey starting point. Keep the full syntax inventory separate from
   visual graph nodes so generic call sites do not create a graph hairball.
@@ -939,7 +945,7 @@ completion criteria include:
 
 ## Current implementation version
 
-`0.71.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
+`0.72.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
 The M9 dependency inventory, public registry refresh, lockfile resolution,
 explicit private-registry routing, reproducible OSV advisory snapshots,
 ecosystem-correct fleet CVE matching, scope-aware UI/JSON/MCP findings, and
@@ -993,7 +999,12 @@ visible as terminal `empty` catalogue entries without inflating pending index
 or derived-artifact work. Native JSON, MCP, and the direct Anthropic tool loop
 now share compact source/symbol/reference discovery. Compact reference reads
 stay on persisted structural artifacts and omit snippet bodies until selected
-files are opened explicitly.
+files are opened explicitly. Java and Go now also expose bounded Tree-sitter
+query search with named captures, text and ancestor/parent predicates,
+persisted node-kind candidate pruning, artifact-bound pagination, and explicit
+coverage/truncation metadata through JSON and MCP. This is structural search
+infrastructure; framework reachability roots and dead-code classification
+remain deliberately unclaimed.
 
 ## Recommended next session
 

@@ -423,6 +423,7 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 	mux.HandleFunc("DELETE /api/contexts/named/{contextID}", server.deleteNamedContext)
 	mux.HandleFunc("GET /api/symbol", server.apiSymbol)
 	mux.HandleFunc("POST /api/symbol", server.apiSymbolJSON)
+	mux.HandleFunc("POST /api/ast/search", server.apiASTSearch)
 	mux.HandleFunc("GET /api/repositories", server.apiRepositories)
 	mux.HandleFunc("GET /api/whoami", server.apiWhoAmI)
 	mux.HandleFunc("GET /api/file/{repository}", server.apiFile)
@@ -1129,6 +1130,28 @@ func (s *Server) apiSymbolJSON(response http.ResponseWriter, request *http.Reque
 		return
 	}
 	writeJSON(response, http.StatusOK, result)
+}
+
+func (s *Server) apiASTSearch(response http.ResponseWriter, request *http.Request) {
+	request.Body = http.MaxBytesReader(response, request.Body, 64<<10)
+	var input codeintel.ASTSearchRequest
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
+		writeAPIError(response, http.StatusBadRequest, errors.New("invalid AST search request"))
+		return
+	}
+	result, err := s.intelligence.SearchAST(request.Context(), input)
+	if err != nil {
+		writeAPIError(response, http.StatusBadRequest, err)
+		return
+	}
+	status := http.StatusOK
+	if result.Index.State == "building" {
+		response.Header().Set("Retry-After", "2")
+		status = http.StatusAccepted
+	}
+	writeJSON(response, status, result)
 }
 
 func (s *Server) apiRepositories(response http.ResponseWriter, request *http.Request) {

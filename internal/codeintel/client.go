@@ -124,6 +124,13 @@ func (c *Client) FindReferences(ctx context.Context, request ReferenceRequest) (
 	})
 }
 
+// SearchAST calls the bounded Tree-sitter structural query API.
+func (c *Client) SearchAST(ctx context.Context, request ASTSearchRequest) (ASTSearchResponse, error) {
+	var output ASTSearchResponse
+	err := c.post(ctx, "/api/ast/search", request, &output)
+	return output, err
+}
+
 // ListNamedContexts calls GET /api/contexts/named.
 func (c *Client) ListNamedContexts(ctx context.Context) (contextscope.NamedContextList, error) {
 	var output contextscope.NamedContextList

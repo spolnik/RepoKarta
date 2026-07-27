@@ -34,7 +34,7 @@ import (
 )
 
 const (
-	snapshotVersion       = 13
+	snapshotVersion       = 14
 	maximumFiles          = 20_000
 	maximumSourceFiles    = 5_000
 	maximumSourceFileSize = 1 << 20
@@ -214,6 +214,7 @@ type StructuralDocument struct {
 	Parser        string                `json:"parser"`
 	ParseComplete bool                  `json:"parse_complete"`
 	Truncated     bool                  `json:"truncated"`
+	NodeKinds     []string              `json:"node_kinds,omitempty"`
 	Symbols       []analysis.Symbol     `json:"symbols,omitempty"`
 	Relations     []analysis.Relation   `json:"relations,omitempty"`
 	BuildFacts    []analysis.BuildFact  `json:"build_facts,omitempty"`
@@ -788,8 +789,11 @@ func structuralIndexFromSnapshot(snapshot Snapshot) StructuralIndex {
 			Parser:        document.Parser,
 			ParseComplete: document.ParseComplete,
 			Truncated:     document.Truncated,
+			NodeKinds:     append([]string(nil), document.NodeKinds...),
 			Symbols:       append([]analysis.Symbol(nil), document.Symbols...),
 			Relations:     append([]analysis.Relation(nil), document.Relations...),
+			BuildFacts:    append([]analysis.BuildFact(nil), document.BuildFacts...),
+			Diagnostics:   append([]analysis.Diagnostic(nil), document.Diagnostics...),
 		})
 	}
 	return StructuralIndex{
@@ -1166,6 +1170,7 @@ func (b *builder) addStructuralAnalysis(
 			Parser:        document.Parser,
 			ParseComplete: document.ParseComplete,
 			Truncated:     document.Truncated,
+			NodeKinds:     document.NodeKinds,
 			Symbols:       document.Symbols,
 			Relations:     document.Relations,
 			BuildFacts:    document.BuildFacts,

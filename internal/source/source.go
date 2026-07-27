@@ -50,52 +50,21 @@ type Line struct {
 	Text   string
 }
 
+// Content is one complete, bounded UTF-8 source blob normalized to LF.
+type Content struct {
+	Revision string
+	Path     string
+	Language string
+	Bytes    []byte
+}
+
 // OpenFile reads a blob through Git without touching the worktree.
 func OpenFile(ctx context.Context, repository catalog.Repository, revision, filePath string, startLine, endLine int) (File, error) {
-	if revision == "" {
-		revision = repository.IndexedCommit
-	}
-	if revision == "" {
-		revision = repository.HeadCommit
-	}
-
-	filePath = strings.TrimSpace(strings.ReplaceAll(filePath, "\\", "/"))
-	cleanPath := path.Clean(filePath)
-	if filePath == "" || cleanPath == "." || cleanPath != filePath || path.IsAbs(cleanPath) ||
-		cleanPath == ".." || strings.HasPrefix(cleanPath, "../") || strings.ContainsRune(cleanPath, 0) {
-		return File{}, ErrUnsafePath
-	}
-
-	boundedContext, cancel := context.WithTimeout(ctx, commandTimeout)
-	defer cancel()
-	revision, err := ResolveCommit(boundedContext, repository, revision)
+	content, err := ReadFileContent(ctx, repository, revision, filePath)
 	if err != nil {
 		return File{}, err
 	}
-
-	object := revision + ":" + cleanPath
-	sizeText, err := gitOutput(boundedContext, repository, "cat-file", "-s", object)
-	if err != nil {
-		return File{}, fmt.Errorf("inspect source blob: %w", err)
-	}
-	size, err := strconv.ParseInt(strings.TrimSpace(string(sizeText)), 10, 64)
-	if err != nil {
-		return File{}, fmt.Errorf("parse source blob size: %w", err)
-	}
-	if size < 0 || size > maximumFileSize {
-		return File{}, fmt.Errorf("%w: file size %d exceeds %d bytes", ErrUnsupportedFile, size, maximumFileSize)
-	}
-
-	content, err := gitOutput(boundedContext, repository, "cat-file", "blob", object)
-	if err != nil {
-		return File{}, fmt.Errorf("read source blob: %w", err)
-	}
-	if bytes.IndexByte(content, 0) >= 0 || !utf8.Valid(content) {
-		return File{}, fmt.Errorf("%w: binary or non-UTF-8 content", ErrUnsupportedFile)
-	}
-
-	text := strings.ReplaceAll(string(content), "\r\n", "\n")
-	allLines := strings.Split(text, "\n")
+	allLines := strings.Split(string(content.Bytes), "\n")
 	if len(allLines) > 0 && allLines[len(allLines)-1] == "" {
 		allLines = allLines[:len(allLines)-1]
 	}
@@ -117,9 +86,9 @@ func OpenFile(ctx context.Context, repository catalog.Repository, revision, file
 
 	file := File{
 		Repository: repository,
-		Revision:   revision,
-		Path:       cleanPath,
-		Language:   languageForPath(cleanPath),
+		Revision:   content.Revision,
+		Path:       content.Path,
+		Language:   content.Language,
 		TotalLines: len(allLines),
 		StartLine:  startLine,
 		EndLine:    endLine,
@@ -131,6 +100,60 @@ func OpenFile(ctx context.Context, repository catalog.Repository, revision, file
 		file.Lines = append(file.Lines, Line{Number: index + 1, Text: allLines[index]})
 	}
 	return file, nil
+}
+
+// ReadFileContent reads a complete source blob through Git without touching
+// the worktree. Binary, non-UTF-8, and files larger than two MiB are rejected.
+func ReadFileContent(ctx context.Context, repository catalog.Repository, revision, filePath string) (Content, error) {
+	if revision == "" {
+		revision = repository.IndexedCommit
+	}
+	if revision == "" {
+		revision = repository.HeadCommit
+	}
+
+	filePath = strings.TrimSpace(strings.ReplaceAll(filePath, "\\", "/"))
+	cleanPath := path.Clean(filePath)
+	if filePath == "" || cleanPath == "." || cleanPath != filePath || path.IsAbs(cleanPath) ||
+		cleanPath == ".." || strings.HasPrefix(cleanPath, "../") || strings.ContainsRune(cleanPath, 0) {
+		return Content{}, ErrUnsafePath
+	}
+
+	boundedContext, cancel := context.WithTimeout(ctx, commandTimeout)
+	defer cancel()
+	revision, err := ResolveCommit(boundedContext, repository, revision)
+	if err != nil {
+		return Content{}, err
+	}
+
+	object := revision + ":" + cleanPath
+	sizeText, err := gitOutput(boundedContext, repository, "cat-file", "-s", object)
+	if err != nil {
+		return Content{}, fmt.Errorf("inspect source blob: %w", err)
+	}
+	size, err := strconv.ParseInt(strings.TrimSpace(string(sizeText)), 10, 64)
+	if err != nil {
+		return Content{}, fmt.Errorf("parse source blob size: %w", err)
+	}
+	if size < 0 || size > maximumFileSize {
+		return Content{}, fmt.Errorf("%w: file size %d exceeds %d bytes", ErrUnsupportedFile, size, maximumFileSize)
+	}
+
+	content, err := gitOutput(boundedContext, repository, "cat-file", "blob", object)
+	if err != nil {
+		return Content{}, fmt.Errorf("read source blob: %w", err)
+	}
+	if bytes.IndexByte(content, 0) >= 0 || !utf8.Valid(content) {
+		return Content{}, fmt.Errorf("%w: binary or non-UTF-8 content", ErrUnsupportedFile)
+	}
+
+	text := strings.ReplaceAll(string(content), "\r\n", "\n")
+	return Content{
+		Revision: revision,
+		Path:     cleanPath,
+		Language: languageForPath(cleanPath),
+		Bytes:    []byte(text),
+	}, nil
 }
 
 func gitOutput(ctx context.Context, repository catalog.Repository, arguments ...string) ([]byte, error) {
