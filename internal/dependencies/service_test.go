@@ -2,8 +2,11 @@ package dependencies
 
 import (
 	"context"
+	"encoding/pem"
 	"io"
 	"net/http"
+	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -127,6 +130,74 @@ func TestRefreshDeduplicatesPackagesAndCachesNPMMetadata(t *testing.T) {
 	if len(observations) != 1 || observations[0].LatestStable != "2.0.0" ||
 		observations[0].ETag != `"npm-etag"` {
 		t.Fatalf("observations = %#v", observations)
+	}
+}
+
+func TestDefaultDependencyClientHonorsSSLCertFileForRegistriesAndOSV(t *testing.T) {
+	requests := make(map[string]int)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		requests[request.URL.Path]++
+		response.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/packages/marked":
+			_, _ = io.WriteString(response, `{"dist-tags":{"latest":"16.4.1"},"versions":{"16.4.1":{}}}`)
+		case "/v1/querybatch":
+			_, _ = io.WriteString(response, `{"results":[]}`)
+		default:
+			http.NotFound(response, request)
+		}
+	}))
+	defer server.Close()
+
+	certificate := pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: server.Certificate().Raw,
+	})
+	certificateFile := t.TempDir() + "/warp-root.pem"
+	if err := os.WriteFile(certificateFile, certificate, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SSL_CERT_FILE", certificateFile)
+	t.Setenv("SSL_CERT_DIR", "")
+
+	service := NewService(context.Background(), &observationMemoryStore{}, nil)
+	service.UseRegistries([]RegistryConfig{{
+		Ecosystem:           "npm",
+		BaseURL:             server.URL,
+		MetadataURLTemplate: server.URL + "/packages/{package}",
+		PackagePrefixes:     []string{"marked"},
+	}})
+	observation := service.lookup(context.Background(), RegistryKey{
+		Ecosystem: "npm",
+		Registry:  server.URL,
+		Package:   "marked",
+	}, Observation{})
+	if observation.Status != "ok" || observation.LatestStable != "16.4.1" {
+		t.Fatalf("registry observation = %#v", observation)
+	}
+
+	service.advisoryBaseURL = server.URL
+	if _, err := service.queryAdvisoryBatch([]osvBatchQuery{{
+		Package: OSVPackage{Ecosystem: "npm", Name: "marked"},
+	}}); err != nil {
+		t.Fatalf("OSV query through SSL_CERT_FILE trust failed: %v", err)
+	}
+	if requests["/packages/marked"] != 1 || requests["/v1/querybatch"] != 1 {
+		t.Fatalf("TLS requests = %#v", requests)
+	}
+}
+
+func TestDefaultDependencyClientReportsInvalidSSLCertFile(t *testing.T) {
+	t.Setenv("SSL_CERT_FILE", t.TempDir()+"/missing.pem")
+	t.Setenv("SSL_CERT_DIR", "")
+	request, err := http.NewRequest(http.MethodGet, "https://registry.example", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = NewService(context.Background(), &observationMemoryStore{}, nil).client.Do(request)
+	if err == nil || !strings.Contains(err.Error(), "configure dependency TLS trust") ||
+		!strings.Contains(err.Error(), "SSL_CERT_FILE") {
+		t.Fatalf("invalid SSL_CERT_FILE error = %v", err)
 	}
 }
 

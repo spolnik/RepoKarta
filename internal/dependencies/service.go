@@ -181,7 +181,7 @@ func NewService(ctx context.Context, store ObservationStore, client *http.Client
 		ctx = context.Background()
 	}
 	if client == nil {
-		client = &http.Client{Timeout: 20 * time.Second}
+		client = newDependencyHTTPClient()
 	}
 	return &Service{
 		ctx:              ctx,

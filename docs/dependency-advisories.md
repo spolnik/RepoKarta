@@ -24,6 +24,12 @@ The refresh is bounded to 20,000 unique package identities and 50,000 hydrated
 advisories. Batch requests are paginated, advisory retrieval is paced, and
 progress is exposed at `/api/dependencies/advisories/progress`.
 
+OSV and public or explicitly configured private-registry HTTPS calls use the
+system trust store. Corporate TLS inspection can add PEM roots through the
+standard `SSL_CERT_FILE` bundle or `SSL_CERT_DIR` directory-list environment
+variables in the environment that launches RepoKarta. These roots are applied
+to both advisory and registry refreshes on Windows, macOS, and Linux.
+
 ## Matching and evidence
 
 RepoKarta selects a lockfile-resolved version when present. Otherwise, it uses
