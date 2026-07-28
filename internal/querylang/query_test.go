@@ -49,11 +49,11 @@ func TestParseSupportsEveryDocumentedFieldAndAliases(t *testing.T) {
 }
 
 func TestParseKeepsUnknownColonSyntaxAsText(t *testing.T) {
-	parsed, err := Parse(`https://example.test sym:Known package:name`)
+	parsed, err := Parse(`https://example.test sym:Known madeup:name`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if parsed.Text != "https://example.test sym:Known package:name" || len(parsed.Filters) != 0 {
+	if parsed.Text != "https://example.test sym:Known madeup:name" || len(parsed.Filters) != 0 {
 		t.Fatalf("parsed = %#v", parsed)
 	}
 }

@@ -57,6 +57,17 @@ var completionFields = []fieldDefinition{
 	{name: "owner", detail: "CODEOWNERS identity or explicit state", values: options(
 		"owned", "unavailable", "unowned", "unresolved",
 	)},
+	{name: "package", detail: "Qualified package or namespace"},
+	{name: "type_name", detail: "Qualified or simple type name"},
+	{name: "method", detail: "Qualified or simple method name"},
+	{name: "member", detail: "Qualified or simple field/member name"},
+	{name: "full_name", detail: "Compiler or syntax-backed full symbol name"},
+	{name: "match", detail: "Programming-element match mode", values: options(
+		"exact", "prefix", "contains",
+	)},
+	{name: "case", detail: "Programming-element case mode", values: options(
+		"insensitive", "sensitive",
+	)},
 	{name: "author", detail: "Git author name or email contains"},
 	{name: "message", detail: "Git subject or body contains"},
 	{name: "added", detail: "Added diff line contains"},
@@ -171,6 +182,20 @@ func canonicalFieldName(field string) string {
 		return "result_type"
 	case FieldOwner:
 		return "owner"
+	case FieldPackage:
+		return "package"
+	case FieldTypeName:
+		return "type_name"
+	case FieldMethod:
+		return "method"
+	case FieldMember:
+		return "member"
+	case FieldFullName:
+		return "full_name"
+	case FieldMatch:
+		return "match"
+	case FieldCase:
+		return "case"
 	case FieldAuthor:
 		return "author"
 	case FieldMessage:

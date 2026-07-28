@@ -77,14 +77,15 @@ type SCIPReader interface {
 
 // Service owns the shared behavior exposed by all external adapters.
 type Service struct {
-	store         RepositoryStore
-	searcher      CodeSearcher
-	structure     StructuralReader
-	scip          SCIPReader
-	derived       DerivedEvidenceSearcher
-	namedContexts NamedContextStore
-	mu            sync.RWMutex
-	baseURL       string
+	store           RepositoryStore
+	searcher        CodeSearcher
+	structure       StructuralReader
+	scip            SCIPReader
+	derived         DerivedEvidenceSearcher
+	namedContexts   NamedContextStore
+	searchWorkspace SearchWorkspaceStore
+	mu              sync.RWMutex
+	baseURL         string
 
 	contextFileMu     sync.Mutex
 	contextFileCache  map[string]contextFileCacheEntry
@@ -223,6 +224,7 @@ type SearchResponse struct {
 	SearchKind          string                      `json:"search_kind,omitempty"`
 	ReferenceResolution string                      `json:"reference_resolution,omitempty"`
 	ReferenceIndex      *ReferenceIndex             `json:"reference_index,omitempty"`
+	Semantic            *scipindex.Resolution       `json:"semantic_resolution,omitempty"`
 	Contexts            []contextscope.Context      `json:"contexts,omitempty"`
 	NamedContexts       []contextscope.NamedContext `json:"named_contexts,omitempty"`
 	QueryLanguage       *querylang.Query            `json:"query_language,omitempty"`
@@ -326,6 +328,8 @@ type ReferenceRequest struct {
 	NamedContextIDs    []string                `json:"named_context_ids,omitempty"`
 	UseDefaultContexts *bool                   `json:"use_default_contexts,omitempty"`
 	RelationKinds      []string                `json:"-"`
+	Owners             []string                `json:"-"`
+	ExcludeOwners      []string                `json:"-"`
 }
 
 // ReferenceResponse uses the normal search evidence and completeness contract.
@@ -343,6 +347,10 @@ type SearchMatch struct {
 	Lines        []SearchLine    `json:"lines"`
 	Citation     string          `json:"citation"`
 	SourceURL    string          `json:"source_url,omitempty"`
+	OwnerState   string          `json:"owner_state,omitempty"`
+	Owners       []string        `json:"owners,omitempty"`
+	Ownership    *graph.Evidence `json:"ownership_evidence,omitempty"`
+	Symbol       *SymbolDetails  `json:"symbol,omitempty"`
 	Ranking      []RankingSignal `json:"ranking,omitempty"`
 	Actions      []SearchAction  `json:"actions,omitempty"`
 }
@@ -914,6 +922,10 @@ func (s *Service) Search(ctx context.Context, request SearchRequest) (SearchResp
 	if err != nil {
 		return SearchResponse{}, err
 	}
+	owners, excludedOwners := ownershipFilters(parsedQuery)
+	if len(owners)+len(excludedOwners) > 0 && s.structure == nil {
+		return SearchResponse{}, fmt.Errorf("owner filters require a commit-pinned CODEOWNERS index")
+	}
 	if resultType == "content" && mixedSourceSearchEligible(request, parsedQuery) {
 		return s.searchMixedSourceEvidence(ctx, request, parsedQuery)
 	}
@@ -930,6 +942,20 @@ func (s *Service) Search(ctx context.Context, request SearchRequest) (SearchResp
 		response, searchErr := s.searchDerivedEvidence(ctx, request, parsedQuery, resultType)
 		if searchErr == nil {
 			response.Compact = request.Compact
+			finalizeSearchResponse(&response, parsedQuery)
+			s.addSearchActions(&response, parsedQuery)
+		}
+		return response, searchErr
+	}
+	if resultType == "symbol_definition" && s.structure != nil {
+		response, searchErr := s.searchQualifiedSymbols(ctx, request, parsedQuery)
+		if searchErr == nil {
+			response.Compact = request.Compact
+			setSearchResultType(&response, resultType)
+			owners, excludedOwners := ownershipFilters(parsedQuery)
+			if ownershipErr := s.applyOwnership(ctx, &response, owners, excludedOwners); ownershipErr != nil {
+				return SearchResponse{}, ownershipErr
+			}
 			finalizeSearchResponse(&response, parsedQuery)
 			s.addSearchActions(&response, parsedQuery)
 		}
@@ -953,6 +979,11 @@ func (s *Service) Search(ctx context.Context, request SearchRequest) (SearchResp
 		}
 		response.QueryLanguage = &parsedQuery
 		if referenceErr == nil {
+			if ownershipErr := s.applyOwnership(
+				ctx, &response, referenceRequest.Owners, referenceRequest.ExcludeOwners,
+			); ownershipErr != nil {
+				return SearchResponse{}, ownershipErr
+			}
 			finalizeSearchResponse(&response, parsedQuery)
 			s.addSearchActions(&response, parsedQuery)
 		}
@@ -1136,6 +1167,9 @@ func (s *Service) Search(ctx context.Context, request SearchRequest) (SearchResp
 	response.QueryLanguage = &parsedQuery
 	response.Compact = request.Compact
 	setSearchResultType(&response, resultType)
+	if err := s.applyOwnership(ctx, &response, queryFilters.owners, queryFilters.excludeOwners); err != nil {
+		return SearchResponse{}, err
+	}
 	finalizeSearchResponse(&response, parsedQuery)
 	s.addSearchActions(&response, parsedQuery)
 	return response, nil
@@ -1341,16 +1375,19 @@ func (s *Service) FindReferences(ctx context.Context, request ReferenceRequest) 
 	resolvedSymbol := symbol
 	resolution := "syntax-target-name"
 	provider := "tree-sitter"
-	if semanticIndex, semanticResolution, ok, semanticErr := s.scipReferenceIndex(
+	var semanticDetail *scipindex.Resolution
+	if semanticIndex, semanticResolution, detail, ok, semanticErr := s.scipReferenceIndex(
 		ctx,
 		repositoryID,
 		symbol,
 		index,
+		request.RelationKinds,
 	); semanticErr != nil {
 		return ReferenceResponse{}, semanticErr
 	} else if ok {
 		referenceIndex = semanticIndex
 		resolvedSymbol = semanticResolution
+		semanticDetail = detail
 		resolution = "scip-" + semanticIndex.ID
 		provider = "scip"
 	}
@@ -1367,6 +1404,7 @@ func (s *Service) FindReferences(ctx context.Context, request ReferenceRequest) 
 	output.SearchKind = "references"
 	setSearchResultType(&output, "reference")
 	output.ReferenceResolution = resolution
+	output.Semantic = semanticDetail
 	output.ReferenceIndex = &ReferenceIndex{
 		Provider:              provider,
 		State:                 "ready",
@@ -1389,16 +1427,17 @@ func (s *Service) scipReferenceIndex(
 	repositoryID int64,
 	symbol string,
 	syntaxIndex graph.StructuralIndex,
-) (graph.StructuralIndex, string, bool, error) {
+	relationKinds []string,
+) (graph.StructuralIndex, string, *scipindex.Resolution, bool, error) {
 	if s.scip == nil {
-		return graph.StructuralIndex{}, "", false, nil
+		return graph.StructuralIndex{}, "", nil, false, nil
 	}
 	repositories, err := s.store.ListRepositories(ctx)
 	if err != nil {
-		return graph.StructuralIndex{}, "", false, err
+		return graph.StructuralIndex{}, "", nil, false, err
 	}
 	if repositoryID == 0 && !syntaxIndex.Scope.Complete {
-		return graph.StructuralIndex{}, "", false, nil
+		return graph.StructuralIndex{}, "", nil, false, nil
 	}
 	javaRepositories := make(map[int64]struct{})
 	for _, document := range syntaxIndex.Structure {
@@ -1415,13 +1454,13 @@ func (s *Service) scipReferenceIndex(
 		revision := strings.TrimSpace(repository.IndexedCommit)
 		if revision == "" {
 			if repositoryID > 0 {
-				return graph.StructuralIndex{}, "", false, nil
+				return graph.StructuralIndex{}, "", nil, false, nil
 			}
 			continue
 		}
 		artifact, ok, readErr := s.scip.Read(ctx, repository.ID, revision)
 		if readErr != nil {
-			return graph.StructuralIndex{}, "", false, fmt.Errorf(
+			return graph.StructuralIndex{}, "", nil, false, fmt.Errorf(
 				"load SCIP artifact for %s: %w",
 				repository.Name,
 				readErr,
@@ -1434,11 +1473,11 @@ func (s *Service) scipReferenceIndex(
 				(repository.SCIPJava != nil && repository.SCIPJava.Applicable)
 			if repository.SCIPJava != nil && repository.SCIPJava.Applicable &&
 				repository.SCIPJava.State != "ready" {
-				return graph.StructuralIndex{}, "", false, nil
+				return graph.StructuralIndex{}, "", nil, false, nil
 			}
 		}
 		if !ok && required {
-			return graph.StructuralIndex{}, "", false, nil
+			return graph.StructuralIndex{}, "", nil, false, nil
 		}
 		if !ok {
 			continue
@@ -1447,18 +1486,24 @@ func (s *Service) scipReferenceIndex(
 		artifacts = append(artifacts, artifact)
 	}
 	if len(selected) == 0 {
-		return graph.StructuralIndex{}, "", false, nil
+		return graph.StructuralIndex{}, "", nil, false, nil
 	}
 	resolved := scipindex.ResolveReferences(artifacts, symbol)
 	if resolved.State != "exact" && resolved.State != "unique-name" {
-		return graph.StructuralIndex{}, "", false, nil
+		return graph.StructuralIndex{}, "", nil, false, nil
 	}
 	repositoryNames := make(map[int64]string, len(selected))
 	for _, repository := range selected {
 		repositoryNames[repository.ID] = repository.Name
 	}
 	documents := make(map[string]*graph.StructuralDocument)
-	for _, reference := range resolved.References {
+	locations := resolved.References
+	if containsFold(relationKinds, "implements") ||
+		containsFold(relationKinds, "extends") ||
+		containsFold(relationKinds, "implementation") {
+		locations = resolved.Implementations
+	}
+	for _, reference := range locations {
 		key := strconv.FormatInt(reference.RepositoryID, 10) + "\x00" + reference.Path
 		document := documents[key]
 		if document == nil {
@@ -1510,7 +1555,23 @@ func (s *Service) scipReferenceIndex(
 			AnalyzedRepositories:  len(selected),
 			RequestedRepositoryID: repositoryID,
 		},
-	}, resolved.Symbol, true, nil
+	}, resolved.Symbol, &resolved, true, nil
+}
+
+// SymbolDetails reports qualified identity and confidence without presenting
+// syntax-derived names as compiler facts.
+type SymbolDetails struct {
+	Name          string   `json:"name"`
+	FullName      string   `json:"full_name"`
+	Package       string   `json:"package,omitempty"`
+	Type          string   `json:"type,omitempty"`
+	Method        string   `json:"method,omitempty"`
+	Member        string   `json:"member,omitempty"`
+	Kind          string   `json:"kind,omitempty"`
+	Signature     string   `json:"signature,omitempty"`
+	Documentation []string `json:"documentation,omitempty"`
+	Identity      string   `json:"identity,omitempty"`
+	Confidence    string   `json:"confidence"`
 }
 
 type structuralReference struct {

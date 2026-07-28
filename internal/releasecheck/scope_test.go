@@ -12,9 +12,11 @@ func TestRoadmapKeepsM7ScopeAndCompletedMilestones(t *testing.T) {
 	root := repositoryRoot(t)
 	scope := normalizeScope(string(readFile(t, root, "SCOPE.md")))
 	m7 := scopeSection(t, scope, "### M7:", "### M8:")
+	m9 := scopeSection(t, scope, "### M9:", "### M10:")
 
 	for _, completed := range []string{
 		"- [x] Add permission-aware Chat autocomplete for `@repository` and `@file`",
+		"- [x] Extend permission-aware autocomplete to `@directory` and `@symbol`",
 		"- [x] Render repository and file mentions as removable context chips",
 		"- [x] Resolve repository and file mentions against the commit-pinned catalogue",
 		"- [x] Share the typed repository/file context contract across Chat",
@@ -23,29 +25,34 @@ func TestRoadmapKeepsM7ScopeAndCompletedMilestones(t *testing.T) {
 		"- [x] Extend resolution to directory and symbol contexts",
 		"- [x] Add named search contexts",
 		"- [x] Make every effective context visible",
+		"- [x] Add one documented query grammar",
 		"- [x] Provide explicit result types",
+		"- [x] Add qualified programming-element search",
 		"- [x] Add result facets",
 		"- [x] Rank exact symbol and path matches",
 		"- [x] Add one-click actions",
+		"- [x] Import optional SCIP indexes",
+		"- [x] Add graph queries",
 		"- [x] Search commits and diffs",
+		"- [x] Ingest CODEOWNERS as commit-pinned metadata",
+		"- [x] Persist per-author recent and saved searches",
+		"- [x] Turn a saved deterministic query into a monitor",
+		"- [x] Add an optional Deep Search mode",
+		"- [x] Stream a concise exploration trace",
+		"- [x] Preserve structured mentions and named contexts",
+		"- [x] Provide cancellation, retry from persisted deterministic evidence",
+		"- [x] Make every Deep Search answer addressable",
+		"- [x] Keep optional semantic retrieval or reranking clearly labeled and bounded",
 	} {
 		if !strings.Contains(m7, completed) {
 			t.Errorf("M7 completed scope is missing %q", completed)
 		}
 	}
-
-	for _, remaining := range []string{
-		"- [ ] Extend permission-aware autocomplete to `@directory` and `@symbol`",
-		"- [ ] Add one documented query grammar",
-		"- [ ] Import optional SCIP indexes",
-		"- [ ] Add graph queries",
-		"- [ ] Persist per-author recent and saved searches",
-		"- [ ] Add an optional Deep Search mode",
-		"- [ ] Make every Deep Search answer addressable",
-	} {
-		if !strings.Contains(m7, remaining) {
-			t.Errorf("M7 remaining scope is missing or no longer open: %q", remaining)
-		}
+	if strings.Contains(m7, "- [ ]") {
+		t.Error("M7 still contains unchecked scope")
+	}
+	if strings.Contains(m9, "- [ ]") {
+		t.Error("M9 still contains unchecked scope")
 	}
 
 	status := scopeSection(
@@ -55,9 +62,9 @@ func TestRoadmapKeepsM7ScopeAndCompletedMilestones(t *testing.T) {
 		"## Recommended next session",
 	)
 	for _, required := range []string{
-		"M0 through M6 are complete",
-		"M7 is in progress",
-		"M9 dependency inventory, public registry refresh, lockfile resolution",
+		"M0 through M12 are complete",
+		"M7 now includes qualified symbol search",
+		"M9 now includes explicit comparison and distance states",
 		"Linked-worktree discovery deduplication",
 		"M10 enterprise identity and administration are complete",
 	} {

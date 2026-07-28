@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	currentSchemaVersion = 21
+	currentSchemaVersion = 23
 
 	schemaV1 = `
 CREATE TABLE IF NOT EXISTS repositories (
@@ -547,6 +547,83 @@ ALTER TABLE repository_scip_indexes ADD COLUMN failure_summary TEXT NOT NULL DEF
 	// Version 21 retains repository identity across transient discovery misses.
 	schemaV21 = `
 ALTER TABLE repositories ADD COLUMN discovery_misses INTEGER NOT NULL DEFAULT 0 CHECK(discovery_misses >= 0);`
+
+	// Version 22 adds per-author recent/saved searches and deterministic
+	// monitor snapshots. Monitor delivery state is explicit even when no
+	// notification transport is configured.
+	schemaV22 = `
+CREATE TABLE IF NOT EXISTS search_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    author_id TEXT NOT NULL,
+    request_json TEXT NOT NULL,
+    result_count INTEGER NOT NULL DEFAULT 0 CHECK(result_count >= 0),
+    executed_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS search_history_author_time_index
+ON search_history(author_id, executed_at DESC, id DESC);
+
+CREATE TABLE IF NOT EXISTS saved_searches (
+    id TEXT PRIMARY KEY,
+    author_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    visibility TEXT NOT NULL CHECK(visibility IN ('personal', 'shared')),
+    managed INTEGER NOT NULL DEFAULT 0,
+    revision_policy TEXT NOT NULL CHECK(revision_policy IN ('pinned', 'latest_indexed')),
+    request_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS saved_searches_author_title_index
+ON saved_searches(author_id, title);
+CREATE INDEX IF NOT EXISTS saved_searches_visibility_index
+ON saved_searches(visibility, managed);
+
+CREATE TABLE IF NOT EXISTS search_monitors (
+    id TEXT PRIMARY KEY,
+    saved_search_id TEXT NOT NULL UNIQUE REFERENCES saved_searches(id) ON DELETE CASCADE,
+    author_id TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    history_limit INTEGER NOT NULL DEFAULT 20 CHECK(history_limit BETWEEN 1 AND 100),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS search_monitors_author_index
+ON search_monitors(author_id, enabled);
+
+CREATE TABLE IF NOT EXISTS search_monitor_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    monitor_id TEXT NOT NULL REFERENCES search_monitors(id) ON DELETE CASCADE,
+    revision_key TEXT NOT NULL,
+    result_keys_json TEXT NOT NULL,
+    added_json TEXT NOT NULL,
+    removed_json TEXT NOT NULL,
+    match_count INTEGER NOT NULL DEFAULT 0 CHECK(match_count >= 0),
+    status TEXT NOT NULL CHECK(status IN ('complete', 'incomplete', 'failed')),
+    notification_status TEXT NOT NULL CHECK(notification_status IN (
+        'not_configured', 'pending', 'delivered', 'failed'
+    )),
+    error TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS search_monitor_runs_monitor_time_index
+ON search_monitor_runs(monitor_id, created_at DESC, id DESC);`
+
+	// Version 23 makes Deep Search a durable conversation mode, persists its
+	// visible exploration trace, and adds revocable unguessable share tokens.
+	schemaV23 = `
+ALTER TABLE conversations ADD COLUMN mode TEXT NOT NULL DEFAULT 'chat'
+    CHECK(mode IN ('chat', 'deep_search'));
+ALTER TABLE conversation_messages ADD COLUMN trace_json TEXT NOT NULL DEFAULT '[]';
+CREATE TABLE IF NOT EXISTS conversation_shares (
+    token TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    author_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    revoked_at TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS conversation_shares_conversation_index
+ON conversation_shares(conversation_id, created_at DESC);`
 )
 
 // SchemaVersion is the current durable metadata format for every supported
@@ -1280,6 +1357,9 @@ func parseTime(value string) time.Time {
 
 // CreateConversation creates durable metadata for a provider-neutral chat.
 func (s *Store) CreateConversation(ctx context.Context, conversation agent.Conversation) error {
+	if strings.TrimSpace(conversation.Mode) == "" {
+		conversation.Mode = "chat"
+	}
 	if strings.TrimSpace(conversation.ID) == "" {
 		return errors.New("conversation id is required")
 	}
@@ -1304,15 +1384,16 @@ func (s *Store) CreateConversation(ctx context.Context, conversation agent.Conve
 	}
 	_, err = s.db.ExecContext(ctx, `
 INSERT INTO conversations (
-    id, title, provider, model, effort,
+    id, title, provider, model, effort, mode,
     author_id, author_name, author_email, author_provider, author_groups,
     resume_cursor, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		conversation.ID,
 		strings.TrimSpace(conversation.Title),
 		strings.TrimSpace(conversation.Provider),
 		strings.TrimSpace(conversation.Model),
 		strings.TrimSpace(conversation.Effort),
+		strings.TrimSpace(conversation.Mode),
 		strings.TrimSpace(conversation.Author.ID),
 		strings.TrimSpace(conversation.Author.Name),
 		strings.TrimSpace(conversation.Author.Email),
@@ -1363,7 +1444,7 @@ WHERE id = ? AND author_id = ?`,
 func (s *Store) ListConversations(ctx context.Context, filter agent.ConversationFilter) ([]agent.Conversation, error) {
 	query := `
 SELECT
-    c.id, c.title, c.provider, c.model, c.effort, c.resume_cursor,
+    c.id, c.title, c.provider, c.model, c.effort, c.mode, c.resume_cursor,
     c.author_id, c.author_name, c.author_email, c.author_provider, c.author_groups,
     c.created_at, c.updated_at, c.input_tokens, c.output_tokens,
     COUNT(m.id)
@@ -1388,6 +1469,7 @@ ORDER BY c.updated_at DESC, c.id DESC`
 			&conversation.Provider,
 			&conversation.Model,
 			&conversation.Effort,
+			&conversation.Mode,
 			&conversation.ResumeCursor,
 			&conversation.Author.ID,
 			&conversation.Author.Name,
@@ -1416,7 +1498,7 @@ func (s *Store) GetConversation(ctx context.Context, id string) (agent.Conversat
 	var createdAt, updatedAt string
 	row := s.db.QueryRowContext(ctx, `
 SELECT
-    id, title, provider, model, effort, resume_cursor,
+    id, title, provider, model, effort, mode, resume_cursor,
     author_id, author_name, author_email, author_provider, author_groups,
     created_at, updated_at,
     input_tokens, output_tokens
@@ -1429,6 +1511,7 @@ WHERE id = ?`, id)
 		&conversation.Provider,
 		&conversation.Model,
 		&conversation.Effort,
+		&conversation.Mode,
 		&conversation.ResumeCursor,
 		&conversation.Author.ID,
 		&conversation.Author.Name,
@@ -1450,7 +1533,7 @@ WHERE id = ?`, id)
 	rows, err := s.db.QueryContext(ctx, `
 SELECT
     id, conversation_id, role, text, status, error,
-    input_tokens, output_tokens, contexts_json, created_at
+    input_tokens, output_tokens, contexts_json, trace_json, created_at
 FROM conversation_messages
 WHERE conversation_id = ?
 ORDER BY id`, id)
@@ -1461,6 +1544,7 @@ ORDER BY id`, id)
 		var message agent.Message
 		var messageCreatedAt string
 		var messageContexts string
+		var messageTrace string
 		if err := rows.Scan(
 			&message.ID,
 			&message.ConversationID,
@@ -1471,6 +1555,7 @@ ORDER BY id`, id)
 			&message.InputTokens,
 			&message.OutputTokens,
 			&messageContexts,
+			&messageTrace,
 			&messageCreatedAt,
 		); err != nil {
 			rows.Close()
@@ -1480,6 +1565,10 @@ ORDER BY id`, id)
 		if err := json.Unmarshal([]byte(messageContexts), &message.Contexts); err != nil {
 			rows.Close()
 			return agent.Conversation{}, fmt.Errorf("decode message contexts: %w", err)
+		}
+		if err := json.Unmarshal([]byte(messageTrace), &message.Trace); err != nil {
+			rows.Close()
+			return agent.Conversation{}, fmt.Errorf("decode message trace: %w", err)
 		}
 		conversation.Messages = append(conversation.Messages, message)
 	}
@@ -1589,6 +1678,10 @@ func (s *Store) AppendMessage(ctx context.Context, message agent.Message) (agent
 	if err != nil {
 		return agent.Message{}, fmt.Errorf("encode message contexts: %w", err)
 	}
+	traceJSON, err := json.Marshal(message.Trace)
+	if err != nil {
+		return agent.Message{}, fmt.Errorf("encode message trace: %w", err)
+	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -1598,8 +1691,8 @@ func (s *Store) AppendMessage(ctx context.Context, message agent.Message) (agent
 	err = tx.QueryRowContext(ctx, `
 INSERT INTO conversation_messages (
     conversation_id, role, text, status, error,
-    input_tokens, output_tokens, contexts_json, created_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    input_tokens, output_tokens, contexts_json, trace_json, created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 RETURNING id`,
 		message.ConversationID,
 		message.Role,
@@ -1609,6 +1702,7 @@ RETURNING id`,
 		message.InputTokens,
 		message.OutputTokens,
 		string(contextsJSON),
+		string(traceJSON),
 		formatTime(message.CreatedAt),
 	).Scan(&message.ID)
 	if err != nil {

@@ -113,6 +113,29 @@
               </p>
             </div>
           </form>
+          <aside class="mt-4 grid gap-4 rounded-2xl border border-white/[0.07] bg-white/[0.025] p-4 lg:grid-cols-2"
+                 data-search-workspace data-can-admin="{{.CanAdminister}}">
+            <section>
+              <div class="flex items-center justify-between gap-3">
+                <div>
+                  <p class="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-300">Reusable search</p>
+                  <h2 class="mt-1 font-semibold text-white">Saved searches and monitors</h2>
+                </div>
+                <button type="button" class="secondary-button" data-save-search>Save current</button>
+              </div>
+              <ol class="mt-3 grid gap-2 text-sm" data-saved-searches></ol>
+              <p class="mt-3 text-xs text-ink-faint" data-saved-searches-empty>Loading saved searches…</p>
+            </section>
+            <section>
+              <div>
+                <p class="text-xs font-semibold uppercase tracking-[0.18em] text-sky-300">Your activity</p>
+                <h2 class="mt-1 font-semibold text-white">Recent deterministic queries</h2>
+              </div>
+              <ol class="mt-3 grid gap-2 text-sm" data-recent-searches></ol>
+              <p class="mt-3 text-xs text-ink-faint" data-recent-searches-empty>Searches you run will appear here.</p>
+            </section>
+            <p class="lg:col-span-2 text-xs text-ink-faint" data-search-workspace-feedback aria-live="polite"></p>
+          </aside>
         </section>
 
         {{template "search-results" .}}

@@ -908,10 +908,10 @@ func TestFleetSCIPCoverageIgnoresExplicitlyNonJavaRepositories(t *testing.T) {
 			{RepositoryID: 8, Language: "typescript"},
 		},
 	}
-	index, resolution, ok, err := service.scipReferenceIndex(
-		context.Background(), 0, "save", syntax,
+	index, resolution, semantic, ok, err := service.scipReferenceIndex(
+		context.Background(), 0, "save", syntax, nil,
 	)
-	if err != nil || !ok || resolution != semanticSave ||
+	if err != nil || !ok || semantic == nil || resolution != semanticSave ||
 		index.Scope.TotalRepositories != 1 ||
 		index.Scope.AnalyzedRepositories != 1 {
 		t.Fatalf("Java-aware SCIP index = %#v, %q, %v, %v", index, resolution, ok, err)
@@ -922,7 +922,7 @@ func TestFleetSCIPCoverageIgnoresExplicitlyNonJavaRepositories(t *testing.T) {
 	repositories[0].SCIPJava = &failed
 	service = New(referenceFleetStore{repositories: repositories}, fixedResultSearcher{}, "").
 		UseSCIP(referenceFleetSCIP{artifacts: map[int64]scipindex.Artifact{7: artifact}})
-	if _, _, ok, err := service.scipReferenceIndex(context.Background(), 0, "save", syntax); err != nil || ok {
+	if _, _, _, ok, err := service.scipReferenceIndex(context.Background(), 0, "save", syntax, nil); err != nil || ok {
 		t.Fatalf("incomplete Java SCIP coverage = %v, %v", ok, err)
 	}
 }

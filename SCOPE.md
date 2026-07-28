@@ -594,7 +594,7 @@ search must remain fast and AI-free.
 - [x] Add permission-aware Chat autocomplete for `@repository` and `@file`,
   including keyboard navigation, bounded suggestions, and useful matching
   across names containing spaces.
-- [ ] Extend permission-aware autocomplete to `@directory` and `@symbol`, and
+- [x] Extend permission-aware autocomplete to `@directory` and `@symbol`, and
   provide repository, file, directory, and symbol parity in the Deep Search
   composer.
 - [x] Render repository and file mentions as removable context chips and
@@ -621,13 +621,13 @@ search must remain fast and AI-free.
 
 #### Query and result experience
 
-- [ ] Add one documented query grammar with autocomplete for repository,
+- [x] Add one documented query grammar with autocomplete for repository,
   revision, language, path, filename, symbol kind, result type, ownership, and
   positive or negative filters while retaining the existing simple form.
 - [x] Provide explicit result types for content, file path, repository, symbol
   definition, reference, implementation, dependency, route, commit, diff,
   generated Wiki page, and captured code insight.
-- [ ] Add qualified programming-element search by package, type, method, member,
+- [x] Add qualified programming-element search by package, type, method, member,
   and full name, with exact, prefix, case-sensitive, and case-insensitive modes.
 - [x] Add result facets and “search within these results” refinement without
   discarding the original query, scope, revision, or completeness metadata.
@@ -637,7 +637,7 @@ search must remain fast and AI-free.
 - [x] Add one-click actions from a result to open source, focus the element in
   Maps, inspect dependencies, find references or implementations, start a
   scoped conversation, or add the result to the current context.
-- [ ] Import optional SCIP indexes for compiler-accurate cross-repository
+- [x] Import optional SCIP indexes for compiler-accurate cross-repository
   definitions, references, implementations, type signatures, and hover
   documentation while retaining syntax-backed results and confidence labels
   when precise data is unavailable.
@@ -653,42 +653,42 @@ search must remain fast and AI-free.
   - [x] Classify Java SCIP failures as environment, JDK/wrapper compatibility,
     or compilation failures, and select a compatible per-repository Gradle JVM
     from exact-commit toolchain/wrapper metadata and configured local JDKs.
-  - [ ] Add precise definitions, implementations, signatures, hover
+  - [x] Add precise definitions, implementations, signatures, hover
     documentation, dependency indexes, and cross-repository symbol stitching.
-- [ ] Add graph queries for upstream and downstream impact, shortest evidenced
+- [x] Add graph queries for upstream and downstream impact, shortest evidenced
   connection paths between two repositories, files, or symbols, and bounded
   traversal by relation type and depth.
 - [x] Search commits and diffs by author, message, path, added or removed text,
   date range, branch, and revision range without pretending unindexed history is
   part of the default-branch content index.
-- [ ] Ingest CODEOWNERS as commit-pinned metadata for owner display and filters,
+- [x] Ingest CODEOWNERS as commit-pinned metadata for owner display and filters,
   including explicit owned, unowned, unresolved-owner, and unavailable states.
 
 #### Saved searches, monitoring, and Deep Search
 
-- [ ] Persist per-author recent and saved searches with title, query, context,
+- [x] Persist per-author recent and saved searches with title, query, context,
   filters, result type, and revision policy; allow administrators to publish
   shared read-only search templates.
-- [ ] Turn a saved deterministic query into a monitor that reports newly added
+- [x] Turn a saved deterministic query into a monitor that reports newly added
   or removed matches between comparable indexed revisions, with bounded history
   and explicit notification-delivery status.
-- [ ] Add an optional Deep Search mode that answers natural-language questions
+- [x] Add an optional Deep Search mode that answers natural-language questions
   through the existing read-only search, symbol, reference, file, tree, Git,
   map, dependency, and Wiki tools rather than introducing an ungrounded
   retrieval path.
-- [ ] Stream a concise exploration trace showing current stage, searches
+- [x] Stream a concise exploration trace showing current stage, searches
   executed, files read, contexts used, elapsed time, coverage warnings, and
   sources; do not expose hidden model reasoning.
-- [ ] Preserve structured mentions and named contexts across follow-up
+- [x] Preserve structured mentions and named contexts across follow-up
   questions, while allowing the user to add, remove, or replace scope without
   restarting the conversation.
-- [ ] Provide cancellation, retry from persisted deterministic evidence,
+- [x] Provide cancellation, retry from persisted deterministic evidence,
   time/token/tool-call budgets, and a visible “search more broadly” action when
   the first bounded exploration is incomplete.
-- [ ] Make every Deep Search answer addressable by URL and shareable only after
+- [x] Make every Deep Search answer addressable by URL and shareable only after
   rechecking repository permissions for every viewer; never expose cited source
   through a shared answer when that viewer cannot access it.
-- [ ] Keep optional semantic retrieval or reranking clearly labeled and bounded.
+- [x] Keep optional semantic retrieval or reranking clearly labeled and bounded.
   Literal, regex, symbol, AST, SCIP, and graph evidence remain authoritative,
   and semantic similarity must not turn a partial negative answer into a
   complete one.
@@ -786,10 +786,10 @@ captured from committed manifests and build files.
 - [x] Query the appropriate public package registry for the latest available
   stable version, including at least Maven Central/Gradle, npm, Go modules,
   Cargo, and PyPI as their manifest extractors mature.
-- [ ] Compare declared and latest stable versions and expose clear states such
+- [x] Compare declared and latest stable versions and expose clear states such
   as current, behind, ahead/prerelease, unavailable, private/internal,
   unresolved, and registry error.
-- [ ] Display version discrepancies fleet-wide and per repository, with filters
+- [x] Display version discrepancies fleet-wide and per repository, with filters
   by ecosystem, package, repository, severity of version distance, and check
   status.
 - [x] Record the registry source and observation timestamp separately from the
@@ -797,7 +797,7 @@ captured from committed manifests and build files.
   a historical source fact.
 - [x] Cache registry responses, honor rate limits and offline operation, bound
   refresh concurrency, and surface partial or stale results explicitly.
-- [ ] Do not send private/internal package names to public registries unless an
+- [x] Do not send private/internal package names to public registries unless an
   administrator explicitly configures that ecosystem and registry as safe.
 - [x] Keep the feature advisory and read-only: RepoKarta may explain an upgrade
   discrepancy, but it must not rewrite manifests, lockfiles, or repositories.
@@ -1065,12 +1065,13 @@ completion criteria include:
 
 ## Current implementation version
 
-`0.88.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
-The M9 dependency inventory, public registry refresh, lockfile resolution,
-explicit private-registry routing, reproducible OSV advisory snapshots,
-ecosystem-correct fleet CVE matching, scope-aware UI/JSON/MCP findings, and
-SARIF export are implemented; discrepancy filtering and fail-closed
-classification of unconfigured internal package prefixes remain.
+`0.93.0-dev`. M0 through M12 are complete. M7 now includes qualified symbol
+search, precise optional SCIP data, commit-pinned CODEOWNERS, bounded evidence
+graph queries, saved searches and deterministic monitors, and permission-safe
+Deep Search with visible trace, budgets, retry, and revocable sharing. M9 now
+includes explicit comparison and distance states, fleet and repository
+filters, and fail-closed classification of unconfigured internal package
+coordinates before registry refresh.
 M12 distributed dependency topology is complete: the Dependencies landing view
 now models deployable components and directed HTTP, gRPC, Kafka, database, and
 MCP relationships; type-aware fleet reconciliation, explicit declarations,
@@ -1156,15 +1157,8 @@ blindly inheriting the server JVM.
 
 ## Recommended next session
 
-Continue M7 with directory/symbol autocomplete, the remaining symbol-kind and
-ownership grammar filters, qualified programming-element search, precise SCIP
-definitions/implementations/hover data, and framework-aware reachability roots
-for Spring, jobs, and dependency injection. Complete
-repository/file/directory/symbol parity when the Deep Search composer is
-introduced. Preserve the current fail-closed permission, revision, ambiguity,
-default-context, and completeness behavior before adding agentic Deep Search.
-
-Continue M9 afterward with discrepancy/status filters and a fail-closed way to
-classify internal package prefixes before public refresh. Preserve the current
-bounded cache, separate observation timestamps and errors, and explicit
-private-registry routing.
+Begin M19 with the disabled-by-default telemetry lifecycle, OTLP configuration,
+stable resource identity, and the privacy/cardinality contract before adding
+individual instruments. Preserve the completed permission, revision,
+ambiguity, registry-routing, evidence, and completeness boundaries when
+instrumenting search or dependency analysis.

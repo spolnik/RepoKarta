@@ -17,10 +17,13 @@ const (
 // Options bounds and filters one dependency inventory page.
 type Options struct {
 	Query        string
+	Package      string
 	Ecosystem    string
 	Usage        string
 	Relationship string
 	Resolution   string
+	CheckStatus  string
+	Distance     string
 	Offset       int
 	Limit        int
 }
@@ -38,6 +41,8 @@ type Inventory struct {
 	CurrentCount    int                    `json:"current_count"`
 	UpdateCount     int                    `json:"update_count"`
 	ErrorCount      int                    `json:"error_count"`
+	PrivateCount    int                    `json:"private_internal_count"`
+	UnresolvedCount int                    `json:"unresolved_count"`
 	ReturnedCount   int                    `json:"returned_count"`
 	Declarations    []Declaration          `json:"declarations"`
 	Truncated       bool                   `json:"truncated"`
@@ -45,10 +50,13 @@ type Inventory struct {
 	Offset          int                    `json:"offset"`
 	Limit           int                    `json:"limit"`
 	Query           string                 `json:"query,omitempty"`
+	Package         string                 `json:"package_filter,omitempty"`
 	Ecosystem       string                 `json:"ecosystem_filter,omitempty"`
 	Usage           string                 `json:"usage_filter,omitempty"`
 	Relationship    string                 `json:"relationship_filter,omitempty"`
 	Resolution      string                 `json:"resolution_filter,omitempty"`
+	CheckStatus     string                 `json:"check_status_filter,omitempty"`
+	Distance        string                 `json:"version_distance_filter,omitempty"`
 	Scope           graph.Scope            `json:"scope"`
 	BuildProgress   graph.ArtifactProgress `json:"build_progress"`
 }
@@ -70,7 +78,9 @@ type Declaration struct {
 	Relationship     string         `json:"relationship"`
 	DeclaredScope    string         `json:"declared_scope,omitempty"`
 	CheckStatus      string         `json:"check_status"`
+	CheckDetail      string         `json:"check_detail,omitempty"`
 	LatestStable     string         `json:"latest_stable,omitempty"`
+	VersionDistance  string         `json:"version_distance,omitempty"`
 	Registry         string         `json:"registry,omitempty"`
 	ObservedAt       string         `json:"observed_at,omitempty"`
 	Evidence         graph.Evidence `json:"evidence"`
@@ -90,10 +100,13 @@ func BuildPage(snapshot graph.Snapshot, options Options) Inventory {
 
 func buildPage(snapshot graph.Snapshot, options Options, decorate func(*Declaration)) Inventory {
 	options.Query = strings.TrimSpace(options.Query)
+	options.Package = strings.TrimSpace(options.Package)
 	options.Ecosystem = strings.ToLower(strings.TrimSpace(options.Ecosystem))
 	options.Usage = strings.ToLower(strings.TrimSpace(options.Usage))
 	options.Relationship = strings.ToLower(strings.TrimSpace(options.Relationship))
 	options.Resolution = strings.ToLower(strings.TrimSpace(options.Resolution))
+	options.CheckStatus = strings.ToLower(strings.TrimSpace(options.CheckStatus))
+	options.Distance = strings.ToLower(strings.TrimSpace(options.Distance))
 	if options.Offset < 0 {
 		options.Offset = 0
 	}
@@ -130,17 +143,23 @@ func buildPage(snapshot graph.Snapshot, options Options, decorate func(*Declarat
 	currentCount := 0
 	updateCount := 0
 	errorCount := 0
+	privateCount := 0
+	unresolvedCount := 0
 	for _, declaration := range filtered {
 		switch declaration.CheckStatus {
 		case "current":
 			currentCount++
 			checkedCount++
-		case "update_available":
+		case "behind":
 			updateCount++
 			checkedCount++
-		case "error":
+		case "registry_error":
 			errorCount++
-		case "unchecked", "checking", "stale":
+		case "private_internal":
+			privateCount++
+		case "unresolved":
+			unresolvedCount++
+		case "unchecked", "checking", "stale", "unavailable":
 			uncheckedCount++
 		default:
 			checkedCount++
@@ -160,6 +179,8 @@ func buildPage(snapshot graph.Snapshot, options Options, decorate func(*Declarat
 		CurrentCount:    currentCount,
 		UpdateCount:     updateCount,
 		ErrorCount:      errorCount,
+		PrivateCount:    privateCount,
+		UnresolvedCount: unresolvedCount,
 		ReturnedCount:   len(page),
 		Declarations:    page,
 		Truncated:       snapshot.Truncated || snapshot.StructureTruncated,
@@ -167,10 +188,13 @@ func buildPage(snapshot graph.Snapshot, options Options, decorate func(*Declarat
 		Offset:          offset,
 		Limit:           options.Limit,
 		Query:           options.Query,
+		Package:         options.Package,
 		Ecosystem:       options.Ecosystem,
 		Usage:           options.Usage,
 		Relationship:    options.Relationship,
 		Resolution:      options.Resolution,
+		CheckStatus:     options.CheckStatus,
+		Distance:        options.Distance,
 		Scope:           snapshot.Scope,
 	}
 }
@@ -217,7 +241,11 @@ func normalizedDeclarations(snapshot graph.Snapshot) []Declaration {
 func filterDeclarations(declarations []Declaration, options Options) []Declaration {
 	filtered := make([]Declaration, 0, len(declarations))
 	query := strings.ToLower(strings.TrimSpace(options.Query))
+	packageQuery := strings.ToLower(strings.TrimSpace(options.Package))
 	for _, declaration := range declarations {
+		if packageQuery != "" && !strings.Contains(strings.ToLower(declaration.Package), packageQuery) {
+			continue
+		}
 		if options.Ecosystem != "" && !strings.EqualFold(declaration.Ecosystem, options.Ecosystem) {
 			continue
 		}
@@ -228,6 +256,12 @@ func filterDeclarations(declarations []Declaration, options Options) []Declarati
 			continue
 		}
 		if options.Relationship != "" && !strings.EqualFold(declaration.Relationship, options.Relationship) {
+			continue
+		}
+		if options.CheckStatus != "" && !strings.EqualFold(declaration.CheckStatus, options.CheckStatus) {
+			continue
+		}
+		if options.Distance != "" && !strings.EqualFold(declaration.VersionDistance, options.Distance) {
 			continue
 		}
 		if query != "" {

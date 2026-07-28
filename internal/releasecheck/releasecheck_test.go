@@ -89,7 +89,13 @@ func TestEveryPackagePathCarriesRequiredLicensesAndVerification(t *testing.T) {
 		}
 	}
 	for _, script := range []string{powerShell, shell} {
-		for _, expected := range []string{"shared-deployment.md", "enterprise-administration.md", "repokarta.env.example"} {
+		for _, expected := range []string{
+			"shared-deployment.md",
+			"enterprise-administration.md",
+			"advanced-search.md",
+			"dependency-management.md",
+			"repokarta.env.example",
+		} {
 			if !strings.Contains(script, expected) {
 				t.Fatalf("release packager is missing shared operations artifact %q", expected)
 			}

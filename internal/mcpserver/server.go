@@ -2,10 +2,12 @@
 package mcpserver
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -144,9 +146,16 @@ func NewToken() (string, error) {
 
 // CitationTracker records exact source URLs returned by MCP tools.
 type CitationTracker struct {
-	mu       sync.Mutex
-	sequence uint64
-	byThread map[string]map[string]trackedCitation
+	mu         sync.Mutex
+	sequence   uint64
+	byThread   map[string]map[string]trackedCitation
+	operations map[string][]agent.ExplorationEvent
+	budgets    map[string]toolCallBudget
+}
+
+type toolCallBudget struct {
+	Used  int
+	Limit int
 }
 
 type trackedCitation struct {
@@ -156,7 +165,75 @@ type trackedCitation struct {
 
 // NewCitationTracker constructs an empty citation recorder.
 func NewCitationTracker() *CitationTracker {
-	return &CitationTracker{byThread: make(map[string]map[string]trackedCitation)}
+	return &CitationTracker{
+		byThread:   make(map[string]map[string]trackedCitation),
+		operations: make(map[string][]agent.ExplorationEvent),
+		budgets:    make(map[string]toolCallBudget),
+	}
+}
+
+// RecordExploration adds a bounded visible read-only tool milestone.
+func (t *CitationTracker) RecordExploration(
+	conversationID string,
+	event agent.ExplorationEvent,
+) {
+	if t == nil || conversationID == "" || event.Kind == "" {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	const maximumOperations = 100
+	if len(t.operations[conversationID]) >= maximumOperations {
+		return
+	}
+	t.operations[conversationID] = append(t.operations[conversationID], event)
+}
+
+func (t *CitationTracker) ListExploration(conversationID string) []agent.ExplorationEvent {
+	if t == nil {
+		return nil
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return append([]agent.ExplorationEvent(nil), t.operations[conversationID]...)
+}
+
+func (t *CitationTracker) BeginTurn(conversationID string, limit int) {
+	if t == nil || conversationID == "" {
+		return
+	}
+	t.mu.Lock()
+	t.budgets[conversationID] = toolCallBudget{Limit: max(1, limit)}
+	t.mu.Unlock()
+}
+
+func (t *CitationTracker) ToolUsage(conversationID string) (int, int) {
+	if t == nil {
+		return 0, 0
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	budget := t.budgets[conversationID]
+	return budget.Used, budget.Limit
+}
+
+func (t *CitationTracker) consumeToolCall(conversationID string) bool {
+	if t == nil || conversationID == "" {
+		return true
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	budget, found := t.budgets[conversationID]
+	if !found {
+		budget.Limit = agent.MaximumToolCallBudget
+	}
+	if budget.Used >= budget.Limit {
+		t.budgets[conversationID] = budget
+		return false
+	}
+	budget.Used++
+	t.budgets[conversationID] = budget
+	return true
 }
 
 // Record adds one exact citation to a conversation.
@@ -207,6 +284,8 @@ func (t *CitationTracker) Clear(conversationID string) {
 	}
 	t.mu.Lock()
 	delete(t.byThread, conversationID)
+	delete(t.operations, conversationID)
+	delete(t.budgets, conversationID)
 	t.mu.Unlock()
 }
 
@@ -219,7 +298,33 @@ func NewHandler(config Config, intelligence Intelligence, trackers ...*CitationT
 	handler := mcp.NewStreamableHTTPHandler(func(request *http.Request) *mcp.Server {
 		return newServer(config, intelligence, tracker, request.URL.Query().Get("conversation_id"))
 	}, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true})
-	return bearerAuth(config, handler)
+	return bearerAuth(config, toolCallBudgetMiddleware(tracker, handler))
+}
+
+func toolCallBudgetMiddleware(tracker *CitationTracker, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if tracker == nil || request.Method != http.MethodPost {
+			next.ServeHTTP(response, request)
+			return
+		}
+		body, err := io.ReadAll(io.LimitReader(request.Body, 1<<20))
+		if err != nil {
+			http.Error(response, "Invalid MCP request", http.StatusBadRequest)
+			return
+		}
+		request.Body = io.NopCloser(bytes.NewReader(body))
+		var envelope struct {
+			Method string `json:"method"`
+		}
+		if json.Unmarshal(body, &envelope) == nil && envelope.Method == "tools/call" {
+			conversationID := strings.TrimSpace(request.URL.Query().Get("conversation_id"))
+			if !tracker.consumeToolCall(conversationID) {
+				http.Error(response, "Deep Search tool-call budget exhausted", http.StatusTooManyRequests)
+				return
+			}
+		}
+		next.ServeHTTP(response, request)
+	})
 }
 
 func newServer(config Config, intelligence Intelligence, tracker *CitationTracker, conversationID string) *mcp.Server {
@@ -309,6 +414,18 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 				tracker.Record(conversationID, agent.Citation{Label: item.Citation, URL: item.SourceURL})
 			}
 		}
+		warning := ""
+		if result.Truncated || !result.TotalFilesExact {
+			warning = "Search coverage is partial or truncated."
+		}
+		tracker.RecordExploration(conversationID, agent.ExplorationEvent{
+			Kind: "search_executed",
+			Detail: fmt.Sprintf(
+				"search_code %q returned %d matches and %d evidence items",
+				input.Query, result.MatchCount, len(result.Items),
+			),
+			CoverageWarning: warning,
+		})
 		return nil, result, nil
 	})
 
@@ -335,6 +452,13 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 			return nil, openFileOutput{}, err
 		}
 		tracker.Record(conversationID, agent.Citation{Label: file.Citation, URL: file.SourceURL})
+		tracker.RecordExploration(conversationID, agent.ExplorationEvent{
+			Kind: "file_read",
+			Detail: fmt.Sprintf(
+				"get_file read %s at %s lines %d-%d",
+				file.Path, shortRevision(file.Revision), file.StartLine, file.EndLine,
+			),
+		})
 		return nil, file, nil
 	})
 
@@ -366,6 +490,11 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 		for _, match := range result.Matches {
 			tracker.Record(conversationID, agent.Citation{Label: match.Citation, URL: match.SourceURL})
 		}
+		tracker.RecordExploration(conversationID, agent.ExplorationEvent{
+			Kind:            "search_executed",
+			Detail:          fmt.Sprintf("find_symbol %q returned %d matches", input.Symbol, result.MatchCount),
+			CoverageWarning: searchCoverageWarning(result),
+		})
 		return nil, result, nil
 	})
 
@@ -399,6 +528,14 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 		for _, match := range result.Matches {
 			tracker.Record(conversationID, agent.Citation{Label: match.Citation, URL: match.SourceURL})
 		}
+		tracker.RecordExploration(conversationID, agent.ExplorationEvent{
+			Kind: "search_executed",
+			Detail: fmt.Sprintf(
+				"find_references %q returned %d matches using %s",
+				input.Symbol, result.MatchCount, result.ReferenceResolution,
+			),
+			CoverageWarning: searchCoverageWarning(result),
+		})
 		return nil, result, nil
 	})
 
@@ -425,6 +562,18 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 		for _, match := range result.Matches {
 			tracker.Record(conversationID, agent.Citation{Label: match.Citation, URL: match.SourceURL})
 		}
+		warning := ""
+		if !result.Complete || result.Truncated {
+			warning = "AST search coverage is incomplete or truncated."
+		}
+		tracker.RecordExploration(conversationID, agent.ExplorationEvent{
+			Kind: "search_executed",
+			Detail: fmt.Sprintf(
+				"search_ast scanned %d files and returned %d matches",
+				result.ScannedFiles, len(result.Matches),
+			),
+			CoverageWarning: warning,
+		})
 		return nil, result, nil
 	})
 
@@ -450,6 +599,16 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 			return nil, listTreeOutput{}, err
 		}
 		tracker.Record(conversationID, agent.Citation{Label: tree.Citation, URL: tree.SourceURL})
+		tracker.RecordExploration(conversationID, agent.ExplorationEvent{
+			Kind:   "tree_read",
+			Detail: fmt.Sprintf("list_tree read %s with %d entries", tree.Path, len(tree.Entries)),
+			CoverageWarning: func() string {
+				if tree.Truncated {
+					return "Tree listing is paginated; more entries remain."
+				}
+				return ""
+			}(),
+		})
 		return nil, tree, nil
 	})
 
@@ -530,6 +689,46 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 				}
 			}
 			return nil, snapshot, nil
+		})
+
+		mcp.AddTool(server, &mcp.Tool{
+			Name:        "query_evidence_graph",
+			Title:       "Query evidence graph",
+			Description: "Traverse bounded upstream/downstream impact or find the shortest evidenced path between repositories, files, symbols, packages, routes, and other map nodes. Relation kinds and depth are explicit; partial source artifacts remain visible. No AI or repository code is invoked.",
+			Annotations: readOnly,
+		}, func(ctx context.Context, _ *mcp.CallToolRequest, input queryEvidenceGraphInput) (*mcp.CallToolResult, graph.QueryResult, error) {
+			repositoryID, err := resolveRepositorySelector(
+				ctx, intelligence, input.RepositoryID, input.Repository, false,
+			)
+			if err != nil {
+				return nil, graph.QueryResult{}, err
+			}
+			snapshot, err := config.Artifacts.RepositoryMap(ctx, repositoryID)
+			if err != nil {
+				return nil, graph.QueryResult{}, err
+			}
+			result, err := graph.QueryGraph(snapshot, input.QueryRequest)
+			if err != nil {
+				return nil, result, err
+			}
+			for _, edge := range result.Edges {
+				for _, evidence := range edge.Evidence {
+					recordEvidence(tracker, conversationID, evidence)
+				}
+			}
+			warning := ""
+			if !result.Complete || result.Truncated {
+				warning = "Graph traversal coverage is incomplete or truncated."
+			}
+			tracker.RecordExploration(conversationID, agent.ExplorationEvent{
+				Kind: "graph_query",
+				Detail: fmt.Sprintf(
+					"query_evidence_graph %s returned %d nodes and %d edges",
+					result.Mode, len(result.Nodes), len(result.Edges),
+				),
+				CoverageWarning: warning,
+			})
+			return nil, result, nil
 		})
 
 		mcp.AddTool(server, &mcp.Tool{
@@ -882,6 +1081,12 @@ type readRepositoryMapInput struct {
 }
 
 type readRepositoryMapOutput = graph.Snapshot
+
+type queryEvidenceGraphInput struct {
+	RepositoryID int64  `json:"repository_id,omitempty" jsonschema:"Optional repository ID. Omit for the accessible fleet."`
+	Repository   string `json:"repository,omitempty" jsonschema:"Optional exact repository name. Omit for the accessible fleet."`
+	graph.QueryRequest
+}
 
 type readDependencyInventoryInput struct {
 	RepositoryID int64  `json:"repository_id,omitempty" jsonschema:"Repository ID. Provide this or repository."`
@@ -1388,6 +1593,13 @@ func aToken(authority *TokenAuthority, token, conversationID string) bool {
 
 func boolPointer(value bool) *bool {
 	return &value
+}
+
+func searchCoverageWarning(result codeintel.SearchResponse) string {
+	if result.Truncated || !result.TotalFilesExact {
+		return "Search coverage is partial or truncated."
+	}
+	return ""
 }
 
 func shortRevision(value string) string {

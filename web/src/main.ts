@@ -475,6 +475,210 @@ function enableSearchFeedback(): void {
   });
 }
 
+function enableSearchWorkspace(): void {
+  const workspace = document.querySelector<HTMLElement>("[data-search-workspace]");
+  const form = document.querySelector<HTMLFormElement>('form[action="/search"]');
+  const savedList = workspace?.querySelector<HTMLOListElement>("[data-saved-searches]");
+  const recentList = workspace?.querySelector<HTMLOListElement>("[data-recent-searches]");
+  const savedEmpty = workspace?.querySelector<HTMLElement>("[data-saved-searches-empty]");
+  const recentEmpty = workspace?.querySelector<HTMLElement>("[data-recent-searches-empty]");
+  const feedback = workspace?.querySelector<HTMLElement>("[data-search-workspace-feedback]");
+  const saveButton = workspace?.querySelector<HTMLButtonElement>("[data-save-search]");
+  if (!workspace || !form || !savedList || !recentList || !savedEmpty || !recentEmpty || !feedback || !saveButton) {
+    return;
+  }
+
+  type WorkspaceSearchRequest = {
+    query: string;
+    repository_id?: number;
+    language?: string;
+    path?: string;
+    file?: string;
+    mode?: string;
+    limit?: number;
+  };
+  type WorkspaceMonitor = {
+    id: string;
+    enabled: boolean;
+    runs?: Array<{
+      status: string;
+      added: string[];
+      removed: string[];
+      notification_status: string;
+    }>;
+  };
+  type WorkspaceSaved = {
+    id: string;
+    title: string;
+    visibility: string;
+    managed: boolean;
+    editable: boolean;
+    revision_policy: string;
+    request: WorkspaceSearchRequest;
+    monitor?: WorkspaceMonitor;
+  };
+  type WorkspaceRecent = {
+    id: number;
+    request: WorkspaceSearchRequest;
+    result_count: number;
+  };
+
+  const formRequest = (): WorkspaceSearchRequest => {
+    const data = new FormData(form);
+    const repositoryID = Number.parseInt(String(data.get("repo") ?? ""), 10);
+    const limit = Number.parseInt(String(data.get("limit") ?? ""), 10);
+    return {
+      query: String(data.get("q") ?? "").trim(),
+      ...(Number.isFinite(repositoryID) && repositoryID > 0 ? { repository_id: repositoryID } : {}),
+      ...(String(data.get("lang") ?? "").trim() ? { language: String(data.get("lang")).trim() } : {}),
+      ...(String(data.get("path") ?? "").trim() ? { path: String(data.get("path")).trim() } : {}),
+      ...(String(data.get("file") ?? "").trim() ? { file: String(data.get("file")).trim() } : {}),
+      mode: String(data.get("mode") ?? "zoekt"),
+      ...(Number.isFinite(limit) ? { limit } : {})
+    };
+  };
+
+  const applyRequest = (request: WorkspaceSearchRequest): void => {
+    const set = (name: string, value: string): void => {
+      const field = form.elements.namedItem(name) as HTMLInputElement | HTMLSelectElement | null;
+      if (field) {
+        field.value = value;
+      }
+    };
+    set("q", request.query);
+    set("repo", request.repository_id ? String(request.repository_id) : "");
+    set("lang", request.language ?? "");
+    set("path", request.path ?? "");
+    set("file", request.file ?? "");
+    set("mode", request.mode ?? "zoekt");
+    set("limit", String(request.limit ?? 100));
+    form.requestSubmit();
+  };
+
+  const load = async (): Promise<void> => {
+    try {
+      const response = await fetch("/api/searches", { headers: { Accept: "application/json" } });
+      if (!response.ok) {
+        throw new Error(await responseErrorMessage(response, "Search workspace is unavailable."));
+      }
+      const data = await response.json() as { saved: WorkspaceSaved[]; recent: WorkspaceRecent[] };
+      savedList.replaceChildren();
+      for (const saved of data.saved ?? []) {
+        const item = document.createElement("li");
+        item.className = "flex items-center gap-2 rounded-xl border border-white/[0.06] px-3 py-2";
+        const open = document.createElement("button");
+        open.type = "button";
+        open.className = "min-w-0 flex-1 text-left";
+        open.innerHTML = `<strong class="block truncate text-white"></strong><span class="text-xs text-ink-faint"></span>`;
+        open.querySelector("strong")!.textContent = saved.title;
+        open.querySelector("span")!.textContent = `${saved.visibility} · ${saved.revision_policy}`;
+        open.addEventListener("click", () => applyRequest(saved.request));
+        const monitor = document.createElement("button");
+        monitor.type = "button";
+        monitor.className = "secondary-button";
+        monitor.textContent = saved.monitor ? "Run monitor" : "Monitor";
+        monitor.addEventListener("click", async () => {
+          monitor.disabled = true;
+          try {
+            let monitorID = saved.monitor?.id;
+            if (!monitorID) {
+              const configured = await fetch(`/api/searches/${encodeURIComponent(saved.id)}/monitor`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json", Accept: "application/json" },
+                body: JSON.stringify({ enabled: true, history_limit: 20 })
+              });
+              if (!configured.ok) {
+                throw new Error(await responseErrorMessage(configured, "Monitor could not be configured."));
+              }
+              monitorID = (await configured.json() as WorkspaceMonitor).id;
+            }
+            const run = await fetch(`/api/search-monitors/${encodeURIComponent(monitorID)}/run`, {
+              method: "POST",
+              headers: { Accept: "application/json" }
+            });
+            if (!run.ok) {
+              throw new Error(await responseErrorMessage(run, "Monitor could not run."));
+            }
+            const result = await run.json() as {
+              added: string[];
+              removed: string[];
+              notification_status: string;
+            };
+            feedback.textContent = `${saved.title}: ${result.added.length} added, ${result.removed.length} removed · notification ${result.notification_status.replaceAll("_", " ")}`;
+            await load();
+          } catch (error: unknown) {
+            feedback.textContent = error instanceof Error ? error.message : "Monitor could not run.";
+          } finally {
+            monitor.disabled = false;
+          }
+        });
+        item.append(open, monitor);
+        savedList.append(item);
+      }
+      savedEmpty.hidden = (data.saved?.length ?? 0) > 0;
+      if (!savedEmpty.hidden) {
+        savedEmpty.textContent = "Save a deterministic query to reuse or monitor it.";
+      }
+
+      recentList.replaceChildren();
+      for (const recent of data.recent ?? []) {
+        const item = document.createElement("li");
+        const open = document.createElement("button");
+        open.type = "button";
+        open.className = "w-full rounded-xl border border-white/[0.06] px-3 py-2 text-left";
+        open.innerHTML = `<strong class="block truncate text-white"></strong><span class="text-xs text-ink-faint"></span>`;
+        open.querySelector("strong")!.textContent = recent.request.query;
+        open.querySelector("span")!.textContent = `${recent.result_count} results`;
+        open.addEventListener("click", () => applyRequest(recent.request));
+        item.append(open);
+        recentList.append(item);
+      }
+      recentEmpty.hidden = (data.recent?.length ?? 0) > 0;
+    } catch (error: unknown) {
+      feedback.textContent = error instanceof Error ? error.message : "Search workspace is unavailable.";
+    }
+  };
+
+  saveButton.addEventListener("click", async () => {
+    const request = formRequest();
+    if (!request.query) {
+      feedback.textContent = "Run or enter a query before saving it.";
+      return;
+    }
+    const title = window.prompt("Saved search title", request.query.slice(0, 80))?.trim();
+    if (!title) {
+      return;
+    }
+    const canAdmin = workspace.dataset.canAdmin === "true";
+    const visibility = canAdmin && window.confirm("Publish this as a shared read-only administrator template?")
+      ? "shared"
+      : "personal";
+    try {
+      const response = await fetch("/api/searches", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({
+          title,
+          visibility,
+          revision_policy: "latest_indexed",
+          request
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await responseErrorMessage(response, "Search could not be saved."));
+      }
+      feedback.textContent = visibility === "shared"
+        ? "Shared read-only search template published."
+        : "Search saved to your workspace.";
+      await load();
+    } catch (error: unknown) {
+      feedback.textContent = error instanceof Error ? error.message : "Search could not be saved.";
+    }
+  });
+
+  void load();
+}
+
 /**
  * Mirrors live catalogue counts into the first-run panel. The catalogue list is
  * swapped by SSE; this keeps the indexing headline and bar in step without
@@ -928,7 +1132,7 @@ function highlightSearchResults(root: ParentNode = document): void {
 }
 
 type ConversationEvent = {
-  type: "meta" | "activity" | "delta" | "sources" | "images" | "context" | "usage" | "interrupted" | "done" | "error";
+  type: "meta" | "activity" | "delta" | "sources" | "images" | "context" | "usage" | "trace" | "interrupted" | "done" | "error";
   conversation_id?: string;
   title?: string;
   activity?: "thinking";
@@ -938,6 +1142,14 @@ type ConversationEvent = {
   images?: ConversationImage[];
   context?: ContextUsage;
   usage?: TokenUsage;
+  trace?: ConversationTrace;
+};
+
+type ConversationTrace = {
+  stage: string;
+  detail?: string;
+  elapsed_ms: number;
+  coverage_warning?: string;
 };
 
 type ContextUsage = {
@@ -1018,6 +1230,7 @@ type ConversationRecord = {
   provider: string;
   model?: string;
   effort?: string;
+  mode: "chat" | "deep_search";
   author: ConversationAuthor;
   created_at: string;
   updated_at: string;
@@ -1052,6 +1265,7 @@ type ConversationRecordMessage = {
   error?: string;
   input_tokens?: number;
   output_tokens?: number;
+  trace?: ConversationTrace[];
   created_at: string;
 };
 
@@ -2118,8 +2332,10 @@ function enableConversations(debug?: DebugLogger): void {
   const provider = document.querySelector<HTMLSelectElement>("#conversation-provider");
   const model = document.querySelector<HTMLSelectElement>("#conversation-model");
   const effort = document.querySelector<HTMLSelectElement>("#conversation-effort");
+  const conversationMode = document.querySelector<HTMLSelectElement>("#conversation-mode");
   const timeout = document.querySelector<HTMLSelectElement>("#conversation-timeout");
   const tokenBudget = document.querySelector<HTMLSelectElement>("#conversation-token-budget");
+  const toolCallBudget = document.querySelector<HTMLSelectElement>("#conversation-tool-budget");
   const tokenBudgetField = document.querySelector<HTMLElement>("[data-token-budget-field]");
   const input = document.querySelector<HTMLTextAreaElement>("#conversation-message");
   const imageInput = document.querySelector<HTMLInputElement>("#conversation-image-input");
@@ -2174,14 +2390,21 @@ function enableConversations(debug?: DebugLogger): void {
   const evidenceList = document.querySelector<HTMLOListElement>("#conversation-evidence-list");
   const evidenceEmpty = document.querySelector<HTMLElement>("[data-evidence-empty]");
   const evidenceCounts = Array.from(document.querySelectorAll<HTMLElement>("[data-evidence-count]"));
+  const traceList = document.querySelector<HTMLOListElement>("#conversation-trace");
+  const traceEmpty = document.querySelector<HTMLElement>("[data-trace-empty]");
+  const retryButton = document.querySelector<HTMLButtonElement>("[data-conversation-retry]");
+  const broadenButton = document.querySelector<HTMLButtonElement>("[data-conversation-broaden]");
+  const shareButton = document.querySelector<HTMLButtonElement>("[data-conversation-share]");
   const initializationChecks = [
     { selector: "#conversation-form", expected: "1", actual: Number(Boolean(form)) },
     { selector: "#conversation-messages", expected: "1", actual: Number(Boolean(messages)) },
     { selector: "#conversation-provider", expected: "1", actual: Number(Boolean(provider)) },
     { selector: "#conversation-model", expected: "1", actual: Number(Boolean(model)) },
     { selector: "#conversation-effort", expected: "1", actual: Number(Boolean(effort)) },
+    { selector: "#conversation-mode", expected: "1", actual: Number(Boolean(conversationMode)) },
     { selector: "#conversation-timeout", expected: "1", actual: Number(Boolean(timeout)) },
     { selector: "#conversation-token-budget", expected: "1", actual: Number(Boolean(tokenBudget)) },
+    { selector: "#conversation-tool-budget", expected: "1", actual: Number(Boolean(toolCallBudget)) },
     { selector: "[data-token-budget-field]", expected: "1", actual: Number(Boolean(tokenBudgetField)) },
     { selector: "#conversation-message", expected: "1", actual: Number(Boolean(input)) },
     { selector: "#conversation-image-input", expected: "1", actual: Number(Boolean(imageInput)) },
@@ -2243,7 +2466,12 @@ function enableConversations(debug?: DebugLogger): void {
     { selector: ".conversation-settings", expected: "1", actual: Number(Boolean(settings)) },
     { selector: "#conversation-evidence-list", expected: "1", actual: Number(Boolean(evidenceList)) },
     { selector: "[data-evidence-empty]", expected: "1", actual: Number(Boolean(evidenceEmpty)) },
-    { selector: "[data-evidence-count]", expected: "at least 1", actual: evidenceCounts.length }
+    { selector: "[data-evidence-count]", expected: "at least 1", actual: evidenceCounts.length },
+    { selector: "#conversation-trace", expected: "1", actual: Number(Boolean(traceList)) },
+    { selector: "[data-trace-empty]", expected: "1", actual: Number(Boolean(traceEmpty)) },
+    { selector: "[data-conversation-retry]", expected: "1", actual: Number(Boolean(retryButton)) },
+    { selector: "[data-conversation-broaden]", expected: "1", actual: Number(Boolean(broadenButton)) },
+    { selector: "[data-conversation-share]", expected: "1", actual: Number(Boolean(shareButton)) }
   ];
   const initializationMismatches = initializationChecks.filter((check) => {
     if (check.expected === "at least 1") {
@@ -2260,8 +2488,10 @@ function enableConversations(debug?: DebugLogger): void {
     !provider ||
     !model ||
     !effort ||
+    !conversationMode ||
     !timeout ||
     !tokenBudget ||
+    !toolCallBudget ||
     !tokenBudgetField ||
     !input ||
     !imageInput ||
@@ -2289,6 +2519,11 @@ function enableConversations(debug?: DebugLogger): void {
     !contextValue ||
     !contextMeter ||
     !usageValue ||
+    !traceList ||
+    !traceEmpty ||
+    !retryButton ||
+    !broadenButton ||
+    !shareButton ||
     !detail ||
     newConversationButtons.length === 0 ||
     !history ||
@@ -3336,12 +3571,14 @@ function enableConversations(debug?: DebugLogger): void {
     const ready = Boolean(status?.available && status.authenticated);
     model.disabled = !ready || Boolean(conversationID);
     effort.disabled = !ready || Boolean(conversationID) || supportedEfforts.length === 0;
+    conversationMode.disabled = busy || Boolean(conversationID);
     const settingsLock = document.querySelector<HTMLElement>("[data-settings-lock]");
     if (settingsLock) {
       settingsLock.hidden = !conversationID;
     }
     timeout.disabled = busy || !ready;
     tokenBudget.disabled = busy || !ready || !status?.token_budget;
+    toolCallBudget.disabled = busy || !ready;
     tokenBudgetField.hidden = !status?.token_budget;
     detail.textContent = status?.detail ?? "Choose an authenticated local provider.";
     configureImageControls();
@@ -3386,6 +3623,30 @@ function enableConversations(debug?: DebugLogger): void {
     markInlineSourceVerification(message);
   };
 
+  const clearTrace = (): void => {
+    traceList.replaceChildren();
+    traceEmpty.hidden = false;
+  };
+
+  const appendTrace = (trace: ConversationTrace): void => {
+    traceEmpty.hidden = true;
+    const item = document.createElement("li");
+    const heading = document.createElement("strong");
+    heading.textContent = trace.stage.replaceAll("_", " ");
+    const detailText = [
+      trace.detail,
+      `${Math.max(0, trace.elapsed_ms)} ms`,
+      trace.coverage_warning
+    ].filter(Boolean).join(" · ");
+    const detailElement = document.createElement("span");
+    detailElement.textContent = detailText;
+    item.append(heading, detailElement);
+    if (trace.coverage_warning) {
+      item.dataset.state = "warning";
+    }
+    traceList.append(item);
+  };
+
   const conversationAuthorLabel = (author: ConversationAuthor | undefined): string => {
     return author?.name?.trim() || author?.email?.trim() || author?.id || "Unknown author";
   };
@@ -3393,6 +3654,7 @@ function enableConversations(debug?: DebugLogger): void {
   const renderStoredTranscript = (conversation: ConversationRecord): void => {
     messages.replaceChildren();
     clearEvidenceSources();
+    clearTrace();
     for (const stored of conversation.messages ?? []) {
       const message = conversationMessage(stored.role);
       if (stored.role === "user") {
@@ -3414,6 +3676,9 @@ function enableConversations(debug?: DebugLogger): void {
       appendMessageContexts(message, stored.contexts ?? []);
       appendConversationImages(message, stored.images ?? [], stored.role === "user" ? "input" : "output");
       appendSources(message, stored.sources);
+      for (const trace of stored.trace ?? []) {
+        appendTrace(trace);
+      }
       if (stored.status === "interrupted") {
         const notice = document.createElement("p");
         notice.className = "conversation-turn-status conversation-turn-status-interrupted";
@@ -3611,6 +3876,11 @@ function enableConversations(debug?: DebugLogger): void {
       provider.disabled = true;
       model.disabled = true;
       effort.disabled = true;
+      conversationMode.value = stored.mode ?? "chat";
+      conversationMode.disabled = true;
+      retryButton.hidden = false;
+      broadenButton.hidden = stored.mode !== "deep_search";
+      shareButton.hidden = stored.mode !== "deep_search";
       const status = statuses.find((candidate) => candidate.id === stored.provider);
       submit.disabled = !status?.available || !status.authenticated;
       renderStoredTranscript(stored);
@@ -3716,6 +3986,7 @@ function enableConversations(debug?: DebugLogger): void {
     const status = statuses.find((candidate) => candidate.id === provider.value);
     model.disabled = !status?.available || !status.authenticated;
     effort.disabled = !status?.available || !status.authenticated || !status.efforts?.length;
+    conversationMode.disabled = false;
     attachedImages = [];
     explicitContexts = [];
     selectedContexts = [];
@@ -3726,6 +3997,10 @@ function enableConversations(debug?: DebugLogger): void {
     headerStatus.textContent = "Ready for a grounded question";
     runtime.classList.remove("conversation-telemetry-active");
     clearEvidenceSources();
+    clearTrace();
+    retryButton.hidden = true;
+    broadenButton.hidden = true;
+    shareButton.hidden = true;
     renderContextUsage();
     renderTokenUsage();
     renderAttachmentTray();
@@ -4059,6 +4334,64 @@ function enableConversations(debug?: DebugLogger): void {
       debug?.add("error", "chat.interrupt.failed", describeError(error));
     }
   });
+  const retryConversation = async (strategy: "retry" | "broader"): Promise<void> => {
+    if (!conversationID || busy) {
+      return;
+    }
+    busy = true;
+    retryButton.disabled = true;
+    broadenButton.disabled = true;
+    headerStatus.textContent = strategy === "broader" ? "Searching more broadly…" : "Retrying from persisted evidence…";
+    try {
+      const response = await fetch(`/api/chat/${encodeURIComponent(conversationID)}/retry`, {
+        method: "POST",
+        headers: {
+          Accept: "application/x-ndjson",
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          strategy,
+          timeout_seconds: strategy === "broader" ? 3600 : Number.parseInt(timeout.value, 10),
+          token_budget: strategy === "broader" ? 64000 : Number.parseInt(tokenBudget.value, 10),
+          tool_call_budget: strategy === "broader" ? 120 : Number.parseInt(toolCallBudget.value, 10)
+        })
+      });
+      const stream = await response.text();
+      if (!response.ok) {
+        throw new Error(stream || `Retry failed (${response.status})`);
+      }
+      busy = false;
+      await openConversation(conversationID);
+    } catch (error: unknown) {
+      headerStatus.textContent = error instanceof Error ? error.message : "Conversation retry failed.";
+    } finally {
+      busy = false;
+      retryButton.disabled = false;
+      broadenButton.disabled = false;
+    }
+  };
+  retryButton.addEventListener("click", () => void retryConversation("retry"));
+  broadenButton.addEventListener("click", () => void retryConversation("broader"));
+  shareButton.addEventListener("click", async () => {
+    if (!conversationID || busy) {
+      return;
+    }
+    try {
+      const response = await fetch(`/api/chat/${encodeURIComponent(conversationID)}/share`, {
+        method: "POST",
+        headers: { Accept: "application/json" }
+      });
+      if (!response.ok) {
+        throw new Error(await responseErrorMessage(response, "Deep Search could not be shared."));
+      }
+      const result = await response.json() as { url: string };
+      const absolute = new URL(result.url, window.location.href).toString();
+      await navigator.clipboard.writeText(absolute);
+      headerStatus.textContent = "Permission-safe share URL copied";
+    } catch (error: unknown) {
+      headerStatus.textContent = error instanceof Error ? error.message : "Deep Search could not be shared.";
+    }
+  });
   for (const button of newConversationButtons) {
     button.addEventListener("click", () => {
       if (busy) {
@@ -4103,6 +4436,8 @@ function enableConversations(debug?: DebugLogger): void {
     setNewConversationDisabled(true);
     timeout.disabled = true;
     tokenBudget.disabled = true;
+    toolCallBudget.disabled = true;
+    conversationMode.disabled = true;
     const providerStatus = statuses.find((candidate) => candidate.id === provider.value);
     interrupt.hidden = !providerStatus?.interrupt;
     interrupt.disabled = true;
@@ -4157,7 +4492,9 @@ function enableConversations(debug?: DebugLogger): void {
           named_context_ids: requestNamedContextIDs,
           use_default_contexts: defaultContextsEnabled,
           timeout_seconds: Number.parseInt(timeout.value, 10),
-          token_budget: providerStatus?.token_budget ? Number.parseInt(tokenBudget.value, 10) : 0
+          token_budget: providerStatus?.token_budget ? Number.parseInt(tokenBudget.value, 10) : 0,
+          tool_call_budget: Number.parseInt(toolCallBudget.value, 10),
+          mode: conversationMode.value
         })
       });
       debug?.add(response.ok ? "info" : "warn", "chat.response.received", {
@@ -4202,6 +4539,10 @@ function enableConversations(debug?: DebugLogger): void {
             provider.disabled = true;
             model.disabled = true;
             effort.disabled = true;
+            conversationMode.disabled = true;
+            retryButton.hidden = false;
+            broadenButton.hidden = conversationMode.value !== "deep_search";
+            shareButton.hidden = conversationMode.value !== "deep_search";
             interrupt.disabled = !providerStatus?.interrupt;
             if (message.title) {
               title.textContent = message.title;
@@ -4259,6 +4600,9 @@ function enableConversations(debug?: DebugLogger): void {
           } else if (message.type === "usage" && message.usage) {
             renderTokenUsage(message.usage);
             debug?.add("info", "chat.stream.usage", message.usage);
+          } else if (message.type === "trace" && message.trace) {
+            appendTrace(message.trace);
+            debug?.add("info", "chat.stream.trace", message.trace);
           } else if (message.type === "interrupted") {
             streamCompleted = true;
             renderMetrics = timelineRenderer?.finish();
@@ -7351,6 +7695,7 @@ enableRepositoryDrawer();
 enableQueryChips();
 enableSearchQueryCompletion();
 enableSearchFeedback();
+enableSearchWorkspace();
 enableFirstRunProgress();
 enableSearchShortcut();
 localiseShortcutHints();

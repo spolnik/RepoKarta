@@ -25,7 +25,7 @@ import (
 )
 
 const (
-	artifactVersion        = 1
+	artifactVersion        = 2
 	maximumIndexBytes      = 256 << 20
 	maximumArtifactBytes   = 512 << 20
 	maximumDocuments       = 200_000
@@ -76,9 +76,23 @@ type Tool struct {
 
 // Symbol keeps the stable SCIP identity and the indexer's display name.
 type Symbol struct {
-	ID          string `json:"id"`
-	DisplayName string `json:"display_name,omitempty"`
-	Kind        string `json:"kind,omitempty"`
+	ID              string         `json:"id"`
+	DisplayName     string         `json:"display_name,omitempty"`
+	Kind            string         `json:"kind,omitempty"`
+	Signature       string         `json:"signature,omitempty"`
+	Documentation   []string       `json:"documentation,omitempty"`
+	EnclosingSymbol string         `json:"enclosing_symbol,omitempty"`
+	Relationships   []Relationship `json:"relationships,omitempty"`
+	External        bool           `json:"external,omitempty"`
+}
+
+// Relationship preserves compiler-produced navigation links.
+type Relationship struct {
+	Symbol         string `json:"symbol"`
+	Reference      bool   `json:"reference,omitempty"`
+	Implementation bool   `json:"implementation,omitempty"`
+	TypeDefinition bool   `json:"type_definition,omitempty"`
+	Definition     bool   `json:"definition,omitempty"`
 }
 
 // Document contains only source locations required by precise navigation.
@@ -112,21 +126,35 @@ type ImportSummary struct {
 // Resolution is the result of resolving a user query against one complete set
 // of repository artifacts.
 type Resolution struct {
-	State      string
-	Symbol     string
-	References []Reference
-	Candidates []string
+	State           string      `json:"state"`
+	Symbol          string      `json:"symbol,omitempty"`
+	References      []Reference `json:"references,omitempty"`
+	Definitions     []Reference `json:"definitions,omitempty"`
+	Implementations []Reference `json:"implementations,omitempty"`
+	Candidates      []string    `json:"candidates,omitempty"`
+	Hover           *Hover      `json:"hover,omitempty"`
+	Stitched        bool        `json:"cross_repository_stitched"`
 }
 
 // Reference is one non-definition occurrence of an exact semantic symbol.
 type Reference struct {
-	RepositoryID int64
-	Revision     string
-	Path         string
-	Language     string
-	Symbol       string
-	Kind         string
-	Line         int
+	RepositoryID int64  `json:"repository_id"`
+	Revision     string `json:"revision"`
+	Path         string `json:"path"`
+	Language     string `json:"language,omitempty"`
+	Symbol       string `json:"symbol"`
+	Kind         string `json:"kind"`
+	Line         int    `json:"line"`
+}
+
+// Hover is compiler-produced symbol documentation. It is absent rather than
+// synthesized when the indexer did not provide it.
+type Hover struct {
+	Symbol        string   `json:"symbol"`
+	DisplayName   string   `json:"display_name,omitempty"`
+	Kind          string   `json:"kind,omitempty"`
+	Signature     string   `json:"signature,omitempty"`
+	Documentation []string `json:"documentation,omitempty"`
 }
 
 // IsSymbol reports whether value is a bounded, valid full SCIP identity.
@@ -369,44 +397,111 @@ func ResolveReferences(artifacts []Artifact, query string) Resolution {
 	}
 
 	resolved := orderedCandidates[0]
+	metadata := make(map[string]Symbol)
+	for _, artifact := range artifacts {
+		for _, symbol := range artifact.Symbols {
+			metadata[symbol.ID] = symbol
+		}
+	}
+	referenceSymbols := map[string]struct{}{resolved: {}}
+	implementationSymbols := make(map[string]struct{})
+	definitionSymbols := map[string]struct{}{resolved: {}}
+	for _, relationship := range metadata[resolved].Relationships {
+		if relationship.Reference {
+			referenceSymbols[relationship.Symbol] = struct{}{}
+		}
+		if relationship.Implementation {
+			implementationSymbols[resolved] = struct{}{}
+		}
+		if relationship.Definition || relationship.TypeDefinition {
+			definitionSymbols[relationship.Symbol] = struct{}{}
+		}
+	}
+	for _, symbol := range metadata {
+		for _, relationship := range symbol.Relationships {
+			if relationship.Symbol != resolved {
+				continue
+			}
+			if relationship.Reference {
+				referenceSymbols[symbol.ID] = struct{}{}
+			}
+			if relationship.Implementation {
+				implementationSymbols[symbol.ID] = struct{}{}
+			}
+			if relationship.Definition || relationship.TypeDefinition {
+				definitionSymbols[symbol.ID] = struct{}{}
+			}
+		}
+	}
 	references := make([]Reference, 0)
+	definitions := make([]Reference, 0)
+	implementations := make([]Reference, 0)
 	for _, artifact := range artifacts {
 		for _, document := range artifact.Documents {
 			for _, occurrence := range document.Occurrences {
-				if occurrence.Symbol != resolved ||
-					occurrence.SymbolRoles&int32(scip.SymbolRole_Definition) != 0 {
-					continue
-				}
-				references = append(references, Reference{
+				location := Reference{
 					RepositoryID: artifact.RepositoryID,
 					Revision:     artifact.Revision,
 					Path:         document.Path,
 					Language:     document.Language,
-					Symbol:       resolved,
+					Symbol:       occurrence.Symbol,
 					Kind:         occurrenceKind(occurrence.SymbolRoles),
 					Line:         int(occurrence.StartLine) + 1,
-				})
+				}
+				if occurrence.SymbolRoles&int32(scip.SymbolRole_Definition) != 0 {
+					if _, ok := definitionSymbols[occurrence.Symbol]; ok {
+						location.Kind = "definition"
+						definitions = append(definitions, location)
+					}
+					if _, ok := implementationSymbols[occurrence.Symbol]; ok {
+						location.Kind = "implementation"
+						implementations = append(implementations, location)
+					}
+					continue
+				}
+				if _, ok := referenceSymbols[occurrence.Symbol]; ok {
+					references = append(references, location)
+				}
 			}
 		}
 	}
-	sort.Slice(references, func(left, right int) bool {
-		if references[left].RepositoryID != references[right].RepositoryID {
-			return references[left].RepositoryID < references[right].RepositoryID
+	sortReferences := func(values []Reference) {
+		sort.Slice(values, func(left, right int) bool {
+			if values[left].RepositoryID != values[right].RepositoryID {
+				return values[left].RepositoryID < values[right].RepositoryID
+			}
+			if values[left].Path != values[right].Path {
+				return values[left].Path < values[right].Path
+			}
+			return values[left].Line < values[right].Line
+		})
+	}
+	sortReferences(references)
+	sortReferences(definitions)
+	sortReferences(implementations)
+	var hover *Hover
+	if symbol, ok := metadata[resolved]; ok {
+		hover = &Hover{
+			Symbol:        symbol.ID,
+			DisplayName:   symbol.DisplayName,
+			Kind:          symbol.Kind,
+			Signature:     symbol.Signature,
+			Documentation: append([]string(nil), symbol.Documentation...),
 		}
-		if references[left].Path != references[right].Path {
-			return references[left].Path < references[right].Path
-		}
-		return references[left].Line < references[right].Line
-	})
+	}
 	state := "unique-name"
 	if exact {
 		state = "exact"
 	}
 	return Resolution{
-		State:      state,
-		Symbol:     resolved,
-		References: references,
-		Candidates: orderedCandidates,
+		State:           state,
+		Symbol:          resolved,
+		References:      references,
+		Definitions:     definitions,
+		Implementations: implementations,
+		Candidates:      orderedCandidates,
+		Hover:           hover,
+		Stitched:        len(artifacts) > 1,
 	}
 }
 
@@ -427,7 +522,7 @@ func project(
 		)
 	}
 	metadataBySymbol := make(map[string]Symbol)
-	addSymbol := func(info *scip.SymbolInformation) error {
+	addSymbol := func(info *scip.SymbolInformation, external bool) error {
 		if info == nil || strings.TrimSpace(info.Symbol) == "" {
 			return nil
 		}
@@ -444,15 +539,43 @@ func project(
 		if len(displayName) > maximumDisplayNameLen {
 			return errors.New("SCIP display name exceeds the supported length")
 		}
+		relationships := make([]Relationship, 0, len(info.Relationships))
+		for _, relationship := range info.Relationships {
+			if relationship == nil || strings.TrimSpace(relationship.Symbol) == "" {
+				continue
+			}
+			if len(relationship.Symbol) > maximumSymbolLength {
+				return errors.New("SCIP relationship symbol exceeds the supported length")
+			}
+			if _, err := scip.ParseSymbol(relationship.Symbol); err != nil {
+				return fmt.Errorf("invalid SCIP relationship symbol %q: %w", relationship.Symbol, err)
+			}
+			relationships = append(relationships, Relationship{
+				Symbol:         relationship.Symbol,
+				Reference:      relationship.IsReference,
+				Implementation: relationship.IsImplementation,
+				TypeDefinition: relationship.IsTypeDefinition,
+				Definition:     relationship.IsDefinition,
+			})
+		}
+		signature := ""
+		if info.SignatureDocumentation != nil {
+			signature = strings.TrimSpace(info.SignatureDocumentation.Text)
+		}
 		metadataBySymbol[info.Symbol] = Symbol{
-			ID:          info.Symbol,
-			DisplayName: displayName,
-			Kind:        info.Kind.String(),
+			ID:              info.Symbol,
+			DisplayName:     displayName,
+			Kind:            info.Kind.String(),
+			Signature:       signature,
+			Documentation:   append([]string(nil), info.Documentation...),
+			EnclosingSymbol: strings.TrimSpace(info.EnclosingSymbol),
+			Relationships:   relationships,
+			External:        external,
 		}
 		return nil
 	}
 	for _, info := range input.ExternalSymbols {
-		if err := addSymbol(info); err != nil {
+		if err := addSymbol(info, true); err != nil {
 			return Artifact{}, ImportSummary{}, err
 		}
 	}
@@ -476,7 +599,7 @@ func project(
 		}
 		seenPaths[documentPath] = struct{}{}
 		for _, info := range inputDocument.Symbols {
-			if err := addSymbol(info); err != nil {
+			if err := addSymbol(info, false); err != nil {
 				return Artifact{}, ImportSummary{}, err
 			}
 		}

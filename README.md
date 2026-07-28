@@ -158,6 +158,12 @@ Useful fields include `repository`, `revision`, `language`, `path`, `file`,
 exclude it. The search box autocompletes the supported grammar, so you do not
 need to memorize it.
 
+See [Advanced search and Deep Search](docs/advanced-search.md) for qualified
+symbols, CODEOWNERS filters, evidence-graph queries, saved-search monitors, and
+permission-safe Deep Search sharing. Dependency version states, discrepancy
+filters, and fail-closed private registry routing are documented in
+[Dependency management](docs/dependency-management.md).
+
 RepoKarta also exposes explicit Zoekt, AST reference, regular-expression, and
 literal modes. Filters, ranking explanations, result counts, and completeness
 warnings stay visible in the results.

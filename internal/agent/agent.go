@@ -33,6 +33,7 @@ const (
 	EventContext     EventType = "context"
 	EventInterrupted EventType = "interrupted"
 	EventUsage       EventType = "usage"
+	EventTrace       EventType = "trace"
 )
 
 const (
@@ -62,6 +63,8 @@ const (
 	MaximumTurnTimeoutSeconds = 3_600
 	DefaultTokenBudget        = 12_000
 	MaximumTokenBudget        = 64_000
+	DefaultToolCallBudget     = 64
+	MaximumToolCallBudget     = 200
 )
 
 // Citation is an exact source reference observed during an MCP tool call.
@@ -98,6 +101,15 @@ type Event struct {
 	Images         []Image       `json:"images,omitempty"`
 	Context        *ContextUsage `json:"context,omitempty"`
 	Usage          *Usage        `json:"usage,omitempty"`
+	Trace          *TraceEvent   `json:"trace,omitempty"`
+}
+
+// TraceEvent records a visible operational milestone, never hidden reasoning.
+type TraceEvent struct {
+	Stage           string `json:"stage"`
+	Detail          string `json:"detail,omitempty"`
+	ElapsedMS       int64  `json:"elapsed_ms"`
+	CoverageWarning string `json:"coverage_warning,omitempty"`
 }
 
 // ModelOption is one curated model exposed by a provider harness. ID is sent
@@ -175,9 +187,22 @@ type TurnRequest struct {
 	UseDefaultContexts *bool                   `json:"use_default_contexts,omitempty"`
 	TimeoutSeconds     int                     `json:"timeout_seconds,omitempty"`
 	TokenBudget        int64                   `json:"token_budget,omitempty"`
+	ToolCallBudget     int                     `json:"tool_call_budget,omitempty"`
+	Mode               string                  `json:"mode,omitempty"`
 	ResumeCursor       string                  `json:"-"`
 	Author             ConversationAuthor      `json:"-"`
 	Contexts           []contextscope.Context  `json:"-"`
+}
+
+// RetryRequest replays the last durable user turn. Broader mode expands
+// read-only exploration while retaining identity and permission boundaries.
+type RetryRequest struct {
+	ConversationID string
+	Author         ConversationAuthor
+	Strategy       string
+	TimeoutSeconds int
+	TokenBudget    int64
+	ToolCallBudget int
 }
 
 // Turn is the provider-neutral content sent to one local harness.
@@ -187,6 +212,7 @@ type Turn struct {
 	History     []Message
 	Contexts    []contextscope.Context
 	TokenBudget int64
+	Mode        string
 }
 
 // EphemeralResult is the complete output of a provider turn that is not added
@@ -207,6 +233,7 @@ type managedConversation struct {
 	provider   string
 	model      string
 	effort     string
+	mode       string
 	imageInput bool
 	sessionMu  sync.RWMutex
 	session    Session
@@ -256,6 +283,22 @@ type MCPTokenIssuer interface {
 type CitationSource interface {
 	List(string) []Citation
 	Clear(string)
+}
+
+// ExplorationEvent is one read-only tool operation safe to show to users.
+type ExplorationEvent struct {
+	Kind            string
+	Detail          string
+	CoverageWarning string
+}
+
+type ExplorationSource interface {
+	ListExploration(string) []ExplorationEvent
+}
+
+type ToolBudgetSource interface {
+	BeginTurn(string, int)
+	ToolUsage(string) (used int, budget int)
 }
 
 // NewManager constructs a conversation manager.
@@ -410,11 +453,22 @@ func (m *Manager) Send(ctx context.Context, request TurnRequest, emit func(Event
 	if err != nil {
 		return err
 	}
+	toolCallBudget, err := normalizeToolCallBudget(request.ToolCallBudget)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(request.Mode) != "" {
+		request.Mode, err = normalizeConversationMode(request.Mode)
+		if err != nil {
+			return err
+		}
+	}
 
 	conversation, conversationID, err := m.conversation(ctx, request)
 	if err != nil {
 		return err
 	}
+	request.Mode = conversation.mode
 	if !conversation.active.CompareAndSwap(false, true) {
 		return errors.New("conversation already has an active turn")
 	}
@@ -461,6 +515,18 @@ func (m *Manager) Send(ctx context.Context, request TurnRequest, emit func(Event
 		Status:         "complete",
 		CreatedAt:      time.Now().UTC(),
 	}
+	startedAt := time.Now()
+	trace := func(stage, detail, coverageWarning string) error {
+		event := TraceEvent{
+			Stage: stage, Detail: detail,
+			ElapsedMS:       time.Since(startedAt).Milliseconds(),
+			CoverageWarning: coverageWarning,
+		}
+		assistantMessage.Trace = append(assistantMessage.Trace, event)
+		return emit(Event{
+			Type: EventTrace, ConversationID: conversationID, Trace: &event,
+		})
+	}
 	providerOutputObserved := false
 	lastSegmentID := ""
 	forward := func(event Event) error {
@@ -493,17 +559,37 @@ func (m *Manager) Send(ctx context.Context, request TurnRequest, emit func(Event
 	}
 	if m.citations != nil {
 		m.citations.Clear(conversationID)
+		if budgeted, ok := m.citations.(ToolBudgetSource); ok {
+			budgeted.BeginTurn(conversationID, toolCallBudget)
+		}
+	}
+	if request.Mode == "deep_search" {
+		if err := trace(
+			"scope_resolved",
+			fmt.Sprintf("%d structured contexts resolved", len(request.Contexts)),
+			"",
+		); err != nil {
+			return err
+		}
 	}
 	activeSession := conversation.currentSession()
 	if err := forward(Event{Type: EventActivity, Activity: ActivityThinking}); err != nil {
 		return err
 	}
+	providerMessage := request.Message
+	if request.Mode == "deep_search" {
+		providerMessage = deepSearchPrompt(request.Message)
+		if err := trace("exploring", "read-only evidence exploration started", ""); err != nil {
+			return err
+		}
+	}
 	sendError := activeSession.Send(turnContext, Turn{
-		Message:     request.Message,
+		Message:     providerMessage,
 		Images:      request.Images,
 		History:     history,
 		Contexts:    request.Contexts,
 		TokenBudget: tokenBudget,
+		Mode:        request.Mode,
 	}, forward)
 	if sendError != nil && !providerOutputObserved {
 		if restored, ok := activeSession.(RestoredSession); ok && restored.Restored() {
@@ -526,13 +612,17 @@ func (m *Manager) Send(ctx context.Context, request TurnRequest, emit func(Event
 				_ = staleSession.Close()
 				if m.citations != nil {
 					m.citations.Clear(conversationID)
+					if budgeted, ok := m.citations.(ToolBudgetSource); ok {
+						budgeted.BeginTurn(conversationID, toolCallBudget)
+					}
 				}
 				sendError = activeSession.Send(turnContext, Turn{
-					Message:     request.Message,
+					Message:     providerMessage,
 					Images:      request.Images,
 					History:     history,
 					Contexts:    request.Contexts,
 					TokenBudget: tokenBudget,
+					Mode:        request.Mode,
 				}, forward)
 			} else {
 				sendError = errors.Join(sendError, fmt.Errorf("start transcript replay fallback: %w", restartError))
@@ -551,6 +641,29 @@ func (m *Manager) Send(ctx context.Context, request TurnRequest, emit func(Event
 	}
 	if m.citations != nil && sendError == nil {
 		sources := m.citations.List(conversationID)
+		if request.Mode == "deep_search" {
+			if exploration, ok := m.citations.(ExplorationSource); ok {
+				for _, operation := range exploration.ListExploration(conversationID) {
+					if err := trace(
+						operation.Kind,
+						operation.Detail,
+						operation.CoverageWarning,
+					); err != nil {
+						return err
+					}
+				}
+			}
+			if budgeted, ok := m.citations.(ToolBudgetSource); ok {
+				used, budget := budgeted.ToolUsage(conversationID)
+				if err := trace(
+					"tool_budget",
+					fmt.Sprintf("%d of %d read-only tool calls used", used, budget),
+					"",
+				); err != nil {
+					return err
+				}
+			}
+		}
 		if len(sources) > 0 {
 			assistantMessage.Sources = append([]Citation(nil), sources...)
 			if err := emit(Event{Type: EventSources, ConversationID: conversationID, Sources: sources}); err != nil {
@@ -558,7 +671,25 @@ func (m *Manager) Send(ctx context.Context, request TurnRequest, emit func(Event
 				return err
 			}
 		}
+		if request.Mode == "deep_search" {
+			warning := ""
+			if len(sources) == 0 {
+				warning = "No commit-pinned source citation was observed; the answer may be incomplete."
+			}
+			if err := trace(
+				"sources_collected",
+				fmt.Sprintf("%d exact source citations retained", len(sources)),
+				warning,
+			); err != nil {
+				return err
+			}
+		}
 		m.citations.Clear(conversationID)
+	}
+	if request.Mode == "deep_search" && sendError == nil {
+		if err := trace("complete", "deep search finished", ""); err != nil {
+			return err
+		}
 	}
 	if m.persistence != nil &&
 		(assistantMessage.Text != "" || len(assistantMessage.Images) > 0 ||
@@ -609,6 +740,58 @@ func (m *Manager) Send(ctx context.Context, request TurnRequest, emit func(Event
 	return nil
 }
 
+// Retry starts a new attempt from the durable transcript and exact contexts.
+func (m *Manager) Retry(
+	ctx context.Context,
+	request RetryRequest,
+	emit func(Event) error,
+) error {
+	if m.persistence == nil {
+		return ErrConversationNotFound
+	}
+	conversation, err := m.persistence.GetConversation(ctx, strings.TrimSpace(request.ConversationID))
+	if err != nil {
+		return ErrConversationNotFound
+	}
+	request.Author = normalizeConversationAuthor(request.Author)
+	if conversation.Author.ID != request.Author.ID {
+		return ErrConversationForbidden
+	}
+	var lastUser *Message
+	for index := len(conversation.Messages) - 1; index >= 0; index-- {
+		if conversation.Messages[index].Role == RoleUser {
+			message := conversation.Messages[index]
+			lastUser = &message
+			break
+		}
+	}
+	if lastUser == nil {
+		return fmt.Errorf("%w: conversation has no user turn to retry", ErrInvalidInput)
+	}
+	strategy := strings.ToLower(strings.TrimSpace(request.Strategy))
+	if strategy == "" {
+		strategy = "retry"
+	}
+	message := lastUser.Text
+	if strategy == "broader" {
+		message = "Search more broadly across every caller-visible RepoKarta index. " +
+			"Retain and verify useful persisted evidence, surface incomplete coverage, " +
+			"and do not widen beyond authorization.\n\nOriginal question:\n" + message
+	} else if strategy != "retry" {
+		return fmt.Errorf("%w: retry strategy must be retry or broader", ErrInvalidInput)
+	}
+	return m.Send(ctx, TurnRequest{
+		ConversationID: conversation.ID,
+		Message:        message,
+		Contexts:       append([]contextscope.Context(nil), lastUser.Contexts...),
+		TimeoutSeconds: request.TimeoutSeconds,
+		TokenBudget:    request.TokenBudget,
+		ToolCallBudget: request.ToolCallBudget,
+		Mode:           conversation.Mode,
+		Author:         request.Author,
+	}, emit)
+}
+
 // RunEphemeral executes one isolated provider turn without creating durable
 // conversation metadata or retaining a resumable provider session.
 func (m *Manager) RunEphemeral(
@@ -623,6 +806,10 @@ func (m *Manager) RunEphemeral(
 		return EphemeralResult{}, err
 	}
 	timeoutSeconds, tokenBudget, err := normalizeTurnControls(request.TimeoutSeconds, request.TokenBudget)
+	if err != nil {
+		return EphemeralResult{}, err
+	}
+	toolCallBudget, err := normalizeToolCallBudget(request.ToolCallBudget)
 	if err != nil {
 		return EphemeralResult{}, err
 	}
@@ -665,6 +852,9 @@ func (m *Manager) RunEphemeral(
 	defer cancel()
 	if m.citations != nil {
 		m.citations.Clear(conversationID)
+		if budgeted, ok := m.citations.(ToolBudgetSource); ok {
+			budgeted.BeginTurn(conversationID, toolCallBudget)
+		}
 		defer m.citations.Clear(conversationID)
 	}
 	lastSegmentID := ""
@@ -765,6 +955,7 @@ func (m *Manager) conversation(ctx context.Context, request TurnRequest) (*manag
 			request.Model = stored.Model
 			request.Effort = stored.Effort
 			request.ResumeCursor = stored.ResumeCursor
+			request.Mode = stored.Mode
 			conversation, err = m.startConversation(ctx, request, request.ConversationID)
 			if err != nil {
 				return nil, "", err
@@ -801,6 +992,9 @@ func (m *Manager) conversation(ctx context.Context, request TurnRequest) (*manag
 		if request.Effort != "" && request.Effort != conversation.effort {
 			return nil, "", fmt.Errorf("%w: a conversation cannot switch effort", ErrInvalidInput)
 		}
+		if request.Mode != "" && request.Mode != conversation.mode {
+			return nil, "", fmt.Errorf("%w: a conversation cannot switch modes", ErrInvalidInput)
+		}
 		if len(request.Images) > 0 && !conversation.imageInput {
 			return nil, "", fmt.Errorf("%w: this provider does not support image input", ErrInvalidInput)
 		}
@@ -822,6 +1016,10 @@ func (m *Manager) conversation(ctx context.Context, request TurnRequest) (*manag
 	if err != nil {
 		return nil, "", fmt.Errorf("create conversation id: %w", err)
 	}
+	request.Mode, err = normalizeConversationMode(request.Mode)
+	if err != nil {
+		return nil, "", err
+	}
 	conversation, err := m.startConversation(ctx, request, conversationID)
 	if err != nil {
 		return nil, "", err
@@ -836,6 +1034,7 @@ func (m *Manager) conversation(ctx context.Context, request TurnRequest) (*manag
 			Provider:  conversation.provider,
 			Model:     conversation.model,
 			Effort:    conversation.effort,
+			Mode:      conversation.mode,
 			Author:    conversation.author,
 			CreatedAt: now,
 			UpdatedAt: now,
@@ -877,6 +1076,29 @@ func normalizeConversationAuthor(author ConversationAuthor) ConversationAuthor {
 		author.Name = "Local administrator"
 	}
 	return author
+}
+
+func normalizeConversationMode(mode string) (string, error) {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode == "" {
+		return "chat", nil
+	}
+	switch mode {
+	case "chat", "deep_search":
+		return mode, nil
+	default:
+		return "", fmt.Errorf("%w: mode must be chat or deep_search", ErrInvalidInput)
+	}
+}
+
+func deepSearchPrompt(message string) string {
+	return `Deep Search mode is active.
+Use RepoKarta's read-only tools to explore deterministic, permission-filtered evidence before answering.
+Treat exact indexed search and commit-pinned source as authoritative. Do not claim completeness when a tool reports truncation, omitted repositories, fallback precision, or missing indexes.
+Include exact citations for code claims. Separate compiler-backed facts, syntax-backed inferences, and optional semantic ranking. Never execute repository code or mutate repositories.
+
+User question:
+` + message
 }
 
 func (m *Manager) startConversation(ctx context.Context, request TurnRequest, conversationID string) (*managedConversation, error) {
@@ -954,6 +1176,7 @@ func (m *Manager) startConversation(ctx context.Context, request TurnRequest, co
 		provider:   adapter.ID(),
 		model:      request.Model,
 		effort:     request.Effort,
+		mode:       request.Mode,
 		imageInput: status.ImageInput,
 		session:    session,
 	}
@@ -1120,6 +1343,20 @@ func normalizeTurnControls(timeoutSeconds int, tokenBudget int64) (int, int64, e
 		)
 	}
 	return timeoutSeconds, tokenBudget, nil
+}
+
+func normalizeToolCallBudget(value int) (int, error) {
+	if value == 0 {
+		return DefaultToolCallBudget, nil
+	}
+	if value < 1 || value > MaximumToolCallBudget {
+		return 0, fmt.Errorf(
+			"%w: tool_call_budget must be from 1 to %d",
+			ErrInvalidInput,
+			MaximumToolCallBudget,
+		)
+	}
+	return value, nil
 }
 
 func containsModel(models []ModelOption, model string) bool {

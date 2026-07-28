@@ -491,6 +491,10 @@ func buildSearchFacets(response *SearchResponse) {
 		add(querylang.FieldRepository, match.Repository)
 		add(querylang.FieldLanguage, match.Language)
 		add(querylang.FieldPath, facetPath(match.Path))
+		add(querylang.FieldOwner, match.OwnerState)
+		for _, owner := range match.Owners {
+			add(querylang.FieldOwner, owner)
+		}
 	}
 	for _, item := range response.Items {
 		add(querylang.FieldResultType, item.ResultType)

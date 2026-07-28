@@ -18,6 +18,13 @@ const (
 	FieldSymbolKind = "symbol_kind"
 	FieldResultType = "result_type"
 	FieldOwner      = "owner"
+	FieldPackage    = "package"
+	FieldTypeName   = "type_name"
+	FieldMethod     = "method"
+	FieldMember     = "member"
+	FieldFullName   = "full_name"
+	FieldMatch      = "match"
+	FieldCase       = "case"
 	FieldAuthor     = "author"
 	FieldMessage    = "message"
 	FieldAdded      = "added"
@@ -47,6 +54,16 @@ var fieldAliases = map[string]string{
 	"result-type": FieldResultType,
 	"result_type": FieldResultType,
 	"owner":       FieldOwner,
+	"package":     FieldPackage,
+	"pkg":         FieldPackage,
+	"type-name":   FieldTypeName,
+	"type_name":   FieldTypeName,
+	"method":      FieldMethod,
+	"member":      FieldMember,
+	"full-name":   FieldFullName,
+	"full_name":   FieldFullName,
+	"match":       FieldMatch,
+	"case":        FieldCase,
 	"author":      FieldAuthor,
 	"message":     FieldMessage,
 	"added":       FieldAdded,

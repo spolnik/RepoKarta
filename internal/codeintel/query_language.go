@@ -21,6 +21,8 @@ type compiledQueryFilters struct {
 	excludePaths      []string
 	files             []string
 	excludeFiles      []string
+	owners            []string
+	excludeOwners     []string
 	repositoryAllow   []uint32
 	repositoryLimited bool
 	repositoryDeny    []uint32
@@ -113,7 +115,11 @@ func (s *Service) referenceRequestForQuery(
 		case querylang.FieldSymbolKind:
 			return output, fmt.Errorf("symbol_kind is not available in syntax-backed reference evidence")
 		case querylang.FieldOwner:
-			return output, fmt.Errorf("owner filters require ownership evidence that is not indexed yet")
+			if filter.Negative {
+				output.ExcludeOwners = append(output.ExcludeOwners, filter.Value)
+			} else {
+				output.Owners = append(output.Owners, filter.Value)
+			}
 		}
 	}
 	if len(repositories)+len(revisions) == 0 {
@@ -198,7 +204,7 @@ func (s *Service) compileQueryFilters(
 				"symbol_kind requires a symbol, reference, or implementation result type",
 			)
 		case querylang.FieldOwner:
-			return compiled, fmt.Errorf("owner filters require ownership evidence that is not indexed yet")
+			target(&compiled.owners, &compiled.excludeOwners)
 		default:
 			return compiled, fmt.Errorf("unsupported query field %q", filter.Field)
 		}

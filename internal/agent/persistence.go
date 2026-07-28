@@ -23,6 +23,7 @@ type Conversation struct {
 	Provider     string             `json:"provider"`
 	Model        string             `json:"model,omitempty"`
 	Effort       string             `json:"effort,omitempty"`
+	Mode         string             `json:"mode"`
 	Author       ConversationAuthor `json:"author"`
 	ResumeCursor string             `json:"-"`
 	CreatedAt    time.Time          `json:"created_at"`
@@ -49,6 +50,22 @@ type ConversationFilter struct {
 	AuthorID string
 }
 
+// ConversationShare is a revocable unguessable URL capability. Reading it
+// still requires source-permission revalidation by the HTTP layer.
+type ConversationShare struct {
+	Token          string    `json:"token"`
+	ConversationID string    `json:"conversation_id"`
+	AuthorID       string    `json:"-"`
+	CreatedAt      time.Time `json:"created_at"`
+	RevokedAt      time.Time `json:"revoked_at,omitempty"`
+}
+
+type ConversationShareStore interface {
+	CreateConversationShare(context.Context, string, string) (ConversationShare, error)
+	GetConversationShare(context.Context, string) (ConversationShare, Conversation, error)
+	RevokeConversationShare(context.Context, string, string) error
+}
+
 // Message is one durable user or assistant turn. Images are persisted as
 // RepoKarta-owned files by the storage implementation, not inline in SQLite.
 type Message struct {
@@ -63,6 +80,7 @@ type Message struct {
 	Error          string                 `json:"error,omitempty"`
 	InputTokens    int64                  `json:"input_tokens,omitempty"`
 	OutputTokens   int64                  `json:"output_tokens,omitempty"`
+	Trace          []TraceEvent           `json:"trace,omitempty"`
 	CreatedAt      time.Time              `json:"created_at"`
 }
 

@@ -631,6 +631,63 @@ func (s *memoryConversationStore) CreateConversation(_ context.Context, conversa
 	return nil
 }
 
+type emptyCitationSource struct{}
+
+func (emptyCitationSource) List(string) []Citation { return nil }
+func (emptyCitationSource) Clear(string)           {}
+
+func TestDeepSearchPersistsModeAndVisibleTrace(t *testing.T) {
+	store := &memoryConversationStore{}
+	adapter := &fakeAdapter{id: "test"}
+	manager := NewManager("", "", "", adapter).
+		UsePersistence(store).
+		UseCitations(emptyCitationSource{})
+	defer manager.Close()
+
+	var events []Event
+	err := manager.Send(context.Background(), TurnRequest{
+		Provider: "test",
+		Message:  "Trace the request",
+		Mode:     "deep_search",
+	}, func(event Event) error {
+		events = append(events, event)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(store.conversations) != 1 {
+		t.Fatalf("conversations = %#v", store.conversations)
+	}
+	var conversation Conversation
+	for _, candidate := range store.conversations {
+		conversation = candidate
+	}
+	if conversation.Mode != "deep_search" || len(conversation.Messages) != 2 {
+		t.Fatalf("deep search conversation = %#v", conversation)
+	}
+	assistant := conversation.Messages[1]
+	if len(assistant.Trace) != 4 ||
+		assistant.Trace[0].Stage != "scope_resolved" ||
+		assistant.Trace[3].Stage != "complete" ||
+		assistant.Trace[2].CoverageWarning == "" {
+		t.Fatalf("persisted trace = %#v", assistant.Trace)
+	}
+	if len(adapter.sessions) != 1 ||
+		!strings.Contains(adapter.sessions[0].prompts[0], "Deep Search mode is active") {
+		t.Fatalf("provider prompt = %#v", adapter.sessions)
+	}
+	traceEvents := 0
+	for _, event := range events {
+		if event.Type == EventTrace {
+			traceEvents++
+		}
+	}
+	if traceEvents != 4 {
+		t.Fatalf("trace events = %d, want 4: %#v", traceEvents, events)
+	}
+}
+
 func (s *memoryConversationStore) ListConversations(_ context.Context, filter ConversationFilter) ([]Conversation, error) {
 	result := make([]Conversation, 0, len(s.conversations))
 	for _, conversation := range s.conversations {

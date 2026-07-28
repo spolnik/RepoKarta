@@ -212,7 +212,9 @@ func Run(ctx context.Context, cfg Config) error {
 	if configured := securityManager.Settings().PublicURL; configured != "" {
 		baseURL = configured
 	}
-	intelligence := codeintel.New(database, engine, baseURL).UseNamedContexts(database)
+	intelligence := codeintel.New(database, engine, baseURL).
+		UseNamedContexts(database).
+		UseSearchWorkspace(database)
 	maps, err := graph.New(database, filepath.Join(cfg.DataDirectory, "maps"), baseURL)
 	if err != nil {
 		return err
@@ -381,6 +383,7 @@ func Run(ctx context.Context, cfg Config) error {
 		MCPBaseURL:            internalBaseURL,
 		MCPCommand:            mcpCommand,
 		Conversations:         conversations,
+		ConversationShares:    database,
 		Maps:                  maps,
 		Docs:                  documents,
 		Security:              securityManager,

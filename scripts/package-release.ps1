@@ -120,6 +120,8 @@ try {
     Copy-Item -LiteralPath (Join-Path $repositoryRoot "docs\dependency-advisories.md") -Destination (Join-Path $stageDirectory "docs\dependency-advisories.md") -Force
     Copy-Item -LiteralPath (Join-Path $repositoryRoot "docs\scip-indexes.md") -Destination (Join-Path $stageDirectory "docs\scip-indexes.md") -Force
     Copy-Item -LiteralPath (Join-Path $repositoryRoot "docs\ast-search.md") -Destination (Join-Path $stageDirectory "docs\ast-search.md") -Force
+    Copy-Item -LiteralPath (Join-Path $repositoryRoot "docs\advanced-search.md") -Destination (Join-Path $stageDirectory "docs\advanced-search.md") -Force
+    Copy-Item -LiteralPath (Join-Path $repositoryRoot "docs\dependency-management.md") -Destination (Join-Path $stageDirectory "docs\dependency-management.md") -Force
     Copy-Item -Path (Join-Path $repositoryRoot "deploy\*") -Destination (Join-Path $stageDirectory "deploy") -Recurse -Force
     Copy-ThirdPartyLicenses -Destination (Join-Path $stageDirectory "licenses")
 
@@ -162,6 +164,12 @@ try {
     }
     if (-not (Test-Path -LiteralPath (Join-Path $stageDirectory "docs\ast-search.md"))) {
         throw "package is missing the structural AST search guide"
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $stageDirectory "docs\advanced-search.md"))) {
+        throw "package is missing the advanced search guide"
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $stageDirectory "docs\dependency-management.md"))) {
+        throw "package is missing the dependency management guide"
     }
     if (-not (Test-Path -LiteralPath (Join-Path $stageDirectory "deploy\repokarta.env.example"))) {
         throw "package is missing the shared-deployment environment template"

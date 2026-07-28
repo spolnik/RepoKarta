@@ -104,6 +104,9 @@
             </div>
           </div>
           <div class="conversation-header-actions">
+            <button type="button" class="conversation-header-button" data-conversation-retry hidden>Retry</button>
+            <button type="button" class="conversation-header-button" data-conversation-broaden hidden>Search more broadly</button>
+            <button type="button" class="conversation-header-button" data-conversation-share hidden>Share</button>
             <button type="button" class="conversation-header-button" data-inspector-toggle aria-controls="conversation-inspector" aria-expanded="false">
               <svg viewBox="0 0 20 20" aria-hidden="true">
                 <path d="M3.5 4.5h13v11h-13zM7.5 4.5v11"></path>
@@ -243,6 +246,13 @@
                         <option value="">Choose a model</option>
                       </select>
                     </label>
+                    <label class="conversation-control">
+                      <span>Mode</span>
+                      <select id="conversation-mode" name="mode">
+                        <option value="chat">Chat</option>
+                        <option value="deep_search">Deep Search</option>
+                      </select>
+                    </label>
                     <div class="conversation-settings-grid">
                       <label class="conversation-control">
                         <span>Effort</span>
@@ -271,6 +281,15 @@
                           <option value="12000" selected>12k</option>
                           <option value="32000">32k</option>
                           <option value="64000">64k</option>
+                        </select>
+                      </label>
+                      <label class="conversation-control">
+                        <span>Tool calls</span>
+                        <select id="conversation-tool-budget" name="tool_call_budget">
+                          <option value="24">24</option>
+                          <option value="64" selected>64</option>
+                          <option value="120">120</option>
+                          <option value="200">200</option>
                         </select>
                       </label>
                     </div>
@@ -350,6 +369,17 @@
                 <strong id="conversation-usage-value" title="Token usage appears when the provider reports it.">After first turn</strong>
               </div>
             </div>
+          </section>
+
+          <section class="conversation-inspector-section" aria-labelledby="exploration-trace-heading">
+            <div class="conversation-inspector-section-heading">
+              <div>
+                <p>Exploration</p>
+                <h3 id="exploration-trace-heading">Visible Deep Search trace</h3>
+              </div>
+            </div>
+            <ol id="conversation-trace" class="conversation-evidence-list"></ol>
+            <p class="conversation-evidence-empty" data-trace-empty>Deep Search stages, evidence counts, and coverage warnings appear here. Hidden model reasoning is never exposed.</p>
           </section>
 
           <section class="conversation-inspector-section" aria-labelledby="scope-heading">

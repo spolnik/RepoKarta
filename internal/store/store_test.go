@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -31,6 +32,7 @@ func TestConversationTranscriptPersistsAcrossDatabaseReopen(t *testing.T) {
 		Title:    "Trace authentication",
 		Provider: "anthropic-api",
 		Model:    "claude-sonnet-5",
+		Mode:     "deep_search",
 		Author: agent.ConversationAuthor{
 			ID:       "saml:alice",
 			Name:     "Alice Example",
@@ -88,7 +90,11 @@ func TestConversationTranscriptPersistsAcrossDatabaseReopen(t *testing.T) {
 		}},
 		InputTokens:  120,
 		OutputTokens: 30,
-		CreatedAt:    now.Add(2 * time.Second),
+		Trace: []agent.TraceEvent{{
+			Stage: "sources_collected", Detail: "1 exact source citation retained",
+			ElapsedMS: 42,
+		}},
+		CreatedAt: now.Add(2 * time.Second),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -108,15 +114,31 @@ func TestConversationTranscriptPersistsAcrossDatabaseReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Title != conversation.Title || got.ResumeCursor != "opaque-provider-cursor" ||
+	if got.Title != conversation.Title || got.Mode != "deep_search" ||
+		got.ResumeCursor != "opaque-provider-cursor" ||
 		!reflect.DeepEqual(got.Author, conversation.Author) {
 		t.Fatalf("conversation metadata = %#v", got)
 	}
 	if got.MessageCount != 2 || got.InputTokens != 120 || got.OutputTokens != 30 {
 		t.Fatalf("conversation totals = %#v", got)
 	}
-	if len(got.Messages) != 2 || len(got.Messages[0].Images) != 1 || len(got.Messages[1].Sources) != 1 {
+	if len(got.Messages) != 2 || len(got.Messages[0].Images) != 1 ||
+		len(got.Messages[1].Sources) != 1 || len(got.Messages[1].Trace) != 1 {
 		t.Fatalf("conversation transcript = %#v", got.Messages)
+	}
+	share, err := storage.CreateConversationShare(ctx, got.ID, got.Author.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, shared, err := storage.GetConversationShare(ctx, share.Token); err != nil ||
+		shared.ID != got.ID {
+		t.Fatalf("shared conversation = %#v, %v", shared, err)
+	}
+	if err := storage.RevokeConversationShare(ctx, share.Token, got.Author.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := storage.GetConversationShare(ctx, share.Token); !errors.Is(err, agent.ErrConversationNotFound) {
+		t.Fatalf("revoked share error = %v", err)
 	}
 	if len(got.Messages[0].Contexts) != 2 ||
 		got.Messages[0].Contexts[0].Path != "internal/app/app.go" ||

@@ -34,7 +34,7 @@ import (
 )
 
 const (
-	snapshotVersion       = 21
+	snapshotVersion       = 22
 	maximumFiles          = 20_000
 	maximumSourceFiles    = 5_000
 	maximumSourceFileSize = 1 << 20
@@ -276,6 +276,7 @@ type Snapshot struct {
 	Manifests                    []Manifest                     `json:"manifests"`
 	Nodes                        []Node                         `json:"nodes"`
 	Edges                        []Edge                         `json:"edges"`
+	Ownership                    []OwnershipIndex               `json:"ownership,omitempty"`
 	Components                   []SystemComponent              `json:"components,omitempty"`
 	Connections                  []SystemConnection             `json:"connections,omitempty"`
 	TopologyPlaceholders         []TopologyPlaceholder          `json:"topology_placeholders,omitempty"`
@@ -304,6 +305,7 @@ type StructuralIndex struct {
 	ID                 string               `json:"id"`
 	GeneratedAt        time.Time            `json:"generated_at"`
 	Structure          []StructuralDocument `json:"structure"`
+	Ownership          []OwnershipIndex     `json:"ownership,omitempty"`
 	StructureTruncated bool                 `json:"structure_truncated"`
 	Scope              Scope                `json:"scope"`
 }
@@ -351,6 +353,9 @@ func rebaseSnapshotEvidence(snapshot *Snapshot, baseURL string) {
 	}
 	for placeholderIndex := range snapshot.TopologyPlaceholders {
 		rebase(&snapshot.TopologyPlaceholders[placeholderIndex].ConsumptionEvidence)
+	}
+	for ownershipIndex := range snapshot.Ownership {
+		rebase(&snapshot.Ownership[ownershipIndex].Evidence)
 	}
 	for assignmentIndex := range snapshot.EnvironmentAssignments {
 		rebase(&snapshot.EnvironmentAssignments[assignmentIndex].Evidence)
@@ -936,6 +941,7 @@ func (s *Service) ReadStructure(ctx context.Context, repositoryID int64) (Struct
 			continue
 		}
 		output.Structure = append(output.Structure, result.index.Structure...)
+		output.Ownership = append(output.Ownership, result.index.Ownership...)
 		output.StructureTruncated = output.StructureTruncated || result.index.StructureTruncated
 		output.Scope.AnalyzedRepositories++
 	}
@@ -969,6 +975,7 @@ func structuralIndexFromSnapshot(snapshot Snapshot) StructuralIndex {
 		ID:                 snapshot.ID,
 		GeneratedAt:        snapshot.GeneratedAt,
 		Structure:          structure,
+		Ownership:          append([]OwnershipIndex(nil), snapshot.Ownership...),
 		StructureTruncated: snapshot.StructureTruncated,
 		Scope:              snapshot.Scope,
 	}
@@ -1085,6 +1092,7 @@ type builder struct {
 	serviceTargets               map[string]string
 	clientReferences             []clientReference
 	structure                    []StructuralDocument
+	ownership                    []OwnershipIndex
 	structuralSymbols            int
 	structuralTypedRelations     int
 	structuralImportRelations    int
@@ -1182,6 +1190,7 @@ func (b *builder) snapshot(signature string) Snapshot {
 		Manifests:                    b.manifests,
 		Nodes:                        nodes,
 		Edges:                        edges,
+		Ownership:                    append([]OwnershipIndex(nil), b.ownership...),
 		Components:                   components,
 		Connections:                  connections,
 		TopologyPlaceholders:         append([]TopologyPlaceholder(nil), b.topologyPlaceholders...),
@@ -1247,10 +1256,12 @@ func (b *builder) analyzeRepository(ctx context.Context, repository catalog.Repo
 
 	candidates := make([]string, 0)
 	sourceCount := 0
+	ownerPath := codeownersPath(files)
 	for _, filePath := range files {
 		if !isManifest(filePath) && !isAnalyzedSource(filePath) &&
 			!isServiceConfiguration(filePath) && !isTopologyFile(filePath) &&
-			!isPotentialEnvironmentAssignmentFile(filePath) {
+			!isPotentialEnvironmentAssignmentFile(filePath) &&
+			filePath != ownerPath {
 			continue
 		}
 		if isAnalyzedSource(filePath) {
@@ -1274,6 +1285,25 @@ func (b *builder) analyzeRepository(ctx context.Context, repository catalog.Repo
 			}
 		}
 	}
+	ownership := OwnershipIndex{
+		RepositoryID: repository.ID,
+		Repository:   repository.Name,
+		Revision:     revision,
+		Available:    false,
+	}
+	if ownerPath != "" {
+		if content, ok := contents[ownerPath]; ok {
+			ownership = parseCODEOWNERS(
+				Repository{ID: repository.ID, Name: repository.Name, Revision: revision},
+				ownerPath,
+				content,
+				func(filePath string, line int, label string) Evidence {
+					return b.evidence(repository, revision, filePath, line, label)
+				},
+			)
+		}
+	}
+	b.ownership = append(b.ownership, ownership)
 
 	goModule := ""
 	if content, ok := contents["go.mod"]; ok {

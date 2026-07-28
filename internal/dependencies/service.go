@@ -60,6 +60,12 @@ type RegistryConfig struct {
 	TokenEnv            string   `json:"token_env,omitempty"`
 }
 
+type registryDecision struct {
+	Key    RegistryKey
+	Status string
+	Detail string
+}
+
 // Observation is one durable, cacheable registry result.
 type Observation struct {
 	RegistryKey
@@ -219,11 +225,14 @@ func (s *Service) Inventory(
 	}
 	now := s.now()
 	return buildPage(snapshot, options, func(declaration *Declaration) {
-		key, ok := s.registryKeyFor(*declaration)
-		if !ok {
-			declaration.CheckStatus = "not_comparable"
+		decision := s.registryDecisionFor(*declaration)
+		if decision.Status != "" {
+			declaration.CheckStatus = decision.Status
+			declaration.CheckDetail = decision.Detail
+			declaration.VersionDistance = "unknown"
 			return
 		}
+		key := decision.Key
 		declaration.Registry = key.Registry
 		observation, ok := byKey[registryKeyString(key)]
 		if !ok {
@@ -233,11 +242,16 @@ func (s *Service) Inventory(
 		declaration.ObservedAt = observation.ObservedAt.UTC().Format(time.RFC3339)
 		switch {
 		case observation.Status == "error":
-			declaration.CheckStatus = "error"
+			declaration.CheckStatus = "registry_error"
+			declaration.CheckDetail = observation.Error
+			declaration.VersionDistance = "unknown"
 		case !observation.ExpiresAt.IsZero() && !observation.ExpiresAt.After(now):
 			declaration.CheckStatus = "stale"
+			declaration.CheckDetail = "the cached registry observation has expired"
+			declaration.VersionDistance = "unknown"
 		default:
 			declaration.CheckStatus = declarationStatus(*declaration, observation.LatestStable)
+			declaration.VersionDistance = versionDistance(*declaration, observation.LatestStable)
 		}
 	}), nil
 }
@@ -270,11 +284,12 @@ func (s *Service) StartRefresh(
 	targets := make(map[string]RegistryKey)
 	skipped := 0
 	for _, declaration := range declarations {
-		key, ok := s.registryKeyFor(declaration)
-		if !ok {
+		decision := s.registryDecisionFor(declaration)
+		if decision.Status != "" {
 			skipped++
 			continue
 		}
+		key := decision.Key
 		targets[registryKeyString(key)] = key
 	}
 	observations, err := s.store.ListDependencyObservations(s.ctx)
@@ -666,18 +681,27 @@ func nugetLatestStable(content []byte) (string, error) {
 	return latest, nil
 }
 
-func (s *Service) registryKeyFor(declaration Declaration) (RegistryKey, bool) {
+func (s *Service) registryDecisionFor(declaration Declaration) registryDecision {
 	key := RegistryKey{
 		Ecosystem: strings.ToLower(strings.TrimSpace(declaration.Ecosystem)),
 		Package:   strings.TrimSpace(declaration.Package),
 	}
+	if key.Package == "" {
+		return registryDecision{Status: "unavailable", Detail: "the declaration has no package coordinate"}
+	}
 	for _, prefix := range []string{"workspace:", "file:", "link:", "git+", "http:", "https:"} {
 		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(declaration.Declared)), prefix) {
-			return RegistryKey{}, false
+			return registryDecision{
+				Status: "unavailable",
+				Detail: "local, linked, Git, and URL dependencies are not sent to a package registry",
+			}
 		}
 	}
 	if strings.HasPrefix(strings.TrimSpace(declaration.Declared), "@ ") {
-		return RegistryKey{}, false
+		return registryDecision{
+			Status: "unresolved",
+			Detail: "the declared version is an unresolved build indirection",
+		}
 	}
 	longestPrefix := -1
 	for _, config := range s.registries {
@@ -693,14 +717,23 @@ func (s *Service) registryKeyFor(declaration Declaration) (RegistryKey, bool) {
 		}
 	}
 	if key.Registry != "" {
-		return key, key.Package != ""
+		return registryDecision{Key: key}
+	}
+	if looksPrivatePackage(key.Ecosystem, key.Package) {
+		return registryDecision{
+			Status: "private_internal",
+			Detail: "not checked publicly; configure an explicit package-prefix route to a safe registry",
+		}
 	}
 	switch key.Ecosystem {
 	case "npm":
 		key.Registry = PublicNPMRegistry
 	case "maven":
 		if strings.HasPrefix(key.Package, "project:") || strings.Count(key.Package, ":") != 1 {
-			return RegistryKey{}, false
+			return registryDecision{
+				Status: "unavailable",
+				Detail: "the Maven coordinate is unresolved or malformed",
+			}
 		}
 		key.Registry = PublicMavenRepository
 	case "pypi":
@@ -712,9 +745,57 @@ func (s *Service) registryKeyFor(declaration Declaration) (RegistryKey, bool) {
 	case "nuget":
 		key.Registry = PublicNuGetRegistry
 	default:
-		return RegistryKey{}, false
+		return registryDecision{
+			Status: "unavailable",
+			Detail: "no package registry adapter is available for this ecosystem",
+		}
 	}
-	return key, key.Package != ""
+	return registryDecision{Key: key}
+}
+
+// registryKeyFor is retained for focused tests and callers that only need the
+// selected destination. New code should use registryDecisionFor so a
+// fail-closed row remains distinguishable from an unsupported declaration.
+func (s *Service) registryKeyFor(declaration Declaration) (RegistryKey, bool) {
+	decision := s.registryDecisionFor(declaration)
+	return decision.Key, decision.Status == ""
+}
+
+func looksPrivatePackage(ecosystem, packageName string) bool {
+	ecosystem = strings.ToLower(strings.TrimSpace(ecosystem))
+	lower := strings.ToLower(strings.TrimSpace(packageName))
+	if lower == "" {
+		return false
+	}
+	segments := strings.FieldsFunc(lower, func(character rune) bool {
+		switch character {
+		case '/', '\\', ':', '.', '-', '_', '@':
+			return true
+		default:
+			return false
+		}
+	})
+	for _, segment := range segments {
+		switch segment {
+		case "internal", "private", "corp", "corporate", "intranet", "local":
+			return true
+		}
+	}
+	switch ecosystem {
+	case "npm":
+		// Scoped npm coordinates can be public, but they can also disclose an
+		// organization name. Require an explicit prefix route before any scoped
+		// coordinate crosses the network.
+		return strings.HasPrefix(lower, "@")
+	case "go":
+		host, _, _ := strings.Cut(lower, "/")
+		return host == "localhost" || strings.HasSuffix(host, ".local") || !strings.Contains(host, ".")
+	case "maven":
+		group, _, found := strings.Cut(lower, ":")
+		return found && (group == "com.example" || strings.HasSuffix(group, ".local"))
+	default:
+		return false
+	}
 }
 
 func validateRegistryURL(value string) error {
@@ -801,10 +882,10 @@ func declarationStatus(declaration Declaration, latest string) string {
 	declared := strings.TrimSpace(strings.TrimPrefix(current, "v"))
 	latest = strings.TrimSpace(strings.TrimPrefix(latest, "v"))
 	if latest == "" {
-		return "unchecked"
+		return "unavailable"
 	}
 	if declaration.Resolved == "" && declaration.Resolution != "exact" {
-		return "latest_known"
+		return "unresolved"
 	}
 	if strings.EqualFold(declared, latest) {
 		return "current"
@@ -815,7 +896,38 @@ func declarationStatus(declaration Declaration, latest string) string {
 	if compareLooseVersions(declared, latest) > 0 {
 		return "ahead"
 	}
-	return "update_available"
+	return "behind"
+}
+
+func versionDistance(declaration Declaration, latest string) string {
+	if declarationStatus(declaration, latest) == "current" {
+		return "none"
+	}
+	if declarationStatus(declaration, latest) != "behind" {
+		return "unknown"
+	}
+	current := firstNonEmpty(declaration.Resolved, declaration.Declared)
+	currentParts := numericVersionParts(current)
+	latestParts := numericVersionParts(latest)
+	if len(currentParts) == 0 || len(latestParts) == 0 {
+		return "unknown"
+	}
+	value := func(parts []int, index int) int {
+		if index >= len(parts) {
+			return 0
+		}
+		return parts[index]
+	}
+	switch {
+	case value(currentParts, 0) != value(latestParts, 0):
+		return "major"
+	case value(currentParts, 1) != value(latestParts, 1):
+		return "minor"
+	case value(currentParts, 2) != value(latestParts, 2):
+		return "patch"
+	default:
+		return "unknown"
+	}
 }
 
 func stableVersion(version string) bool {

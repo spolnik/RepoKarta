@@ -39,6 +39,7 @@ import (
 	"github.com/spolnik/RepoKarta/internal/mcpserver"
 	"github.com/spolnik/RepoKarta/internal/scipjava"
 	"github.com/spolnik/RepoKarta/internal/search"
+	"github.com/spolnik/RepoKarta/internal/searchworkspace"
 	"github.com/spolnik/RepoKarta/internal/security"
 	"github.com/spolnik/RepoKarta/internal/source"
 	"github.com/spolnik/RepoKarta/internal/store"
@@ -69,6 +70,10 @@ type ConversationService interface {
 	Statuses(context.Context) []agent.Status
 	Send(context.Context, agent.TurnRequest, func(agent.Event) error) error
 	Interrupt(context.Context, string) error
+}
+
+type ConversationRetryService interface {
+	Retry(context.Context, agent.RetryRequest, func(agent.Event) error) error
 }
 
 // ConversationHistoryService supplies durable titled transcripts.
@@ -157,6 +162,7 @@ type Config struct {
 	MCPBaseURL            string
 	MCPCommand            string
 	Conversations         ConversationService
+	ConversationShares    agent.ConversationShareStore
 	Maps                  MapService
 	Docs                  DocumentationService
 	Security              *security.Manager
@@ -179,6 +185,7 @@ type Server struct {
 	refresher             CatalogueRefresher
 	agents                ConversationService
 	history               ConversationHistoryService
+	conversationShares    agent.ConversationShareStore
 	maps                  MapService
 	docs                  DocumentationService
 	security              *security.Manager
@@ -431,6 +438,7 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 		intelligence:          intelligence,
 		refresher:             refresher,
 		agents:                config.Conversations,
+		conversationShares:    config.ConversationShares,
 		maps:                  config.Maps,
 		docs:                  config.Docs,
 		security:              config.Security,
@@ -459,6 +467,12 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 	mux.HandleFunc("GET /api/search", server.apiSearch)
 	mux.HandleFunc("POST /api/search", server.apiSearchJSON)
 	mux.HandleFunc("GET /api/search/query-completions", server.apiQueryCompletions)
+	mux.HandleFunc("GET /api/searches", server.apiSearchWorkspace)
+	mux.HandleFunc("POST /api/searches", server.createSavedSearch)
+	mux.HandleFunc("PUT /api/searches/{searchID}", server.updateSavedSearch)
+	mux.HandleFunc("DELETE /api/searches/{searchID}", server.deleteSavedSearch)
+	mux.HandleFunc("PUT /api/searches/{searchID}/monitor", server.configureSearchMonitor)
+	mux.HandleFunc("POST /api/search-monitors/{monitorID}/run", server.runSearchMonitor)
 	mux.HandleFunc("GET /api/contexts/suggest", server.apiContextSuggestions)
 	mux.HandleFunc("POST /api/contexts/resolve", server.apiContextResolution)
 	mux.HandleFunc("GET /api/contexts/named", server.apiNamedContexts)
@@ -562,6 +576,7 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 	if server.maps != nil {
 		mux.HandleFunc("GET /maps", server.mapPage)
 		mux.HandleFunc("GET /api/maps", server.apiMap)
+		mux.HandleFunc("POST /api/graph/query", server.apiGraphQuery)
 		mux.HandleFunc("GET /api/artifacts/progress", server.apiArtifactProgress)
 		mux.HandleFunc("GET /api/maps/export", server.controlled(
 			identity.PermissionExportArtifacts, "artifact.export", "map", server.exportMap,
@@ -653,6 +668,9 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 		mux.HandleFunc("POST /api/chat/{conversationID}/interrupt", server.controlled(
 			identity.PermissionGenerateAI, "generation.interrupt", "conversation", server.interruptChat,
 		))
+		mux.HandleFunc("POST /api/chat/{conversationID}/retry", server.controlled(
+			identity.PermissionGenerateAI, "generation.retry", "conversation", server.retryChat,
+		))
 		if server.history != nil {
 			mux.HandleFunc("GET /api/conversations", server.listConversations)
 			mux.HandleFunc("GET /api/conversations/{conversationID}", server.getConversation)
@@ -660,6 +678,15 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 			mux.HandleFunc("DELETE /api/conversations/{conversationID}", server.controlled(
 				identity.PermissionReadRepositories, "owned-data.conversation.delete", "conversation", server.deleteConversation,
 			))
+		}
+		if server.conversationShares != nil {
+			mux.HandleFunc("POST /api/chat/{conversationID}/share", server.controlled(
+				identity.PermissionReadRepositories, "conversation.share", "conversation", server.shareConversation,
+			))
+			mux.HandleFunc("DELETE /api/chat/shares/{token}", server.controlled(
+				identity.PermissionReadRepositories, "conversation.share.revoke", "conversation", server.revokeConversationShare,
+			))
+			mux.HandleFunc("GET /api/shared/deep/{token}", server.sharedDeepSearch)
 		}
 	}
 
@@ -854,6 +881,201 @@ func (s *Server) chat(response http.ResponseWriter, request *http.Request) {
 	}
 }
 
+func (s *Server) retryChat(response http.ResponseWriter, request *http.Request) {
+	retrier, ok := s.agents.(ConversationRetryService)
+	if !ok || s.history == nil {
+		writeAPIError(response, http.StatusServiceUnavailable, errors.New("conversation retry is unavailable"))
+		return
+	}
+	var input struct {
+		Strategy       string `json:"strategy"`
+		TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
+		TokenBudget    int64  `json:"token_budget,omitempty"`
+		ToolCallBudget int    `json:"tool_call_budget,omitempty"`
+	}
+	if err := decodeBoundedJSON(response, request, &input); err != nil {
+		writeAPIError(response, http.StatusBadRequest, errors.New("invalid retry request"))
+		return
+	}
+	conversationID := strings.TrimSpace(request.PathValue("conversationID"))
+	conversation, err := s.history.GetConversation(request.Context(), conversationID)
+	if err != nil {
+		writeConversationError(response, err)
+		return
+	}
+	if err := s.authorizeConversation(request.Context(), conversation); err != nil {
+		writeConversationError(response, err)
+		return
+	}
+	flusher, ok := response.(http.Flusher)
+	if !ok {
+		writeAPIError(response, http.StatusInternalServerError, errors.New("streaming is not supported"))
+		return
+	}
+	response.Header().Set("Content-Type", "application/x-ndjson; charset=utf-8")
+	response.Header().Set("Cache-Control", "no-store")
+	response.Header().Set("X-Accel-Buffering", "no")
+	encoder := json.NewEncoder(response)
+	emit := func(event agent.Event) error {
+		if err := encoder.Encode(event); err != nil {
+			return err
+		}
+		flusher.Flush()
+		return nil
+	}
+	viewer := s.conversationViewer(request.Context())
+	err = retrier.Retry(request.Context(), agent.RetryRequest{
+		ConversationID: conversationID,
+		Author:         viewer.Author,
+		Strategy:       input.Strategy,
+		TimeoutSeconds: input.TimeoutSeconds,
+		TokenBudget:    input.TokenBudget,
+		ToolCallBudget: input.ToolCallBudget,
+	}, emit)
+	if err != nil {
+		_ = emit(agent.Event{Type: agent.EventError, ConversationID: conversationID, Text: err.Error()})
+	}
+}
+
+func (s *Server) shareConversation(response http.ResponseWriter, request *http.Request) {
+	conversationID := strings.TrimSpace(request.PathValue("conversationID"))
+	conversation, err := s.history.GetConversation(request.Context(), conversationID)
+	if err != nil {
+		writeConversationError(response, err)
+		return
+	}
+	if err := s.authorizeConversation(request.Context(), conversation); err != nil {
+		writeConversationError(response, err)
+		return
+	}
+	if conversation.Mode != "deep_search" {
+		writeAPIError(response, http.StatusUnprocessableEntity, errors.New("only Deep Search conversations can be shared"))
+		return
+	}
+	viewer := s.conversationViewer(request.Context())
+	share, err := s.conversationShares.CreateConversationShare(
+		request.Context(), conversation.ID, viewer.Author.ID,
+	)
+	if err != nil {
+		writeConversationError(response, err)
+		return
+	}
+	writeJSON(response, http.StatusCreated, map[string]any{
+		"share": share,
+		"url":   "/api/shared/deep/" + url.PathEscape(share.Token),
+	})
+}
+
+func (s *Server) revokeConversationShare(response http.ResponseWriter, request *http.Request) {
+	viewer := s.conversationViewer(request.Context())
+	if err := s.conversationShares.RevokeConversationShare(
+		request.Context(), request.PathValue("token"), viewer.Author.ID,
+	); err != nil {
+		writeConversationError(response, err)
+		return
+	}
+	response.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) sharedDeepSearch(response http.ResponseWriter, request *http.Request) {
+	share, conversation, err := s.conversationShares.GetConversationShare(
+		request.Context(), request.PathValue("token"),
+	)
+	if err != nil || conversation.Mode != "deep_search" {
+		writeAPIError(response, http.StatusNotFound, agent.ErrConversationNotFound)
+		return
+	}
+	if err := s.revalidateConversationSources(request.Context(), conversation); err != nil {
+		writeAPIError(
+			response,
+			http.StatusForbidden,
+			errors.New("shared Deep Search contains a source that is not visible to the current viewer"),
+		)
+		return
+	}
+	writeJSON(response, http.StatusOK, map[string]any{
+		"share": map[string]any{
+			"token":      share.Token,
+			"created_at": share.CreatedAt,
+		},
+		"conversation": map[string]any{
+			"id":            conversation.ID,
+			"title":         conversation.Title,
+			"mode":          conversation.Mode,
+			"provider":      conversation.Provider,
+			"model":         conversation.Model,
+			"created_at":    conversation.CreatedAt,
+			"updated_at":    conversation.UpdatedAt,
+			"input_tokens":  conversation.InputTokens,
+			"output_tokens": conversation.OutputTokens,
+			"messages":      conversation.Messages,
+		},
+		"permission_revalidated": true,
+	})
+}
+
+func (s *Server) revalidateConversationSources(
+	ctx context.Context,
+	conversation agent.Conversation,
+) error {
+	checked := make(map[int64]struct{})
+	check := func(repositoryID int64) error {
+		if repositoryID <= 0 {
+			return nil
+		}
+		if _, ok := checked[repositoryID]; ok {
+			return nil
+		}
+		if _, err := s.intelligence.RepositoryByID(ctx, repositoryID); err != nil {
+			return err
+		}
+		checked[repositoryID] = struct{}{}
+		return nil
+	}
+	for _, message := range conversation.Messages {
+		for _, structured := range message.Contexts {
+			if err := check(structured.RepositoryID); err != nil {
+				return err
+			}
+		}
+		for _, citation := range message.Sources {
+			repositoryID, ok := sourceRepositoryID(citation.URL)
+			if ok {
+				if err := check(repositoryID); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func sourceRepositoryID(raw string) (int64, bool) {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return 0, false
+	}
+	segments := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	for index := 0; index+1 < len(segments); index++ {
+		switch segments[index] {
+		case "source", "projects", "wiki":
+		default:
+			continue
+		}
+		id, err := strconv.ParseInt(segments[index+1], 10, 64)
+		if err == nil && id > 0 {
+			return id, true
+		}
+	}
+	for _, key := range []string{"repo", "repository_id"} {
+		id, err := strconv.ParseInt(parsed.Query().Get(key), 10, 64)
+		if err == nil && id > 0 {
+			return id, true
+		}
+	}
+	return 0, false
+}
+
 func (s *Server) interruptChat(response http.ResponseWriter, request *http.Request) {
 	conversationID := strings.TrimSpace(request.PathValue("conversationID"))
 	if conversationID == "" {
@@ -961,7 +1183,7 @@ func (s *Server) apiSearch(response http.ResponseWriter, request *http.Request) 
 	if mode == "" {
 		mode = "zoekt"
 	}
-	result, err := s.intelligence.Search(request.Context(), codeintel.SearchRequest{
+	input := codeintel.SearchRequest{
 		Query:        request.URL.Query().Get("q"),
 		RepositoryID: repositoryID,
 		Repository:   repositoryName,
@@ -971,10 +1193,14 @@ func (s *Server) apiSearch(response http.ResponseWriter, request *http.Request) 
 		Mode:         mode,
 		Limit:        limit,
 		Compact:      compact,
-	})
+	}
+	result, err := s.intelligence.Search(request.Context(), input)
 	if err != nil {
 		writeContextOrAPIError(response, err)
 		return
+	}
+	if err := s.intelligence.RecordRecentSearch(request.Context(), input, result); err != nil {
+		slog.Warn("record recent search", "error", err)
 	}
 	writeSearchJSON(response, result)
 }
@@ -993,7 +1219,93 @@ func (s *Server) apiSearchJSON(response http.ResponseWriter, request *http.Reque
 		writeContextOrAPIError(response, err)
 		return
 	}
+	if err := s.intelligence.RecordRecentSearch(request.Context(), input, result); err != nil {
+		slog.Warn("record recent structured search", "error", err)
+	}
 	writeSearchJSON(response, result)
+}
+
+func (s *Server) apiSearchWorkspace(response http.ResponseWriter, request *http.Request) {
+	workspace, err := s.intelligence.ListSearchWorkspace(request.Context())
+	if err != nil {
+		writeSearchWorkspaceError(response, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, workspace)
+}
+
+func (s *Server) createSavedSearch(response http.ResponseWriter, request *http.Request) {
+	var input codeintel.SavedSearchInput
+	if err := decodeBoundedJSON(response, request, &input); err != nil {
+		writeAPIError(response, http.StatusBadRequest, errors.New("invalid saved search"))
+		return
+	}
+	saved, err := s.intelligence.CreateSavedSearch(request.Context(), input)
+	if err != nil {
+		writeSearchWorkspaceError(response, err)
+		return
+	}
+	writeJSON(response, http.StatusCreated, saved)
+}
+
+func (s *Server) updateSavedSearch(response http.ResponseWriter, request *http.Request) {
+	var input codeintel.SavedSearchInput
+	if err := decodeBoundedJSON(response, request, &input); err != nil {
+		writeAPIError(response, http.StatusBadRequest, errors.New("invalid saved search"))
+		return
+	}
+	saved, err := s.intelligence.UpdateSavedSearch(
+		request.Context(), request.PathValue("searchID"), input,
+	)
+	if err != nil {
+		writeSearchWorkspaceError(response, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, saved)
+}
+
+func (s *Server) deleteSavedSearch(response http.ResponseWriter, request *http.Request) {
+	if err := s.intelligence.DeleteSavedSearch(
+		request.Context(), request.PathValue("searchID"),
+	); err != nil {
+		writeSearchWorkspaceError(response, err)
+		return
+	}
+	response.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) configureSearchMonitor(response http.ResponseWriter, request *http.Request) {
+	var input codeintel.SearchMonitorInput
+	if err := decodeBoundedJSON(response, request, &input); err != nil {
+		writeAPIError(response, http.StatusBadRequest, errors.New("invalid search monitor"))
+		return
+	}
+	monitor, err := s.intelligence.ConfigureSearchMonitor(
+		request.Context(), request.PathValue("searchID"), input,
+	)
+	if err != nil {
+		writeSearchWorkspaceError(response, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, monitor)
+}
+
+func (s *Server) runSearchMonitor(response http.ResponseWriter, request *http.Request) {
+	run, err := s.intelligence.RunSearchMonitor(
+		request.Context(), request.PathValue("monitorID"),
+	)
+	if err != nil {
+		writeSearchWorkspaceError(response, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, run)
+}
+
+func decodeBoundedJSON(response http.ResponseWriter, request *http.Request, value any) error {
+	request.Body = http.MaxBytesReader(response, request.Body, 1<<20)
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	return decoder.Decode(value)
 }
 
 func (s *Server) apiQueryCompletions(response http.ResponseWriter, request *http.Request) {
@@ -1835,6 +2147,38 @@ func (s *Server) apiMap(response http.ResponseWriter, request *http.Request) {
 	writeJSON(response, http.StatusOK, snapshot)
 }
 
+func (s *Server) apiGraphQuery(response http.ResponseWriter, request *http.Request) {
+	request.Body = http.MaxBytesReader(response, request.Body, 64<<10)
+	var input struct {
+		RepositoryID int64 `json:"repository_id,omitempty"`
+		graph.QueryRequest
+	}
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
+		writeAPIError(response, http.StatusBadRequest, errors.New("invalid graph query request"))
+		return
+	}
+	if input.RepositoryID < 0 {
+		writeAPIError(response, http.StatusBadRequest, errors.New("repository_id must be positive when provided"))
+		return
+	}
+	snapshot, err := s.maps.Snapshot(request.Context(), input.RepositoryID, false)
+	if err != nil {
+		writeAPIError(response, http.StatusInternalServerError, errors.New("graph snapshot could not be loaded"))
+		return
+	}
+	result, err := graph.QueryGraph(snapshot, input.QueryRequest)
+	if err != nil {
+		writeJSON(response, http.StatusUnprocessableEntity, map[string]any{
+			"error":  err.Error(),
+			"result": result,
+		})
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
 func (s *Server) apiDependencies(response http.ResponseWriter, request *http.Request) {
 	repositoryID, err := optionalRepositoryID(request.URL.Query().Get("repository"))
 	if err != nil {
@@ -2094,15 +2438,38 @@ func dependencyOptions(request *http.Request) (dependencies.Options, error) {
 	query := request.URL.Query()
 	options := dependencies.Options{
 		Query:        query.Get("query"),
+		Package:      query.Get("package"),
 		Ecosystem:    query.Get("ecosystem"),
 		Usage:        query.Get("usage"),
 		Relationship: query.Get("relationship"),
 		Resolution:   query.Get("resolution"),
+		CheckStatus:  query.Get("check_status"),
+		Distance:     query.Get("distance"),
 		Limit:        dependencies.DefaultPageLimit,
 	}
-	if len(options.Query) > 200 || len(options.Ecosystem) > 50 || len(options.Usage) > 50 ||
-		len(options.Relationship) > 50 || len(options.Resolution) > 50 {
+	if len(options.Query) > 200 || len(options.Package) > 200 ||
+		len(options.Ecosystem) > 50 || len(options.Usage) > 50 ||
+		len(options.Relationship) > 50 || len(options.Resolution) > 50 ||
+		len(options.CheckStatus) > 50 || len(options.Distance) > 50 {
 		return dependencies.Options{}, errors.New("dependency filters are too long")
+	}
+	for _, check := range []struct {
+		name    string
+		value   string
+		allowed []string
+	}{
+		{"check_status", options.CheckStatus, []string{
+			"current", "behind", "ahead", "prerelease", "unavailable",
+			"private_internal", "unresolved", "registry_error", "stale", "unchecked",
+		}},
+		{"distance", options.Distance, []string{"major", "minor", "patch", "none", "unknown"}},
+	} {
+		value := strings.ToLower(strings.TrimSpace(check.value))
+		if value != "" && !slices.Contains(check.allowed, value) {
+			return dependencies.Options{}, fmt.Errorf(
+				"%s must be one of %s", check.name, strings.Join(check.allowed, ", "),
+			)
+		}
 	}
 	if value := strings.TrimSpace(query.Get("offset")); value != "" {
 		offset, err := strconv.Atoi(value)
@@ -2119,8 +2486,11 @@ func dependencyOptions(request *http.Request) (dependencies.Options, error) {
 		options.Limit = limit
 	}
 	options.Query = strings.TrimSpace(options.Query)
+	options.Package = strings.TrimSpace(options.Package)
 	options.Ecosystem = strings.ToLower(strings.TrimSpace(options.Ecosystem))
 	options.Usage = strings.ToLower(strings.TrimSpace(options.Usage))
+	options.CheckStatus = strings.ToLower(strings.TrimSpace(options.CheckStatus))
+	options.Distance = strings.ToLower(strings.TrimSpace(options.Distance))
 	return options, nil
 }
 
@@ -2247,6 +2617,9 @@ func dependencyURL(base string, repositoryID int64, options dependencies.Options
 	if value := strings.TrimSpace(options.Query); value != "" {
 		query.Set("query", value)
 	}
+	if value := strings.TrimSpace(options.Package); value != "" {
+		query.Set("package", value)
+	}
 	if value := strings.TrimSpace(options.Ecosystem); value != "" {
 		query.Set("ecosystem", value)
 	}
@@ -2258,6 +2631,12 @@ func dependencyURL(base string, repositoryID int64, options dependencies.Options
 	}
 	if value := strings.TrimSpace(options.Resolution); value != "" {
 		query.Set("resolution", value)
+	}
+	if value := strings.TrimSpace(options.CheckStatus); value != "" {
+		query.Set("check_status", value)
+	}
+	if value := strings.TrimSpace(options.Distance); value != "" {
+		query.Set("distance", value)
 	}
 	query.Set("limit", strconv.Itoa(options.Limit))
 	if offset > 0 {
@@ -2418,7 +2797,7 @@ func (s *Server) search(response http.ResponseWriter, request *http.Request) {
 	data.Search.SelectedRepositoryID = repositoryID
 	data.Search.Performed = query.Text != ""
 	if data.Search.Performed {
-		result, searchError := s.intelligence.Search(request.Context(), codeintel.SearchRequest{
+		input := codeintel.SearchRequest{
 			Query:        query.Text,
 			RepositoryID: repositoryID,
 			Repository:   query.Repository,
@@ -2427,10 +2806,14 @@ func (s *Server) search(response http.ResponseWriter, request *http.Request) {
 			File:         query.File,
 			Mode:         query.Mode,
 			Limit:        query.Limit,
-		})
+		}
+		result, searchError := s.intelligence.Search(request.Context(), input)
 		if searchError != nil {
 			data.Search.Error = searchError.Error()
 		} else {
+			if err := s.intelligence.RecordRecentSearch(request.Context(), input, result); err != nil {
+				slog.Warn("record recent HTML search", "error", err)
+			}
 			data.Search.Duration = formatMilliseconds(result.DurationMS)
 			data.Search.MatchCount = result.MatchCount
 			data.Search.FileCount = result.MatchingFiles
@@ -3278,6 +3661,19 @@ func writeNamedContextError(response http.ResponseWriter, err error) {
 		writeAPIError(response, http.StatusConflict, err)
 	default:
 		writeContextOrAPIErrorWithoutNamedContext(response, err)
+	}
+}
+
+func writeSearchWorkspaceError(response http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, searchworkspace.ErrNotFound):
+		writeAPIError(response, http.StatusNotFound, err)
+	case errors.Is(err, searchworkspace.ErrForbidden):
+		writeAPIError(response, http.StatusForbidden, err)
+	case errors.Is(err, searchworkspace.ErrConflict):
+		writeAPIError(response, http.StatusConflict, err)
+	default:
+		writeContextOrAPIError(response, err)
 	}
 }
 

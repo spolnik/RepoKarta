@@ -22,6 +22,22 @@ import (
 	"github.com/spolnik/RepoKarta/internal/search"
 )
 
+func TestCitationTrackerEnforcesPerTurnToolBudget(t *testing.T) {
+	tracker := NewCitationTracker()
+	tracker.BeginTurn("deep", 2)
+	if !tracker.consumeToolCall("deep") || !tracker.consumeToolCall("deep") ||
+		tracker.consumeToolCall("deep") {
+		t.Fatal("tool-call budget did not stop the third call")
+	}
+	if used, budget := tracker.ToolUsage("deep"); used != 2 || budget != 2 {
+		t.Fatalf("tool usage = %d/%d", used, budget)
+	}
+	tracker.Clear("deep")
+	if used, budget := tracker.ToolUsage("deep"); used != 0 || budget != 0 {
+		t.Fatalf("cleared tool usage = %d/%d", used, budget)
+	}
+}
+
 type fakeStore struct {
 	repositories []catalog.Repository
 }
@@ -374,8 +390,8 @@ func TestMCPSearchReturnsPinnedCitation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tools.Tools) != 19 {
-		t.Fatalf("got %d tools, want 19", len(tools.Tools))
+	if len(tools.Tools) != 20 {
+		t.Fatalf("got %d tools, want 20", len(tools.Tools))
 	}
 	toolNames := make(map[string]bool, len(tools.Tools))
 	for _, tool := range tools.Tools {
@@ -414,6 +430,7 @@ func TestMCPSearchReturnsPinnedCitation(t *testing.T) {
 		"read_repository_map",
 		"read_dependency_inventory",
 		"read_system_topology",
+		"query_evidence_graph",
 		"read_dependency_findings",
 		"list_deep_wiki_pages",
 		"read_generated_document",
@@ -485,6 +502,11 @@ func TestMCPSearchReturnsPinnedCitation(t *testing.T) {
 	citations := tracker.List("conversation")
 	if len(citations) != 1 || citations[0].URL != match.SourceURL || citations[0].Label != match.Citation {
 		t.Fatalf("tracked citations = %#v", citations)
+	}
+	exploration := tracker.ListExploration("conversation")
+	if len(exploration) != 1 || exploration[0].Kind != "search_executed" ||
+		!strings.Contains(exploration[0].Detail, "3 matches") {
+		t.Fatalf("tracked exploration = %#v", exploration)
 	}
 
 	result, err = session.CallTool(context.Background(), &mcp.CallToolParams{

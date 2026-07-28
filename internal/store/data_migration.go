@@ -24,6 +24,7 @@ var migrationTables = []string{
 	"conversation_messages",
 	"conversation_message_images",
 	"conversation_message_citations",
+	"conversation_shares",
 	"audit_events",
 	"identities",
 	"identity_groups",
@@ -38,6 +39,10 @@ var migrationTables = []string{
 	"named_contexts",
 	"runtime_topology_observations",
 	"repository_scip_indexes",
+	"search_history",
+	"saved_searches",
+	"search_monitors",
+	"search_monitor_runs",
 }
 
 var identityTables = []string{
@@ -53,6 +58,8 @@ var identityTables = []string{
 	"repository_acquisitions",
 	"repository_acquisition_events",
 	"runtime_topology_observations",
+	"search_history",
+	"search_monitor_runs",
 }
 
 // MigrateSQLiteToPostgres upgrades the SQLite source, requires an empty

@@ -3,6 +3,7 @@ package dependencies
 import (
 	"context"
 	"encoding/pem"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -70,7 +71,8 @@ func TestInventoryJoinsFreshObservationsWithoutNetwork(t *testing.T) {
 		t.Fatal(err)
 	}
 	if inventory.UpdateCount != 1 || inventory.UncheckedCount != 0 ||
-		inventory.Declarations[0].CheckStatus != "update_available" ||
+		inventory.Declarations[0].CheckStatus != "behind" ||
+		inventory.Declarations[0].VersionDistance != "major" ||
 		inventory.Declarations[0].LatestStable != "17.0.0" {
 		t.Fatalf("inventory = %#v", inventory)
 	}
@@ -268,7 +270,7 @@ func TestDeclarationStatusUsesResolvedVersionAndDistinguishesAhead(t *testing.T)
 			name:        "unresolved constraint",
 			declaration: Declaration{Declared: "^2", Resolution: "constraint"},
 			latest:      "2.3.0",
-			want:        "latest_known",
+			want:        "unresolved",
 		},
 		{
 			name:        "ahead",
@@ -288,6 +290,56 @@ func TestDeclarationStatusUsesResolvedVersionAndDistinguishesAhead(t *testing.T)
 				t.Fatalf("status = %q, want %q", got, testCase.want)
 			}
 		})
+	}
+}
+
+func TestPrivateLookingPackageIsNotSentToPublicRegistryWithoutExplicitRoute(t *testing.T) {
+	requests := 0
+	client := &http.Client{Transport: dependencyRoundTripper(func(request *http.Request) (*http.Response, error) {
+		requests++
+		return nil, errors.New("unexpected public registry request")
+	})}
+	service := NewService(context.Background(), &observationMemoryStore{}, client)
+	snapshot := dependencySnapshot(graph.DependencyDeclaration{
+		Ecosystem: "npm", Package: "@acme/widget", Declared: "1.0.0",
+		Resolution: "exact", Usage: "production",
+	})
+	progress, err := service.StartRefresh(snapshot, Options{}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if progress.Total != 0 || progress.Skipped != 1 || requests != 0 {
+		t.Fatalf("refresh = %#v, requests = %d", progress, requests)
+	}
+	inventory, err := service.Inventory(context.Background(), snapshot, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	declaration := inventory.Declarations[0]
+	if declaration.CheckStatus != "private_internal" ||
+		!strings.Contains(declaration.CheckDetail, "not checked publicly") ||
+		inventory.PrivateCount != 1 {
+		t.Fatalf("private declaration = %#v; inventory = %#v", declaration, inventory)
+	}
+}
+
+func TestExplicitPublicPrefixRouteAllowsScopedPackage(t *testing.T) {
+	configs, err := ParseRegistryConfigs(`[{
+  "ecosystem": "npm",
+  "base_url": "https://registry.npmjs.org",
+  "metadata_url_template": "https://registry.npmjs.org/{package}",
+  "package_prefixes": ["@types/"]
+}]`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewService(context.Background(), &observationMemoryStore{}, nil)
+	service.UseRegistries(configs)
+	decision := service.registryDecisionFor(Declaration{
+		Ecosystem: "npm", Package: "@types/node", Declared: "24.0.0", Resolution: "exact",
+	})
+	if decision.Status != "" || decision.Key.Registry != PublicNPMRegistry {
+		t.Fatalf("public allowlist decision = %#v", decision)
 	}
 }
 

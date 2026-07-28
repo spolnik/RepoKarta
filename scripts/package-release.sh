@@ -54,6 +54,10 @@ cp "$repository_root/docs/scip-indexes.md" \
     "$stage_directory/docs/scip-indexes.md"
 cp "$repository_root/docs/ast-search.md" \
     "$stage_directory/docs/ast-search.md"
+cp "$repository_root/docs/advanced-search.md" \
+    "$stage_directory/docs/advanced-search.md"
+cp "$repository_root/docs/dependency-management.md" \
+    "$stage_directory/docs/dependency-management.md"
 cp "$repository_root/deploy/"* "$stage_directory/deploy/"
 cp "$repository_root/third_party/zoekt/LICENSE" \
     "$stage_directory/licenses/zoekt-Apache-2.0.txt"
@@ -127,6 +131,8 @@ test -f "$verify_directory/$package_name/docs/postgresql.md"
 test -f "$verify_directory/$package_name/docs/dependency-advisories.md"
 test -f "$verify_directory/$package_name/docs/scip-indexes.md"
 test -f "$verify_directory/$package_name/docs/ast-search.md"
+test -f "$verify_directory/$package_name/docs/advanced-search.md"
+test -f "$verify_directory/$package_name/docs/dependency-management.md"
 test -f "$verify_directory/$package_name/deploy/repokarta.env.example"
 if [ "$(uname -s)" = "Darwin" ]; then
     reported_version=$("$verify_directory/$package_name/repokarta" version)

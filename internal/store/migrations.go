@@ -58,6 +58,10 @@ func migration(version int, backend Backend) (string, error) {
 		statement = schemaV20
 	case 21:
 		statement = schemaV21
+	case 22:
+		statement = schemaV22
+	case 23:
+		statement = schemaV23
 	default:
 		return "", fmt.Errorf("missing migration for schema version %d", version)
 	}
@@ -99,6 +103,19 @@ WHERE type = 'table' AND name = 'repositories'`).Scan(&repositoryTableCount); er
 				// Some early test/development databases recorded a schema
 				// version without creating the catalogue. Keep those sparse
 				// databases openable; fresh catalogues still receive V21.
+				statement = "SELECT 1;"
+			}
+		}
+		if next == 23 {
+			var conversationTableCount int
+			if err := db.QueryRow(`
+SELECT COUNT(*) FROM sqlite_master
+WHERE type = 'table' AND name = 'conversations'`).Scan(&conversationTableCount); err != nil {
+				return fmt.Errorf("inspect conversation table before migration 23: %w", err)
+			}
+			if conversationTableCount == 0 {
+				// Preserve support for sparse historical test/development
+				// databases that recorded a later version without chat tables.
 				statement = "SELECT 1;"
 			}
 		}
