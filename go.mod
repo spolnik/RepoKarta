@@ -9,6 +9,7 @@ require (
 	github.com/anthropics/anthropic-sdk-go v1.61.0
 	github.com/crewjam/saml v0.5.1
 	github.com/grafana/regexp v0.0.0-20240607082908-2cb410fa05da
+	github.com/jackc/pgx/v5 v5.10.0
 	github.com/modelcontextprotocol/go-sdk v1.6.1
 	github.com/odvcencio/gotreesitter v0.47.0
 	github.com/scip-code/scip/bindings/go/scip v0.9.0
@@ -55,6 +56,9 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/grpc-ecosystem/go-grpc-middleware/v2 v2.3.3 // indirect
 	github.com/invopop/jsonschema v0.14.0 // indirect
+	github.com/jackc/pgpassfile v1.0.0 // indirect
+	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
+	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/jbenet/go-context v0.0.0-20150711004518-d14ea06fba99 // indirect
 	github.com/jonboulle/clockwork v0.2.2 // indirect
 	github.com/kevinburke/ssh_config v1.2.0 // indirect

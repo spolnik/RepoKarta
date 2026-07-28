@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -30,6 +31,15 @@ func TestDefaultConfigReadsBoundedEnvironment(t *testing.T) {
 		"package_prefixes":["@acme/"],
 		"token_env":"ACME_NPM_TOKEN"
 	}]`)
+	databaseURLFile := filepath.Join(t.TempDir(), "postgres-url")
+	if err := os.WriteFile(
+		databaseURLFile,
+		[]byte("postgresql://repokarta@db.example.com/repokarta?sslmode=verify-full\n"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("REPOKARTA_DATABASE_URL_FILE", databaseURLFile)
 	config, err := DefaultConfig()
 	if err != nil {
 		t.Fatal(err)
@@ -46,6 +56,7 @@ func TestDefaultConfigReadsBoundedEnvironment(t *testing.T) {
 		config.SCIPJavaJDKHome != `C:\Java\default` ||
 		config.SCIPJavaJDKHomes[8] != `C:\Java\8` ||
 		config.SCIPJavaJDKHomes[17] != `C:\Java\17` ||
+		config.DatabaseURL != "postgresql://repokarta@db.example.com/repokarta?sslmode=verify-full" ||
 		len(config.DependencyRegistries) != 1 ||
 		config.DependencyRegistries[0].TokenEnv != "ACME_NPM_TOKEN" ||
 		filepath.Base(config.DataDirectory) != "RepoKarta" {

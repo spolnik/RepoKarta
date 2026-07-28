@@ -215,9 +215,12 @@ RepoKarta keeps its state outside your repositories:
 | macOS | `~/Library/Caches/RepoKarta/` |
 | Linux | the current user's operating-system cache directory |
 
-That directory contains SQLite metadata, search indexes, maps, generated
-documentation, conversation data, and other RepoKarta-owned artifacts. Override
-it with `-data-dir` when needed.
+That directory contains the default SQLite metadata database, search indexes,
+maps, generated documentation, conversation data, and other RepoKarta-owned
+artifacts. Override it with `-data-dir` when needed. PostgreSQL 18 or newer is
+an optional metadata backend for shared deployments; SQLite remains the
+zero-configuration default. See the
+[PostgreSQL backend and migration guide](./docs/postgresql.md).
 
 Your local repositories are treated as read-only inputs. RepoKarta does not
 fetch, checkout, reset, clean, build, execute, or delete them. The optional
@@ -371,6 +374,7 @@ $version = go run ./cmd/repokarta version
 
 - [Product scope, decisions, and roadmap](./SCOPE.md)
 - [Shared deployment operations](./docs/shared-deployment.md)
+- [PostgreSQL backend and SQLite migration](./docs/postgresql.md)
 - [Enterprise identity and audit operations](./docs/enterprise-administration.md)
 - [Dependency advisory data and refresh behavior](./docs/dependency-advisories.md)
 - [Distributed dependency topology and runtime observations](./docs/distributed-topology.md)

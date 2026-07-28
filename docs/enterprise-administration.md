@@ -3,8 +3,9 @@
 RepoKarta evaluates enterprise authorization on every application request.
 Provider authentication proves identity; RepoKarta then resolves the current
 direct role, SCIM group membership, and exact provider-group mappings from
-SQLite. This makes role changes, suspension, and deprovisioning effective on
-the next request without erasing historical authorship.
+the selected metadata database. This makes role changes, suspension, and
+deprovisioning effective on the next request without erasing historical
+authorship.
 
 ## Provisioning boundary
 
@@ -99,6 +100,6 @@ Retention defaults to 365 days and 100,000 events. The administrator may set
 application path that deletes audit rows, and the change records a new audit
 event after the purge.
 
-Back up the SQLite database before upgrades. Audit evidence, identities,
-groups, role mappings, and repository access policy are all part of that
-database and must be restored as one consistent unit.
+Back up the selected metadata database before upgrades. Audit evidence,
+identities, groups, role mappings, and repository access policy are all part
+of that database and must be restored as one consistent unit.

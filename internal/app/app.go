@@ -39,6 +39,7 @@ import (
 type Config struct {
 	ListenAddress          string
 	DataDirectory          string
+	DatabaseURL            string
 	RepositoryRoot         string
 	Excludes               []string
 	Version                string
@@ -108,10 +109,22 @@ func DefaultConfig() (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("parse REPOKARTA_SCIP_JAVA_JDK_HOMES: %w", err)
 	}
+	databaseURL := strings.TrimSpace(os.Getenv("REPOKARTA_DATABASE_URL"))
+	if databaseURLFile := strings.TrimSpace(os.Getenv("REPOKARTA_DATABASE_URL_FILE")); databaseURLFile != "" {
+		raw, err := os.ReadFile(databaseURLFile)
+		if err != nil {
+			return Config{}, fmt.Errorf("read REPOKARTA_DATABASE_URL_FILE: %w", err)
+		}
+		databaseURL = strings.TrimSpace(string(raw))
+		if databaseURL == "" {
+			return Config{}, errors.New("REPOKARTA_DATABASE_URL_FILE is empty")
+		}
+	}
 
 	return Config{
 		ListenAddress:  "127.0.0.1:7331",
 		DataDirectory:  filepath.Join(cacheDirectory, "RepoKarta"),
+		DatabaseURL:    databaseURL,
 		RepositoryRoot: workingDirectory,
 		OpenBrowser:    true,
 		CodexCommand:   "codex",
@@ -150,7 +163,16 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 	}
 
-	database, err := store.Open(filepath.Join(cfg.DataDirectory, "repokarta.db"))
+	databaseConfig := store.Config{
+		Backend:       store.BackendSQLite,
+		SQLitePath:    filepath.Join(cfg.DataDirectory, "repokarta.db"),
+		DataDirectory: cfg.DataDirectory,
+	}
+	if strings.TrimSpace(cfg.DatabaseURL) != "" {
+		databaseConfig.Backend = store.BackendPostgres
+		databaseConfig.PostgresURL = cfg.DatabaseURL
+	}
+	database, err := store.OpenConfig(databaseConfig)
 	if err != nil {
 		return err
 	}

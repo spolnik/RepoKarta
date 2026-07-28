@@ -49,6 +49,7 @@ function Copy-ThirdPartyLicenses {
         "third_party\licenses\tree-sitter-grammars-MIT.txt" = "tree-sitter-grammars-MIT.txt"
         "third_party\licenses\nvim-treesitter-Kotlin-query-NOTICE.txt" = "nvim-treesitter-Kotlin-query-NOTICE.txt"
         "third_party\licenses\crewjam-saml-BSD-2-Clause.txt" = "crewjam-saml-BSD-2-Clause.txt"
+        "third_party\licenses\pgx-MIT.txt" = "pgx-MIT.txt"
     }
     foreach ($source in $licenses.Keys) {
         Copy-Item -LiteralPath (Join-Path $repositoryRoot $source) -Destination (Join-Path $Destination $licenses[$source]) -Force
@@ -114,6 +115,7 @@ try {
     New-Item -ItemType Directory -Force -Path (Join-Path $stageDirectory "deploy") | Out-Null
     Copy-Item -LiteralPath (Join-Path $repositoryRoot "docs\shared-deployment.md") -Destination (Join-Path $stageDirectory "docs\shared-deployment.md") -Force
     Copy-Item -LiteralPath (Join-Path $repositoryRoot "docs\enterprise-administration.md") -Destination (Join-Path $stageDirectory "docs\enterprise-administration.md") -Force
+    Copy-Item -LiteralPath (Join-Path $repositoryRoot "docs\postgresql.md") -Destination (Join-Path $stageDirectory "docs\postgresql.md") -Force
     Copy-Item -LiteralPath (Join-Path $repositoryRoot "docs\dependency-advisories.md") -Destination (Join-Path $stageDirectory "docs\dependency-advisories.md") -Force
     Copy-Item -LiteralPath (Join-Path $repositoryRoot "docs\scip-indexes.md") -Destination (Join-Path $stageDirectory "docs\scip-indexes.md") -Force
     Copy-Item -LiteralPath (Join-Path $repositoryRoot "docs\ast-search.md") -Destination (Join-Path $stageDirectory "docs\ast-search.md") -Force
@@ -136,11 +138,17 @@ try {
     if (-not (Test-Path -LiteralPath (Join-Path $stageDirectory "licenses\sourcegraph-beaut-Apache-2.0.txt"))) {
         throw "packaged executable is missing the Sourcegraph beaut Apache-2.0 license"
     }
+    if (-not (Test-Path -LiteralPath (Join-Path $stageDirectory "licenses\pgx-MIT.txt"))) {
+        throw "packaged executable is missing the pgx MIT license"
+    }
     if (-not (Test-Path -LiteralPath (Join-Path $stageDirectory "docs\shared-deployment.md"))) {
         throw "package is missing the shared-deployment runbook"
     }
     if (-not (Test-Path -LiteralPath (Join-Path $stageDirectory "docs\enterprise-administration.md"))) {
         throw "package is missing the enterprise-administration runbook"
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $stageDirectory "docs\postgresql.md"))) {
+        throw "package is missing the PostgreSQL runbook"
     }
     if (-not (Test-Path -LiteralPath (Join-Path $stageDirectory "docs\dependency-advisories.md"))) {
         throw "package is missing the dependency-advisories runbook"

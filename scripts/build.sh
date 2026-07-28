@@ -31,5 +31,7 @@ cp "$repository_root/third_party/licenses/nvim-treesitter-Kotlin-query-NOTICE.tx
     "$license_directory/nvim-treesitter-Kotlin-query-NOTICE.txt"
 cp "$repository_root/third_party/licenses/crewjam-saml-BSD-2-Clause.txt" \
     "$license_directory/crewjam-saml-BSD-2-Clause.txt"
+cp "$repository_root/third_party/licenses/pgx-MIT.txt" \
+    "$license_directory/pgx-MIT.txt"
 
 printf 'Built %s with third-party licenses\n' "$output_directory/repokarta"

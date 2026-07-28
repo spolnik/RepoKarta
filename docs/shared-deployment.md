@@ -67,11 +67,14 @@ It returns only status and application version. Use an authenticated
 
 ## Backup and restore
 
-Stop the service before a filesystem-level backup. Back up the complete
-RepoKarta data directory as one unit: SQLite, indexes, maps, Wiki files,
-conversation attachments, and the SAML identity files. Back up the SAML
-private key as a secret. Repository worktrees are external read-only inputs and
-need their own backup policy.
+Stop the service before a filesystem-level backup. With the default SQLite
+backend, back up the complete RepoKarta data directory as one unit: SQLite,
+indexes, maps, Wiki files, conversation attachments, and the SAML identity
+files. With PostgreSQL, take a transactionally consistent database backup and
+back up the data directory at the same maintenance point. Back up the SAML
+private key and PostgreSQL URL file as secrets. Repository worktrees are
+external read-only inputs and need their own backup policy. See
+[PostgreSQL backend and migration](./postgresql.md).
 
 To restore, keep the service stopped, restore into an empty directory with the
 same ownership, then start the same or newer RepoKarta version. Confirm the
@@ -89,7 +92,8 @@ commit-pinned source read before opening traffic.
    Search, one Map, one Wiki page, and a SCIM list call when configured.
 
 Database migrations are forward-only. Rollback requires restoring the
-pre-upgrade data-directory backup together with the previous binary.
+pre-upgrade metadata database and data-directory backup together with the
+previous binary.
 
 ## Deprovisioning
 

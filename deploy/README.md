@@ -11,5 +11,5 @@ The systemd unit expects:
 - repositories beneath `/srv/repositories`;
 - RepoKarta-owned state at `/var/lib/repokarta`;
 - configuration at `/etc/repokarta/repokarta.env`; and
-- mode-0600 administrator password and SCIM bearer-token files referenced by
-  that configuration.
+- mode-0600 administrator password, SCIM bearer-token, and optional PostgreSQL
+  URL files referenced by that configuration.

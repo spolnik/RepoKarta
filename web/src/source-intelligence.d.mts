@@ -10,3 +10,4 @@ export function sourceSearchURL(
   mode: string
 ): string;
 export function sourceSearchSummary(payload: unknown): string;
+export function sourceHighlightLanguage(language: unknown, path: unknown): string;

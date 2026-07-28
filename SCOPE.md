@@ -280,10 +280,15 @@ repositories on managed Windows and Apple Silicon macOS laptops.
 ### Local operations
 
 - Bind to `127.0.0.1` by default.
-- Store metadata in SQLite using a pure-Go driver.
+- Store metadata in SQLite by default using a pure-Go driver. Allow an
+  operator-selected PostgreSQL 18+ backend for shared deployments without
+  changing application persistence logic.
 - Store large Zoekt shards and generated artifacts on the filesystem rather
-  than in SQLite.
-- Use WAL mode and migrations for SQLite.
+  than in the relational metadata database.
+- Use WAL mode and forward migrations for SQLite. Maintain PostgreSQL-specific
+  migrations at the same schema version where dialects differ.
+- Provide a one-way, atomic, row-count-verified SQLite-to-PostgreSQL migration
+  that requires an empty destination and preserves filesystem artifacts.
 - Expose indexing and generation progress through Server-Sent Events.
 - Include health and diagnostic endpoints without exposing secrets.
 - Provide clear storage usage and cleanup controls.
@@ -359,7 +364,7 @@ Local Git repositories (read-only)
 cmd/repokarta/          CLI executable
 internal/app/           startup and lifecycle
 internal/catalog/       repository discovery and metadata
-internal/store/         SQLite and migrations
+internal/store/         relational metadata backends and migrations
 internal/search/        RepoKarta search interfaces
 internal/search/zoekt/  Zoekt adapter
 internal/source/        safe file and Git access
@@ -395,7 +400,7 @@ macOS:
   logs/
 ```
 
-SQLite owns small relational state:
+The selected relational metadata database owns:
 
 - repository catalogue;
 - scan and job state;
@@ -411,9 +416,15 @@ The filesystem owns:
 - graph snapshots and exports;
 - temporary job artifacts.
 
+SQLite is the zero-configuration default. PostgreSQL 18+ is optional for a
+shared deployment and uses the same Store behavior through a backend-neutral
+boundary. Search indexes, generated documents, maps, conversation attachments,
+and other large artifacts remain in the data directory for both backends.
+
 API keys must come from environment variables, an operating-system credential
 store, or an explicit runtime prompt. They must never be written to SQLite,
-logs, generated documents, repository configuration, or browser local storage.
+PostgreSQL, logs, generated documents, repository configuration, or browser
+local storage.
 
 ## Security boundary
 
@@ -542,7 +553,8 @@ changes.
 
 The executable now has a tested shared-deployment authentication boundary while
 remaining loopback-only by default. Non-secret provider settings persist in
-SQLite; bootstrap administrator credentials and SAML private keys do not.
+the selected metadata database; bootstrap administrator credentials and SAML
+private keys do not.
 
 - [x] Configurable bind address beyond `127.0.0.1`.
 - [x] Four explicit access modes: loopback-only local, Cloudflare Access JWT,
@@ -943,7 +955,9 @@ completion criteria include:
 - Backend and application host: Go.
 - Search engine: Zoekt behind a RepoKarta adapter. A direct pinned dependency is
   preferred, contingent on resolving native Windows compilation.
-- Metadata database: SQLite with a pure-Go driver.
+- Metadata database: SQLite with a pure-Go driver by default; PostgreSQL 18+
+  is an operator-selected shared-deployment backend with schema-compatible,
+  backend-specific migrations and an explicit SQLite migration command.
 - Primary interface: server-rendered Go templates and HTMX.
 - Frontend build and styling: Vite and Tailwind CSS.
 - Visualization: a focused TypeScript island, not a full SPA.
@@ -972,7 +986,7 @@ completion criteria include:
 
 ## Current implementation version
 
-`0.84.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
+`0.86.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
 The M9 dependency inventory, public registry refresh, lockfile resolution,
 explicit private-registry routing, reproducible OSV advisory snapshots,
 ecosystem-correct fleet CVE matching, scope-aware UI/JSON/MCP findings, and

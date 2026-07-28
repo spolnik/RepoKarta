@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,11 +19,23 @@ import (
 // TestVersionIsTheCurrentImplementationVersion keeps the reported version in
 // step with the completed milestone recorded in SCOPE.md.
 func TestVersionIsTheCurrentImplementationVersion(t *testing.T) {
-	if version != "0.84.0-dev" {
-		t.Fatalf("version = %q, want %q", version, "0.84.0-dev")
+	if version != "0.86.0-dev" {
+		t.Fatalf("version = %q, want %q", version, "0.86.0-dev")
 	}
 	if !regexp.MustCompile(`^\d+\.\d+\.\d+(-[a-z]+)?$`).MatchString(version) {
 		t.Fatalf("version %q is not a semantic version", version)
+	}
+}
+
+func TestDatabaseMigrationRequiresPostgresURL(t *testing.T) {
+	t.Setenv("REPOKARTA_DATABASE_URL", "")
+	t.Setenv("REPOKARTA_DATABASE_URL_FILE", "")
+	err := runDatabase([]string{
+		"migrate-sqlite-to-postgres",
+		"-data-dir", t.TempDir(),
+	})
+	if err == nil || !strings.Contains(err.Error(), "PostgreSQL URL is required") {
+		t.Fatalf("database migration error = %v", err)
 	}
 }
 

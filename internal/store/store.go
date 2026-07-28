@@ -18,7 +18,6 @@ import (
 	"github.com/spolnik/RepoKarta/internal/audit"
 	"github.com/spolnik/RepoKarta/internal/catalog"
 	"github.com/spolnik/RepoKarta/internal/contextscope"
-	_ "modernc.org/sqlite"
 )
 
 const (
@@ -546,117 +545,10 @@ ALTER TABLE repository_scip_indexes ADD COLUMN failure_category TEXT NOT NULL DE
 ALTER TABLE repository_scip_indexes ADD COLUMN failure_summary TEXT NOT NULL DEFAULT '';`
 )
 
-// SchemaVersion is the current durable SQLite format. Diagnostics and upgrade
-// tests use this value without reaching into migration internals.
+// SchemaVersion is the current durable metadata format for every supported
+// database backend. Diagnostics and upgrade tests use this value without
+// reaching into migration internals.
 const SchemaVersion = currentSchemaVersion
-
-// Store persists RepoKarta-owned metadata. Repository source remains read-only.
-type Store struct {
-	db                    *sql.DB
-	conversationDirectory string
-}
-
-// Open opens the SQLite database, enables WAL, and applies migrations.
-func Open(path string) (*Store, error) {
-	db, err := sql.Open("sqlite", path)
-	if err != nil {
-		return nil, fmt.Errorf("open SQLite database: %w", err)
-	}
-	db.SetMaxOpenConns(1)
-
-	if _, err := db.Exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;"); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("configure SQLite database: %w", err)
-	}
-	if err := migrate(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	conversationDirectory := filepath.Join(filepath.Dir(path), "conversations")
-	if err := os.MkdirAll(conversationDirectory, 0o700); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("create conversation storage: %w", err)
-	}
-
-	return &Store{db: db, conversationDirectory: conversationDirectory}, nil
-}
-
-func migrate(db *sql.DB) error {
-	var version int
-	if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
-		return fmt.Errorf("read schema version: %w", err)
-	}
-	if version > currentSchemaVersion {
-		return fmt.Errorf("database schema version %d is newer than supported version %d", version, currentSchemaVersion)
-	}
-
-	for version < currentSchemaVersion {
-		next := version + 1
-		var migration string
-		switch next {
-		case 1:
-			migration = schemaV1
-		case 2:
-			migration = schemaV2
-		case 3:
-			migration = schemaV3
-		case 4:
-			migration = schemaV4
-		case 5:
-			migration = schemaV5
-		case 6:
-			migration = schemaV6
-		case 7:
-			migration = schemaV7
-		case 8:
-			migration = schemaV8
-		case 9:
-			migration = schemaV9
-		case 10:
-			migration = schemaV10
-		case 11:
-			migration = schemaV11
-		case 12:
-			migration = schemaV12
-		case 13:
-			migration = schemaV13
-		case 14:
-			migration = schemaV14
-		case 15:
-			migration = schemaV15
-		case 16:
-			migration = schemaV16
-		case 17:
-			migration = schemaV17
-		case 18:
-			migration = schemaV18
-		case 19:
-			migration = schemaV19
-		case 20:
-			migration = schemaV20
-		default:
-			return fmt.Errorf("missing migration for schema version %d", next)
-		}
-
-		tx, err := db.Begin()
-		if err != nil {
-			return fmt.Errorf("begin schema migration %d: %w", next, err)
-		}
-		if _, err := tx.Exec(migration); err != nil {
-			tx.Rollback()
-			return fmt.Errorf("apply schema migration %d: %w", next, err)
-		}
-		if _, err := tx.Exec(fmt.Sprintf("PRAGMA user_version = %d", next)); err != nil {
-			tx.Rollback()
-			return fmt.Errorf("record schema migration %d: %w", next, err)
-		}
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("commit schema migration %d: %w", next, err)
-		}
-		version = next
-	}
-	return nil
-}
 
 // EnsureIndexConfiguration queues every repository for reindexing when the
 // indexer's capability signature changes, such as ctags becoming available.
@@ -1635,11 +1527,12 @@ func (s *Store) AppendMessage(ctx context.Context, message agent.Message) (agent
 		return agent.Message{}, err
 	}
 	defer tx.Rollback()
-	result, err := tx.ExecContext(ctx, `
+	err = tx.QueryRowContext(ctx, `
 INSERT INTO conversation_messages (
     conversation_id, role, text, status, error,
     input_tokens, output_tokens, contexts_json, created_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+RETURNING id`,
 		message.ConversationID,
 		message.Role,
 		message.Text,
@@ -1649,13 +1542,9 @@ INSERT INTO conversation_messages (
 		message.OutputTokens,
 		string(contextsJSON),
 		formatTime(message.CreatedAt),
-	)
+	).Scan(&message.ID)
 	if err != nil {
 		return agent.Message{}, fmt.Errorf("append conversation message: %w", err)
-	}
-	message.ID, err = result.LastInsertId()
-	if err != nil {
-		return agent.Message{}, err
 	}
 
 	var writtenPaths []string

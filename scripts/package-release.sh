@@ -45,6 +45,8 @@ cp "$repository_root/docs/shared-deployment.md" \
     "$stage_directory/docs/shared-deployment.md"
 cp "$repository_root/docs/enterprise-administration.md" \
     "$stage_directory/docs/enterprise-administration.md"
+cp "$repository_root/docs/postgresql.md" \
+    "$stage_directory/docs/postgresql.md"
 cp "$repository_root/docs/dependency-advisories.md" \
     "$stage_directory/docs/dependency-advisories.md"
 cp "$repository_root/docs/scip-indexes.md" \
@@ -68,6 +70,8 @@ cp "$repository_root/third_party/licenses/nvim-treesitter-Kotlin-query-NOTICE.tx
     "$stage_directory/licenses/nvim-treesitter-Kotlin-query-NOTICE.txt"
 cp "$repository_root/third_party/licenses/crewjam-saml-BSD-2-Clause.txt" \
     "$stage_directory/licenses/crewjam-saml-BSD-2-Clause.txt"
+cp "$repository_root/third_party/licenses/pgx-MIT.txt" \
+    "$stage_directory/licenses/pgx-MIT.txt"
 
 if [ -n "${REPOKARTA_CODESIGN_IDENTITY:-}" ]; then
     codesign --force --options runtime --timestamp \
@@ -114,8 +118,10 @@ test -f "$verify_directory/$package_name/licenses/zoekt-Apache-2.0.txt"
 test -f "$verify_directory/$package_name/licenses/deps.dev-semver-Apache-2.0.txt"
 test -f "$verify_directory/$package_name/licenses/scip-Apache-2.0.txt"
 test -f "$verify_directory/$package_name/licenses/sourcegraph-beaut-Apache-2.0.txt"
+test -f "$verify_directory/$package_name/licenses/pgx-MIT.txt"
 test -f "$verify_directory/$package_name/docs/shared-deployment.md"
 test -f "$verify_directory/$package_name/docs/enterprise-administration.md"
+test -f "$verify_directory/$package_name/docs/postgresql.md"
 test -f "$verify_directory/$package_name/docs/dependency-advisories.md"
 test -f "$verify_directory/$package_name/docs/scip-indexes.md"
 test -f "$verify_directory/$package_name/docs/ast-search.md"

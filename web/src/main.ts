@@ -35,6 +35,7 @@ import { parseRepoKartaContextURL } from "./context-url.mjs";
 import { buildContextualChatURL, normaliseContextMode } from "./contextual-chat.mjs";
 import { applyQueryCompletion, type QueryCompletionEdit } from "./query-completion.mjs";
 import {
+  sourceHighlightLanguage,
   sourceSearchSummary,
   sourceSearchURL,
   sourceSelection
@@ -681,22 +682,20 @@ function enableSourceIntelligence(): void {
   const form = workspace?.querySelector<HTMLFormElement>("[data-source-intelligence-form]");
   const query = workspace?.querySelector<HTMLInputElement>("[data-source-intelligence-query]");
   const mode = workspace?.querySelector<HTMLSelectElement>("[data-source-intelligence-mode]");
-  const close = workspace?.querySelector<HTMLButtonElement>("[data-source-intelligence-close]");
+  const toggle = workspace?.querySelector<HTMLButtonElement>("[data-source-intelligence-toggle]");
   const status = workspace?.querySelector<HTMLElement>("[data-source-intelligence-status]");
   const results = workspace?.querySelector<HTMLElement>("[data-source-intelligence-results]");
   const repositoryID = Number(workspace?.dataset.repositoryId);
-  if (!workspace || !viewer || !form || !query || !mode || !close || !status || !results ||
+  if (!workspace || !viewer || !form || !query || !mode || !toggle || !status || !results ||
     !Number.isInteger(repositoryID) || repositoryID <= 0) {
     return;
   }
 
   let requestController: AbortController | undefined;
-  const clearResults = (): void => {
-    requestController?.abort();
-    results.replaceChildren();
-    results.hidden = true;
-    close.hidden = true;
-    status.textContent = "";
+  const setResultsExpanded = (expanded: boolean): void => {
+    results.hidden = !expanded;
+    toggle.textContent = expanded ? "Collapse findings" : "Show findings";
+    toggle.setAttribute("aria-expanded", String(expanded));
   };
   const resultSourceURL = (match: SourceIntelligenceMatch, line: SourceIntelligenceLine): string => {
     if (match.source_url) {
@@ -728,18 +727,19 @@ function enableSourceIntelligence(): void {
       results.append(empty);
     }
     for (const match of matches) {
-      const article = document.createElement("article");
+      const article = document.createElement("details");
       article.className = "source-intelligence-result";
-      const heading = document.createElement("div");
+      article.open = true;
+      const heading = document.createElement("summary");
       heading.className = "source-intelligence-result-heading";
       const title = document.createElement("strong");
       title.textContent = match.path;
       const repository = document.createElement("span");
-      repository.textContent = `${match.repository} · ${match.revision.slice(0, 8)}`;
+      const lines = match.lines ?? [];
+      repository.textContent = `${lines.length} ${lines.length === 1 ? "finding" : "findings"} · ${match.repository} · ${match.revision.slice(0, 8)}`;
       heading.append(title, repository);
       article.append(heading);
 
-      const lines = match.lines ?? [];
       for (const line of lines) {
         const link = document.createElement("a");
         link.className = "source-intelligence-line";
@@ -748,9 +748,7 @@ function enableSourceIntelligence(): void {
         number.textContent = `L${line.number}`;
         const code = document.createElement("code");
         code.textContent = line.text || line.reference_target || query.value;
-        if (match.language) {
-          code.dataset.searchHighlightLanguage = match.language;
-        }
+        code.dataset.searchHighlightLanguage = sourceHighlightLanguage(match.language, match.path);
         const metadata = document.createElement("small");
         metadata.textContent = [
           line.reference_kind,
@@ -769,7 +767,8 @@ function enableSourceIntelligence(): void {
       results.append(item);
     }
     results.hidden = false;
-    close.hidden = false;
+    toggle.hidden = false;
+    setResultsExpanded(true);
     status.textContent = sourceSearchSummary(payload);
     highlightSearchResults(results);
   };
@@ -810,6 +809,7 @@ function enableSourceIntelligence(): void {
       ? `Finding usages of ${searchQuery}…`
       : `Searching ${workspace.dataset.repositoryName ?? "this repository"}…`;
     results.hidden = true;
+    toggle.hidden = true;
     try {
       const response = await fetch(sourceSearchURL(repositoryID, searchQuery, mode.value), {
         cache: "no-store",
@@ -826,10 +826,12 @@ function enableSourceIntelligence(): void {
       }
       status.textContent = error instanceof Error ? error.message : "The repository search failed.";
       results.hidden = true;
-      close.hidden = true;
+      toggle.hidden = true;
     }
   });
-  close.addEventListener("click", clearResults);
+  toggle.addEventListener("click", () => {
+    setResultsExpanded(results.hasAttribute("hidden"));
+  });
   document.addEventListener("keydown", (event) => {
     if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "f") {
       event.preventDefault();

@@ -37,3 +37,74 @@ export function sourceSearchSummary(payload) {
   }
   return parts.join(" · ");
 }
+
+const languageAliases = new Map([
+  ["c++", "cpp"],
+  ["c#", "csharp"],
+  ["cs", "csharp"],
+  ["golang", "go"],
+  ["gradle", "groovy"],
+  ["js", "javascript"],
+  ["jsx", "javascript"],
+  ["kt", "kotlin"],
+  ["kts", "kotlin"],
+  ["md", "markdown"],
+  ["py", "python"],
+  ["rb", "ruby"],
+  ["rs", "rust"],
+  ["sh", "bash"],
+  ["shell", "bash"],
+  ["ts", "typescript"],
+  ["tsx", "typescript"],
+  ["yml", "yaml"]
+]);
+
+const extensionLanguages = new Map([
+  ["bash", "bash"],
+  ["c", "c"],
+  ["cc", "cpp"],
+  ["cpp", "cpp"],
+  ["cs", "csharp"],
+  ["css", "css"],
+  ["go", "go"],
+  ["gradle", "groovy"],
+  ["groovy", "groovy"],
+  ["htm", "xml"],
+  ["html", "xml"],
+  ["ini", "ini"],
+  ["java", "java"],
+  ["js", "javascript"],
+  ["json", "json"],
+  ["jsx", "javascript"],
+  ["kt", "kotlin"],
+  ["kts", "kotlin"],
+  ["md", "markdown"],
+  ["mjs", "javascript"],
+  ["php", "php"],
+  ["properties", "ini"],
+  ["py", "python"],
+  ["rb", "ruby"],
+  ["rs", "rust"],
+  ["sh", "bash"],
+  ["sql", "sql"],
+  ["svg", "xml"],
+  ["toml", "ini"],
+  ["ts", "typescript"],
+  ["tsx", "typescript"],
+  ["txt", "plaintext"],
+  ["xml", "xml"],
+  ["yaml", "yaml"],
+  ["yml", "yaml"]
+]);
+
+export function sourceHighlightLanguage(language, path) {
+  const declared = String(language ?? "").trim().toLowerCase();
+  if (declared) {
+    return languageAliases.get(declared) ?? declared;
+  }
+  const fileName = String(path ?? "").split(/[\\/]/).pop() ?? "";
+  const extension = fileName.includes(".")
+    ? fileName.slice(fileName.lastIndexOf(".") + 1).toLowerCase()
+    : "";
+  return extensionLanguages.get(extension) ?? "";
+}

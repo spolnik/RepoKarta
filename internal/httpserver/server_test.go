@@ -2398,6 +2398,8 @@ func TestReadOnlyHTTPAPIsAgainstCommittedRepository(t *testing.T) {
 		`data-source-intelligence`,
 		`data-repository-id="12"`,
 		`Find usages`,
+		`data-source-intelligence-toggle`,
+		`aria-controls="source-intelligence-results"`,
 		`Search this repository`,
 		`GET /ready`,
 		`checkout`,

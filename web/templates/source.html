@@ -96,14 +96,26 @@
                 </select>
               </label>
               <button class="search-button" type="submit">Search</button>
-              <button class="secondary-button" type="button" data-source-intelligence-close hidden>Close results</button>
+              <button
+                class="secondary-button"
+                type="button"
+                data-source-intelligence-toggle
+                aria-controls="source-intelligence-results"
+                aria-expanded="false"
+                hidden
+              >Collapse findings</button>
             </form>
             <div class="source-intelligence-context">
               <span>Scope locked to <strong>{{.File.Repository.Name}}</strong></span>
               <span>Select an identifier in the editor to prepare a usage search.</span>
             </div>
             <p class="source-intelligence-status" data-source-intelligence-status aria-live="polite"></p>
-            <div class="source-intelligence-results" data-source-intelligence-results hidden></div>
+            <div
+              id="source-intelligence-results"
+              class="source-intelligence-results"
+              data-source-intelligence-results
+              hidden
+            ></div>
 
             <details class="source-api-surface" {{if and .Intelligence.Routes (le .Intelligence.RouteCount 12)}}open{{end}}>
               <summary>

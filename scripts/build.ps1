@@ -93,6 +93,10 @@ try {
         -LiteralPath (Join-Path $repositoryRoot "third_party\licenses\crewjam-saml-BSD-2-Clause.txt") `
         -Destination (Join-Path $licenseDirectory "crewjam-saml-BSD-2-Clause.txt") `
         -Force
+    Copy-Item `
+        -LiteralPath (Join-Path $repositoryRoot "third_party\licenses\pgx-MIT.txt") `
+        -Destination (Join-Path $licenseDirectory "pgx-MIT.txt") `
+        -Force
 }
 finally {
     Pop-Location

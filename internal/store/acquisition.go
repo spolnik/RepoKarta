@@ -80,20 +80,17 @@ func (s *Store) UpsertAcquisition(ctx context.Context, repository acquisition.Re
 		repository.UpdatedAt = now
 	}
 	if repository.ID == 0 {
-		result, err := s.db.ExecContext(ctx, `
+		err := s.db.QueryRowContext(ctx, `
 INSERT INTO repository_acquisitions (
     provider, provider_repository_id, canonical_id, name, namespace, remote_url, web_url, checkout_path,
     default_branch, credential_ref, inclusion_policy, visibility, archived, forked, owned, state,
     last_error, head_commit, failure_count, created_at, discovered_at, synced_at,
     next_sync_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			acquisitionArguments(repository)...)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+RETURNING id`,
+			acquisitionArguments(repository)...).Scan(&repository.ID)
 		if err != nil {
 			return acquisition.Repository{}, fmt.Errorf("register repository acquisition %q: %w", repository.CanonicalID, err)
-		}
-		repository.ID, err = result.LastInsertId()
-		if err != nil {
-			return acquisition.Repository{}, err
 		}
 	} else {
 		result, err := s.db.ExecContext(ctx, `

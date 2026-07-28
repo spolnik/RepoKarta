@@ -20,7 +20,7 @@ import (
 	"github.com/spolnik/RepoKarta/internal/store"
 )
 
-var version = "0.84.0-dev"
+var version = "0.86.0-dev"
 
 type stringList []string
 
@@ -49,6 +49,8 @@ func run() error {
 	switch os.Args[1] {
 	case "serve":
 		return serve(os.Args[2:])
+	case "database":
+		return runDatabase(os.Args[2:])
 	case "mcp":
 		return serveMCP(os.Args[2:])
 	case "scip":
@@ -87,7 +89,16 @@ func runSCIP(args []string) error {
 	if *repositoryID <= 0 {
 		return errors.New("scip import requires -repository-id")
 	}
-	database, err := store.Open(filepath.Join(*dataDirectory, "repokarta.db"))
+	databaseConfig := store.Config{
+		Backend:       store.BackendSQLite,
+		SQLitePath:    filepath.Join(*dataDirectory, "repokarta.db"),
+		DataDirectory: *dataDirectory,
+	}
+	if defaults.DatabaseURL != "" {
+		databaseConfig.Backend = store.BackendPostgres
+		databaseConfig.PostgresURL = defaults.DatabaseURL
+	}
+	database, err := store.OpenConfig(databaseConfig)
 	if err != nil {
 		return err
 	}
@@ -141,6 +152,68 @@ func runSCIP(args []string) error {
 		summary.Occurrences,
 		summary.Indexer.Name,
 		summary.Indexer.Version,
+	)
+	return nil
+}
+
+func runDatabase(args []string) error {
+	if len(args) == 0 || args[0] != "migrate-sqlite-to-postgres" {
+		return errors.New(
+			"usage: repokarta database migrate-sqlite-to-postgres [options]",
+		)
+	}
+	defaults, err := app.DefaultConfig()
+	if err != nil {
+		return err
+	}
+	flags := flag.NewFlagSet("database migrate-sqlite-to-postgres", flag.ContinueOnError)
+	dataDirectory := flags.String("data-dir", defaults.DataDirectory, "RepoKarta data directory")
+	sqlitePath := flags.String("sqlite-path", "", "SQLite database path; defaults to <data-dir>/repokarta.db")
+	postgresURLFile := flags.String(
+		"postgres-url-file",
+		strings.TrimSpace(os.Getenv("REPOKARTA_DATABASE_URL_FILE")),
+		"permission-restricted file containing the PostgreSQL URL",
+	)
+	if err := flags.Parse(args[1:]); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("database migration does not accept positional arguments")
+	}
+	sourcePath := strings.TrimSpace(*sqlitePath)
+	if sourcePath == "" {
+		sourcePath = filepath.Join(*dataDirectory, "repokarta.db")
+	}
+	postgresURL := strings.TrimSpace(defaults.DatabaseURL)
+	if strings.TrimSpace(*postgresURLFile) != "" {
+		raw, err := os.ReadFile(*postgresURLFile)
+		if err != nil {
+			return fmt.Errorf("read PostgreSQL URL file: %w", err)
+		}
+		postgresURL = strings.TrimSpace(string(raw))
+	}
+	if postgresURL == "" {
+		return errors.New(
+			"PostgreSQL URL is required through REPOKARTA_DATABASE_URL or -postgres-url-file",
+		)
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	report, err := store.MigrateSQLiteToPostgres(
+		ctx,
+		sourcePath,
+		postgresURL,
+		*dataDirectory,
+	)
+	if err != nil {
+		return err
+	}
+	fmt.Printf(
+		"Migrated %d rows across %d tables from SQLite to PostgreSQL. "+
+			"Set REPOKARTA_DATABASE_URL_FILE (or REPOKARTA_DATABASE_URL) "+
+			"for subsequent RepoKarta starts.\n",
+		report.Rows,
+		report.Tables,
 	)
 	return nil
 }
@@ -248,6 +321,7 @@ func serve(args []string) error {
 	cfg := app.Config{
 		ListenAddress:          *listenAddress,
 		DataDirectory:          *dataDirectory,
+		DatabaseURL:            defaults.DatabaseURL,
 		RepositoryRoot:         repositoryRoot,
 		Excludes:               excludes,
 		Version:                version,
@@ -292,6 +366,7 @@ Usage:
   repokarta serve [options] [repository-root]
   repokarta mcp [options]
   repokarta scip import [options] index.scip
+  repokarta database migrate-sqlite-to-postgres [options]
   repokarta version
 
 Serve options:
@@ -325,5 +400,12 @@ SCIP import options:
   -data-dir string   RepoKarta data directory
   -repository-id int repository ID returned by RepoKarta
   -revision string   exact indexed commit (defaults to repository's indexed commit)
-  -root string       repository-relative project root used by the indexer (default .)`)
+  -root string       repository-relative project root used by the indexer (default .)
+
+Database migration options:
+  -data-dir string   RepoKarta data directory holding filesystem artifacts
+  -sqlite-path string source SQLite path (default <data-dir>/repokarta.db)
+  -postgres-url-file permission-restricted file containing the PostgreSQL URL
+
+Set REPOKARTA_DATABASE_URL to use PostgreSQL for serve and scip import.`)
 }

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  sourceHighlightLanguage,
   sourceSearchSummary,
   sourceSearchURL,
   sourceSelection
@@ -41,4 +42,12 @@ test("summarizes reference precision and partial results", () => {
     }),
     "3 matches · 2 files · scip references · partial result"
   );
+});
+
+test("resolves result syntax from declared languages and file extensions", () => {
+  assert.equal(sourceHighlightLanguage("TypeScript", "src/order.ts"), "typescript");
+  assert.equal(sourceHighlightLanguage("golang", "service.go"), "go");
+  assert.equal(sourceHighlightLanguage("", "src/main.kt"), "kotlin");
+  assert.equal(sourceHighlightLanguage(undefined, "README.md"), "markdown");
+  assert.equal(sourceHighlightLanguage(undefined, "LICENSE"), "");
 });
