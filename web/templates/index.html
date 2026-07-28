@@ -615,7 +615,14 @@
 {{define "repository-list"}}
 <section id="repository-list" class="overflow-hidden rounded-2xl border border-white/[0.07] bg-white/[0.025]">
   <div class="border-b border-white/[0.06] px-4 py-3">
-    <h2 class="text-xs font-medium uppercase tracking-widest text-ink-soft">Repositories</h2>
+    <div class="flex items-center justify-between gap-3">
+      <h2 class="text-xs font-medium uppercase tracking-widest text-ink-soft">Repositories</h2>
+      {{if .SCIPJavaEnabled}}
+      <span class="text-xs {{if .SCIPJava.Available}}text-emerald-300{{else}}text-amber-300{{end}}">
+        Java SCIP {{if .SCIPJava.Available}}{{.SCIPJava.Version}}{{else}}unavailable{{end}}
+      </span>
+      {{end}}
+    </div>
   </div>
   {{if .Repositories}}
   <ul class="max-h-[25rem] divide-y divide-white/[0.045] overflow-y-auto">
@@ -634,6 +641,26 @@
       <a class="repository-project-link" href="/projects/{{.ID}}">Browse committed files →</a>
       {{end}}
       {{if .IndexError}}<p class="mt-2 line-clamp-2 text-xs leading-4 {{if eq .IndexState "empty"}}text-ink-faint{{else}}text-rose-300/70{{end}}" title="{{.IndexError}}">{{.IndexError}}</p>{{end}}
+      {{if and $.SCIPJavaEnabled .SCIPJava}}
+      <div class="mt-2 flex items-center justify-between gap-3 rounded-lg border border-white/[0.05] bg-black/10 px-2.5 py-2">
+        <div class="min-w-0">
+          <p class="text-xs text-ink-soft">Java SCIP · <span class="{{if eq .SCIPJava.State "ready"}}text-emerald-300{{else if eq .SCIPJava.State "failed"}}text-rose-300{{else}}text-amber-300{{end}}">{{scipStatusLabel .SCIPJava.State}}</span></p>
+          {{if eq .SCIPJava.State "ready"}}
+          <p class="mt-0.5 truncate font-mono text-[0.68rem] text-ink-faint">{{.SCIPJava.Documents}} files · {{.SCIPJava.Occurrences}} occurrences · {{shortCommit .SCIPJava.Revision}}</p>
+          {{else if .SCIPJava.Error}}
+          <p class="mt-0.5 line-clamp-2 text-[0.68rem] leading-4 text-ink-faint" title="{{.SCIPJava.Error}}">{{.SCIPJava.Error}}</p>
+          {{end}}
+        </div>
+        {{if and $.CanManageArtifacts (ne .SCIPJava.State "indexing") (ne .SCIPJava.State "pending")}}
+        <form method="post" action="/repositories/{{.ID}}/scip/java/retry"
+              hx-post="/repositories/{{.ID}}/scip/java/retry"
+              hx-target="#repository-list"
+              hx-swap="outerHTML">
+          <button type="submit" class="rounded-md border border-white/10 px-2 py-1 text-[0.68rem] text-ink-soft hover:border-white/20 hover:text-white">{{if eq .SCIPJava.State "ready"}}Rebuild{{else}}Retry{{end}}</button>
+        </form>
+        {{end}}
+      </div>
+      {{end}}
     </li>
     {{end}}
   </ul>

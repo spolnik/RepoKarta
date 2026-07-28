@@ -17,6 +17,59 @@ generated sources, compiler flags, and framework plugins should be prepared in
 that build environment before invoking the indexer. Pin the indexer version in
 CI for reproducible results.
 
+## Automatic Java generation
+
+RepoKarta can run an existing `scip-java` installation after ordinary source
+indexing completes. Automatic execution is disabled by default because Gradle
+build scripts execute repository code and may download dependencies.
+
+Enable PATH discovery:
+
+```powershell
+repokarta serve `
+  -scip-java-mode auto `
+  C:\work\services
+```
+
+Or require a particular executable:
+
+```powershell
+repokarta serve `
+  -scip-java-command C:\tools\scip-java.exe `
+  -scip-java-timeout 30m `
+  -scip-java-concurrency 1 `
+  C:\work\services
+```
+
+The equivalent environment variables are
+`REPOKARTA_SCIP_JAVA_MODE`, `REPOKARTA_SCIP_JAVA_COMMAND`,
+`REPOKARTA_SCIP_JAVA_TIMEOUT`, and `REPOKARTA_SCIP_JAVA_CONCURRENCY`.
+Modes are `off`, `auto`, and `required`. An explicit command implies
+`required` unless the mode flag or environment variable was also set.
+Concurrency is limited to 1 through 4 and defaults to 1.
+
+For each exact indexed commit, RepoKarta checks the committed Git tree for Java
+sources and a Gradle build. Root and nested single-root Gradle builds, including
+multi-project builds, are supported. Repositories with multiple independent
+Gradle roots should be indexed as separate repositories.
+
+Eligible builds run in a RepoKarta-owned detached Git worktree, never in the
+user's checkout. RepoKarta invokes `scip-java index` from the detected build
+root, imports the resulting bounded `index.scip`, records its indexer version
+and configuration fingerprint, and removes the temporary worktree. A matching
+ready artifact is not rebuilt until the indexed revision, indexer version, or
+configuration changes.
+
+The work is handled by a dedicated, deduplicated background queue. A failed,
+unavailable, or inapplicable Java index never fails normal source indexing.
+Provider status is available from `GET /api/scip/java`; per-repository status
+is included in `GET /api/repositories`; and an authorized retry can be queued
+with `POST /api/scip/java/retry/{repositoryID}` or the repository-list control.
+Failure output is bounded and obvious credential-bearing lines are redacted.
+
+RepoKarta neither downloads nor bundles `scip-java`; operators install and
+trust the external Apache-2.0 tool and the repository build being executed.
+
 ## Import an index
 
 First read the repository ID and `indexed_commit` from `GET /api/repositories`,
@@ -44,8 +97,8 @@ are never silently applied to newer source.
 
 ## Reference resolution and fallback
 
-Reference search uses SCIP when every repository in the requested scope has an
-artifact for its exact indexed commit and either:
+Reference search uses SCIP when every applicable Java repository in the
+requested scope has an artifact for its exact indexed commit and either:
 
 - the query is a full SCIP symbol identity; or
 - the source-level name resolves to exactly one SCIP symbol across that scope.
@@ -55,11 +108,13 @@ Results report `reference_resolution` as `scip-exact` or
 with `reference_confidence: "compiler"`. Definitions are excluded from
 reference results.
 
-If any artifact is missing or stale, or a bare name is ambiguous, RepoKarta
-retains the existing syntax-backed Tree-sitter behavior. A corrupt artifact is
-reported explicitly instead of being silently ignored. Fallback results report
-`syntax-target-name`, the `tree-sitter` provider, and does not present the
-fallback as compiler-precise.
+Repositories explicitly classified as non-Java do not prevent compiler-precise
+Java resolution; manually imported artifacts for other languages remain part
+of coverage when present. If any applicable artifact is missing or stale, or a
+bare name is ambiguous, RepoKarta retains the existing syntax-backed
+Tree-sitter behavior. A corrupt artifact is reported explicitly instead of
+being silently ignored. Fallback results report `syntax-target-name`, the
+`tree-sitter` provider, and do not present the fallback as compiler-precise.
 
 This first slice imports symbol identities and reference occurrences. SCIP
 definitions, implementations, signatures, hover documentation, dependency

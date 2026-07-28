@@ -15,11 +15,12 @@ import (
 	"github.com/spolnik/RepoKarta/internal/codeintel"
 	"github.com/spolnik/RepoKarta/internal/mcpserver"
 	"github.com/spolnik/RepoKarta/internal/scipindex"
+	"github.com/spolnik/RepoKarta/internal/scipjava"
 	"github.com/spolnik/RepoKarta/internal/security"
 	"github.com/spolnik/RepoKarta/internal/store"
 )
 
-var version = "0.77.0-dev"
+var version = "0.78.0-dev"
 
 type stringList []string
 
@@ -185,6 +186,10 @@ func serve(args []string) error {
 	samlMetadataURL := flags.String("saml-metadata-url", defaults.Security.SAMLMetadataURL, "SAML identity-provider metadata URL")
 	samlEntityID := flags.String("saml-entity-id", defaults.Security.SAMLEntityID, "optional SAML service-provider entity ID")
 	repositorySyncInterval := flags.Duration("repository-sync-interval", defaults.RepositorySyncInterval, "automatic managed-repository sync interval; zero disables scheduling")
+	scipJavaMode := flags.String("scip-java-mode", defaults.SCIPJavaMode, "Java SCIP generation: off, auto, or required")
+	scipJavaCommand := flags.String("scip-java-command", defaults.SCIPJavaCommand, "scip-java executable name or absolute path")
+	scipJavaTimeout := flags.Duration("scip-java-timeout", defaults.SCIPJavaTimeout, "maximum time for one Java SCIP build")
+	scipJavaConcurrency := flags.Int("scip-java-concurrency", defaults.SCIPJavaConcurrency, "maximum concurrent Java SCIP builds (1-4)")
 	acquisitionGitHubAPI := flags.String("github-api", defaults.AcquisitionGitHubAPI, "GitHub REST API base URL used for repository discovery")
 	acquisitionGitLabAPI := flags.String("gitlab-api", defaults.AcquisitionGitLabAPI, "GitLab REST API base URL used for repository discovery")
 	acquisitionGitHubHost := flags.String("github-host", defaults.AcquisitionGitHubHost, "allowed GitHub HTTPS Git host; defaults to github.com")
@@ -193,6 +198,15 @@ func serve(args []string) error {
 	flags.Var(&excludes, "exclude", "directory to exclude; repeat for multiple directories")
 	if err := flags.Parse(args); err != nil {
 		return err
+	}
+	scipJavaModeExplicit := false
+	flags.Visit(func(current *flag.Flag) {
+		if current.Name == "scip-java-mode" {
+			scipJavaModeExplicit = true
+		}
+	})
+	if !scipJavaModeExplicit && strings.TrimSpace(*scipJavaCommand) != "" {
+		*scipJavaMode = scipjava.ModeRequired
 	}
 
 	repositoryRoot := defaults.RepositoryRoot
@@ -248,6 +262,10 @@ func serve(args []string) error {
 		AcquisitionGitLabAPI:   *acquisitionGitLabAPI,
 		AcquisitionGitHubHost:  *acquisitionGitHubHost,
 		AcquisitionGitLabHost:  *acquisitionGitLabHost,
+		SCIPJavaMode:           *scipJavaMode,
+		SCIPJavaCommand:        *scipJavaCommand,
+		SCIPJavaTimeout:        *scipJavaTimeout,
+		SCIPJavaConcurrency:    *scipJavaConcurrency,
 		Security: security.Settings{
 			Mode:                 security.Mode(*authMode),
 			PublicURL:            *publicURL,
@@ -291,6 +309,10 @@ Serve options:
   -saml-metadata-url SAML identity-provider metadata URL
   -saml-entity-id    optional SAML service-provider entity ID
   -repository-sync-interval automatic managed-repository sync interval (default 0)
+  -scip-java-mode  Java SCIP generation: off, auto, or required (default off)
+  -scip-java-command scip-java executable name or absolute path
+  -scip-java-timeout maximum time for one Java SCIP build (default 20m)
+  -scip-java-concurrency concurrent Java SCIP builds, 1-4 (default 1)
 
 MCP options:
   -url string        running RepoKarta URL (default http://127.0.0.1:7331)

@@ -18,6 +18,8 @@ func TestDefaultConfigReadsBoundedEnvironment(t *testing.T) {
 	t.Setenv("REPOKARTA_ADMIN_USER", " admin ")
 	t.Setenv("REPOKARTA_PUBLIC_URL", " https://repo.example.com ")
 	t.Setenv("REPOKARTA_GITHUB_API", " https://api.github.test ")
+	t.Setenv("REPOKARTA_SCIP_JAVA_MODE", " auto ")
+	t.Setenv("REPOKARTA_SCIP_JAVA_COMMAND", " C:\\tools\\scip-java.exe ")
 	t.Setenv("REPOKARTA_DEPENDENCY_REGISTRIES", `[{
 		"ecosystem":"npm",
 		"base_url":"https://npm.example.com",
@@ -34,10 +36,27 @@ func TestDefaultConfigReadsBoundedEnvironment(t *testing.T) {
 		config.Security.PublicURL != "https://repo.example.com" ||
 		!config.AllowOpen || config.AdminUser != "admin" ||
 		config.AcquisitionGitHubAPI != "https://api.github.test" ||
+		config.SCIPJavaMode != "auto" ||
+		config.SCIPJavaCommand != `C:\tools\scip-java.exe` ||
+		config.SCIPJavaTimeout <= 0 ||
+		config.SCIPJavaConcurrency != 1 ||
 		len(config.DependencyRegistries) != 1 ||
 		config.DependencyRegistries[0].TokenEnv != "ACME_NPM_TOKEN" ||
 		filepath.Base(config.DataDirectory) != "RepoKarta" {
 		t.Fatalf("default config = %#v", config)
+	}
+}
+
+func TestDefaultConfigRequiresExplicitSCIPJavaCommand(t *testing.T) {
+	t.Setenv("REPOKARTA_SCIP_JAVA_MODE", "")
+	t.Setenv("REPOKARTA_SCIP_JAVA_COMMAND", `C:\tools\scip-java.exe`)
+
+	config, err := DefaultConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.SCIPJavaMode != "required" {
+		t.Fatalf("SCIP Java mode = %q, want required", config.SCIPJavaMode)
 	}
 }
 

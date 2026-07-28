@@ -29,6 +29,7 @@ import (
 	"github.com/spolnik/RepoKarta/internal/mcpserver"
 	"github.com/spolnik/RepoKarta/internal/scim"
 	"github.com/spolnik/RepoKarta/internal/scipindex"
+	"github.com/spolnik/RepoKarta/internal/scipjava"
 	"github.com/spolnik/RepoKarta/internal/search"
 	zoektadapter "github.com/spolnik/RepoKarta/internal/search/zoekt"
 	"github.com/spolnik/RepoKarta/internal/security"
@@ -55,6 +56,10 @@ type Config struct {
 	AcquisitionGitHubHost  string
 	AcquisitionGitLabHost  string
 	DependencyRegistries   []dependencies.RegistryConfig
+	SCIPJavaMode           string
+	SCIPJavaCommand        string
+	SCIPJavaTimeout        time.Duration
+	SCIPJavaConcurrency    int
 }
 
 func DefaultConfig() (Config, error) {
@@ -72,6 +77,28 @@ func DefaultConfig() (Config, error) {
 	)
 	if err != nil {
 		return Config{}, err
+	}
+	scipJavaCommand := strings.TrimSpace(os.Getenv("REPOKARTA_SCIP_JAVA_COMMAND"))
+	scipJavaMode := envOrDefault("REPOKARTA_SCIP_JAVA_MODE", scipjava.ModeOff)
+	if scipJavaCommand != "" && strings.TrimSpace(os.Getenv("REPOKARTA_SCIP_JAVA_MODE")) == "" {
+		scipJavaMode = scipjava.ModeRequired
+	}
+	scipJavaTimeout := scipjava.DefaultTimeout
+	if value := strings.TrimSpace(os.Getenv("REPOKARTA_SCIP_JAVA_TIMEOUT")); value != "" {
+		scipJavaTimeout, err = time.ParseDuration(value)
+		if err != nil || scipJavaTimeout <= 0 {
+			return Config{}, fmt.Errorf("parse REPOKARTA_SCIP_JAVA_TIMEOUT: positive duration is required")
+		}
+	}
+	scipJavaConcurrency := scipjava.DefaultConcurrency
+	if value := strings.TrimSpace(os.Getenv("REPOKARTA_SCIP_JAVA_CONCURRENCY")); value != "" {
+		scipJavaConcurrency, err = strconv.Atoi(value)
+		if err != nil || scipJavaConcurrency < 1 || scipJavaConcurrency > scipjava.MaximumConcurrency {
+			return Config{}, fmt.Errorf(
+				"parse REPOKARTA_SCIP_JAVA_CONCURRENCY: integer from 1 through %d is required",
+				scipjava.MaximumConcurrency,
+			)
+		}
 	}
 
 	return Config{
@@ -96,6 +123,10 @@ func DefaultConfig() (Config, error) {
 		AcquisitionGitHubHost: strings.TrimSpace(os.Getenv("REPOKARTA_GITHUB_HOST")),
 		AcquisitionGitLabHost: strings.TrimSpace(os.Getenv("REPOKARTA_GITLAB_HOST")),
 		DependencyRegistries:  dependencyRegistries,
+		SCIPJavaMode:          scipJavaMode,
+		SCIPJavaCommand:       scipJavaCommand,
+		SCIPJavaTimeout:       scipJavaTimeout,
+		SCIPJavaConcurrency:   scipJavaConcurrency,
 	}, nil
 }
 
@@ -160,6 +191,17 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 	intelligence.UseSCIP(semanticIndexes)
+	javaSCIP, err := scipjava.New(scipjava.Config{
+		Mode:          cfg.SCIPJavaMode,
+		Command:       cfg.SCIPJavaCommand,
+		DataDirectory: filepath.Join(cfg.DataDirectory, "scip-java"),
+		Timeout:       cfg.SCIPJavaTimeout,
+		Concurrency:   cfg.SCIPJavaConcurrency,
+	}, database, semanticIndexes)
+	if err != nil {
+		return fmt.Errorf("initialize Java SCIP generation: %w", err)
+	}
+	javaSCIP.Start(ctx)
 
 	acquisitions, err := acquisition.New(acquisition.Config{
 		DataDirectory: cfg.DataDirectory,
@@ -175,7 +217,9 @@ func Run(ctx context.Context, cfg Config) error {
 	coordinator := search.NewCoordinator(cfg.RepositoryRoot, cfg.Excludes, database, engine).
 		UseRepositoryProvider(acquisitions.CatalogueRepositories).
 		UseIndexedObserver(func(observerContext context.Context, repositoryID int64) error {
-			return maps.PrepareStructure(observerContext, repositoryID)
+			mapErr := maps.PrepareStructure(observerContext, repositoryID)
+			javaSCIP.Queue(repositoryID)
+			return mapErr
 		})
 	acquisitions.UseRefresher(coordinator.Refresh)
 	if err := coordinator.Start(ctx); err != nil {
@@ -316,6 +360,7 @@ func Run(ctx context.Context, cfg Config) error {
 		}(),
 		Insights:     codeInsights,
 		Dependencies: dependencyRegistry,
+		SCIPJava:     javaSCIP,
 	}, intelligence, coordinator)
 	if err != nil {
 		return err

@@ -215,6 +215,61 @@ func TestMigrationFromEnterpriseSchemaAddsStructuredContexts(t *testing.T) {
 	rows.Close()
 }
 
+func TestJavaSCIPStatusIsIndependentAndRoundTrips(t *testing.T) {
+	storage, err := Open(filepath.Join(t.TempDir(), "repokarta.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer storage.Close()
+	ctx := context.Background()
+	if err := storage.SyncRepositories(ctx, []catalog.Repository{{
+		Name: "payments", Path: filepath.Join(t.TempDir(), "payments"),
+		HeadCommit: "abc123", ScanState: "ready", DiscoveredAt: time.Now(),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	repositories, err := storage.ListRepositories(ctx)
+	if err != nil || len(repositories) != 1 {
+		t.Fatalf("repositories = %#v, %v", repositories, err)
+	}
+	repositoryID := repositories[0].ID
+	if err := storage.UpdateIndexState(ctx, repositoryID, "ready", "abc123", ""); err != nil {
+		t.Fatal(err)
+	}
+	finished := time.Now().UTC().Truncate(time.Microsecond)
+	status := catalog.SCIPIndexStatus{
+		Provider: "scip-java", State: "ready", Applicable: true,
+		Revision: "abc123", Configuration: "fingerprint",
+		Indexer: "scip-java", Version: "v-test", BuildRoot: "backend",
+		Documents: 12, Symbols: 34, Occurrences: 56, FinishedAt: finished,
+	}
+	if err := storage.UpdateSCIPIndexStatus(ctx, repositoryID, status); err != nil {
+		t.Fatal(err)
+	}
+	repository, err := storage.RepositoryByID(ctx, repositoryID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repository.IndexState != "ready" || repository.IndexedCommit != "abc123" ||
+		repository.SCIPJava == nil ||
+		repository.SCIPJava.State != "ready" ||
+		repository.SCIPJava.Configuration != "fingerprint" ||
+		repository.SCIPJava.Documents != 12 ||
+		!repository.SCIPJava.FinishedAt.Equal(finished) {
+		t.Fatalf("repository with Java SCIP = %#v", repository)
+	}
+	status.State = "failed"
+	status.Error = "compiler failed"
+	if err := storage.UpdateSCIPIndexStatus(ctx, repositoryID, status); err != nil {
+		t.Fatal(err)
+	}
+	repository, err = storage.RepositoryByID(ctx, repositoryID)
+	if err != nil || repository.IndexState != "ready" ||
+		repository.SCIPJava == nil || repository.SCIPJava.State != "failed" {
+		t.Fatalf("independent failed Java SCIP = %#v, %v", repository, err)
+	}
+}
+
 func TestRepositoryAccessDefaultsPrivateAndSupportsUserGroupAndSharedScopes(t *testing.T) {
 	storage, err := Open(filepath.Join(t.TempDir(), "repokarta.db"))
 	if err != nil {

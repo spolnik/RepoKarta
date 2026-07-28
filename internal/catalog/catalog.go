@@ -41,6 +41,28 @@ type Repository struct {
 	DiscoveredAt    time.Time
 	ScannedAt       time.Time
 	IndexedAt       time.Time
+	SCIPJava        *SCIPIndexStatus
+}
+
+// SCIPIndexStatus is the durable state of one optional compiler-precise
+// repository artifact. It is kept separate from IndexState because a failed
+// language build must never make ordinary source search unavailable.
+type SCIPIndexStatus struct {
+	Provider      string    `json:"provider"`
+	State         string    `json:"state"`
+	Applicable    bool      `json:"applicable"`
+	Revision      string    `json:"revision,omitempty"`
+	Configuration string    `json:"-"`
+	Indexer       string    `json:"indexer,omitempty"`
+	Version       string    `json:"version,omitempty"`
+	BuildRoot     string    `json:"build_root,omitempty"`
+	Documents     int       `json:"documents,omitempty"`
+	Symbols       int       `json:"symbols,omitempty"`
+	Occurrences   int       `json:"occurrences,omitempty"`
+	Error         string    `json:"error,omitempty"`
+	QueuedAt      time.Time `json:"queued_at,omitempty"`
+	StartedAt     time.Time `json:"started_at,omitempty"`
+	FinishedAt    time.Time `json:"finished_at,omitempty"`
 }
 
 // DiscoverOptions controls repository catalogue discovery.

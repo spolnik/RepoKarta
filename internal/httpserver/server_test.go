@@ -28,6 +28,7 @@ import (
 	"github.com/spolnik/RepoKarta/internal/graph"
 	"github.com/spolnik/RepoKarta/internal/identity"
 	"github.com/spolnik/RepoKarta/internal/maintenance"
+	"github.com/spolnik/RepoKarta/internal/scipjava"
 	"github.com/spolnik/RepoKarta/internal/search"
 	"github.com/spolnik/RepoKarta/internal/security"
 	"github.com/spolnik/RepoKarta/internal/source"
@@ -473,6 +474,65 @@ func (maintenanceTestStore) ConversationImagePaths(context.Context) (map[string]
 
 type testStore struct {
 	repositories []catalog.Repository
+}
+
+type testSCIPJavaService struct {
+	retried int64
+}
+
+func (service *testSCIPJavaService) ProviderStatus() scipjava.ProviderStatus {
+	return scipjava.ProviderStatus{
+		Mode: "auto", Enabled: true, Available: true,
+		Command: "scip-java", Version: "v-test", Configuration: "fixture",
+	}
+}
+
+func (service *testSCIPJavaService) Retry(_ context.Context, repositoryID int64) error {
+	service.retried = repositoryID
+	return nil
+}
+
+func TestJavaSCIPStatusAndRetryAPI(t *testing.T) {
+	javaSCIP := &testSCIPJavaService{}
+	repository := catalog.Repository{
+		ID: 7, Name: "payments", IndexState: "ready", IndexedCommit: "abc123",
+		SCIPJava: &catalog.SCIPIndexStatus{
+			Provider: "scip-java", State: "failed", Applicable: true,
+			Revision: "abc123", Error: "fixture failure",
+		},
+	}
+	server, err := New(
+		Config{
+			Address: "127.0.0.1:7331", Version: "test", SCIPJava: javaSCIP,
+		},
+		codeintel.New(testStore{repositories: []catalog.Repository{repository}}, testSearcher{}, ""),
+		testRefresher{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7331/api/scip/java", nil)
+	response := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK ||
+		!strings.Contains(response.Body.String(), `"available":true`) ||
+		!strings.Contains(response.Body.String(), `"version":"v-test"`) {
+		t.Fatalf("provider response = %d, %q", response.Code, response.Body.String())
+	}
+	request = httptest.NewRequest(http.MethodPost, "http://127.0.0.1:7331/api/scip/java/retry/7", nil)
+	response = httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusAccepted || javaSCIP.retried != 7 {
+		t.Fatalf("retry response = %d, retried = %d, body = %q", response.Code, javaSCIP.retried, response.Body.String())
+	}
+	request = httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7331/", nil)
+	response = httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK ||
+		!strings.Contains(response.Body.String(), "Java SCIP") ||
+		!strings.Contains(response.Body.String(), "fixture failure") {
+		t.Fatalf("home Java SCIP status = %d, %q", response.Code, response.Body.String())
+	}
 }
 
 func TestEnterpriseAdministrationAPILifecycle(t *testing.T) {

@@ -146,16 +146,17 @@ func (s *Service) UseDerivedEvidence(searcher DerivedEvidenceSearcher) *Service 
 
 // Repository describes one indexed repository without exposing its local path.
 type Repository struct {
-	ID              int64  `json:"id"`
-	Name            string `json:"name"`
-	OriginURL       string `json:"origin_url,omitempty"`
-	DefaultRevision string `json:"default_revision,omitempty"`
-	HeadCommit      string `json:"head_commit,omitempty"`
-	IndexedCommit   string `json:"indexed_commit,omitempty"`
-	ScanState       string `json:"scan_state"`
-	ScanError       string `json:"scan_error,omitempty"`
-	IndexState      string `json:"index_state"`
-	IndexError      string `json:"index_error,omitempty"`
+	ID              int64                    `json:"id"`
+	Name            string                   `json:"name"`
+	OriginURL       string                   `json:"origin_url,omitempty"`
+	DefaultRevision string                   `json:"default_revision,omitempty"`
+	HeadCommit      string                   `json:"head_commit,omitempty"`
+	IndexedCommit   string                   `json:"indexed_commit,omitempty"`
+	ScanState       string                   `json:"scan_state"`
+	ScanError       string                   `json:"scan_error,omitempty"`
+	IndexState      string                   `json:"index_state"`
+	IndexError      string                   `json:"index_error,omitempty"`
+	SCIPJava        *catalog.SCIPIndexStatus `json:"scip_java,omitempty"`
 }
 
 // RepositoryList is the JSON and MCP repository-list contract.
@@ -494,6 +495,7 @@ func (s *Service) Repositories(ctx context.Context) (RepositoryList, error) {
 			ScanError:       repository.ScanError,
 			IndexState:      repository.IndexState,
 			IndexError:      repository.IndexError,
+			SCIPJava:        repository.SCIPJava,
 		})
 	}
 	return output, nil
@@ -1335,6 +1337,7 @@ func (s *Service) FindReferences(ctx context.Context, request ReferenceRequest) 
 		ctx,
 		repositoryID,
 		symbol,
+		index,
 	); semanticErr != nil {
 		return ReferenceResponse{}, semanticErr
 	} else if ok {
@@ -1377,6 +1380,7 @@ func (s *Service) scipReferenceIndex(
 	ctx context.Context,
 	repositoryID int64,
 	symbol string,
+	syntaxIndex graph.StructuralIndex,
 ) (graph.StructuralIndex, string, bool, error) {
 	if s.scip == nil {
 		return graph.StructuralIndex{}, "", false, nil
@@ -1385,21 +1389,27 @@ func (s *Service) scipReferenceIndex(
 	if err != nil {
 		return graph.StructuralIndex{}, "", false, err
 	}
+	if repositoryID == 0 && !syntaxIndex.Scope.Complete {
+		return graph.StructuralIndex{}, "", false, nil
+	}
+	javaRepositories := make(map[int64]struct{})
+	for _, document := range syntaxIndex.Structure {
+		if strings.EqualFold(document.Language, "java") {
+			javaRepositories[document.RepositoryID] = struct{}{}
+		}
+	}
 	selected := make([]catalog.Repository, 0, len(repositories))
+	artifacts := make([]scipindex.Artifact, 0, len(repositories))
 	for _, repository := range repositories {
 		if repositoryID > 0 && repository.ID != repositoryID {
 			continue
 		}
-		selected = append(selected, repository)
-	}
-	if len(selected) == 0 {
-		return graph.StructuralIndex{}, "", false, nil
-	}
-	artifacts := make([]scipindex.Artifact, 0, len(selected))
-	for _, repository := range selected {
 		revision := strings.TrimSpace(repository.IndexedCommit)
 		if revision == "" {
-			return graph.StructuralIndex{}, "", false, nil
+			if repositoryID > 0 {
+				return graph.StructuralIndex{}, "", false, nil
+			}
+			continue
 		}
 		artifact, ok, readErr := s.scip.Read(ctx, repository.ID, revision)
 		if readErr != nil {
@@ -1409,10 +1419,27 @@ func (s *Service) scipReferenceIndex(
 				readErr,
 			)
 		}
-		if !ok {
+		required := repositoryID > 0
+		if repositoryID == 0 {
+			_, syntaxHasJava := javaRepositories[repository.ID]
+			required = syntaxHasJava ||
+				(repository.SCIPJava != nil && repository.SCIPJava.Applicable)
+			if repository.SCIPJava != nil && repository.SCIPJava.Applicable &&
+				repository.SCIPJava.State != "ready" {
+				return graph.StructuralIndex{}, "", false, nil
+			}
+		}
+		if !ok && required {
 			return graph.StructuralIndex{}, "", false, nil
 		}
+		if !ok {
+			continue
+		}
+		selected = append(selected, repository)
 		artifacts = append(artifacts, artifact)
+	}
+	if len(selected) == 0 {
+		return graph.StructuralIndex{}, "", false, nil
 	}
 	resolved := scipindex.ResolveReferences(artifacts, symbol)
 	if resolved.State != "exact" && resolved.State != "unique-name" {

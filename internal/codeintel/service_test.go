@@ -600,6 +600,23 @@ func (s referenceTestStore) ListRepositories(context.Context) ([]catalog.Reposit
 	return []catalog.Repository{s.repository}, nil
 }
 
+type referenceFleetStore struct {
+	repositories []catalog.Repository
+}
+
+func (s referenceFleetStore) ListRepositories(context.Context) ([]catalog.Repository, error) {
+	return append([]catalog.Repository(nil), s.repositories...), nil
+}
+
+func (s referenceFleetStore) RepositoryByID(_ context.Context, id int64) (catalog.Repository, error) {
+	for _, repository := range s.repositories {
+		if repository.ID == id {
+			return repository, nil
+		}
+	}
+	return catalog.Repository{}, context.Canceled
+}
+
 func (s referenceTestStore) RepositoryByID(_ context.Context, id int64) (catalog.Repository, error) {
 	if id == s.repository.ID {
 		return s.repository, nil
@@ -628,6 +645,22 @@ func (s referenceTestSCIP) Read(
 		return scipindex.Artifact{}, false, nil
 	}
 	return s.artifact, true, nil
+}
+
+type referenceFleetSCIP struct {
+	artifacts map[int64]scipindex.Artifact
+}
+
+func (s referenceFleetSCIP) Read(
+	_ context.Context,
+	repositoryID int64,
+	revision string,
+) (scipindex.Artifact, bool, error) {
+	artifact, ok := s.artifacts[repositoryID]
+	if !ok || artifact.Revision != revision {
+		return scipindex.Artifact{}, false, nil
+	}
+	return artifact, true, nil
 }
 
 func TestReferenceSearchUsesPersistedASTRelationsAndPinnedSource(t *testing.T) {
@@ -837,6 +870,60 @@ public class PaymentService extends BaseService {
 		ambiguousResult.ReferenceIndex == nil ||
 		ambiguousResult.ReferenceIndex.Provider != "tree-sitter" {
 		t.Fatalf("ambiguous SCIP fallback = %#v", ambiguousResult)
+	}
+}
+
+func TestFleetSCIPCoverageIgnoresExplicitlyNonJavaRepositories(t *testing.T) {
+	const (
+		revision     = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		semanticSave = "scip-java maven com.acme:payments 1.0.0 com/acme/PaymentService#save()."
+	)
+	ready := &catalog.SCIPIndexStatus{
+		Provider: "scip-java", State: "ready", Applicable: true, Revision: revision,
+	}
+	skipped := &catalog.SCIPIndexStatus{
+		Provider: "scip-java", State: "skipped", Applicable: false, Revision: revision,
+	}
+	repositories := []catalog.Repository{
+		{ID: 7, Name: "payments", IndexedCommit: revision, IndexState: "ready", SCIPJava: ready},
+		{ID: 8, Name: "frontend", IndexedCommit: revision, IndexState: "ready", SCIPJava: skipped},
+	}
+	artifact := scipindex.Artifact{
+		RepositoryID: 7, Revision: revision,
+		Symbols: []scipindex.Symbol{{ID: semanticSave, DisplayName: "save"}},
+		Documents: []scipindex.Document{{
+			Path: "src/PaymentService.java", Language: "java",
+			Occurrences: []scipindex.Occurrence{{Symbol: semanticSave, StartLine: 3}},
+		}},
+	}
+	service := New(referenceFleetStore{repositories: repositories}, fixedResultSearcher{}, "").
+		UseSCIP(referenceFleetSCIP{artifacts: map[int64]scipindex.Artifact{7: artifact}})
+	syntax := graph.StructuralIndex{
+		Scope: graph.Scope{
+			Kind: "collection", Complete: true,
+			TotalRepositories: 2, AnalyzedRepositories: 2,
+		},
+		Structure: []graph.StructuralDocument{
+			{RepositoryID: 7, Language: "java"},
+			{RepositoryID: 8, Language: "typescript"},
+		},
+	}
+	index, resolution, ok, err := service.scipReferenceIndex(
+		context.Background(), 0, "save", syntax,
+	)
+	if err != nil || !ok || resolution != semanticSave ||
+		index.Scope.TotalRepositories != 1 ||
+		index.Scope.AnalyzedRepositories != 1 {
+		t.Fatalf("Java-aware SCIP index = %#v, %q, %v, %v", index, resolution, ok, err)
+	}
+
+	failed := *ready
+	failed.State = "failed"
+	repositories[0].SCIPJava = &failed
+	service = New(referenceFleetStore{repositories: repositories}, fixedResultSearcher{}, "").
+		UseSCIP(referenceFleetSCIP{artifacts: map[int64]scipindex.Artifact{7: artifact}})
+	if _, _, ok, err := service.scipReferenceIndex(context.Background(), 0, "save", syntax); err != nil || ok {
+		t.Fatalf("incomplete Java SCIP coverage = %v, %v", ok, err)
 	}
 }
 

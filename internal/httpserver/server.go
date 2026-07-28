@@ -36,6 +36,7 @@ import (
 	"github.com/spolnik/RepoKarta/internal/identity"
 	"github.com/spolnik/RepoKarta/internal/insights"
 	"github.com/spolnik/RepoKarta/internal/maintenance"
+	"github.com/spolnik/RepoKarta/internal/scipjava"
 	"github.com/spolnik/RepoKarta/internal/search"
 	"github.com/spolnik/RepoKarta/internal/security"
 	"github.com/spolnik/RepoKarta/internal/source"
@@ -52,6 +53,13 @@ const (
 // CatalogueRefresher manually rediscovers and queues repositories.
 type CatalogueRefresher interface {
 	Refresh(context.Context) error
+}
+
+// SCIPJavaService exposes the optional compiler indexer without coupling HTTP
+// requests to build execution.
+type SCIPJavaService interface {
+	ProviderStatus() scipjava.ProviderStatus
+	Retry(context.Context, int64) error
 }
 
 // ConversationService supplies provider status and streamed read-only turns.
@@ -156,6 +164,7 @@ type Config struct {
 	SCIMHandler           http.Handler
 	Insights              InsightService
 	Dependencies          DependencyService
+	SCIPJava              SCIPJavaService
 }
 
 // Server hosts RepoKarta's loopback interface.
@@ -176,6 +185,7 @@ type Server struct {
 	enterprise            EnterpriseStore
 	insights              InsightService
 	dependencies          DependencyService
+	scipJava              SCIPJavaService
 }
 
 type pageData struct {
@@ -204,6 +214,8 @@ type pageData struct {
 	CanAdminister       bool
 	CanManageArtifacts  bool
 	MCP                 mcpPageData
+	SCIPJava            scipjava.ProviderStatus
+	SCIPJavaEnabled     bool
 }
 
 type mcpPageData struct {
@@ -358,6 +370,7 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 		},
 		"shortCommit":     shortCommit,
 		"statusLabel":     statusLabel,
+		"scipStatusLabel": scipStatusLabel,
 		"nextSearchLimit": nextSearchLimit,
 		"indexProgress":   indexProgress,
 		"formatBytes":     formatBytes,
@@ -396,6 +409,7 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 		enterprise:            config.Enterprise,
 		insights:              config.Insights,
 		dependencies:          config.Dependencies,
+		scipJava:              config.SCIPJava,
 	}
 	server.history, _ = config.Conversations.(ConversationHistoryService)
 
@@ -425,6 +439,21 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 	mux.HandleFunc("POST /api/symbol", server.apiSymbolJSON)
 	mux.HandleFunc("POST /api/ast/search", server.apiASTSearch)
 	mux.HandleFunc("GET /api/repositories", server.apiRepositories)
+	if server.scipJava != nil {
+		mux.HandleFunc("GET /api/scip/java", server.apiSCIPJava)
+		mux.HandleFunc("POST /api/scip/java/retry/{repositoryID}", server.controlled(
+			identity.PermissionManageArtifacts,
+			"scip.java.retry",
+			"repository-scip-index",
+			server.retrySCIPJava,
+		))
+		mux.HandleFunc("POST /repositories/{repositoryID}/scip/java/retry", server.controlled(
+			identity.PermissionManageArtifacts,
+			"scip.java.retry",
+			"repository-scip-index",
+			server.retrySCIPJava,
+		))
+	}
 	mux.HandleFunc("GET /api/whoami", server.apiWhoAmI)
 	mux.HandleFunc("GET /api/file/{repository}", server.apiFile)
 	mux.HandleFunc("GET /api/tree/{repository}", server.apiTree)
@@ -1145,6 +1174,34 @@ func (s *Server) apiRepositories(response http.ResponseWriter, request *http.Req
 		return
 	}
 	writeJSON(response, http.StatusOK, repositories)
+}
+
+func (s *Server) apiSCIPJava(response http.ResponseWriter, _ *http.Request) {
+	writeJSON(response, http.StatusOK, s.scipJava.ProviderStatus())
+}
+
+func (s *Server) retrySCIPJava(response http.ResponseWriter, request *http.Request) {
+	repositoryID, err := strconv.ParseInt(strings.TrimSpace(request.PathValue("repositoryID")), 10, 64)
+	if err != nil || repositoryID <= 0 {
+		writeAPIError(response, http.StatusBadRequest, errors.New("positive repository ID is required"))
+		return
+	}
+	if err := s.scipJava.Retry(request.Context(), repositoryID); err != nil {
+		writeAPIError(response, http.StatusConflict, err)
+		return
+	}
+	if strings.HasPrefix(request.URL.Path, "/api/") {
+		writeJSON(response, http.StatusAccepted, map[string]any{
+			"repository_id": repositoryID,
+			"state":         "pending",
+		})
+		return
+	}
+	if strings.EqualFold(strings.TrimSpace(request.Header.Get("HX-Request")), "true") {
+		s.repositoryList(response, request)
+		return
+	}
+	http.Redirect(response, request, "/", http.StatusSeeOther)
 }
 
 func (s *Server) apiWhoAmI(response http.ResponseWriter, request *http.Request) {
@@ -2562,6 +2619,10 @@ func (s *Server) pageData(ctx context.Context) (pageData, error) {
 			Query: search.Query{Limit: codeintel.DefaultSearchLimit},
 		},
 	}
+	if s.scipJava != nil {
+		data.SCIPJava = s.scipJava.ProviderStatus()
+		data.SCIPJavaEnabled = data.SCIPJava.Enabled
+	}
 	if s.security != nil {
 		data.AuthMode = string(s.security.Mode())
 		data.AdminEnabled = s.security.AdminEnabled()
@@ -3046,6 +3107,25 @@ func statusLabel(state string) string {
 	}
 }
 
+func scipStatusLabel(state string) string {
+	switch state {
+	case "ready":
+		return "Precise"
+	case "indexing":
+		return "Compiling"
+	case "pending":
+		return "Queued"
+	case "failed":
+		return "Failed"
+	case "unavailable":
+		return "Unavailable"
+	case "skipped":
+		return "Not applicable"
+	default:
+		return "Not generated"
+	}
+}
+
 // staticAssets serves the embedded frontend with a build-derived validator.
 //
 // Asset paths are unversioned (/assets/app.js, /assets/app.css) and embed.FS
@@ -3120,13 +3200,19 @@ func repositorySignature(repositories []catalog.Repository) string {
 	for _, repository := range repositories {
 		fmt.Fprintf(
 			&builder,
-			"%d:%s:%s:%s:%s:%s;",
+			"%d:%s:%s:%s:%s:%s:%s;",
 			repository.ID,
 			repository.HeadCommit,
 			repository.ScanState,
 			repository.ScanError,
 			repository.IndexState,
 			repository.IndexError,
+			func() string {
+				if repository.SCIPJava == nil {
+					return ""
+				}
+				return repository.SCIPJava.State + ":" + repository.SCIPJava.Revision + ":" + repository.SCIPJava.Error
+			}(),
 		)
 	}
 	return builder.String()

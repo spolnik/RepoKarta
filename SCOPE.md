@@ -621,6 +621,9 @@ search must remain fast and AI-free.
     repository scope has complete, current SCIP coverage and the symbol
     identity is exact or unambiguous; otherwise retain labeled Tree-sitter
     fallback.
+  - [x] Discover or explicitly configure an external `scip-java`, generate
+    exact-commit Gradle indexes in a bounded background queue, persist visible
+    per-repository status, and support retry without blocking normal indexing.
   - [ ] Add precise definitions, implementations, signatures, hover
     documentation, dependency indexes, and cross-repository symbol stitching.
 - [ ] Add graph queries for upstream and downstream impact, shortest evidenced
@@ -950,7 +953,7 @@ completion criteria include:
 
 ## Current implementation version
 
-`0.77.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
+`0.78.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
 The M9 dependency inventory, public registry refresh, lockfile resolution,
 explicit private-registry routing, reproducible OSV advisory snapshots,
 ecosystem-correct fleet CVE matching, scope-aware UI/JSON/MCP findings, and
@@ -1018,6 +1021,11 @@ infrastructure; framework reachability roots and dead-code classification
 remain deliberately unclaimed. Language filters now canonicalize
 case-insensitive names and aliases at the Zoekt boundary, while unknown values
 produce an explicit machine-readable warning instead of a silent empty result.
+Optional Java SCIP generation now discovers an installed or configured
+`scip-java`, detects Gradle Java builds at the exact indexed revision, runs
+them in isolated background worktrees, imports bounded artifacts, exposes
+provider and repository status plus retry controls, and retains Tree-sitter
+fallback whenever precise Java coverage is missing, stale, or failed.
 
 ## Recommended next session
 

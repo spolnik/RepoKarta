@@ -40,6 +40,9 @@ provider, an API key, Docker, or a cloud account.
 - **Review engineering signals.** Import coverage and static-analysis reports,
   compare revisions, and inspect dependency versions without running project
   code.
+- **Upgrade Java navigation when requested.** Use an installed or explicitly
+  configured `scip-java` to build compiler-precise reference indexes in a
+  background, exact-commit worktree while normal indexing remains available.
 
 ### The important difference
 

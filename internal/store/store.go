@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	currentSchemaVersion = 18
+	currentSchemaVersion = 19
 
 	schemaV1 = `
 CREATE TABLE IF NOT EXISTS repositories (
@@ -505,6 +505,33 @@ CREATE INDEX IF NOT EXISTS runtime_topology_observations_window_index
 ON runtime_topology_observations(observed_to DESC, observed_from DESC);
 CREATE INDEX IF NOT EXISTS runtime_topology_observations_peer_index
 ON runtime_topology_observations(source_name, target_name, protocol);`
+
+	// Java SCIP generation is an optional derived build. Its state is separate
+	// from repositories.index_state so build-tool failures retain normal source
+	// search and syntax-backed navigation.
+	schemaV19 = `
+CREATE TABLE IF NOT EXISTS repository_scip_indexes (
+    repository_id INTEGER PRIMARY KEY REFERENCES repositories(id) ON DELETE CASCADE,
+    provider TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN (
+        'pending', 'indexing', 'ready', 'failed', 'unavailable', 'skipped'
+    )),
+    applicable INTEGER NOT NULL DEFAULT 0,
+    revision TEXT NOT NULL DEFAULT '',
+    configuration TEXT NOT NULL DEFAULT '',
+    indexer TEXT NOT NULL DEFAULT '',
+    version TEXT NOT NULL DEFAULT '',
+    build_root TEXT NOT NULL DEFAULT '',
+    documents INTEGER NOT NULL DEFAULT 0 CHECK(documents >= 0),
+    symbols INTEGER NOT NULL DEFAULT 0 CHECK(symbols >= 0),
+    occurrences INTEGER NOT NULL DEFAULT 0 CHECK(occurrences >= 0),
+    error TEXT NOT NULL DEFAULT '',
+    queued_at TEXT NOT NULL DEFAULT '',
+    started_at TEXT NOT NULL DEFAULT '',
+    finished_at TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS repository_scip_indexes_state_index
+ON repository_scip_indexes(state, revision);`
 )
 
 // SchemaVersion is the current durable SQLite format. Diagnostics and upgrade
@@ -591,6 +618,8 @@ func migrate(db *sql.DB) error {
 			migration = schemaV17
 		case 18:
 			migration = schemaV18
+		case 19:
+			migration = schemaV19
 		default:
 			return fmt.Errorf("missing migration for schema version %d", next)
 		}
@@ -917,8 +946,12 @@ func (s *Store) ListRepositories(ctx context.Context) ([]catalog.Repository, err
 SELECT
     r.id, r.name, r.path, r.origin_url, r.default_revision, r.head_commit, r.bare,
     r.scan_state, r.scan_error, r.index_state, r.index_error, r.indexed_commit,
-    r.discovered_at, r.scanned_at, r.indexed_at, r.acquisition_id
-FROM repositories r`
+    r.discovered_at, r.scanned_at, r.indexed_at, r.acquisition_id,
+    si.provider, si.state, si.applicable, si.revision, si.configuration,
+    si.indexer, si.version, si.build_root, si.documents, si.symbols,
+    si.occurrences, si.error, si.queued_at, si.started_at, si.finished_at
+FROM repositories r
+LEFT JOIN repository_scip_indexes si ON si.repository_id = r.id`
 	arguments := []any{}
 	if viewer, restricted := access.ViewerFromContext(ctx); restricted && !viewer.Admin {
 		query += `
@@ -961,8 +994,12 @@ func (s *Store) RepositoryByID(ctx context.Context, id int64) (catalog.Repositor
 SELECT
     r.id, r.name, r.path, r.origin_url, r.default_revision, r.head_commit, r.bare,
     r.scan_state, r.scan_error, r.index_state, r.index_error, r.indexed_commit,
-    r.discovered_at, r.scanned_at, r.indexed_at, r.acquisition_id
-FROM repositories r`
+    r.discovered_at, r.scanned_at, r.indexed_at, r.acquisition_id,
+    si.provider, si.state, si.applicable, si.revision, si.configuration,
+    si.indexer, si.version, si.build_root, si.documents, si.symbols,
+    si.occurrences, si.error, si.queued_at, si.started_at, si.finished_at
+FROM repositories r
+LEFT JOIN repository_scip_indexes si ON si.repository_id = r.id`
 	arguments := []any{id}
 	if viewer, restricted := access.ViewerFromContext(ctx); restricted && !viewer.Admin {
 		query += `
@@ -1145,6 +1182,64 @@ WHERE id = ?`,
 	return nil
 }
 
+// UpdateSCIPIndexStatus atomically records the independent compiler-index
+// lifecycle for one repository.
+func (s *Store) UpdateSCIPIndexStatus(ctx context.Context, repositoryID int64, status catalog.SCIPIndexStatus) error {
+	if repositoryID <= 0 {
+		return errors.New("SCIP repository ID is required")
+	}
+	result, err := s.db.ExecContext(ctx, `
+INSERT INTO repository_scip_indexes (
+    repository_id, provider, state, applicable, revision, configuration,
+    indexer, version, build_root, documents, symbols, occurrences, error,
+    queued_at, started_at, finished_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(repository_id) DO UPDATE SET
+    provider = excluded.provider,
+    state = excluded.state,
+    applicable = excluded.applicable,
+    revision = excluded.revision,
+    configuration = excluded.configuration,
+    indexer = excluded.indexer,
+    version = excluded.version,
+    build_root = excluded.build_root,
+    documents = excluded.documents,
+    symbols = excluded.symbols,
+    occurrences = excluded.occurrences,
+    error = excluded.error,
+    queued_at = excluded.queued_at,
+    started_at = excluded.started_at,
+    finished_at = excluded.finished_at`,
+		repositoryID,
+		status.Provider,
+		status.State,
+		status.Applicable,
+		status.Revision,
+		status.Configuration,
+		status.Indexer,
+		status.Version,
+		status.BuildRoot,
+		status.Documents,
+		status.Symbols,
+		status.Occurrences,
+		status.Error,
+		formatTime(status.QueuedAt),
+		formatTime(status.StartedAt),
+		formatTime(status.FinishedAt),
+	)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 type rowScanner interface {
 	Scan(...any) error
 }
@@ -1152,6 +1247,13 @@ type rowScanner interface {
 func scanRepository(row rowScanner) (catalog.Repository, error) {
 	var repository catalog.Repository
 	var discoveredAt, scannedAt, indexedAt string
+	var (
+		scipProvider, scipState, scipRevision, scipConfiguration sql.NullString
+		scipIndexer, scipVersion, scipBuildRoot, scipError       sql.NullString
+		scipQueuedAt, scipStartedAt, scipFinishedAt              sql.NullString
+		scipApplicable                                           sql.NullBool
+		scipDocuments, scipSymbols, scipOccurrences              sql.NullInt64
+	)
 	if err := row.Scan(
 		&repository.ID,
 		&repository.Name,
@@ -1169,12 +1271,46 @@ func scanRepository(row rowScanner) (catalog.Repository, error) {
 		&scannedAt,
 		&indexedAt,
 		&repository.AcquisitionID,
+		&scipProvider,
+		&scipState,
+		&scipApplicable,
+		&scipRevision,
+		&scipConfiguration,
+		&scipIndexer,
+		&scipVersion,
+		&scipBuildRoot,
+		&scipDocuments,
+		&scipSymbols,
+		&scipOccurrences,
+		&scipError,
+		&scipQueuedAt,
+		&scipStartedAt,
+		&scipFinishedAt,
 	); err != nil {
 		return catalog.Repository{}, err
 	}
 	repository.DiscoveredAt = parseTime(discoveredAt)
 	repository.ScannedAt = parseTime(scannedAt)
 	repository.IndexedAt = parseTime(indexedAt)
+	if scipState.Valid {
+		repository.SCIPJava = &catalog.SCIPIndexStatus{
+			Provider:      scipProvider.String,
+			State:         scipState.String,
+			Applicable:    scipApplicable.Bool,
+			Revision:      scipRevision.String,
+			Configuration: scipConfiguration.String,
+			Indexer:       scipIndexer.String,
+			Version:       scipVersion.String,
+			BuildRoot:     scipBuildRoot.String,
+			Documents:     int(scipDocuments.Int64),
+			Symbols:       int(scipSymbols.Int64),
+			Occurrences:   int(scipOccurrences.Int64),
+			Error:         scipError.String,
+			QueuedAt:      parseTime(scipQueuedAt.String),
+			StartedAt:     parseTime(scipStartedAt.String),
+			FinishedAt:    parseTime(scipFinishedAt.String),
+		}
+	}
 	return repository, nil
 }
 
