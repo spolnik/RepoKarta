@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spolnik/RepoKarta/internal/catalog"
@@ -20,6 +21,8 @@ import (
 const (
 	maximumUnifiedDiffResults = 25
 	maximumSearchItemDetail   = 12_000
+	maximumEntityWorkers      = 4
+	maximumGitInvocations     = 64
 )
 
 type entitySearchSelection struct {
@@ -359,46 +362,83 @@ func (s *Service) searchCommits(
 	selection entitySearchSelection,
 	limit int,
 ) (SearchResponse, error) {
+	type repositoryResult struct {
+		items     []SearchItem
+		warnings  []search.Warning
+		truncated bool
+		err       error
+	}
+	results := make([]repositoryResult, len(selection.repositories))
+	jobs := make(chan int)
+	workerCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var workers sync.WaitGroup
+	for range min(maximumEntityWorkers, max(1, len(selection.repositories))) {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for index := range jobs {
+				repository := selection.repositories[index]
+				fromRevision, toRevision, err := resolveHistoryRange(workerCtx, repository, selection)
+				if err != nil {
+					results[index].err = fmt.Errorf("resolve history range in %s: %w", repository.Name, err)
+					cancel()
+					continue
+				}
+				history, err := s.GitLog(workerCtx, GitLogRequest{
+					RepositoryID: repository.ID, Revision: toRevision,
+					Path: selection.path, Limit: MaximumGitLogLimit,
+				})
+				if err != nil {
+					results[index].err = fmt.Errorf("search commits in %s: %w", repository.Name, err)
+					cancel()
+					continue
+				}
+				result := &results[index]
+				result.truncated = history.Truncated || history.OutputTruncated
+				foundLowerBound := fromRevision == ""
+				for _, commit := range history.Commits {
+					if fromRevision != "" && strings.EqualFold(commit.Revision, fromRevision) {
+						foundLowerBound = true
+						break
+					}
+					if matchesHistoryCommit(commit, parsed, selection) {
+						result.items = append(result.items, s.commitSearchItem(repository, commit, selection.path))
+					}
+				}
+				if !foundLowerBound {
+					result.truncated = true
+					result.warnings = append(result.warnings, search.Warning{
+						Code: "history_range_partial",
+						Message: fmt.Sprintf(
+							"The lower revision boundary was not reached within the bounded %d-commit history for %s.",
+							MaximumGitLogLimit, repository.Name,
+						),
+					})
+				}
+			}
+		}()
+	}
+	for index := range selection.repositories {
+		select {
+		case jobs <- index:
+		case <-workerCtx.Done():
+			break
+		}
+	}
+	close(jobs)
+	workers.Wait()
+
 	items := make([]SearchItem, 0, limit)
 	warnings := []search.Warning{}
 	truncated := false
-	for _, repository := range selection.repositories {
-		fromRevision, toRevision, err := resolveHistoryRange(ctx, repository, selection)
-		if err != nil {
-			return SearchResponse{}, fmt.Errorf("resolve history range in %s: %w", repository.Name, err)
+	for _, result := range results {
+		if result.err != nil {
+			return SearchResponse{}, result.err
 		}
-		history, err := s.GitLog(ctx, GitLogRequest{
-			RepositoryID: repository.ID,
-			Revision:     toRevision,
-			Path:         selection.path,
-			Limit:        MaximumGitLogLimit,
-		})
-		if err != nil {
-			return SearchResponse{}, fmt.Errorf("search commits in %s: %w", repository.Name, err)
-		}
-		truncated = truncated || history.Truncated || history.OutputTruncated
-		foundLowerBound := fromRevision == ""
-		for _, commit := range history.Commits {
-			if fromRevision != "" && strings.EqualFold(commit.Revision, fromRevision) {
-				foundLowerBound = true
-				break
-			}
-			if !matchesHistoryCommit(commit, parsed, selection) {
-				continue
-			}
-			items = append(items, s.commitSearchItem(repository, commit, selection.path))
-		}
-		if !foundLowerBound {
-			truncated = true
-			warnings = append(warnings, search.Warning{
-				Code: "history_range_partial",
-				Message: fmt.Sprintf(
-					"The lower revision boundary was not reached within the bounded %d-commit history for %s.",
-					MaximumGitLogLimit,
-					repository.Name,
-				),
-			})
-		}
+		items = append(items, result.items...)
+		warnings = append(warnings, result.warnings...)
+		truncated = truncated || result.truncated
 	}
 	sort.SliceStable(items, func(left, right int) bool {
 		return searchItemMetadata(items[left], "authored") > searchItemMetadata(items[right], "authored")
@@ -429,8 +469,18 @@ func (s *Service) searchDiffs(
 	}
 	items := make([]SearchItem, 0, effectiveLimit)
 	truncated := limit > effectiveLimit
+	gitInvocations := 0
 	for _, repository := range selection.repositories {
+		if gitInvocations >= maximumGitInvocations {
+			truncated = true
+			warnings = append(warnings, search.Warning{
+				Code:    "history_git_cap",
+				Message: fmt.Sprintf("Diff search stopped after %d bounded Git operations.", maximumGitInvocations),
+			})
+			break
+		}
 		fromRevision, toRevision, err := resolveHistoryRange(ctx, repository, selection)
+		gitInvocations += 2
 		if err != nil {
 			return SearchResponse{}, fmt.Errorf("resolve diff range in %s: %w", repository.Name, err)
 		}
@@ -440,6 +490,7 @@ func (s *Service) searchDiffs(
 				Revision:     toRevision,
 				Limit:        1,
 			})
+			gitInvocations++
 			if err != nil {
 				return SearchResponse{}, fmt.Errorf("read range endpoint in %s: %w", repository.Name, err)
 			}
@@ -454,6 +505,7 @@ func (s *Service) searchDiffs(
 				Path:         selection.path,
 				ContextLines: DefaultDiffContext,
 			})
+			gitInvocations++
 			if err != nil {
 				return SearchResponse{}, fmt.Errorf("search revision range in %s: %w", repository.Name, err)
 			}
@@ -470,12 +522,13 @@ func (s *Service) searchDiffs(
 			Path:         selection.path,
 			Limit:        historyLimit,
 		})
+		gitInvocations++
 		if err != nil {
 			return SearchResponse{}, fmt.Errorf("enumerate diffs in %s: %w", repository.Name, err)
 		}
 		truncated = truncated || history.Truncated || history.OutputTruncated
 		for _, commit := range history.Commits {
-			if len(items) >= effectiveLimit {
+			if len(items) >= effectiveLimit || gitInvocations >= maximumGitInvocations {
 				truncated = true
 				break
 			}
@@ -485,6 +538,7 @@ func (s *Service) searchDiffs(
 				Path:         selection.path,
 				ContextLines: DefaultDiffContext,
 			})
+			gitInvocations++
 			if err != nil {
 				return SearchResponse{}, fmt.Errorf(
 					"search diff %s in %s: %w",

@@ -3,6 +3,7 @@ package codeintel
 import (
 	"context"
 	"strings"
+	"sync"
 
 	"github.com/spolnik/RepoKarta/internal/querylang"
 	"github.com/spolnik/RepoKarta/internal/search"
@@ -36,15 +37,35 @@ func (s *Service) searchMixedSourceEvidence(
 	}
 	limit := normalizeLimit(request.Limit, DefaultSearchLimit, MaximumSearchLimit)
 	children := make([]SearchResponse, 0, len(resultTypes))
-	for _, resultType := range resultTypes {
-		childRequest := request
-		childRequest.Query = strings.TrimSpace(request.Query) + " result_type:" + resultType
-		childRequest.Limit = limit
-		child, err := s.Search(ctx, childRequest)
-		if err != nil {
-			return SearchResponse{}, err
-		}
-		children = append(children, child)
+	children = make([]SearchResponse, len(resultTypes))
+	childCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var group sync.WaitGroup
+	var errorMu sync.Mutex
+	var firstError error
+	for index, resultType := range resultTypes {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			childRequest := request
+			childRequest.Query = strings.TrimSpace(request.Query) + " result_type:" + resultType
+			childRequest.Limit = limit
+			child, err := s.Search(childCtx, childRequest)
+			if err != nil {
+				errorMu.Lock()
+				if firstError == nil {
+					firstError = err
+					cancel()
+				}
+				errorMu.Unlock()
+				return
+			}
+			children[index] = child
+		}()
+	}
+	group.Wait()
+	if firstError != nil {
+		return SearchResponse{}, firstError
 	}
 
 	output := SearchResponse{

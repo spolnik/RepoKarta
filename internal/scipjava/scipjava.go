@@ -168,6 +168,7 @@ type Service struct {
 	inherited *jdkInstallation
 
 	startOnce sync.Once
+	baseCtxMu sync.RWMutex
 	baseCtx   context.Context
 	signal    chan struct{}
 	mu        sync.Mutex
@@ -458,7 +459,9 @@ func (s *Service) Start(ctx context.Context) {
 		return
 	}
 	s.startOnce.Do(func() {
+		s.baseCtxMu.Lock()
 		s.baseCtx = ctx
+		s.baseCtxMu.Unlock()
 		for range s.config.Concurrency {
 			go s.worker(ctx)
 		}
@@ -468,7 +471,11 @@ func (s *Service) Start(ctx context.Context) {
 // Queue schedules one repository without dropping work or duplicating a
 // currently pending ID.
 func (s *Service) Queue(repositoryID int64) {
-	if s == nil || !s.provider.Enabled || repositoryID <= 0 || s.baseCtx == nil {
+	if s == nil || !s.provider.Enabled || repositoryID <= 0 {
+		return
+	}
+	baseCtx := s.baseContext()
+	if baseCtx == nil {
 		return
 	}
 	s.mu.Lock()
@@ -483,8 +490,7 @@ func (s *Service) Queue(repositoryID int64) {
 	}
 	s.queued[repositoryID] = struct{}{}
 	s.pending = append(s.pending, repositoryID)
-	s.mu.Unlock()
-	if repository, err := s.store.RepositoryByID(s.baseCtx, repositoryID); err == nil &&
+	if repository, err := s.store.RepositoryByID(baseCtx, repositoryID); err == nil &&
 		repository.IndexState == "ready" &&
 		strings.TrimSpace(repository.IndexedCommit) != "" &&
 		(repository.SCIPJava == nil ||
@@ -497,20 +503,27 @@ func (s *Service) Queue(repositoryID int64) {
 			applicable = repository.SCIPJava.Applicable
 			buildRoot = repository.SCIPJava.BuildRoot
 		}
-		if statusErr := s.store.UpdateSCIPIndexStatus(s.baseCtx, repositoryID, catalog.SCIPIndexStatus{
+		if statusErr := s.store.UpdateSCIPIndexStatus(baseCtx, repositoryID, catalog.SCIPIndexStatus{
 			Provider: "scip-java", State: "pending", Applicable: applicable,
 			Revision: repository.IndexedCommit, Configuration: s.provider.Configuration,
 			Indexer: "scip-java", Version: s.provider.Version, BuildRoot: buildRoot,
 			QueuedAt: time.Now().UTC(),
-		}); statusErr != nil && s.baseCtx.Err() == nil {
+		}); statusErr != nil && baseCtx.Err() == nil {
 			slog.Warn("record queued Java SCIP index", "repository_id", repositoryID, "error", statusErr)
 		}
 	}
+	s.mu.Unlock()
 	select {
 	case s.signal <- struct{}{}:
-	case <-s.baseCtx.Done():
+	case <-baseCtx.Done():
 	default:
 	}
+}
+
+func (s *Service) baseContext() context.Context {
+	s.baseCtxMu.RLock()
+	defer s.baseCtxMu.RUnlock()
+	return s.baseCtx
 }
 
 // Retry clears a terminal state and queues the repository again.
@@ -569,16 +582,17 @@ func (s *Service) next() (int64, bool) {
 }
 
 func (s *Service) finish(repositoryID int64) {
+	baseCtx := s.baseContext()
 	s.mu.Lock()
 	delete(s.running, repositoryID)
-	if _, requested := s.rerun[repositoryID]; requested && s.baseCtx.Err() == nil {
+	if _, requested := s.rerun[repositoryID]; requested && baseCtx != nil && baseCtx.Err() == nil {
 		delete(s.rerun, repositoryID)
 		s.queued[repositoryID] = struct{}{}
 		s.pending = append(s.pending, repositoryID)
 		s.mu.Unlock()
 		select {
 		case s.signal <- struct{}{}:
-		case <-s.baseCtx.Done():
+		case <-baseCtx.Done():
 		default:
 		}
 		return
@@ -705,6 +719,10 @@ func (s *Service) build(
 	build gradleBuild,
 	selection jdkSelection,
 ) (scipindex.ImportSummary, error) {
+	shadowPath, err := s.prepareGitShadow(ctx, repository, revision)
+	if err != nil {
+		return scipindex.ImportSummary{}, fmt.Errorf("prepare Java SCIP Git shadow: %w", err)
+	}
 	parent, err := os.MkdirTemp(filepath.Join(s.config.DataDirectory, "worktrees"), fmt.Sprintf("%d-", repository.ID))
 	if err != nil {
 		return scipindex.ImportSummary{}, fmt.Errorf("create isolated worktree parent: %w", err)
@@ -713,7 +731,7 @@ func (s *Service) build(
 	defer func() {
 		cleanupContext, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
-		if cleanupErr := removeWorktree(cleanupContext, repository.Path, worktree); cleanupErr != nil {
+		if cleanupErr := removeWorktree(cleanupContext, shadowPath, worktree); cleanupErr != nil {
 			slog.Warn("remove Java SCIP worktree", "repository_id", repository.ID, "error", cleanupErr)
 		}
 		if removeErr := os.RemoveAll(parent); removeErr != nil {
@@ -721,7 +739,7 @@ func (s *Service) build(
 		}
 	}()
 
-	if output, addErr := runGit(ctx, repository.Path, "worktree", "add", "--detach", "--force", worktree, revision); addErr != nil {
+	if output, addErr := runGit(ctx, shadowPath, "worktree", "add", "--detach", "--force", worktree, revision); addErr != nil {
 		return scipindex.ImportSummary{}, fmt.Errorf("create exact-commit worktree: %w: %s", addErr, output)
 	}
 	indexDirectory := worktree
@@ -759,6 +777,35 @@ func (s *Service) build(
 		return scipindex.ImportSummary{}, fmt.Errorf("import generated index.scip: %w", err)
 	}
 	return summary, nil
+}
+
+func (s *Service) prepareGitShadow(
+	ctx context.Context,
+	repository catalog.Repository,
+	revision string,
+) (string, error) {
+	root := filepath.Join(s.config.DataDirectory, "git-shadow")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return "", err
+	}
+	shadowPath := filepath.Join(root, fmt.Sprintf("repository-%d.git", repository.ID))
+	if _, err := os.Stat(filepath.Join(shadowPath, "HEAD")); errors.Is(err, os.ErrNotExist) {
+		command := exec.CommandContext(ctx, "git", "init", "--bare", shadowPath)
+		if output, commandErr := command.CombinedOutput(); commandErr != nil {
+			return "", fmt.Errorf("initialize shadow: %w: %s", commandErr, boundedOneLine(output))
+		}
+	} else if err != nil {
+		return "", err
+	}
+	ref := "refs/repokarta/scip"
+	if output, err := runGit(
+		ctx,
+		shadowPath,
+		"fetch", "--force", "--no-tags", repository.Path, "+"+revision+":"+ref,
+	); err != nil {
+		return "", fmt.Errorf("fetch exact revision: %w: %s", err, output)
+	}
+	return shadowPath, nil
 }
 
 func classifyFailure(cause error) (string, string) {

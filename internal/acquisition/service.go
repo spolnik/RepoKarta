@@ -669,7 +669,7 @@ func (s *Service) runGitEnvironment(ctx context.Context, environment map[string]
 	}
 	environment["GIT_TERMINAL_PROMPT"] = "0"
 	environment["GIT_OPTIONAL_LOCKS"] = "0"
-	environment["GIT_CONFIG_NOSYSTEM"] = "0"
+	environment["GIT_CONFIG_NOSYSTEM"] = "1"
 	command.Env = environmentWithOverrides(environment)
 	output, err := command.CombinedOutput()
 	if err != nil {

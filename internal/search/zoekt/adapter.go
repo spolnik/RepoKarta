@@ -43,6 +43,7 @@ type Adapter struct {
 	indexDirectory string
 	ctagsPath      string
 	symbolsEnabled bool
+	indexMu        sync.Mutex
 	mu             sync.RWMutex
 	searcher       upstream.Streamer
 }
@@ -120,12 +121,8 @@ func (a *Adapter) Index(ctx context.Context, repository catalog.Repository) (boo
 		return false, fmt.Errorf("repository ID %d cannot be represented in the Zoekt index", repository.ID)
 	}
 
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.searcher != nil {
-		a.searcher.Close()
-		a.searcher = nil
-	}
+	a.indexMu.Lock()
+	defer a.indexMu.Unlock()
 
 	shadowPath, err := a.prepareGitShadow(ctx, repository)
 	if err != nil {
@@ -160,6 +157,14 @@ func (a *Adapter) Index(ctx context.Context, repository catalog.Repository) (boo
 	if err := ctx.Err(); err != nil {
 		return updated, err
 	}
+	// Existing searchers keep serving their open shards throughout the fetch
+	// and build. Swap them only after the new shard set is completely published.
+	a.mu.Lock()
+	if a.searcher != nil {
+		a.searcher.Close()
+		a.searcher = nil
+	}
+	a.mu.Unlock()
 	return updated, nil
 }
 
@@ -187,7 +192,7 @@ func (a *Adapter) Search(ctx context.Context, request search.Query) (search.Resu
 	boundedContext, cancel := context.WithTimeout(ctx, searchTimeout)
 	defer cancel()
 
-	searcher, release, err := a.acquireSearcher()
+	searcher, release, err := a.acquireSearcher(boundedContext)
 	if err != nil {
 		return search.Result{}, fmt.Errorf("open Zoekt shards: %w", err)
 	}
@@ -299,25 +304,101 @@ func normalizeLanguageFilters(request search.Query) (search.Query, []search.Warn
 	return request, warnings
 }
 
-func (a *Adapter) acquireSearcher() (upstream.Streamer, func(), error) {
+func (a *Adapter) acquireSearcher(ctx context.Context) (upstream.Streamer, func(), error) {
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer ticker.Stop()
 	for {
-		a.mu.RLock()
-		if a.searcher != nil {
-			return a.searcher, a.mu.RUnlock, nil
-		}
-		a.mu.RUnlock()
-
-		a.mu.Lock()
-		if a.searcher == nil {
-			searcher, err := zoektsearch.NewDirectorySearcher(a.indexDirectory)
-			if err != nil {
-				a.mu.Unlock()
-				return nil, nil, err
+		if a.mu.TryRLock() {
+			if a.searcher != nil {
+				return a.searcher, a.mu.RUnlock, nil
 			}
-			a.searcher = searcher
+			a.mu.RUnlock()
+		}
+		if a.mu.TryLock() {
+			if a.searcher == nil {
+				searcher, err := zoektsearch.NewDirectorySearcher(a.indexDirectory)
+				if err != nil {
+					a.mu.Unlock()
+					return nil, nil, err
+				}
+				a.searcher = searcher
+			}
+			a.mu.Unlock()
+		}
+		select {
+		case <-ctx.Done():
+			return nil, nil, ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+// PruneRepositories removes only shards and shadows keyed to repository IDs no
+// longer present in the durable catalogue.
+func (a *Adapter) PruneRepositories(ctx context.Context, live map[int64]struct{}) error {
+	a.indexMu.Lock()
+	defer a.indexMu.Unlock()
+	entries, err := os.ReadDir(a.indexDirectory)
+	if err != nil {
+		return err
+	}
+	var removed bool
+	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if entry.Name() == "git-shadow" {
+			continue
+		}
+		id, ok := repositoryIDFromZoektArtifact(entry.Name())
+		if !ok {
+			continue
+		}
+		if _, keep := live[id]; keep {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(a.indexDirectory, entry.Name())); err != nil {
+			return fmt.Errorf("remove orphaned Zoekt artifact %s: %w", entry.Name(), err)
+		}
+		removed = true
+	}
+	shadowRoot := filepath.Join(a.indexDirectory, "git-shadow")
+	shadows, err := os.ReadDir(shadowRoot)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	for _, entry := range shadows {
+		id, ok := repositoryIDFromZoektArtifact(entry.Name())
+		if !ok {
+			continue
+		}
+		if _, keep := live[id]; keep {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(shadowRoot, entry.Name())); err != nil {
+			return fmt.Errorf("remove orphaned Git shadow %s: %w", entry.Name(), err)
+		}
+		removed = true
+	}
+	if removed {
+		a.mu.Lock()
+		if a.searcher != nil {
+			a.searcher.Close()
+			a.searcher = nil
 		}
 		a.mu.Unlock()
 	}
+	return nil
+}
+
+func repositoryIDFromZoektArtifact(name string) (int64, bool) {
+	name = strings.TrimPrefix(name, "repo-")
+	end := strings.IndexAny(name, ".-_")
+	if end >= 0 {
+		name = name[:end]
+	}
+	id, err := strconv.ParseInt(name, 10, 64)
+	return id, err == nil && id > 0
 }
 
 func buildQuery(request search.Query) (query.Q, error) {

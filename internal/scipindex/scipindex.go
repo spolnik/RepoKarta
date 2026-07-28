@@ -15,7 +15,9 @@ import (
 	"path"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/scip-code/scip/bindings/go/scip"
@@ -23,18 +25,35 @@ import (
 )
 
 const (
-	artifactVersion       = 1
-	maximumIndexBytes     = 256 << 20
-	maximumArtifactBytes  = 512 << 20
-	maximumDocuments      = 200_000
-	maximumOccurrences    = 2_000_000
-	maximumSymbolLength   = 16 << 10
-	maximumDisplayNameLen = 4 << 10
+	artifactVersion        = 1
+	maximumIndexBytes      = 256 << 20
+	maximumArtifactBytes   = 512 << 20
+	maximumDocuments       = 200_000
+	maximumOccurrences     = 2_000_000
+	maximumSymbolLength    = 16 << 10
+	maximumDisplayNameLen  = 4 << 10
+	maximumCachedArtifacts = 16
 )
 
 // Store owns RepoKarta's derived SCIP artifacts.
 type Store struct {
 	directory string
+	cacheMu   sync.Mutex
+	cache     map[string]cachedArtifact
+	loads     map[string]*artifactLoad
+}
+
+type cachedArtifact struct {
+	artifact Artifact
+	found    bool
+	lastUsed time.Time
+}
+
+type artifactLoad struct {
+	done     chan struct{}
+	artifact Artifact
+	found    bool
+	err      error
 }
 
 // Artifact is a compact projection of one compiler-produced SCIP index.
@@ -128,7 +147,11 @@ func New(directory string) (*Store, error) {
 	if err := os.MkdirAll(directory, 0o755); err != nil {
 		return nil, fmt.Errorf("create SCIP artifact directory: %w", err)
 	}
-	return &Store{directory: directory}, nil
+	return &Store{
+		directory: directory,
+		cache:     make(map[string]cachedArtifact),
+		loads:     make(map[string]*artifactLoad),
+	}, nil
 }
 
 // Import validates and atomically publishes a standard protobuf index.scip.
@@ -202,6 +225,9 @@ func (s *Store) Import(
 			return ImportSummary{}, fmt.Errorf("publish SCIP artifact: %w", renameErr)
 		}
 	}
+	s.cacheMu.Lock()
+	delete(s.cache, artifactCacheKey(repositoryID, revision))
+	s.cacheMu.Unlock()
 	return summary, nil
 }
 
@@ -214,6 +240,47 @@ func (s *Store) Read(
 	if err := ctx.Err(); err != nil {
 		return Artifact{}, false, err
 	}
+	key := artifactCacheKey(repositoryID, revision)
+	s.cacheMu.Lock()
+	if cached, ok := s.cache[key]; ok {
+		cached.lastUsed = time.Now()
+		s.cache[key] = cached
+		s.cacheMu.Unlock()
+		return cached.artifact, cached.found, nil
+	}
+	if loading, ok := s.loads[key]; ok {
+		s.cacheMu.Unlock()
+		select {
+		case <-ctx.Done():
+			return Artifact{}, false, ctx.Err()
+		case <-loading.done:
+			return loading.artifact, loading.found, loading.err
+		}
+	}
+	loading := &artifactLoad{done: make(chan struct{})}
+	s.loads[key] = loading
+	s.cacheMu.Unlock()
+
+	artifact, found, err := s.readArtifact(ctx, repositoryID, revision)
+	s.cacheMu.Lock()
+	loading.artifact, loading.found, loading.err = artifact, found, err
+	if err == nil {
+		s.cache[key] = cachedArtifact{
+			artifact: artifact, found: found, lastUsed: time.Now(),
+		}
+		s.evictArtifactsLocked()
+	}
+	delete(s.loads, key)
+	close(loading.done)
+	s.cacheMu.Unlock()
+	return artifact, found, err
+}
+
+func (s *Store) readArtifact(
+	ctx context.Context,
+	repositoryID int64,
+	revision string,
+) (Artifact, bool, error) {
 	file, err := os.Open(s.artifactPath(repositoryID, revision))
 	if errors.Is(err, os.ErrNotExist) {
 		return Artifact{}, false, nil
@@ -239,6 +306,23 @@ func (s *Store) Read(
 		return Artifact{}, false, errors.New("SCIP artifact identity does not match its requested repository revision")
 	}
 	return artifact, true, nil
+}
+
+func (s *Store) evictArtifactsLocked() {
+	for len(s.cache) > maximumCachedArtifacts {
+		var oldestKey string
+		var oldest time.Time
+		for key, cached := range s.cache {
+			if oldestKey == "" || cached.lastUsed.Before(oldest) {
+				oldestKey, oldest = key, cached.lastUsed
+			}
+		}
+		delete(s.cache, oldestKey)
+	}
+}
+
+func artifactCacheKey(repositoryID int64, revision string) string {
+	return strconv.FormatInt(repositoryID, 10) + "\x00" + revision
 }
 
 // ResolveReferences selects an exact SCIP identity. A source-level name is

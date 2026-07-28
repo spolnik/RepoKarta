@@ -35,7 +35,7 @@ const (
 )
 
 var (
-	repositoryArtifactPattern = regexp.MustCompile(`^repository-(\d+)(?:-|$)`)
+	repositoryArtifactPattern = regexp.MustCompile(`^(?:repository|repo)-(\d+)(?:[._-]|$)`)
 	sensitiveValuePattern     = regexp.MustCompile(`(?i)\b(password|passwd|token|secret|api[_-]?key|authorization)(\s*[:=]\s*)([^\s,;]+)`)
 	bearerPattern             = regexp.MustCompile(`(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{12,}`)
 )
@@ -288,7 +288,11 @@ func (s *Service) scanPath(
 		}
 		item.RepositoryID = repositoryIDFromPath(relative)
 		item.Repository = repositoryNames[item.RepositoryID]
-		if temporaryArtifact(entry.Name()) {
+		if item.RepositoryID > 0 && item.Repository == "" {
+			item.State = "orphaned"
+			item.Cleanable = true
+			item.Reason = "No durable repository references this derived artifact."
+		} else if temporaryArtifact(entry.Name()) {
 			item.State = "interrupted"
 			item.Cleanable = true
 			item.Reason = "Interrupted temporary output; no published artifact references it."
@@ -579,7 +583,7 @@ func categoryForTopLevel(name string) string {
 	switch strings.ToLower(name) {
 	case "repokarta.db", "repokarta.db-wal", "repokarta.db-shm":
 		return "database"
-	case "indexes":
+	case "indexes", "scip", "scip-java":
 		return "indexes"
 	case "maps":
 		return "maps"

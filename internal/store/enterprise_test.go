@@ -77,6 +77,12 @@ func TestRepositoryCatalogueAcquisitionAndRemovalAreAudited(t *testing.T) {
 	if err := database.SyncRepositories(ctx, nil); err != nil {
 		t.Fatal(err)
 	}
+	if err := database.SyncRepositories(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.SyncRepositories(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
 	for _, action := range []string{"repository.acquire", "repository.remove"} {
 		page, err := database.AuditEvents(ctx, audit.Filter{Action: action, Limit: 10})
 		if err != nil {

@@ -122,3 +122,9 @@ type Engine interface {
 	Search(context.Context, Query) (Result, error)
 	Close() error
 }
+
+// ArtifactGarbageCollector is implemented by engines that own repository-keyed
+// derived files. Catalogue refresh invokes it only after durable sync succeeds.
+type ArtifactGarbageCollector interface {
+	PruneRepositories(context.Context, map[int64]struct{}) error
+}

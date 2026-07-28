@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	currentSchemaVersion = 20
+	currentSchemaVersion = 21
 
 	schemaV1 = `
 CREATE TABLE IF NOT EXISTS repositories (
@@ -543,6 +543,10 @@ ALTER TABLE repository_scip_indexes ADD COLUMN jdk_source TEXT NOT NULL DEFAULT 
 ALTER TABLE repository_scip_indexes ADD COLUMN failure_category TEXT NOT NULL DEFAULT ''
     CHECK(failure_category IN ('', 'environment', 'jdk_incompatible_wrapper', 'compile_error'));
 ALTER TABLE repository_scip_indexes ADD COLUMN failure_summary TEXT NOT NULL DEFAULT '';`
+
+	// Version 21 retains repository identity across transient discovery misses.
+	schemaV21 = `
+ALTER TABLE repositories ADD COLUMN discovery_misses INTEGER NOT NULL DEFAULT 0 CHECK(discovery_misses >= 0);`
 )
 
 // SchemaVersion is the current durable metadata format for every supported
@@ -577,8 +581,7 @@ SET index_state = CASE
     index_error = CASE
         WHEN scan_state IN ('empty', 'error') THEN scan_error
         ELSE ''
-    END,
-    indexed_at = ''`); err != nil {
+    END`); err != nil {
 		return false, err
 	}
 	if _, err := tx.ExecContext(ctx, `
@@ -656,24 +659,28 @@ func (s *Store) SyncRepositories(ctx context.Context, repositories []catalog.Rep
 	}
 	defer tx.Rollback()
 
-	previous := make(map[string]string)
-	rows, err := tx.QueryContext(ctx, `SELECT path, CAST(id AS TEXT) FROM repositories`)
+	type previousRepository struct {
+		id     string
+		misses int
+	}
+	previous := make(map[string]previousRepository)
+	rows, err := tx.QueryContext(ctx, `SELECT path, CAST(id AS TEXT), discovery_misses FROM repositories`)
 	if err != nil {
 		return err
 	}
 	for rows.Next() {
 		var path, id string
-		if err := rows.Scan(&path, &id); err != nil {
+		var misses int
+		if err := rows.Scan(&path, &id, &misses); err != nil {
 			rows.Close()
 			return err
 		}
-		previous[repositoryPathKey(path)] = id
+		previous[repositoryPathKey(path)] = previousRepository{id: id, misses: misses}
 	}
 	if err := rows.Close(); err != nil {
 		return err
 	}
 
-	seen := make([]string, 0, len(repositories))
 	current := make(map[string]catalog.Repository, len(repositories))
 	for _, repository := range repositories {
 		discoveredAt := formatTime(repository.DiscoveredAt)
@@ -712,6 +719,7 @@ ON CONFLICT(path) DO UPDATE SET
     bare = excluded.bare,
     scan_state = excluded.scan_state,
     scan_error = excluded.scan_error,
+    discovery_misses = 0,
     scanned_at = excluded.scanned_at,
     index_state = CASE
         WHEN excluded.index_state IN ('empty', 'error')
@@ -742,24 +750,27 @@ ON CONFLICT(path) DO UPDATE SET
 		); err != nil {
 			return fmt.Errorf("sync repository %q: %w", repository.Path, err)
 		}
-		seen = append(seen, repository.Path)
 		current[repositoryPathKey(repository.Path)] = repository
 	}
 
-	if len(seen) == 0 {
-		if _, err := tx.ExecContext(ctx, "DELETE FROM repositories"); err != nil {
-			return err
+	removed := make([]previousRepository, 0)
+	for key, repository := range previous {
+		if _, retained := current[key]; retained {
+			continue
 		}
-	} else {
-		placeholders := "?"
-		arguments := make([]any, len(seen))
-		for index, path := range seen {
-			arguments[index] = path
-			if index > 0 {
-				placeholders += ",?"
+		if repository.misses >= 2 {
+			if _, err := tx.ExecContext(ctx, "DELETE FROM repositories WHERE id = ?", repository.id); err != nil {
+				return err
 			}
+			removed = append(removed, repository)
+			continue
 		}
-		if _, err := tx.ExecContext(ctx, "DELETE FROM repositories WHERE path NOT IN ("+placeholders+")", arguments...); err != nil {
+		if _, err := tx.ExecContext(ctx, `
+UPDATE repositories
+SET discovery_misses = discovery_misses + 1,
+    scan_state = 'error',
+    scan_error = 'Repository was not found during the latest catalogue scan'
+WHERE id = ?`, repository.id); err != nil {
 			return err
 		}
 	}
@@ -790,15 +801,12 @@ SET acquisition_id = COALESCE((
 			return err
 		}
 	}
-	for key, repositoryID := range previous {
-		if _, retained := current[key]; retained {
-			continue
-		}
+	for _, repository := range removed {
 		if err := appendAuditEvent(ctx, tx, audit.Event{
 			ActorID: "system:catalogue", ActorName: "Repository catalogue",
-			Action: "repository.remove", TargetType: "repository", TargetID: repositoryID,
+			Action: "repository.remove", TargetType: "repository", TargetID: repository.id,
 			Outcome: "success", Provider: "system",
-			Metadata: map[string]string{"path_key": key},
+			Metadata: map[string]string{"reason": "three consecutive discovery misses"},
 		}); err != nil {
 			return err
 		}
@@ -1482,19 +1490,79 @@ ORDER BY id`, id)
 	if err := rows.Close(); err != nil {
 		return agent.Conversation{}, err
 	}
-	for index := range conversation.Messages {
-		message := &conversation.Messages[index]
-		message.Images, err = s.messageImages(ctx, message.ID)
-		if err != nil {
-			return agent.Conversation{}, err
-		}
-		message.Sources, err = s.messageCitations(ctx, message.ID)
-		if err != nil {
-			return agent.Conversation{}, err
-		}
+	if err := s.attachConversationEvidence(ctx, conversation.ID, conversation.Messages); err != nil {
+		return agent.Conversation{}, err
 	}
 	conversation.MessageCount = len(conversation.Messages)
 	return conversation, nil
+}
+
+func (s *Store) attachConversationEvidence(
+	ctx context.Context,
+	conversationID string,
+	messages []agent.Message,
+) error {
+	positions := make(map[int64]int, len(messages))
+	for index := range messages {
+		positions[messages[index].ID] = index
+	}
+	imageRows, err := s.db.QueryContext(ctx, `
+SELECT i.message_id, i.name, i.media_type, i.storage_path
+FROM conversation_message_images i
+JOIN conversation_messages m ON m.id = i.message_id
+WHERE m.conversation_id = ?
+ORDER BY i.id`, conversationID)
+	if err != nil {
+		return err
+	}
+	for imageRows.Next() {
+		var messageID int64
+		var name, mediaType, storagePath string
+		if err := imageRows.Scan(&messageID, &name, &mediaType, &storagePath); err != nil {
+			imageRows.Close()
+			return err
+		}
+		if filepath.Base(storagePath) != storagePath {
+			imageRows.Close()
+			return errors.New("invalid conversation image path")
+		}
+		content, err := os.ReadFile(filepath.Join(s.conversationDirectory, storagePath))
+		if err != nil {
+			imageRows.Close()
+			return err
+		}
+		if index, ok := positions[messageID]; ok {
+			messages[index].Images = append(messages[index].Images, agent.Image{
+				Name: name, MediaType: mediaType,
+				Data: base64.StdEncoding.EncodeToString(content),
+			})
+		}
+	}
+	if err := imageRows.Close(); err != nil {
+		return err
+	}
+
+	citationRows, err := s.db.QueryContext(ctx, `
+SELECT c.message_id, c.label, c.url
+FROM conversation_message_citations c
+JOIN conversation_messages m ON m.id = c.message_id
+WHERE m.conversation_id = ?
+ORDER BY c.id`, conversationID)
+	if err != nil {
+		return err
+	}
+	defer citationRows.Close()
+	for citationRows.Next() {
+		var messageID int64
+		var citation agent.Citation
+		if err := citationRows.Scan(&messageID, &citation.Label, &citation.URL); err != nil {
+			return err
+		}
+		if index, ok := positions[messageID]; ok {
+			messages[index].Sources = append(messages[index].Sources, citation)
+		}
+	}
+	return citationRows.Err()
 }
 
 // AppendMessage stores one transcript entry and its filesystem-backed images.

@@ -1203,24 +1203,22 @@ func (s *Service) searchResponse(ctx context.Context, result search.Result, limi
 			})
 		}
 		repository, visible := resolveRepository(repositories, match.RepositoryID, match.Repository, match.Revision, restricted)
-		if restricted && !visible {
+		if !visible {
 			droppedMatches = true
 			continue
 		}
-		if visible {
-			start, end := lineRange(match.Lines)
-			outputMatch.RepositoryID = repository.ID
-			outputMatch.Repository = repository.Name
-			outputMatch.Citation = Citation(repository.Name, match.Revision, match.Path, start, end)
-			outputMatch.SourceURL = s.SourceURL(repository.ID, match.Revision, match.Path, start, end)
-		}
+		start, end := lineRange(match.Lines)
+		outputMatch.RepositoryID = repository.ID
+		outputMatch.Repository = repository.Name
+		outputMatch.Citation = Citation(repository.Name, match.Revision, match.Path, start, end)
+		outputMatch.SourceURL = s.SourceURL(repository.ID, match.Revision, match.Path, start, end)
 		output.Matches = append(output.Matches, outputMatch)
 		visibleMatches++
 		visibleMatchCount += len(match.Lines)
 	}
-	if restricted && droppedMatches {
-		// Search may scan shared shards internally, but authorization metadata
-		// and inaccessible match counts never cross the response boundary.
+	if droppedMatches {
+		// Search may briefly observe a shard whose durable repository row has
+		// disappeared. Neither its path nor its counts cross the API boundary.
 		output.MatchCount = visibleMatchCount
 		output.MatchingFiles = visibleMatches
 		output.EstimatedTotalFiles = visibleMatches
@@ -1229,6 +1227,10 @@ func (s *Service) searchResponse(ctx context.Context, result search.Result, limi
 		output.ShardsSkipped = 0
 		output.Truncated = visibleMatches >= limit
 		output.TotalFilesExact = !output.Truncated
+		output.Warnings = append(output.Warnings, search.Warning{
+			Code:    "orphaned_search_match",
+			Message: "One or more search matches were omitted because their repository metadata was unavailable.",
+		})
 	}
 	output.ReturnedItems = len(output.Matches)
 	return output, nil
@@ -2038,16 +2040,14 @@ func (s *Service) namedRepository(ctx context.Context, name string) (catalog.Rep
 func resolveRepository(repositories []catalog.Repository, repositoryID int64, searchName, revision string, requireExactIdentity bool) (catalog.Repository, bool) {
 	normalized := strings.ReplaceAll(searchName, "\\", "/")
 	for _, repository := range repositories {
-		if repository.IndexedCommit != revision && repository.HeadCommit != revision {
-			continue
-		}
 		repositoryPath := filepath.ToSlash(filepath.Clean(repository.Path))
 		pathMatches := normalized == repositoryPath
 		if runtime.GOOS == "windows" {
 			pathMatches = strings.EqualFold(normalized, repositoryPath)
 		}
 		idMatches := repositoryID > 0 && repository.ID == repositoryID
-		if idMatches || pathMatches || (!requireExactIdentity &&
+		revisionMatches := repository.IndexedCommit == revision || repository.HeadCommit == revision
+		if idMatches || (revisionMatches && pathMatches) || (!requireExactIdentity && revisionMatches &&
 			(normalized == repository.Name ||
 				strings.HasSuffix(strings.ToLower(normalized), "/"+strings.ToLower(repository.Name)))) {
 			return repository, true

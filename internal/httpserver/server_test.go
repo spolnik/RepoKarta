@@ -1008,10 +1008,11 @@ func (testSearcher) Search(context.Context, search.Query) (search.Result, error)
 		Truncated:       true,
 		TotalFilesExact: true,
 		Matches: []search.FileMatch{{
-			Repository: "github.com/example/repo",
-			Revision:   "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-			Path:       "internal/example.go",
-			Language:   "Go",
+			RepositoryID: 12,
+			Repository:   "github.com/example/repo",
+			Revision:     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			Path:         "internal/example.go",
+			Language:     "Go",
 			Lines: []search.LineMatch{{
 				Number:    7,
 				Text:      "if <tag> needle",

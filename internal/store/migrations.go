@@ -56,6 +56,8 @@ func migration(version int, backend Backend) (string, error) {
 		statement = schemaV19
 	case 20:
 		statement = schemaV20
+	case 21:
+		statement = schemaV21
 	default:
 		return "", fmt.Errorf("missing migration for schema version %d", version)
 	}
@@ -85,6 +87,20 @@ func migrateSQLite(db *database) error {
 		statement, err := migration(next, BackendSQLite)
 		if err != nil {
 			return err
+		}
+		if next == 21 {
+			var repositoryTableCount int
+			if err := db.QueryRow(`
+SELECT COUNT(*) FROM sqlite_master
+WHERE type = 'table' AND name = 'repositories'`).Scan(&repositoryTableCount); err != nil {
+				return fmt.Errorf("inspect repository table before migration 21: %w", err)
+			}
+			if repositoryTableCount == 0 {
+				// Some early test/development databases recorded a schema
+				// version without creating the catalogue. Keep those sparse
+				// databases openable; fresh catalogues still receive V21.
+				statement = "SELECT 1;"
+			}
 		}
 		tx, err := db.Begin()
 		if err != nil {

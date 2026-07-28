@@ -381,6 +381,12 @@ func TestOpenMigratesM0DatabaseAndPreservesIndexStateAcrossScans(t *testing.T) {
 	if err := storage.SyncRepositories(context.Background(), []catalog.Repository{repository}); err != nil {
 		t.Fatal(err)
 	}
+	if err := storage.SyncRepositories(context.Background(), []catalog.Repository{repository}); err != nil {
+		t.Fatal(err)
+	}
+	if err := storage.SyncRepositories(context.Background(), []catalog.Repository{repository}); err != nil {
+		t.Fatal(err)
+	}
 	repositories, err := storage.ListRepositories(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -558,6 +564,13 @@ func TestSyncRepositoriesCanonicalizesDuplicatesAndRemovesStaleRows(t *testing.T
 		{Name: "duplicate", Path: aliasPath, ScanState: "ready", DiscoveredAt: now},
 	}); err != nil {
 		t.Fatal(err)
+	}
+	for range 2 {
+		if err := storage.SyncRepositories(context.Background(), []catalog.Repository{
+			{Name: "duplicate", Path: aliasPath, ScanState: "ready", DiscoveredAt: now},
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	repositories, err = storage.ListRepositories(context.Background())
 	if err != nil {

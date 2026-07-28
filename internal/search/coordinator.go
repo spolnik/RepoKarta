@@ -27,6 +27,7 @@ type Coordinator struct {
 	engine   Engine
 
 	startOnce          sync.Once
+	baseCtxMu          sync.RWMutex
 	baseCtx            context.Context
 	indexing           atomic.Bool
 	indexedObserver    func(context.Context, int64) error
@@ -72,7 +73,9 @@ func (c *Coordinator) UseIndexedObserver(observer func(context.Context, int64) e
 func (c *Coordinator) Start(ctx context.Context) error {
 	var startError error
 	c.startOnce.Do(func() {
+		c.baseCtxMu.Lock()
 		c.baseCtx = ctx
+		c.baseCtxMu.Unlock()
 		if c.indexedObserver != nil {
 			go c.observeIndexed(ctx)
 		}
@@ -110,12 +113,27 @@ func (c *Coordinator) Refresh(ctx context.Context) error {
 	if err := c.store.SyncRepositories(ctx, repositories); err != nil {
 		return fmt.Errorf("store repositories: %w", err)
 	}
+	if collector, ok := c.engine.(ArtifactGarbageCollector); ok {
+		liveRepositories, err := c.store.ListRepositories(ctx)
+		if err != nil {
+			return fmt.Errorf("load repositories for artifact cleanup: %w", err)
+		}
+		live := make(map[int64]struct{}, len(liveRepositories))
+		for _, repository := range liveRepositories {
+			live[repository.ID] = struct{}{}
+		}
+		if err := collector.PruneRepositories(ctx, live); err != nil {
+			return fmt.Errorf("clean derived search artifacts: %w", err)
+		}
+	}
 	c.queueIndexing()
 	return nil
 }
 
 func (c *Coordinator) queueIndexing() {
+	c.baseCtxMu.RLock()
 	ctx := c.baseCtx
+	c.baseCtxMu.RUnlock()
 	if ctx == nil || !c.indexing.CompareAndSwap(false, true) {
 		return
 	}

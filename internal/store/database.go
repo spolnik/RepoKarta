@@ -130,7 +130,10 @@ func OpenConfig(config Config) (*Store, error) {
 	}
 	db := &database{DB: raw, backend: backend}
 	if backend == BackendSQLite {
-		raw.SetMaxOpenConns(1)
+		// WAL permits concurrent readers while SQLite still serializes the
+		// transaction-backed write path.
+		raw.SetMaxOpenConns(4)
+		raw.SetMaxIdleConns(4)
 		if _, err := raw.Exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;"); err != nil {
 			raw.Close()
 			return nil, fmt.Errorf("configure SQLite database: %w", err)
