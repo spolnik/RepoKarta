@@ -742,6 +742,10 @@ func (b *builder) addUnresolvedPlaceholderConnection(
 	reason string,
 	additionalEvidence ...Evidence,
 ) {
+	candidate := placeholder.MapKeyCandidate
+	if candidate == "" {
+		candidate = nameShapeServiceCandidate(placeholder.Variable)
+	}
 	evidence := appendUniqueEvidence(
 		[]Evidence{placeholder.ConsumptionEvidence},
 		additionalEvidence...,
@@ -749,10 +753,10 @@ func (b *builder) addUnresolvedPlaceholderConnection(
 	unresolved := UnresolvedTopologyConnection{
 		ID: normalizeID(strings.Join([]string{
 			"unresolved", placeholder.Source, placeholder.Variable,
-			placeholder.MapKeyCandidate,
+			candidate,
 		}, ":")),
 		Source: placeholder.Source, Variable: placeholder.Variable,
-		Candidate: placeholder.MapKeyCandidate,
+		Candidate: candidate,
 		Protocol:  placeholder.Protocol, Interaction: placeholder.Interaction,
 		Reason: reason, Evidence: evidence,
 	}

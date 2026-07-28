@@ -2092,10 +2092,15 @@ func dependencyTopologyOptions(request *http.Request) (dependencies.TopologyOpti
 		Origin:      strings.ToLower(strings.TrimSpace(query.Get("origin"))),
 		Environment: strings.TrimSpace(query.Get("environment")),
 		Provider:    strings.TrimSpace(query.Get("provider")),
+		Direction:   strings.ToLower(strings.TrimSpace(query.Get("direction"))),
+		Depth:       1,
+	}
+	if options.Direction == "" {
+		options.Direction = "both"
 	}
 	if len(options.Query) > 200 || len(options.Protocol) > 30 ||
 		len(options.Origin) > 30 || len(options.Environment) > 80 ||
-		len(options.Provider) > 80 {
+		len(options.Provider) > 80 || len(options.Direction) > 10 {
 		return dependencies.TopologyOptions{}, errors.New("topology filters are too long")
 	}
 	if options.Protocol != "" && !slices.Contains(
@@ -2108,6 +2113,16 @@ func dependencyTopologyOptions(request *http.Request) (dependencies.TopologyOpti
 		[]string{"static", "runtime", "confirmed"}, options.Origin,
 	) {
 		return dependencies.TopologyOptions{}, errors.New("origin must be static, runtime, or confirmed")
+	}
+	if !slices.Contains([]string{"both", "inbound", "outbound"}, options.Direction) {
+		return dependencies.TopologyOptions{}, errors.New("direction must be both, inbound, or outbound")
+	}
+	if value := strings.TrimSpace(query.Get("depth")); value != "" {
+		depth, err := strconv.Atoi(value)
+		if err != nil || depth < 1 || depth > 2 {
+			return dependencies.TopologyOptions{}, errors.New("depth must be 1 or 2")
+		}
+		options.Depth = depth
 	}
 	for key, target := range map[string]*time.Time{
 		"observed_from": &options.ObservedFrom,
@@ -2223,6 +2238,7 @@ func dependencyTopologyURL(
 	for key, value := range map[string]string{
 		"query": options.Query, "protocol": options.Protocol, "origin": options.Origin,
 		"environment": options.Environment, "provider": options.Provider,
+		"direction": options.Direction,
 	} {
 		if value = strings.TrimSpace(value); value != "" {
 			query.Set(key, value)
@@ -2233,6 +2249,9 @@ func dependencyTopologyURL(
 	}
 	if !options.ObservedTo.IsZero() {
 		query.Set("observed_to", options.ObservedTo.UTC().Format(time.RFC3339))
+	}
+	if options.Depth > 0 {
+		query.Set("depth", strconv.Itoa(options.Depth))
 	}
 	if encoded := query.Encode(); encoded != "" {
 		return base + "?" + encoded

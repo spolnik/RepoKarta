@@ -233,11 +233,31 @@ BILLING_SERVICE_URL: http://billing-service.production.svc.cluster.local
 	if !found || selectedConnection.ResolutionTier != "map_key_registry" ||
 		!selectedConnection.TargetResolved ||
 		componentByID(selected.Components, selectedConnection.Target).Name != "billing-service" ||
-		selected.Scope.TotalRepositories != 1 ||
-		selectedProgress.RequestedRepositories != 1 {
+		selected.Scope.TotalRepositories != 3 ||
+		selected.Scope.AnalyzedRepositories != 3 ||
+		selectedProgress.RequestedRepositories != 3 {
 		t.Fatalf(
 			"repository-scoped fleet resolution = %+v, scope = %+v, progress = %+v",
 			selectedConnection, selected.Scope, selectedProgress,
+		)
+	}
+
+	billingSelected, billingProgress, err := service.ReadTopologySnapshot(
+		t.Context(), repositories[2].ID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inboundConnection, found := placeholderConnection(
+		billingSelected.Connections, "BILLING_SERVICE_URL",
+	)
+	if !found ||
+		componentByID(billingSelected.Components, inboundConnection.Source).Name != "checkout" ||
+		componentByID(billingSelected.Components, inboundConnection.Target).Name != "billing-service" ||
+		billingProgress.RequestedRepositories != 3 {
+		t.Fatalf(
+			"repository-scoped inbound fleet connection = %+v, progress = %+v",
+			inboundConnection, billingProgress,
 		)
 	}
 }

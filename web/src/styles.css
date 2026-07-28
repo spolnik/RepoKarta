@@ -2417,6 +2417,17 @@ a.brand-mark:hover,
   color: #fde68a;
 }
 
+.topology-neighborhood-header {
+  align-items: center;
+  background: linear-gradient(90deg, rgb(56 189 248 / 7%), rgb(15 23 42 / 35%) 48%, rgb(52 211 153 / 7%));
+  border: 1px solid rgb(148 163 184 / 14%);
+  border-radius: 0.75rem;
+  display: flex;
+  gap: 1.5rem;
+  justify-content: space-between;
+  padding: 0.9rem 1rem;
+}
+
 .topology-shell {
   display: grid;
   min-height: 680px;
@@ -2508,6 +2519,10 @@ a.brand-mark:hover,
 .topology-legend [data-protocol="mcp"]::before { background: #f472b6; }
 .topology-legend [data-state="runtime_only"]::before { background: transparent; border-top: 2px dashed #22d3ee; }
 .topology-legend [data-state="static_only"]::before { opacity: 0.55; }
+.topology-legend [data-neighborhood-role="inbound"]::before { background: #7dd3fc; }
+.topology-legend [data-neighborhood-role="selected"]::before { background: #f8fafc; }
+.topology-legend [data-neighborhood-role="outbound"]::before { background: #6ee7b7; }
+.topology-legend [data-neighborhood-role="bidirectional"]::before { background: #c4b5fd; }
 
 .topology-inspector {
   overflow-y: auto;
@@ -2599,6 +2614,21 @@ a.brand-mark:hover,
 .topology-protocol-grpc { border-color: rgb(167 139 250 / 25%); color: #ddd6fe; }
 .topology-protocol-http { border-color: rgb(52 211 153 / 25%); color: #a7f3d0; }
 
+.topology-direction {
+  border: 1px solid rgb(148 163 184 / 18%);
+  border-radius: 999px;
+  display: inline-flex;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 0.25rem 0.5rem;
+  text-transform: uppercase;
+}
+
+.topology-direction-inbound { border-color: rgb(125 211 252 / 25%); color: #bae6fd; }
+.topology-direction-outbound { border-color: rgb(110 231 183 / 25%); color: #a7f3d0; }
+.topology-direction-context { color: #cbd5e1; }
+
 @media (max-width: 1024px) {
   .topology-shell {
     grid-template-columns: 1fr;
@@ -2613,6 +2643,11 @@ a.brand-mark:hover,
 
 @media (max-width: 640px) {
   .topology-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .topology-neighborhood-header {
     align-items: flex-start;
     flex-direction: column;
   }

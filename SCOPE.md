@@ -889,6 +889,10 @@ secondary views.
 - [x] Expose filtering, focus-neighbor interaction, accessible connection
   inventory, evidence/telemetry inspection, bounded JSON read/import APIs, and
   the read-only `read_system_topology` MCP tool.
+- [x] Scope repository topology as a bounded fleet-backed neighborhood with
+  explicit inbound/outbound direction, depth-one defaults, optional depth-two
+  context, grouped hub overflow, unresolved possible callers, and honest fleet
+  snapshot freshness.
 - [x] Require artifact-management permission for runtime imports; keep reads
   cache-only and return explicit `202 Accepted` progress for cold topology
   artifacts.
@@ -953,7 +957,7 @@ completion criteria include:
 
 ## Current implementation version
 
-`0.80.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
+`0.81.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
 The M9 dependency inventory, public registry refresh, lockfile resolution,
 explicit private-registry routing, reproducible OSV advisory snapshots,
 ecosystem-correct fleet CVE matching, scope-aware UI/JSON/MCP findings, and
@@ -969,7 +973,9 @@ blanking the graph. Deployment-only repositories retain diagnostic counts for
 connections dropped from suppressed source components. Placeholder resolution now
 includes service-map keys, ranked fleet assignments, candidate and unresolved
 payloads, registrable-domain naming, and resolved/candidate/unresolved honesty
-counts.
+counts. Repository scope is a fleet-backed, depth-one inbound/outbound
+neighborhood with bounded overflow groups, optional depth-two context, possible
+unresolved inbound callers, and explicit fleet freshness/partiality.
 Linked-worktree discovery deduplication and M10 enterprise identity and
 administration are complete; conversations are strictly owner-only, Wiki/admin
 actions retain principal-scoped audit evidence, advisory results are grouped

@@ -757,3 +757,22 @@ func TestRepositoryNameResolutionReportsAmbiguityWithMatchingIDs(t *testing.T) {
 		t.Fatalf("ambiguity error = %v", err)
 	}
 }
+
+func TestTopologyToolOptionsExposeScopedDirectionAndDepth(t *testing.T) {
+	options, err := topologyToolOptions(readSystemTopologyInput{
+		Direction: "INBOUND",
+		Depth:     2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.Direction != "inbound" || options.Depth != 2 {
+		t.Fatalf("topology neighborhood options = %+v", options)
+	}
+	if _, err := topologyToolOptions(readSystemTopologyInput{
+		Direction: "sideways",
+		Depth:     3,
+	}); err == nil {
+		t.Fatal("invalid topology direction and depth were accepted")
+	}
+}

@@ -2,6 +2,7 @@ package dependencies
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -317,4 +318,194 @@ func TestTopologyReportsAndFiltersStaticPlaceholderMetadata(t *testing.T) {
 		filtered.Connections[0].EnvironmentVariable != "PAYMENTS_URL" {
 		t.Fatalf("static environment filter = %+v", filtered.Connections)
 	}
+}
+
+func TestScopedTopologyBuildsBidirectionalFleetNeighborhood(t *testing.T) {
+	now := time.Date(2026, 7, 28, 10, 0, 0, 0, time.UTC)
+	snapshot := graph.Snapshot{
+		ID: "three-repository-fleet",
+		Components: []graph.SystemComponent{
+			{ID: "a", Name: "A", Kind: "service", RepositoryID: 1, Repository: "repo-a"},
+			{ID: "b", Name: "B", Kind: "service", RepositoryID: 2, Repository: "repo-b"},
+			{ID: "c", Name: "C", Kind: "service", RepositoryID: 3, Repository: "repo-c"},
+		},
+		Connections: []graph.SystemConnection{
+			{
+				ID: "a-b", Source: "a", Target: "b", Protocol: "http",
+				Interaction: "calls", EvidenceOrigin: "static", TargetResolved: true,
+			},
+			{
+				ID: "c-b", Source: "c", Target: "b", Protocol: "grpc",
+				Interaction: "calls", EvidenceOrigin: "static", TargetResolved: true,
+			},
+		},
+		Scope: graph.Scope{
+			Kind: "repository", Complete: true, TotalRepositories: 3,
+			AnalyzedRepositories: 3, RequestedRepositoryID: 2,
+		},
+		TopologyFleetGeneratedAt:    now.Add(-time.Hour),
+		TopologySelectedGeneratedAt: now,
+	}
+	topology := buildTopology(
+		snapshot, graph.ArtifactProgress{State: "ready"}, nil,
+		TopologyOptions{Direction: "both", Depth: 1}, now,
+	)
+	if topology.Neighborhood == nil ||
+		topology.Neighborhood.InboundConnectionCount != 2 ||
+		topology.Neighborhood.OutboundConnectionCount != 0 ||
+		!topology.Neighborhood.FleetStale ||
+		len(topology.Connections) != 2 {
+		t.Fatalf("B neighborhood = %+v, connections = %+v", topology.Neighborhood, topology.Connections)
+	}
+	for _, connection := range topology.Connections {
+		if connection.Target != "b" || connection.NeighborhoodDirection != "inbound" {
+			t.Fatalf("B direction split = %+v", topology.Connections)
+		}
+	}
+	if roleForComponent(topology.Components, "b") != "selected" ||
+		roleForComponent(topology.Components, "a") != "inbound" ||
+		roleForComponent(topology.Components, "c") != "inbound" {
+		t.Fatalf("B component roles = %+v", topology.Components)
+	}
+
+	snapshot.Scope.RequestedRepositoryID = 1
+	snapshot.TopologySelectedGeneratedAt = now.Add(-time.Hour)
+	topology = buildTopology(
+		snapshot, graph.ArtifactProgress{State: "ready"}, nil,
+		TopologyOptions{Direction: "both", Depth: 1}, now,
+	)
+	if topology.Neighborhood == nil ||
+		topology.Neighborhood.InboundConnectionCount != 0 ||
+		topology.Neighborhood.OutboundConnectionCount != 1 ||
+		len(topology.Connections) != 1 ||
+		topology.Connections[0].Source != "a" ||
+		topology.Connections[0].Target != "b" ||
+		topology.Connections[0].NeighborhoodDirection != "outbound" {
+		t.Fatalf("A direction split = %+v, connections = %+v", topology.Neighborhood, topology.Connections)
+	}
+}
+
+func TestScopedTopologyGroupsHubConnectionsBeyondDisplayCap(t *testing.T) {
+	components := []graph.SystemComponent{{
+		ID: "hub", Name: "Hub", Kind: "service", RepositoryID: 100, Repository: "hub",
+	}}
+	connections := make([]graph.SystemConnection, 0, topologyNeighborhoodCap+3)
+	for index := 0; index < topologyNeighborhoodCap+3; index++ {
+		id := fmt.Sprintf("caller-%02d", index)
+		components = append(components, graph.SystemComponent{
+			ID: id, Name: id, Kind: "service", RepositoryID: int64(index + 1),
+		})
+		connections = append(connections, graph.SystemConnection{
+			ID: id + "-hub", Source: id, Target: "hub", Protocol: "http",
+			Interaction: "calls", EvidenceOrigin: "static", TargetResolved: true,
+		})
+	}
+	topology := buildTopology(
+		graph.Snapshot{
+			ID: "hub-fleet", Components: components, Connections: connections,
+			Scope: graph.Scope{
+				Kind: "repository", Complete: true,
+				TotalRepositories: len(components), AnalyzedRepositories: len(components),
+				RequestedRepositoryID: 100,
+			},
+		},
+		graph.ArtifactProgress{State: "ready"}, nil,
+		TopologyOptions{Direction: "both", Depth: 1}, time.Now(),
+	)
+	if topology.Neighborhood == nil ||
+		topology.Neighborhood.InboundConnectionCount != topologyNeighborhoodCap+3 ||
+		len(topology.Connections) != topologyNeighborhoodCap ||
+		len(topology.Neighborhood.Groups) != 1 ||
+		topology.Neighborhood.Groups[0].Direction != "inbound" ||
+		topology.Neighborhood.Groups[0].OmittedConnectionCount != 3 ||
+		topology.Neighborhood.Groups[0].OmittedComponentCount != 3 ||
+		len(topology.Components) != topologyNeighborhoodCap+1 {
+		t.Fatalf(
+			"hub neighborhood = %+v, connections = %d, components = %d",
+			topology.Neighborhood, len(topology.Connections), len(topology.Components),
+		)
+	}
+}
+
+func TestScopedTopologyDepthTwoAddsBoundedContext(t *testing.T) {
+	topology := buildTopology(
+		graph.Snapshot{
+			ID: "depth-two",
+			Components: []graph.SystemComponent{
+				{ID: "a", Name: "A", Kind: "service", RepositoryID: 1},
+				{ID: "b", Name: "B", Kind: "service", RepositoryID: 2},
+				{ID: "c", Name: "C", Kind: "service", RepositoryID: 3},
+			},
+			Connections: []graph.SystemConnection{
+				{
+					ID: "a-b", Source: "a", Target: "b", Protocol: "http",
+					Interaction: "calls", EvidenceOrigin: "static", TargetResolved: true,
+				},
+				{
+					ID: "b-c", Source: "b", Target: "c", Protocol: "grpc",
+					Interaction: "calls", EvidenceOrigin: "static", TargetResolved: true,
+				},
+			},
+			Scope: graph.Scope{
+				Kind: "repository", Complete: true, TotalRepositories: 3,
+				AnalyzedRepositories: 3, RequestedRepositoryID: 1,
+			},
+		},
+		graph.ArtifactProgress{State: "ready"}, nil,
+		TopologyOptions{Direction: "both", Depth: 2}, time.Now(),
+	)
+	if topology.Neighborhood == nil ||
+		topology.Neighborhood.Depth != 2 ||
+		topology.Neighborhood.ContextConnectionCount != 1 ||
+		len(topology.Connections) != 2 ||
+		topology.Connections[0].NeighborhoodDirection != "outbound" ||
+		topology.Connections[1].NeighborhoodDirection != "context" ||
+		roleForComponent(topology.Components, "c") != "context" {
+		t.Fatalf("depth-two neighborhood = %+v, connections = %+v", topology.Neighborhood, topology.Connections)
+	}
+}
+
+func TestScopedTopologySeparatesPossibleUnresolvedInboundCallers(t *testing.T) {
+	topology := buildTopology(
+		graph.Snapshot{
+			ID: "possible-inbound",
+			Components: []graph.SystemComponent{
+				{
+					ID: "checkout", Name: "checkout-service", Kind: "service",
+					RepositoryID: 1, Aliases: []string{"checkout"},
+				},
+				{ID: "caller", Name: "caller", Kind: "service", RepositoryID: 2},
+			},
+			UnresolvedTopology: []graph.UnresolvedTopologyConnection{{
+				ID: "caller-checkout", Source: "caller",
+				Variable: "CHECKOUT_URL", Candidate: "checkout",
+				Protocol: "http", Interaction: "calls", Reason: "no-indexed-assignment",
+			}},
+			Scope: graph.Scope{
+				Kind: "repository", Complete: false, TotalRepositories: 3,
+				AnalyzedRepositories: 2, OmittedRepositories: 1,
+				RequestedRepositoryID: 1,
+			},
+		},
+		graph.ArtifactProgress{State: "building", PendingRepositories: 1}, nil,
+		TopologyOptions{Direction: "both", Depth: 1}, time.Now(),
+	)
+	if topology.Neighborhood == nil || !topology.Neighborhood.FleetPartial ||
+		topology.Neighborhood.PossibleInboundUnresolvedCount != 1 ||
+		len(topology.Neighborhood.PossibleInboundUnresolved) != 1 ||
+		topology.Neighborhood.PossibleInboundUnresolved[0].SourceName != "caller" ||
+		topology.Neighborhood.PossibleInboundUnresolved[0].NeighborhoodDirection != "possible_inbound" ||
+		len(topology.Unresolved) != 0 ||
+		topology.Summary.UnresolvedPlaceholderCount != 1 {
+		t.Fatalf("possible inbound unresolved = %+v, summary = %+v", topology.Neighborhood, topology.Summary)
+	}
+}
+
+func roleForComponent(components []TopologyComponent, id string) string {
+	for _, component := range components {
+		if component.ID == id {
+			return component.NeighborhoodRole
+		}
+	}
+	return ""
 }

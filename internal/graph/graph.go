@@ -284,6 +284,8 @@ type Snapshot struct {
 	ExcludedEnvironmentVariables []string                       `json:"excluded_environment_variables,omitempty"`
 	RejectedExternalCount        int                            `json:"rejected_external_component_count,omitempty"`
 	SuppressedSourceEdges        int                            `json:"suppressed_source_edges,omitempty"`
+	TopologyFleetGeneratedAt     time.Time                      `json:"topology_fleet_generated_at,omitempty"`
+	TopologySelectedGeneratedAt  time.Time                      `json:"topology_selected_generated_at,omitempty"`
 	Structure                    []StructuralDocument           `json:"structure,omitempty"`
 	StructureTruncated           bool                           `json:"structure_truncated"`
 	FileCount                    int                            `json:"file_count"`
@@ -560,9 +562,11 @@ func (s *Service) ReadDependencySnapshot(
 }
 
 // ReadTopologySnapshot composes distributed-system components and connections
-// from already-prepared per-repository artifacts. The final fleet pass
-// reconciles inferred external peers against aliases from every visible
-// repository, which is impossible while a repository is indexed in isolation.
+// from already-prepared per-repository artifacts. Repository selection records
+// the component to focus but deliberately retains the complete fleet snapshot:
+// inbound edges originate in other repositories and cannot be recovered from
+// the selected repository's extraction. The final fleet pass also reconciles
+// inferred external peers against aliases from every visible repository.
 func (s *Service) ReadTopologySnapshot(
 	ctx context.Context,
 	repositoryID int64,
@@ -607,23 +611,19 @@ func (s *Service) ReadTopologySnapshot(
 
 	output := Snapshot{
 		Version:      snapshotVersion,
-		ID:           snapshotSignature(requestedRepositories),
+		ID:           snapshotSignature(resolutionRepositories),
 		GeneratedAt:  time.Now().UTC(),
 		Repositories: []Repository{},
 		Components:   []SystemComponent{},
 		Connections:  []SystemConnection{},
 		Scope: Scope{
 			Kind:                  "repository",
-			TotalRepositories:     len(requestedRepositories),
+			TotalRepositories:     len(resolutionRepositories),
 			RequestedRepositoryID: repositoryID,
 		},
 	}
 	if repositoryID == 0 {
 		output.Scope.Kind = "collection"
-	}
-	inScope := make(map[int64]bool, len(requestedRepositories))
-	for _, repository := range requestedRepositories {
-		inScope[repository.ID] = true
 	}
 	merged := newBuilder(s.currentBaseURL())
 	suppressedSourceEdges := 0
@@ -631,24 +631,28 @@ func (s *Service) ReadTopologySnapshot(
 		if !result.ok {
 			continue
 		}
-		selected := inScope[result.repository.ID]
-		if selected {
-			output.Repositories = append(output.Repositories, result.snapshot.Repositories...)
+		output.Repositories = append(output.Repositories, result.snapshot.Repositories...)
+		output.Scope.AnalyzedRepositories++
+		if output.TopologyFleetGeneratedAt.IsZero() ||
+			(!result.snapshot.GeneratedAt.IsZero() &&
+				result.snapshot.GeneratedAt.Before(output.TopologyFleetGeneratedAt)) {
+			output.TopologyFleetGeneratedAt = result.snapshot.GeneratedAt
+		}
+		if result.repository.ID == repositoryID {
+			output.TopologySelectedGeneratedAt = result.snapshot.GeneratedAt
 		}
 		for _, component := range result.snapshot.Components {
 			merged.addSystemComponent(component)
 		}
-		if selected {
-			for _, connection := range result.snapshot.Connections {
-				if connection.EnvironmentVariable != "" {
-					continue
-				}
-				merged.addSystemConnection(connection)
+		for _, connection := range result.snapshot.Connections {
+			if connection.EnvironmentVariable != "" {
+				continue
 			}
-			merged.topologyPlaceholders = append(
-				merged.topologyPlaceholders, result.snapshot.TopologyPlaceholders...,
-			)
+			merged.addSystemConnection(connection)
 		}
+		merged.topologyPlaceholders = append(
+			merged.topologyPlaceholders, result.snapshot.TopologyPlaceholders...,
+		)
 		merged.environmentAssignments = append(
 			merged.environmentAssignments, result.snapshot.EnvironmentAssignments...,
 		)
@@ -656,11 +660,8 @@ func (s *Service) ReadTopologySnapshot(
 		for _, variable := range result.snapshot.ExcludedEnvironmentVariables {
 			merged.excludedEnvironmentVariables[variable] = true
 		}
-		if selected {
-			suppressedSourceEdges += result.snapshot.SuppressedSourceEdges
-			output.Truncated = output.Truncated || result.snapshot.Truncated
-			output.Scope.AnalyzedRepositories++
-		}
+		suppressedSourceEdges += result.snapshot.SuppressedSourceEdges
+		output.Truncated = output.Truncated || result.snapshot.Truncated
 	}
 	merged.resolveTopologyPlaceholders()
 	merged.resolveSystemConnections()

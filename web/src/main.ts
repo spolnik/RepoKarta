@@ -6482,6 +6482,7 @@ type TopologyComponentPayload = {
   candidate?: boolean;
   evidence?: TopologyEvidence[];
   origins: string[];
+  neighborhood_role?: "selected" | "inbound" | "outbound" | "bidirectional" | "context";
 };
 
 type TopologyRuntimePayload = {
@@ -6515,6 +6516,27 @@ type TopologyConnectionPayload = {
   unresolved_reason?: string;
   evidence?: TopologyEvidence[];
   runtime?: TopologyRuntimePayload;
+  neighborhood_direction?: "inbound" | "outbound" | "context";
+};
+
+type TopologyNeighborhoodGroupPayload = {
+  id: string;
+  direction: "inbound" | "outbound" | "context";
+  label: string;
+  omitted_connection_count: number;
+  omitted_component_count: number;
+};
+
+type TopologyNeighborhoodPayload = {
+  repository_id: number;
+  direction: "both" | "inbound" | "outbound";
+  depth: number;
+  display_cap: number;
+  selected_component_ids: string[];
+  inbound_connection_count: number;
+  outbound_connection_count: number;
+  context_connection_count?: number;
+  groups: TopologyNeighborhoodGroupPayload[];
 };
 
 type TopologyPayload = {
@@ -6522,6 +6544,7 @@ type TopologyPayload = {
   connections: TopologyConnectionPayload[];
   build_progress: { state: string; pending_repositories: number };
   warnings?: Array<{ code: string; message: string; count: number }>;
+  neighborhood?: TopologyNeighborhoodPayload;
 };
 
 function enableDependencyTopology(debug?: DebugLogger): void {
@@ -6557,6 +6580,8 @@ function enableDependencyTopology(debug?: DebugLogger): void {
   type TopologySingular = import("cytoscape").NodeSingular | import("cytoscape").EdgeSingular;
   let graph: TopologyCore | undefined;
   let selected: TopologySingular | undefined;
+  const scopedNeighborhood = workspace.dataset.topologyScoped === "true";
+  let currentDepth = Number(workspace.dataset.topologyDepth || "1");
   const showIntegrityWarning = (count: number): void => {
     if (count <= 0) {
       warning.hidden = true;
@@ -6608,7 +6633,7 @@ function enableDependencyTopology(debug?: DebugLogger): void {
   };
   const inspect = (element: TopologySingular): void => {
     selected = element;
-    focus.disabled = false;
+    focus.disabled = scopedNeighborhood ? currentDepth >= 2 : false;
     inspectorEmpty.hidden = true;
     inspector.hidden = false;
     graph?.elements().removeClass("topology-dim topology-selected");
@@ -6662,6 +6687,17 @@ function enableDependencyTopology(debug?: DebugLogger): void {
     graph.fit(graph.elements(), 48);
   };
   focus.addEventListener("click", () => {
+    if (scopedNeighborhood) {
+      if (currentDepth >= 2) {
+        return;
+      }
+      const endpoint = new URL(apiURL, window.location.href);
+      endpoint.searchParams.set("depth", "2");
+      focus.disabled = true;
+      focus.textContent = "Loading depth 2...";
+      void loadTopology(endpoint.pathname + endpoint.search);
+      return;
+    }
     if (!graph || !selected) {
       return;
     }
@@ -6675,7 +6711,7 @@ function enableDependencyTopology(debug?: DebugLogger): void {
   });
   reset.addEventListener("click", () => {
     selected = undefined;
-    focus.disabled = true;
+    focus.disabled = scopedNeighborhood ? currentDepth >= 2 : true;
     graph?.elements().removeClass("topology-dim topology-selected");
     inspector.hidden = true;
     inspectorEmpty.hidden = false;
@@ -6695,8 +6731,36 @@ function enableDependencyTopology(debug?: DebugLogger): void {
     if (payload.components.length === 0) {
       return;
     }
-    const elements = [
-      ...payload.components.map((component) => ({
+    const laneX: Record<string, number> = {
+      inbound: 120,
+      selected: 440,
+      outbound: 760,
+      bidirectional: 440,
+      context: 980
+    };
+    const roleCounts = new Map<string, number>();
+    const roleTotals = new Map<string, number>();
+    payload.components.forEach((component) => {
+      const role = component.neighborhood_role ?? "context";
+      roleTotals.set(role, (roleTotals.get(role) ?? 0) + 1);
+    });
+    payload.neighborhood?.groups.forEach((group) => {
+      roleTotals.set(group.direction, (roleTotals.get(group.direction) ?? 0) + 1);
+    });
+    const lanePosition = (role: string): { x: number; y: number } | undefined => {
+      if (!payload.neighborhood) {
+        return undefined;
+      }
+      const index = roleCounts.get(role) ?? 0;
+      roleCounts.set(role, index + 1);
+      const total = roleTotals.get(role) ?? 1;
+      return {
+        x: laneX[role] ?? laneX.context,
+        y: 280 + (index - (total - 1) / 2) * 82
+      };
+    };
+    const selectedID = payload.neighborhood?.selected_component_ids[0];
+    const componentElements = payload.components.map((component) => ({
         data: {
           id: component.id,
           label: component.name,
@@ -6704,10 +6768,12 @@ function enableDependencyTopology(debug?: DebugLogger): void {
           external: component.external ? "yes" : "no",
           candidate: component.candidate ? "yes" : "no",
           origin: component.origins.join("-"),
+          neighborhoodRole: component.neighborhood_role ?? "",
           payload: component
-        }
-      })),
-      ...payload.connections.map((connection) => ({
+        },
+        position: lanePosition(component.neighborhood_role ?? "context")
+      }));
+    const connectionElements = payload.connections.map((connection) => ({
         data: {
           id: connection.id,
           source: connection.source,
@@ -6717,11 +6783,40 @@ function enableDependencyTopology(debug?: DebugLogger): void {
             : `${connection.protocol} · ${connection.interaction}`,
           protocol: connection.protocol,
           state: connection.state,
+          neighborhoodDirection: connection.neighborhood_direction ?? "",
           width: Math.min(7, 2 + Math.log10((connection.runtime?.request_count ?? 0) + 1)),
           payload: connection
         }
-      }))
-    ];
+      }));
+    const groupElements = (payload.neighborhood?.groups ?? []).flatMap((group) => {
+      if (!selectedID) {
+        return [];
+      }
+      const inbound = group.direction === "inbound";
+      return [
+        {
+          data: {
+            id: group.id,
+            label: group.label,
+            group: "yes",
+            neighborhoodRole: group.direction
+          },
+          position: lanePosition(group.direction)
+        },
+        {
+          data: {
+            id: `${group.id}:edge`,
+            source: inbound ? group.id : selectedID,
+            target: inbound ? selectedID : group.id,
+            label: "grouped",
+            group: "yes",
+            neighborhoodDirection: group.direction,
+            width: 2
+          }
+        }
+      ];
+    });
+    const elements = [...componentElements, ...connectionElements, ...groupElements];
     graph = cytoscape({
       container: canvas,
       elements,
@@ -6753,6 +6848,11 @@ function enableDependencyTopology(debug?: DebugLogger): void {
         { selector: 'node[kind = "mcp_server"]', style: { shape: "hexagon", "border-color": "#f472b6" } },
         { selector: 'node[external = "yes"]', style: { "border-style": "dashed", "background-color": "#15121c" } },
         { selector: 'node[candidate = "yes"]', style: { "border-color": "#fbbf24", "background-color": "#1c1810" } },
+        { selector: 'node[neighborhoodRole = "selected"]', style: { "border-color": "#f8fafc", "border-width": 4, "background-color": "#172033", width: 152 } },
+        { selector: 'node[neighborhoodRole = "inbound"]', style: { "border-color": "#7dd3fc" } },
+        { selector: 'node[neighborhoodRole = "outbound"]', style: { "border-color": "#6ee7b7" } },
+        { selector: 'node[neighborhoodRole = "bidirectional"]', style: { "border-color": "#c4b5fd", "border-style": "double" } },
+        { selector: 'node[group = "yes"]', style: { shape: "round-rectangle", "border-style": "dashed", "background-color": "#18181b", color: "#f8fafc", width: 156, height: 42 } },
         {
           selector: "edge",
           style: {
@@ -6778,19 +6878,30 @@ function enableDependencyTopology(debug?: DebugLogger): void {
         { selector: 'edge[protocol = "mcp"]', style: { "line-color": "#f472b6", "target-arrow-color": "#f472b6" } },
         { selector: 'edge[state = "runtime_only"]', style: { "line-style": "dashed", opacity: 0.9 } },
         { selector: 'edge[state = "static_only"]', style: { opacity: 0.48 } },
+        { selector: 'edge[neighborhoodDirection = "inbound"]', style: { "target-arrow-color": "#7dd3fc", "target-arrow-shape": "triangle" } },
+        { selector: 'edge[neighborhoodDirection = "outbound"]', style: { "target-arrow-color": "#6ee7b7", "target-arrow-shape": "triangle" } },
+        { selector: 'edge[group = "yes"]', style: { "line-style": "dashed", "line-color": "#94a3b8", "target-arrow-color": "#94a3b8", label: "" } },
         { selector: ".topology-selected", style: { "overlay-color": "#ffffff", "overlay-opacity": 0.08, "overlay-padding": 7 } },
         { selector: ".topology-dim", style: { opacity: 0.08, "text-opacity": 0.08 } }
       ],
-      layout: {
-        name: "breadthfirst",
-        directed: true,
-        padding: 48,
-        spacingFactor: 1.25,
-        avoidOverlap: true,
-        circle: false
-      }
+      layout: payload.neighborhood
+        ? { name: "preset", padding: 48, fit: true }
+        : {
+            name: "breadthfirst",
+            directed: true,
+            padding: 48,
+            spacingFactor: 1.25,
+            avoidOverlap: true,
+            circle: false
+          }
     });
-    graph.on("tap", "node, edge", (event) => inspect(event.target as TopologySingular));
+    graph.on("tap", "node, edge", (event) => {
+      const element = event.target as TopologySingular;
+      if (element.data("group") === "yes") {
+        return;
+      }
+      inspect(element);
+    });
     graph.on("tap", (event) => {
       if (event.target === graph) {
         reset.click();
@@ -6802,13 +6913,18 @@ function enableDependencyTopology(debug?: DebugLogger): void {
     graph.on("mouseout", "node, edge", () => {
       canvas.style.cursor = "default";
     });
+    if (payload.neighborhood) {
+      currentDepth = payload.neighborhood.depth;
+      focus.disabled = currentDepth >= 2;
+      focus.textContent = currentDepth >= 2 ? "Depth 2 shown" : "Show depth 2";
+    }
     fit();
   };
 
-  void (async () => {
+  const loadTopology = async (endpoint: string): Promise<void> => {
     const started = performance.now();
     try {
-      const response = await fetch(apiURL, {
+      const response = await fetch(endpoint, {
         cache: "no-store",
         headers: { Accept: "application/json" }
       });
@@ -6845,7 +6961,9 @@ function enableDependencyTopology(debug?: DebugLogger): void {
       empty.querySelector("p")!.textContent = error instanceof Error ? error.message : "Unknown topology error";
       debug?.add("error", "dependency.topology.failed", describeError(error));
     }
-  })();
+  };
+
+  void loadTopology(apiURL);
 }
 
 connectIndexEvents();

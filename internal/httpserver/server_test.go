@@ -1592,6 +1592,7 @@ func TestDependencyTopologyIsDefaultAndExposesDirectedProtocolEvidence(t *testin
 		Scope: graph.Scope{
 			Kind: "repository", Complete: true,
 			TotalRepositories: 1, AnalyzedRepositories: 1,
+			RequestedRepositoryID: 4,
 		},
 		Components: []graph.SystemComponent{
 			{ID: "checkout", Name: "checkout", Kind: "service", RepositoryID: 4, Repository: "checkout"},
@@ -1635,10 +1636,10 @@ func TestDependencyTopologyIsDefaultAndExposesDirectedProtocolEvidence(t *testin
 		t.Fatalf("topology page status = %d, body = %s", pageResponse.Code, pageResponse.Body.String())
 	}
 	for _, expected := range []string{
-		`System topology`, `Who talks to what, and how`, `HTTP`, `MCP`,
+		`System topology`, `Inbound callers`, `outbound dependencies`, `HTTP`, `MCP`,
 		`Resolved`, `Candidates`, `Unresolved`,
 		`data-topology-workspace`, `data-topology-warning`,
-		`/api/dependencies/topology?repository=4`,
+		`/api/dependencies/topology?depth=1&amp;direction=both&amp;repository=4`,
 	} {
 		if !strings.Contains(pageResponse.Body.String(), expected) {
 			t.Fatalf("topology page does not contain %q", expected)
@@ -1655,10 +1656,28 @@ func TestDependencyTopologyIsDefaultAndExposesDirectedProtocolEvidence(t *testin
 		!strings.Contains(apiResponse.Body.String(), `"protocol":"http"`) ||
 		!strings.Contains(apiResponse.Body.String(), `"source":"checkout"`) ||
 		!strings.Contains(apiResponse.Body.String(), `"target":"orders"`) ||
+		!strings.Contains(apiResponse.Body.String(), `"neighborhood_direction":"outbound"`) ||
+		!strings.Contains(apiResponse.Body.String(), `"outbound_connection_count":1`) ||
 		!strings.Contains(apiResponse.Body.String(), `"code":"missing_component_reference"`) ||
 		!strings.Contains(apiResponse.Body.String(), `"count":1`) ||
 		strings.Contains(apiResponse.Body.String(), `"source":"suppressed-deployment"`) {
 		t.Fatalf("topology API status = %d, body = %s", apiResponse.Code, apiResponse.Body.String())
+	}
+	inboundRequest := httptest.NewRequest(
+		http.MethodGet,
+		"http://127.0.0.1:7331/api/dependencies/topology?repository=4&direction=inbound&depth=1",
+		nil,
+	)
+	inboundResponse := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(inboundResponse, inboundRequest)
+	if inboundResponse.Code != http.StatusOK ||
+		!strings.Contains(inboundResponse.Body.String(), `"direction":"inbound"`) ||
+		!strings.Contains(inboundResponse.Body.String(), `"connection_count":0`) ||
+		!strings.Contains(inboundResponse.Body.String(), `"outbound_connection_count":1`) {
+		t.Fatalf(
+			"inbound topology API status = %d, body = %s",
+			inboundResponse.Code, inboundResponse.Body.String(),
+		)
 	}
 }
 

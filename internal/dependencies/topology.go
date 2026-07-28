@@ -15,6 +15,8 @@ import (
 const (
 	MaximumTopologyObservations = 5_000
 	topologyRetention           = 90 * 24 * time.Hour
+	topologyNeighborhoodCap     = 12
+	topologyContextCap          = 12
 )
 
 // RuntimeTopologyObservation is an aggregate observed interaction from an APM,
@@ -65,13 +67,16 @@ type TopologyOptions struct {
 	Origin       string
 	Environment  string
 	Provider     string
+	Direction    string
+	Depth        int
 	ObservedFrom time.Time
 	ObservedTo   time.Time
 }
 
 type TopologyComponent struct {
 	graph.SystemComponent
-	Origins []string `json:"origins"`
+	Origins          []string `json:"origins"`
+	NeighborhoodRole string   `json:"neighborhood_role,omitempty"`
 }
 
 type RuntimeMetrics struct {
@@ -86,30 +91,58 @@ type RuntimeMetrics struct {
 }
 
 type TopologyConnection struct {
-	ID                  string           `json:"id"`
-	Source              string           `json:"source"`
-	SourceName          string           `json:"source_name"`
-	Target              string           `json:"target"`
-	TargetName          string           `json:"target_name"`
-	Protocol            string           `json:"protocol"`
-	Interaction         string           `json:"interaction"`
-	Transport           string           `json:"transport,omitempty"`
-	Confidence          string           `json:"confidence"`
-	State               string           `json:"state"`
-	Origins             []string         `json:"origins"`
-	TargetResolved      bool             `json:"target_resolved"`
-	EnvironmentVariable string           `json:"environment_variable,omitempty"`
-	ResolutionTier      string           `json:"resolution_tier,omitempty"`
-	Environment         string           `json:"environment,omitempty"`
-	ResolutionDivergent bool             `json:"resolution_divergent,omitempty"`
-	UnresolvedReason    string           `json:"unresolved_reason,omitempty"`
-	Evidence            []graph.Evidence `json:"evidence,omitempty"`
-	Runtime             *RuntimeMetrics  `json:"runtime,omitempty"`
+	ID                    string           `json:"id"`
+	Source                string           `json:"source"`
+	SourceName            string           `json:"source_name"`
+	Target                string           `json:"target"`
+	TargetName            string           `json:"target_name"`
+	Protocol              string           `json:"protocol"`
+	Interaction           string           `json:"interaction"`
+	Transport             string           `json:"transport,omitempty"`
+	Confidence            string           `json:"confidence"`
+	State                 string           `json:"state"`
+	Origins               []string         `json:"origins"`
+	TargetResolved        bool             `json:"target_resolved"`
+	EnvironmentVariable   string           `json:"environment_variable,omitempty"`
+	ResolutionTier        string           `json:"resolution_tier,omitempty"`
+	Environment           string           `json:"environment,omitempty"`
+	ResolutionDivergent   bool             `json:"resolution_divergent,omitempty"`
+	UnresolvedReason      string           `json:"unresolved_reason,omitempty"`
+	Evidence              []graph.Evidence `json:"evidence,omitempty"`
+	Runtime               *RuntimeMetrics  `json:"runtime,omitempty"`
+	NeighborhoodDirection string           `json:"neighborhood_direction,omitempty"`
 }
 
 type TopologyUnresolved struct {
 	graph.UnresolvedTopologyConnection
-	SourceName string `json:"source_name"`
+	SourceName            string `json:"source_name"`
+	NeighborhoodDirection string `json:"neighborhood_direction,omitempty"`
+}
+
+type TopologyNeighborhoodGroup struct {
+	ID                     string `json:"id"`
+	Direction              string `json:"direction"`
+	Label                  string `json:"label"`
+	OmittedConnectionCount int    `json:"omitted_connection_count"`
+	OmittedComponentCount  int    `json:"omitted_component_count"`
+}
+
+type TopologyNeighborhood struct {
+	RepositoryID                   int64                       `json:"repository_id"`
+	Direction                      string                      `json:"direction"`
+	Depth                          int                         `json:"depth"`
+	DisplayCap                     int                         `json:"display_cap"`
+	SelectedComponentIDs           []string                    `json:"selected_component_ids"`
+	InboundConnectionCount         int                         `json:"inbound_connection_count"`
+	OutboundConnectionCount        int                         `json:"outbound_connection_count"`
+	ContextConnectionCount         int                         `json:"context_connection_count,omitempty"`
+	Groups                         []TopologyNeighborhoodGroup `json:"groups"`
+	PossibleInboundUnresolvedCount int                         `json:"possible_inbound_unresolved_count"`
+	PossibleInboundUnresolved      []TopologyUnresolved        `json:"possible_inbound_unresolved"`
+	FleetSnapshotAt                time.Time                   `json:"fleet_snapshot_at,omitempty"`
+	SelectedSnapshotAt             time.Time                   `json:"selected_snapshot_at,omitempty"`
+	FleetPartial                   bool                        `json:"fleet_partial"`
+	FleetStale                     bool                        `json:"fleet_stale"`
 }
 
 type TopologyWarning struct {
@@ -147,6 +180,7 @@ type Topology struct {
 	BuildProgress graph.ArtifactProgress `json:"build_progress"`
 	Partial       bool                   `json:"partial"`
 	Warnings      []TopologyWarning      `json:"warnings,omitempty"`
+	Neighborhood  *TopologyNeighborhood  `json:"neighborhood,omitempty"`
 	Options       TopologyOptions        `json:"-"`
 }
 
@@ -487,7 +521,9 @@ func buildTopology(
 	output.Summary.UnresolvedCount += len(output.Unresolved)
 	output.Summary.UnresolvedPlaceholderCount = len(output.Unresolved)
 	for id, component := range nodes {
-		if len(output.Connections) > 0 && !visibleNodeIDs[id] {
+		selectedComponent := snapshot.Scope.RequestedRepositoryID > 0 &&
+			component.RepositoryID == snapshot.Scope.RequestedRepositoryID
+		if len(output.Connections) > 0 && !visibleNodeIDs[id] && !selectedComponent {
 			continue
 		}
 		if options.Query != "" && len(output.Connections) == 0 &&
@@ -515,7 +551,330 @@ func buildTopology(
 	output.Protocols = sortedSet(protocols)
 	output.Providers = sortedSet(providers)
 	output.Environments = sortedSet(environments)
+	if snapshot.Scope.RequestedRepositoryID > 0 {
+		output = scopeTopologyNeighborhood(output, snapshot, options)
+	}
 	return output
+}
+
+func scopeTopologyNeighborhood(
+	topology Topology,
+	snapshot graph.Snapshot,
+	options TopologyOptions,
+) Topology {
+	direction := strings.ToLower(strings.TrimSpace(options.Direction))
+	if direction == "" {
+		direction = "both"
+	}
+	depth := options.Depth
+	if depth < 1 {
+		depth = 1
+	}
+	if depth > 2 {
+		depth = 2
+	}
+	componentByID := make(map[string]TopologyComponent, len(topology.Components))
+	selected := make(map[string]bool)
+	selectedAliases := make(map[string]bool)
+	for _, component := range topology.Components {
+		componentByID[component.ID] = component
+		if component.RepositoryID != snapshot.Scope.RequestedRepositoryID {
+			continue
+		}
+		selected[component.ID] = true
+		for _, alias := range append(component.Aliases, component.Name) {
+			if normalized := topologyName(alias); normalized != "" {
+				selectedAliases[normalized] = true
+			}
+		}
+	}
+
+	allConnections := append([]TopologyConnection(nil), topology.Connections...)
+	slices.SortFunc(allConnections, func(left, right TopologyConnection) int {
+		return strings.Compare(left.ID, right.ID)
+	})
+	inbound := make([]TopologyConnection, 0)
+	outbound := make([]TopologyConnection, 0)
+	directNeighborIDs := make(map[string]bool)
+	for _, connection := range allConnections {
+		sourceSelected, targetSelected := selected[connection.Source], selected[connection.Target]
+		switch {
+		case targetSelected && !sourceSelected:
+			connection.NeighborhoodDirection = "inbound"
+			inbound = append(inbound, connection)
+			directNeighborIDs[connection.Source] = true
+		case sourceSelected:
+			connection.NeighborhoodDirection = "outbound"
+			outbound = append(outbound, connection)
+			directNeighborIDs[connection.Target] = true
+		}
+	}
+
+	neighborhood := &TopologyNeighborhood{
+		RepositoryID:              snapshot.Scope.RequestedRepositoryID,
+		Direction:                 direction,
+		Depth:                     depth,
+		DisplayCap:                topologyNeighborhoodCap,
+		SelectedComponentIDs:      sortedBoolSet(selected),
+		InboundConnectionCount:    len(inbound),
+		OutboundConnectionCount:   len(outbound),
+		Groups:                    []TopologyNeighborhoodGroup{},
+		PossibleInboundUnresolved: []TopologyUnresolved{},
+		FleetSnapshotAt:           snapshot.TopologyFleetGeneratedAt,
+		SelectedSnapshotAt:        snapshot.TopologySelectedGeneratedAt,
+		FleetPartial:              !snapshot.Scope.Complete,
+	}
+	neighborhood.FleetStale =
+		!neighborhood.FleetSnapshotAt.IsZero() &&
+			!neighborhood.SelectedSnapshotAt.IsZero() &&
+			neighborhood.FleetSnapshotAt.Before(neighborhood.SelectedSnapshotAt)
+
+	visibleConnections := make([]TopologyConnection, 0, topologyNeighborhoodCap*2)
+	if direction == "both" || direction == "inbound" {
+		kept, group := capNeighborhoodConnections(
+			inbound, "inbound", topologyNeighborhoodCap, selected,
+		)
+		visibleConnections = append(visibleConnections, kept...)
+		if group != nil {
+			neighborhood.Groups = append(neighborhood.Groups, *group)
+		}
+	}
+	if direction == "both" || direction == "outbound" {
+		kept, group := capNeighborhoodConnections(
+			outbound, "outbound", topologyNeighborhoodCap, selected,
+		)
+		visibleConnections = append(visibleConnections, kept...)
+		if group != nil {
+			neighborhood.Groups = append(neighborhood.Groups, *group)
+		}
+	}
+
+	if depth == 2 {
+		contextConnections := make([]TopologyConnection, 0)
+		directIDs := make(map[string]bool, len(inbound)+len(outbound))
+		for _, connection := range append(append(
+			[]TopologyConnection(nil), inbound...), outbound...) {
+			directIDs[connection.ID] = true
+		}
+		for _, connection := range allConnections {
+			if directIDs[connection.ID] || selected[connection.Source] ||
+				selected[connection.Target] {
+				continue
+			}
+			if !directNeighborIDs[connection.Source] && !directNeighborIDs[connection.Target] {
+				continue
+			}
+			connection.NeighborhoodDirection = "context"
+			contextConnections = append(contextConnections, connection)
+		}
+		neighborhood.ContextConnectionCount = len(contextConnections)
+		kept, group := capNeighborhoodConnections(
+			contextConnections, "context", topologyContextCap, selected,
+		)
+		visibleConnections = append(visibleConnections, kept...)
+		if group != nil {
+			neighborhood.Groups = append(neighborhood.Groups, *group)
+		}
+	}
+
+	visibleComponentIDs := make(map[string]bool, len(selected)+len(visibleConnections)*2)
+	for id := range selected {
+		visibleComponentIDs[id] = true
+	}
+	for _, connection := range visibleConnections {
+		visibleComponentIDs[connection.Source] = true
+		visibleComponentIDs[connection.Target] = true
+	}
+
+	outgoingUnresolved := make([]TopologyUnresolved, 0)
+	for _, unresolved := range topology.Unresolved {
+		if selected[unresolved.Source] {
+			if direction == "both" || direction == "outbound" {
+				unresolved.NeighborhoodDirection = "outbound"
+				outgoingUnresolved = append(outgoingUnresolved, unresolved)
+				visibleComponentIDs[unresolved.Source] = true
+			}
+			continue
+		}
+		if direction != "both" && direction != "inbound" {
+			continue
+		}
+		if candidate := topologyName(unresolved.Candidate); candidate != "" &&
+			selectedAliases[candidate] {
+			unresolved.NeighborhoodDirection = "possible_inbound"
+			neighborhood.PossibleInboundUnresolved = append(
+				neighborhood.PossibleInboundUnresolved, unresolved,
+			)
+		}
+	}
+
+	components := make([]TopologyComponent, 0, len(visibleComponentIDs))
+	for id := range visibleComponentIDs {
+		component, ok := componentByID[id]
+		if !ok {
+			continue
+		}
+		inboundNeighbor := componentIsInboundNeighbor(id, visibleConnections, selected)
+		outboundNeighbor := componentIsOutboundNeighbor(id, visibleConnections, selected)
+		switch {
+		case selected[id]:
+			component.NeighborhoodRole = "selected"
+		case inboundNeighbor && outboundNeighbor:
+			component.NeighborhoodRole = "bidirectional"
+		case inboundNeighbor:
+			component.NeighborhoodRole = "inbound"
+		case outboundNeighbor:
+			component.NeighborhoodRole = "outbound"
+		default:
+			component.NeighborhoodRole = "context"
+		}
+		components = append(components, component)
+	}
+	slices.SortFunc(components, func(left, right TopologyComponent) int {
+		if left.NeighborhoodRole != right.NeighborhoodRole {
+			return strings.Compare(left.NeighborhoodRole, right.NeighborhoodRole)
+		}
+		return strings.Compare(strings.ToLower(left.Name), strings.ToLower(right.Name))
+	})
+	slices.SortFunc(visibleConnections, func(left, right TopologyConnection) int {
+		return strings.Compare(left.ID, right.ID)
+	})
+	slices.SortFunc(outgoingUnresolved, func(left, right TopologyUnresolved) int {
+		return strings.Compare(left.ID, right.ID)
+	})
+	slices.SortFunc(
+		neighborhood.PossibleInboundUnresolved,
+		func(left, right TopologyUnresolved) int {
+			return strings.Compare(left.ID, right.ID)
+		},
+	)
+	neighborhood.PossibleInboundUnresolvedCount =
+		len(neighborhood.PossibleInboundUnresolved)
+	if len(neighborhood.PossibleInboundUnresolved) > topologyNeighborhoodCap {
+		neighborhood.PossibleInboundUnresolved =
+			neighborhood.PossibleInboundUnresolved[:topologyNeighborhoodCap]
+	}
+	topology.Components = components
+	topology.Connections = visibleConnections
+	topology.Unresolved = outgoingUnresolved
+	topology.Neighborhood = neighborhood
+	rebuildTopologySummary(&topology)
+	return topology
+}
+
+func capNeighborhoodConnections(
+	connections []TopologyConnection,
+	direction string,
+	limit int,
+	selected map[string]bool,
+) ([]TopologyConnection, *TopologyNeighborhoodGroup) {
+	if len(connections) <= limit {
+		return connections, nil
+	}
+	kept := append([]TopologyConnection(nil), connections[:limit]...)
+	omittedComponents := make(map[string]bool)
+	for _, connection := range connections[limit:] {
+		if !selected[connection.Source] {
+			omittedComponents[connection.Source] = true
+		}
+		if !selected[connection.Target] {
+			omittedComponents[connection.Target] = true
+		}
+	}
+	connectionCount := len(connections) - limit
+	componentCount := len(omittedComponents)
+	label := fmt.Sprintf("+%d more %s connections", connectionCount, direction)
+	if direction == "inbound" {
+		label = fmt.Sprintf("+%d more callers", componentCount)
+	} else if direction == "outbound" {
+		label = fmt.Sprintf("+%d more dependencies", componentCount)
+	}
+	return kept, &TopologyNeighborhoodGroup{
+		ID: "neighborhood-group:" + direction, Direction: direction, Label: label,
+		OmittedConnectionCount: connectionCount,
+		OmittedComponentCount:  componentCount,
+	}
+}
+
+func componentIsInboundNeighbor(
+	id string,
+	connections []TopologyConnection,
+	selected map[string]bool,
+) bool {
+	for _, connection := range connections {
+		if connection.NeighborhoodDirection == "inbound" &&
+			connection.Source == id && selected[connection.Target] {
+			return true
+		}
+	}
+	return false
+}
+
+func componentIsOutboundNeighbor(
+	id string,
+	connections []TopologyConnection,
+	selected map[string]bool,
+) bool {
+	for _, connection := range connections {
+		if connection.NeighborhoodDirection == "outbound" &&
+			connection.Target == id && selected[connection.Source] {
+			return true
+		}
+	}
+	return false
+}
+
+func sortedBoolSet(values map[string]bool) []string {
+	output := make([]string, 0, len(values))
+	for value := range values {
+		output = append(output, value)
+	}
+	sort.Strings(output)
+	return output
+}
+
+func rebuildTopologySummary(topology *Topology) {
+	suppressedSourceEdges := topology.Summary.SuppressedSourceEdges
+	topology.Summary = TopologySummary{SuppressedSourceEdges: suppressedSourceEdges}
+	topology.Summary.ComponentCount = len(topology.Components)
+	componentByID := make(map[string]TopologyComponent, len(topology.Components))
+	for _, component := range topology.Components {
+		componentByID[component.ID] = component
+		if component.Kind == "service" {
+			topology.Summary.ServiceCount++
+		} else {
+			topology.Summary.ResourceCount++
+		}
+	}
+	protocols := make(map[string]bool)
+	for _, connection := range topology.Connections {
+		protocols[connection.Protocol] = true
+		switch connection.State {
+		case "confirmed":
+			topology.Summary.ConfirmedCount++
+		case "runtime_only":
+			topology.Summary.RuntimeOnlyCount++
+		default:
+			topology.Summary.StaticOnlyCount++
+		}
+		target := componentByID[connection.Target]
+		if target.Candidate {
+			topology.Summary.CandidateCount++
+		} else if strings.HasPrefix(connection.Target, "runtime:") &&
+			!connection.TargetResolved {
+			topology.Summary.UnresolvedCount++
+		} else {
+			topology.Summary.ResolvedCount++
+		}
+	}
+	topology.Summary.ConnectionCount = len(topology.Connections)
+	topology.Summary.UnresolvedPlaceholderCount = len(topology.Unresolved)
+	if topology.Neighborhood != nil {
+		topology.Summary.UnresolvedPlaceholderCount +=
+			topology.Neighborhood.PossibleInboundUnresolvedCount
+	}
+	topology.Summary.UnresolvedCount += topology.Summary.UnresolvedPlaceholderCount
+	topology.Protocols = sortedSet(protocols)
 }
 
 // SanitizeTopology is the final response-level guard for topology consumers.
@@ -542,38 +901,7 @@ func SanitizeTopology(topology Topology) Topology {
 	}
 	topology.Connections = connections
 	addMissingComponentWarning(&topology, hidden)
-
-	topology.Summary.ConnectionCount = len(connections)
-	topology.Summary.ConfirmedCount = 0
-	topology.Summary.StaticOnlyCount = 0
-	topology.Summary.RuntimeOnlyCount = 0
-	topology.Summary.ResolvedCount = 0
-	topology.Summary.CandidateCount = 0
-	runtimeUnresolved := 0
-	protocols := make(map[string]bool)
-	for _, connection := range connections {
-		protocols[connection.Protocol] = true
-		switch connection.State {
-		case "confirmed":
-			topology.Summary.ConfirmedCount++
-		case "runtime_only":
-			topology.Summary.RuntimeOnlyCount++
-		default:
-			topology.Summary.StaticOnlyCount++
-		}
-		target := componentByID[connection.Target]
-		if target.Candidate {
-			topology.Summary.CandidateCount++
-		} else if strings.HasPrefix(connection.Target, "runtime:") &&
-			!connection.TargetResolved {
-			runtimeUnresolved++
-		} else {
-			topology.Summary.ResolvedCount++
-		}
-	}
-	topology.Summary.UnresolvedCount =
-		topology.Summary.UnresolvedPlaceholderCount + runtimeUnresolved
-	topology.Protocols = sortedSet(protocols)
+	rebuildTopologySummary(&topology)
 	return topology
 }
 

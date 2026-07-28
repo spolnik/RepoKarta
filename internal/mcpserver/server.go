@@ -591,7 +591,7 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 		mcp.AddTool(server, &mcp.Tool{
 			Name:        "read_system_topology",
 			Title:       "Read distributed system topology",
-			Description: "Read a directed component-level dependency graph across one repository or the visible fleet. Returns HTTP, gRPC, Kafka, database, MCP, and declared relationships; static source evidence and timestamped runtime observations remain distinct, with confirmed/static-only/runtime-only drift states and explicit unresolved peers. No external service is contacted.",
+			Description: "Read a directed component-level dependency graph across the visible fleet. A repository selector returns its bounded inbound/outbound neighborhood from the fleet snapshot, so callers as well as dependencies remain visible; direction and depth can narrow or expand the result. Returns HTTP, gRPC, Kafka, database, MCP, and declared relationships; static source evidence and timestamped runtime observations remain distinct, with confirmed/static-only/runtime-only drift states and explicit unresolved peers. No external service is contacted.",
 			Annotations: readOnly,
 		}, func(ctx context.Context, _ *mcp.CallToolRequest, input readSystemTopologyInput) (*mcp.CallToolResult, dependencies.Topology, error) {
 			repositoryID, err := resolveRepositorySelector(
@@ -948,6 +948,8 @@ type readSystemTopologyInput struct {
 	Origin       string `json:"origin,omitempty" jsonschema:"Optional evidence filter: static runtime or confirmed."`
 	Environment  string `json:"environment,omitempty" jsonschema:"Optional exact runtime environment such as prod."`
 	Provider     string `json:"provider,omitempty" jsonschema:"Optional exact runtime provider such as tempo or datadog."`
+	Direction    string `json:"direction,omitempty" jsonschema:"Scoped neighborhood direction: both inbound or outbound. Defaults to both."`
+	Depth        int    `json:"depth,omitempty" jsonschema:"Scoped neighborhood depth: 1 for direct peers or 2 for one additional context hop. Defaults to 1."`
 	ObservedFrom string `json:"observed_from,omitempty" jsonschema:"Optional RFC3339 runtime window start. Defaults to 24 hours before observed_to."`
 	ObservedTo   string `json:"observed_to,omitempty" jsonschema:"Optional RFC3339 runtime window end. Defaults to now."`
 }
@@ -957,6 +959,19 @@ func topologyToolOptions(input readSystemTopologyInput) (dependencies.TopologyOp
 		Query: strings.TrimSpace(input.Query), Protocol: strings.ToLower(strings.TrimSpace(input.Protocol)),
 		Origin:      strings.ToLower(strings.TrimSpace(input.Origin)),
 		Environment: strings.TrimSpace(input.Environment), Provider: strings.TrimSpace(input.Provider),
+		Direction: strings.ToLower(strings.TrimSpace(input.Direction)), Depth: input.Depth,
+	}
+	if options.Direction == "" {
+		options.Direction = "both"
+	}
+	if !slices.Contains([]string{"both", "inbound", "outbound"}, options.Direction) {
+		return dependencies.TopologyOptions{}, errors.New("topology direction must be both, inbound, or outbound")
+	}
+	if options.Depth == 0 {
+		options.Depth = 1
+	}
+	if options.Depth < 1 || options.Depth > 2 {
+		return dependencies.TopologyOptions{}, errors.New("topology depth must be 1 or 2")
 	}
 	for _, timestamp := range []struct {
 		value  string
