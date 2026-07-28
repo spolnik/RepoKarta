@@ -48,6 +48,31 @@ Modes are `off`, `auto`, and `required`. An explicit command implies
 `required` unless the mode flag or environment variable was also set.
 Concurrency is limited to 1 through 4 and defaults to 1.
 
+### Select a compatible JDK per repository
+
+RepoKarta reads the committed Gradle wrapper version, Java toolchain
+declarations such as `JavaLanguageVersion.of(17)` or `jvmToolchain(17)`, and
+Gradle daemon JVM criteria before starting `scip-java`. It prefers a configured
+JDK matching the requested toolchain when that JDK can also run the wrapper.
+For a legacy wrapper that cannot run on the requested toolchain JDK, RepoKarta
+uses another compatible configured JDK to launch Gradle and exposes every
+configured JDK to Gradle's normal toolchain discovery. Launcher selection
+follows Gradle's published
+[Java runtime compatibility matrix](https://docs.gradle.org/current/userguide/compatibility.html).
+
+Configure versioned JDK homes with a comma-separated `major=home` mapping:
+
+```powershell
+$env:REPOKARTA_SCIP_JAVA_JDK_HOMES = '11=C:\Java\jdk-11,17=C:\Java\jdk-17,25=C:\Java\jdk-25'
+repokarta serve -scip-java-mode auto C:\work\services
+```
+
+Use `REPOKARTA_SCIP_JAVA_JDK_HOME` or `-scip-java-jdk-home` only to force one
+JDK for every repository. The forced override takes precedence and fails with
+the `jdk_incompatible_wrapper` category when it cannot run a repository's
+wrapper. Versioned homes are preferable for a mixed fleet. JDK paths remain
+local configuration and are not returned by the API.
+
 For each exact indexed commit, RepoKarta checks the committed Git tree for Java
 sources and a Gradle build. Root and nested single-root Gradle builds, including
 multi-project builds, are supported. Repositories with multiple independent
@@ -66,6 +91,19 @@ Provider status is available from `GET /api/scip/java`; per-repository status
 is included in `GET /api/repositories`; and an authorized retry can be queued
 with `POST /api/scip/java/retry/{repositoryID}` or the repository-list control.
 Failure output is bounded and obvious credential-bearing lines are redacted.
+Failed repository status also includes a stable `failure_category` and a short
+`failure_summary`, while the bounded raw diagnostic remains available in
+`error`. Categories are:
+
+- `environment` for missing tools, Docker/service availability, permissions,
+  networking, and timeouts;
+- `jdk_incompatible_wrapper` when the selected or available JDK cannot launch
+  the committed Gradle wrapper; and
+- `compile_error` when Gradle reaches the build but compilation fails.
+
+Successful and failed repository status records the detected Gradle version,
+selected JDK major, and non-sensitive selection source. This makes the status
+API and repository UI actionable without exposing local JDK paths.
 
 RepoKarta neither downloads nor bundles `scip-java`; operators install and
 trust the external Apache-2.0 tool and the repository build being executed.

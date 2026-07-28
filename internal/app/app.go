@@ -60,6 +60,8 @@ type Config struct {
 	SCIPJavaCommand        string
 	SCIPJavaTimeout        time.Duration
 	SCIPJavaConcurrency    int
+	SCIPJavaJDKHome        string
+	SCIPJavaJDKHomes       map[int]string
 }
 
 func DefaultConfig() (Config, error) {
@@ -100,6 +102,12 @@ func DefaultConfig() (Config, error) {
 			)
 		}
 	}
+	scipJavaJDKHomes, err := scipjava.ParseJDKHomes(
+		strings.TrimSpace(os.Getenv("REPOKARTA_SCIP_JAVA_JDK_HOMES")),
+	)
+	if err != nil {
+		return Config{}, fmt.Errorf("parse REPOKARTA_SCIP_JAVA_JDK_HOMES: %w", err)
+	}
 
 	return Config{
 		ListenAddress:  "127.0.0.1:7331",
@@ -127,6 +135,8 @@ func DefaultConfig() (Config, error) {
 		SCIPJavaCommand:       scipJavaCommand,
 		SCIPJavaTimeout:       scipJavaTimeout,
 		SCIPJavaConcurrency:   scipJavaConcurrency,
+		SCIPJavaJDKHome:       strings.TrimSpace(os.Getenv("REPOKARTA_SCIP_JAVA_JDK_HOME")),
+		SCIPJavaJDKHomes:      scipJavaJDKHomes,
 	}, nil
 }
 
@@ -197,6 +207,8 @@ func Run(ctx context.Context, cfg Config) error {
 		DataDirectory: filepath.Join(cfg.DataDirectory, "scip-java"),
 		Timeout:       cfg.SCIPJavaTimeout,
 		Concurrency:   cfg.SCIPJavaConcurrency,
+		JDKHome:       cfg.SCIPJavaJDKHome,
+		JDKHomes:      cfg.SCIPJavaJDKHomes,
 	}, database, semanticIndexes)
 	if err != nil {
 		return fmt.Errorf("initialize Java SCIP generation: %w", err)

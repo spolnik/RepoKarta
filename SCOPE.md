@@ -624,6 +624,9 @@ search must remain fast and AI-free.
   - [x] Discover or explicitly configure an external `scip-java`, generate
     exact-commit Gradle indexes in a bounded background queue, persist visible
     per-repository status, and support retry without blocking normal indexing.
+  - [x] Classify Java SCIP failures as environment, JDK/wrapper compatibility,
+    or compilation failures, and select a compatible per-repository Gradle JVM
+    from exact-commit toolchain/wrapper metadata and configured local JDKs.
   - [ ] Add precise definitions, implementations, signatures, hover
     documentation, dependency indexes, and cross-repository symbol stitching.
 - [ ] Add graph queries for upstream and downstream impact, shortest evidenced
@@ -957,7 +960,7 @@ completion criteria include:
 
 ## Current implementation version
 
-`0.81.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
+`0.82.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
 The M9 dependency inventory, public registry refresh, lockfile resolution,
 explicit private-registry routing, reproducible OSV advisory snapshots,
 ecosystem-correct fleet CVE matching, scope-aware UI/JSON/MCP findings, and
@@ -1034,7 +1037,11 @@ Optional Java SCIP generation now discovers an installed or configured
 `scip-java`, detects Gradle Java builds at the exact indexed revision, runs
 them in isolated background worktrees, imports bounded artifacts, exposes
 provider and repository status plus retry controls, and retains Tree-sitter
-fallback whenever precise Java coverage is missing, stale, or failed.
+fallback whenever precise Java coverage is missing, stale, or failed. Its
+status distinguishes environment or Docker failures, JDK-incompatible
+wrappers, and compilation errors. Exact-commit Gradle wrapper and Java
+toolchain metadata drive a compatible configured launcher JDK instead of
+blindly inheriting the server JVM.
 
 ## Recommended next session
 

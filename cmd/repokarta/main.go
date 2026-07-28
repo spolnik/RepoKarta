@@ -20,7 +20,7 @@ import (
 	"github.com/spolnik/RepoKarta/internal/store"
 )
 
-var version = "0.81.0-dev"
+var version = "0.82.0-dev"
 
 type stringList []string
 
@@ -190,6 +190,7 @@ func serve(args []string) error {
 	scipJavaCommand := flags.String("scip-java-command", defaults.SCIPJavaCommand, "scip-java executable name or absolute path")
 	scipJavaTimeout := flags.Duration("scip-java-timeout", defaults.SCIPJavaTimeout, "maximum time for one Java SCIP build")
 	scipJavaConcurrency := flags.Int("scip-java-concurrency", defaults.SCIPJavaConcurrency, "maximum concurrent Java SCIP builds (1-4)")
+	scipJavaJDKHome := flags.String("scip-java-jdk-home", defaults.SCIPJavaJDKHome, "JDK home forced for every Java SCIP build")
 	acquisitionGitHubAPI := flags.String("github-api", defaults.AcquisitionGitHubAPI, "GitHub REST API base URL used for repository discovery")
 	acquisitionGitLabAPI := flags.String("gitlab-api", defaults.AcquisitionGitLabAPI, "GitLab REST API base URL used for repository discovery")
 	acquisitionGitHubHost := flags.String("github-host", defaults.AcquisitionGitHubHost, "allowed GitHub HTTPS Git host; defaults to github.com")
@@ -266,6 +267,8 @@ func serve(args []string) error {
 		SCIPJavaCommand:        *scipJavaCommand,
 		SCIPJavaTimeout:        *scipJavaTimeout,
 		SCIPJavaConcurrency:    *scipJavaConcurrency,
+		SCIPJavaJDKHome:        *scipJavaJDKHome,
+		SCIPJavaJDKHomes:       defaults.SCIPJavaJDKHomes,
 		Security: security.Settings{
 			Mode:                 security.Mode(*authMode),
 			PublicURL:            *publicURL,
@@ -313,6 +316,7 @@ Serve options:
   -scip-java-command scip-java executable name or absolute path
   -scip-java-timeout maximum time for one Java SCIP build (default 20m)
   -scip-java-concurrency concurrent Java SCIP builds, 1-4 (default 1)
+  -scip-java-jdk-home JDK home forced for every Java SCIP build
 
 MCP options:
   -url string        running RepoKarta URL (default http://127.0.0.1:7331)

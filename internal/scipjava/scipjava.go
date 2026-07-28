@@ -16,7 +16,9 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -30,12 +32,18 @@ const (
 	ModeAuto     = "auto"
 	ModeRequired = "required"
 
-	DefaultTimeout     = 20 * time.Minute
-	DefaultConcurrency = 1
-	MaximumConcurrency = 4
-	maximumGitOutput   = 16 << 20
-	maximumBuildOutput = 1 << 20
-	maximumStatusError = 4 << 10
+	FailureEnvironment            = "environment"
+	FailureJDKIncompatibleWrapper = "jdk_incompatible_wrapper"
+	FailureCompileError           = "compile_error"
+
+	DefaultTimeout             = 20 * time.Minute
+	DefaultConcurrency         = 1
+	MaximumConcurrency         = 4
+	maximumGitOutput           = 16 << 20
+	maximumBuildOutput         = 1 << 20
+	maximumStatusError         = 4 << 10
+	maximumGradleMetadataFiles = 256
+	maximumGradleMetadataBytes = 1 << 20
 )
 
 // Config controls the optional external compiler indexer.
@@ -45,19 +53,24 @@ type Config struct {
 	DataDirectory string
 	Timeout       time.Duration
 	Concurrency   int
+	JDKHome       string
+	JDKHomes      map[int]string
 
 	executor commandExecutor
 }
 
 // ProviderStatus describes whether the configured producer can run.
 type ProviderStatus struct {
-	Mode          string `json:"mode"`
-	Enabled       bool   `json:"enabled"`
-	Available     bool   `json:"available"`
-	Command       string `json:"command,omitempty"`
-	Version       string `json:"version,omitempty"`
-	Configuration string `json:"configuration,omitempty"`
-	Error         string `json:"error,omitempty"`
+	Mode            string `json:"mode"`
+	Enabled         bool   `json:"enabled"`
+	Available       bool   `json:"available"`
+	Command         string `json:"command,omitempty"`
+	Version         string `json:"version,omitempty"`
+	Configuration   string `json:"configuration,omitempty"`
+	JDKVersions     []int  `json:"jdk_versions,omitempty"`
+	FailureCategory string `json:"failure_category,omitempty"`
+	FailureSummary  string `json:"failure_summary,omitempty"`
+	Error           string `json:"error,omitempty"`
 }
 
 // RepositoryStore is the durable state surface required by the scheduler.
@@ -74,7 +87,7 @@ type importer interface {
 
 type commandExecutor interface {
 	Verify(context.Context, string) (string, error)
-	Run(context.Context, string, string) ([]byte, error)
+	Run(context.Context, string, string, []string) ([]byte, error)
 }
 
 type osCommandExecutor struct{}
@@ -87,9 +100,10 @@ func (osCommandExecutor) Verify(ctx context.Context, command string) (string, er
 	return boundedOneLine(output), nil
 }
 
-func (osCommandExecutor) Run(ctx context.Context, command, directory string) ([]byte, error) {
+func (osCommandExecutor) Run(ctx context.Context, command, directory string, environment []string) ([]byte, error) {
 	process := exec.CommandContext(ctx, command, "index")
 	process.Dir = directory
+	process.Env = environment
 	var output cappedBuffer
 	output.maximum = maximumBuildOutput
 	process.Stdout = &output
@@ -97,6 +111,49 @@ func (osCommandExecutor) Run(ctx context.Context, command, directory string) ([]
 	err := process.Run()
 	return output.Bytes(), err
 }
+
+type gradleBuild struct {
+	Root             string
+	GradleVersion    string
+	ToolchainVersion int
+}
+
+type jdkInstallation struct {
+	Home   string
+	Major  int
+	Source string
+}
+
+type jdkSelection struct {
+	Home             string
+	Major            int
+	Source           string
+	RequestedVersion int
+	GradleVersion    string
+}
+
+type failure struct {
+	Category string
+	Summary  string
+	Cause    error
+}
+
+func (value *failure) Error() string {
+	return value.Cause.Error()
+}
+
+func (value *failure) Unwrap() error {
+	return value.Cause
+}
+
+var (
+	gradleDistributionPattern = regexp.MustCompile(`(?i)gradle-([0-9]+(?:\.[0-9]+){1,2})-(?:bin|all)\.zip`)
+	javaToolchainPatterns     = []*regexp.Regexp{
+		regexp.MustCompile(`(?i)JavaLanguageVersion\.of\(\s*["']?([0-9]+)["']?\s*\)`),
+		regexp.MustCompile(`(?i)\bjvmToolchain\(\s*([0-9]+)\s*\)`),
+		regexp.MustCompile(`(?m)^\s*toolchainVersion\s*=\s*([0-9]+)\s*$`),
+	}
+)
 
 // Service owns a lossless, deduplicated queue independent of structural-map
 // concurrency. One worker is the default because each item may compile a full
@@ -107,6 +164,8 @@ type Service struct {
 	artifacts importer
 	provider  ProviderStatus
 	executor  commandExecutor
+	jdks      []jdkInstallation
+	inherited *jdkInstallation
 
 	startOnce sync.Once
 	baseCtx   context.Context
@@ -148,6 +207,16 @@ func New(config Config, store RepositoryStore, artifacts importer) (*Service, er
 	if config.Concurrency > MaximumConcurrency {
 		return nil, fmt.Errorf("Java SCIP concurrency exceeds maximum %d", MaximumConcurrency)
 	}
+	var jdks []jdkInstallation
+	var inherited *jdkInstallation
+	var err error
+	if config.Mode != ModeOff {
+		jdks, err = configuredJDKInstallations(config)
+		if err != nil {
+			return nil, err
+		}
+		inherited = inheritedJDKInstallation()
+	}
 	if err := os.MkdirAll(filepath.Join(config.DataDirectory, "worktrees"), 0o700); err != nil {
 		return nil, fmt.Errorf("create Java SCIP worktree directory: %w", err)
 	}
@@ -157,6 +226,7 @@ func New(config Config, store RepositoryStore, artifacts importer) (*Service, er
 	}
 	service := &Service{
 		config: config, store: store, artifacts: artifacts, executor: executor,
+		jdks: jdks, inherited: inherited,
 		signal:  make(chan struct{}, config.Concurrency),
 		queued:  make(map[int64]struct{}),
 		running: make(map[int64]struct{}),
@@ -173,6 +243,8 @@ func New(config Config, store RepositoryStore, artifacts importer) (*Service, er
 	command, err := resolveCommand(config.Command)
 	if err != nil {
 		service.provider.Error = "scip-java is not available"
+		service.provider.FailureCategory = FailureEnvironment
+		service.provider.FailureSummary = "The configured scip-java executable could not be found."
 		if config.Mode == ModeRequired {
 			return nil, fmt.Errorf("resolve required scip-java command: %w", err)
 		}
@@ -183,6 +255,8 @@ func New(config Config, store RepositoryStore, artifacts importer) (*Service, er
 	cancel()
 	if verifyErr != nil {
 		service.provider.Error = "scip-java did not pass its version check"
+		service.provider.FailureCategory = FailureEnvironment
+		service.provider.FailureSummary = "The configured scip-java executable could not be started."
 		if config.Mode == ModeRequired {
 			return nil, fmt.Errorf("verify required scip-java command: %w", verifyErr)
 		}
@@ -191,13 +265,143 @@ func New(config Config, store RepositoryStore, artifacts importer) (*Service, er
 	if version == "" {
 		version = "unknown"
 	}
-	digest := sha256.Sum256([]byte(command + "\x00" + version + "\x00index"))
+	configurationParts := []string{command, version, "index"}
+	for _, jdk := range jdks {
+		configurationParts = append(configurationParts, strconv.Itoa(jdk.Major), jdk.Home, jdk.Source)
+		service.provider.JDKVersions = append(service.provider.JDKVersions, jdk.Major)
+	}
+	if inherited != nil {
+		configurationParts = append(configurationParts, "inherited", strconv.Itoa(inherited.Major), inherited.Home)
+	}
+	digest := sha256.Sum256([]byte(strings.Join(configurationParts, "\x00")))
 	service.provider.Available = true
 	service.provider.Command = filepath.Base(command)
 	service.provider.Version = version
 	service.provider.Configuration = hex.EncodeToString(digest[:])
 	service.config.Command = command
 	return service, nil
+}
+
+func configuredJDKInstallations(config Config) ([]jdkInstallation, error) {
+	installations := make([]jdkInstallation, 0, len(config.JDKHomes)+1)
+	seen := make(map[string]struct{})
+	if home := strings.TrimSpace(config.JDKHome); home != "" {
+		home, err := validateJDKHome(home)
+		if err != nil {
+			return nil, fmt.Errorf("validate Java SCIP JDK override: %w", err)
+		}
+		major, err := detectJDKMajor(home)
+		if err != nil {
+			return nil, fmt.Errorf("inspect Java SCIP JDK override: %w", err)
+		}
+		installations = append(installations, jdkInstallation{
+			Home: home, Major: major, Source: "override",
+		})
+		seen[filepath.Clean(home)] = struct{}{}
+	}
+	versions := make([]int, 0, len(config.JDKHomes))
+	for major := range config.JDKHomes {
+		if major <= 0 {
+			return nil, errors.New("configured Java SCIP JDK versions must be positive")
+		}
+		versions = append(versions, major)
+	}
+	sort.Ints(versions)
+	for _, major := range versions {
+		home, err := validateJDKHome(config.JDKHomes[major])
+		if err != nil {
+			return nil, fmt.Errorf("validate configured Java %d home: %w", major, err)
+		}
+		detected, err := detectJDKMajor(home)
+		if err != nil {
+			return nil, fmt.Errorf("inspect configured Java %d home: %w", major, err)
+		}
+		if detected != major {
+			return nil, fmt.Errorf(
+				"configured Java %d home reports Java %d",
+				major,
+				detected,
+			)
+		}
+		if _, duplicate := seen[filepath.Clean(home)]; duplicate {
+			continue
+		}
+		seen[filepath.Clean(home)] = struct{}{}
+		installations = append(installations, jdkInstallation{
+			Home: home, Major: major, Source: "configured",
+		})
+	}
+	return installations, nil
+}
+
+func validateJDKHome(home string) (string, error) {
+	absolute, err := filepath.Abs(strings.TrimSpace(home))
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(absolute)
+	if err != nil {
+		return "", err
+	}
+	if !info.IsDir() {
+		return "", errors.New("JDK home is not a directory")
+	}
+	if _, err := os.Stat(javaExecutable(absolute)); err != nil {
+		return "", fmt.Errorf("find Java executable: %w", err)
+	}
+	return filepath.Clean(absolute), nil
+}
+
+func javaExecutable(home string) string {
+	name := "java"
+	if filepath.Separator == '\\' {
+		name += ".exe"
+	}
+	return filepath.Join(home, "bin", name)
+}
+
+func detectJDKMajor(home string) (int, error) {
+	command := "java"
+	if strings.TrimSpace(home) != "" {
+		command = javaExecutable(home)
+	}
+	output, err := exec.Command(command, "-version").CombinedOutput()
+	if err != nil {
+		return 0, fmt.Errorf("run java -version: %w", err)
+	}
+	return parseJavaMajor(string(output))
+}
+
+func parseJavaMajor(value string) (int, error) {
+	versionPattern := regexp.MustCompile(`(?i)(?:java|openjdk) version "([^"]+)"`)
+	match := versionPattern.FindStringSubmatch(value)
+	if len(match) != 2 {
+		return 0, errors.New("java -version did not report a recognizable version")
+	}
+	parts := strings.FieldsFunc(match[1], func(character rune) bool {
+		return character == '.' || character == '-' || character == '_'
+	})
+	if len(parts) == 0 {
+		return 0, errors.New("java -version reported an empty version")
+	}
+	index := 0
+	if parts[0] == "1" && len(parts) > 1 {
+		index = 1
+	}
+	major, err := strconv.Atoi(parts[index])
+	if err != nil || major <= 0 {
+		return 0, errors.New("java -version reported an invalid major version")
+	}
+	return major, nil
+}
+
+func inheritedJDKInstallation() *jdkInstallation {
+	home := strings.TrimSpace(os.Getenv("JAVA_HOME"))
+	major, err := detectJDKMajor(home)
+	if err != nil {
+		return nil
+	}
+	return &jdkInstallation{Home: home, Major: major, Source: "inherited"}
 }
 
 func resolveCommand(configured string) (string, error) {
@@ -216,6 +420,28 @@ func resolveCommand(configured string) (string, error) {
 		return filepath.Clean(configured), nil
 	}
 	return exec.LookPath(configured)
+}
+
+// ParseJDKHomes parses a deterministic comma-separated major=home mapping used
+// to select a Gradle launcher per repository.
+func ParseJDKHomes(value string) (map[int]string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, nil
+	}
+	homes := make(map[int]string)
+	for _, entry := range strings.Split(value, ",") {
+		version, home, found := strings.Cut(strings.TrimSpace(entry), "=")
+		major, err := strconv.Atoi(strings.TrimSpace(version))
+		if !found || err != nil || major <= 0 || strings.TrimSpace(home) == "" {
+			return nil, fmt.Errorf("expected comma-separated major=JDK-home entries")
+		}
+		if _, duplicate := homes[major]; duplicate {
+			return nil, fmt.Errorf("Java %d JDK home is configured more than once", major)
+		}
+		homes[major] = strings.TrimSpace(home)
+	}
+	return homes, nil
 }
 
 // ProviderStatus returns a copy safe for API and template presentation.
@@ -370,9 +596,13 @@ func (s *Service) indexRepository(ctx context.Context, repositoryID int64) error
 	if repository.IndexState != "ready" || revision == "" {
 		return nil
 	}
-	buildRoot, applicable, reason, inspectErr := inspectGradleRepository(ctx, repository, revision)
+	build, applicable, reason, inspectErr := inspectGradleRepository(ctx, repository, revision)
 	if inspectErr != nil {
-		return s.recordFailure(ctx, repository, revision, "", true, inspectErr)
+		return s.recordFailure(ctx, repository, revision, gradleBuild{}, jdkSelection{}, true, &failure{
+			Category: FailureEnvironment,
+			Summary:  "RepoKarta could not inspect the exact-commit Gradle build.",
+			Cause:    inspectErr,
+		})
 	}
 	if !applicable {
 		return s.store.UpdateSCIPIndexStatus(ctx, repository.ID, catalog.SCIPIndexStatus{
@@ -385,8 +615,12 @@ func (s *Service) indexRepository(ctx context.Context, repositoryID int64) error
 		return s.store.UpdateSCIPIndexStatus(ctx, repository.ID, catalog.SCIPIndexStatus{
 			Provider: "scip-java", State: "unavailable", Applicable: true,
 			Revision: revision, Configuration: s.provider.Configuration,
-			BuildRoot: buildRoot, Error: s.provider.Error,
-			FinishedAt: time.Now().UTC(),
+			BuildRoot: build.Root, GradleVersion: build.GradleVersion,
+			RequestedJDKVersion: build.ToolchainVersion,
+			FailureCategory:     s.provider.FailureCategory,
+			FailureSummary:      s.provider.FailureSummary,
+			Error:               s.provider.Error,
+			FinishedAt:          time.Now().UTC(),
 		})
 	}
 	if current := repository.SCIPJava; current != nil &&
@@ -399,22 +633,29 @@ func (s *Service) indexRepository(ctx context.Context, repositoryID int64) error
 			return nil
 		}
 	}
+	selection, selectionErr := s.selectJDK(build)
+	if selectionErr != nil {
+		return s.recordFailure(ctx, repository, revision, build, selection, true, selectionErr)
+	}
 
 	now := time.Now().UTC()
 	status := catalog.SCIPIndexStatus{
 		Provider: "scip-java", State: "indexing", Applicable: true,
 		Revision: revision, Configuration: s.provider.Configuration,
 		Indexer: "scip-java", Version: s.provider.Version,
-		BuildRoot: buildRoot, QueuedAt: now, StartedAt: now,
+		BuildRoot: build.Root, GradleVersion: build.GradleVersion,
+		RequestedJDKVersion: build.ToolchainVersion,
+		JDKVersion:          selection.Major, JDKSource: selection.Source,
+		QueuedAt: now, StartedAt: now,
 	}
 	if err := s.store.UpdateSCIPIndexStatus(ctx, repository.ID, status); err != nil {
 		return err
 	}
 	bounded, cancel := context.WithTimeout(ctx, s.config.Timeout)
-	summary, buildErr := s.build(bounded, repository, revision, buildRoot)
+	summary, buildErr := s.build(bounded, repository, revision, build, selection)
 	cancel()
 	if buildErr != nil {
-		return s.recordFailure(ctx, repository, revision, buildRoot, true, buildErr)
+		return s.recordFailure(ctx, repository, revision, build, selection, true, buildErr)
 	}
 	status.State = "ready"
 	status.Indexer = summary.Indexer.Name
@@ -429,15 +670,26 @@ func (s *Service) indexRepository(ctx context.Context, repositoryID int64) error
 func (s *Service) recordFailure(
 	ctx context.Context,
 	repository catalog.Repository,
-	revision, buildRoot string,
+	revision string,
+	build gradleBuild,
+	selection jdkSelection,
 	applicable bool,
 	cause error,
 ) error {
-	message := sanitizeFailure(cause.Error(), repository.Path, s.config.DataDirectory)
+	sensitivePaths := []string{repository.Path, s.config.DataDirectory}
+	for _, installation := range s.jdks {
+		sensitivePaths = append(sensitivePaths, installation.Home)
+	}
+	message := sanitizeFailure(cause.Error(), sensitivePaths...)
+	category, summary := classifyFailure(cause)
 	statusErr := s.store.UpdateSCIPIndexStatus(ctx, repository.ID, catalog.SCIPIndexStatus{
 		Provider: "scip-java", State: "failed", Applicable: applicable,
 		Revision: revision, Configuration: s.provider.Configuration,
-		Indexer: "scip-java", Version: s.provider.Version, BuildRoot: buildRoot,
+		Indexer: "scip-java", Version: s.provider.Version,
+		BuildRoot: build.Root, GradleVersion: build.GradleVersion,
+		RequestedJDKVersion: build.ToolchainVersion,
+		JDKVersion:          selection.Major, JDKSource: selection.Source,
+		FailureCategory: category, FailureSummary: summary,
 		Error: message, FinishedAt: time.Now().UTC(),
 	})
 	if statusErr != nil {
@@ -449,7 +701,9 @@ func (s *Service) recordFailure(
 func (s *Service) build(
 	ctx context.Context,
 	repository catalog.Repository,
-	revision, buildRoot string,
+	revision string,
+	build gradleBuild,
+	selection jdkSelection,
 ) (scipindex.ImportSummary, error) {
 	parent, err := os.MkdirTemp(filepath.Join(s.config.DataDirectory, "worktrees"), fmt.Sprintf("%d-", repository.ID))
 	if err != nil {
@@ -472,21 +726,28 @@ func (s *Service) build(
 	}
 	indexDirectory := worktree
 	sourceRoot := "."
-	if buildRoot != "" {
-		indexDirectory = filepath.Join(worktree, filepath.FromSlash(buildRoot))
-		sourceRoot = buildRoot
+	if build.Root != "" {
+		indexDirectory = filepath.Join(worktree, filepath.FromSlash(build.Root))
+		sourceRoot = build.Root
 	}
 	indexPath := filepath.Join(indexDirectory, "index.scip")
 	if removeErr := os.Remove(indexPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
 		return scipindex.ImportSummary{}, fmt.Errorf("remove stale temporary SCIP output: %w", removeErr)
 	}
-	output, runErr := s.executor.Run(ctx, s.config.Command, indexDirectory)
+	output, runErr := s.executor.Run(ctx, s.config.Command, indexDirectory, s.buildEnvironment(selection))
 	if runErr != nil {
-		return scipindex.ImportSummary{}, fmt.Errorf(
-			"scip-java index failed: %w: %s",
-			runErr,
+		detail := fmt.Errorf(
+			"scip-java index failed: %w: %s", runErr,
 			sanitizeFailure(string(output), repository.Path, worktree, s.config.DataDirectory),
 		)
+		if ctx.Err() != nil {
+			return scipindex.ImportSummary{}, &failure{
+				Category: FailureEnvironment,
+				Summary:  "Java SCIP generation exceeded its configured time limit.",
+				Cause:    errors.Join(ctx.Err(), detail),
+			}
+		}
+		return scipindex.ImportSummary{}, classifyBuildFailure(detail, string(output))
 	}
 	input, err := os.Open(indexPath)
 	if err != nil {
@@ -498,6 +759,271 @@ func (s *Service) build(
 		return scipindex.ImportSummary{}, fmt.Errorf("import generated index.scip: %w", err)
 	}
 	return summary, nil
+}
+
+func classifyFailure(cause error) (string, string) {
+	var classified *failure
+	if errors.As(cause, &classified) {
+		return classified.Category, classified.Summary
+	}
+	if errors.Is(cause, context.DeadlineExceeded) {
+		return FailureEnvironment, "Java SCIP generation exceeded its configured time limit."
+	}
+	return FailureEnvironment, "The Java SCIP build environment failed before compilation completed."
+}
+
+func classifyBuildFailure(cause error, output string) error {
+	lower := strings.ToLower(output + "\n" + cause.Error())
+	jdkPatterns := []string{
+		"unsupported class file major version",
+		"could not determine java version from",
+		"gradle requires jvm",
+		"requires java 17 or later",
+		"incompatible java version",
+		"incompatible because this component declares a component compatible with java",
+		"your build is currently configured to use incompatible java",
+	}
+	for _, pattern := range jdkPatterns {
+		if strings.Contains(lower, pattern) {
+			return &failure{
+				Category: FailureJDKIncompatibleWrapper,
+				Summary:  "The selected JDK cannot run this repository's Gradle wrapper.",
+				Cause:    cause,
+			}
+		}
+	}
+	environmentPatterns := []string{
+		"cannot connect to the docker daemon",
+		"error during connect: this error may indicate that the docker daemon is not running",
+		"docker: command not found",
+		"'docker' is not recognized",
+		"cannot run program \"docker\"",
+		"no such file or directory",
+		"the system cannot find the file specified",
+		"permission denied",
+		"access is denied",
+		"could not resolve host",
+		"connection timed out",
+	}
+	for _, pattern := range environmentPatterns {
+		if strings.Contains(lower, pattern) {
+			return &failure{
+				Category: FailureEnvironment,
+				Summary:  "The build environment or a required external service is unavailable.",
+				Cause:    cause,
+			}
+		}
+	}
+	return &failure{
+		Category: FailureCompileError,
+		Summary:  "Gradle reached compilation, but the repository build did not compile successfully.",
+		Cause:    cause,
+	}
+}
+
+func (s *Service) selectJDK(build gradleBuild) (jdkSelection, error) {
+	selection := jdkSelection{
+		RequestedVersion: build.ToolchainVersion,
+		GradleVersion:    build.GradleVersion,
+	}
+	if len(s.jdks) > 0 && s.jdks[0].Source == "override" {
+		selection.Home = s.jdks[0].Home
+		selection.Major = s.jdks[0].Major
+		selection.Source = "override"
+		if !gradleSupportsJavaRuntime(build.GradleVersion, selection.Major) {
+			return selection, incompatibleJDKFailure(build, selection)
+		}
+		return selection, nil
+	}
+
+	candidates := append([]jdkInstallation(nil), s.jdks...)
+	if s.inherited != nil {
+		candidates = append(candidates, *s.inherited)
+	}
+	if build.ToolchainVersion > 0 {
+		for _, candidate := range candidates {
+			if candidate.Major == build.ToolchainVersion &&
+				gradleSupportsJavaRuntime(build.GradleVersion, candidate.Major) {
+				selection.Home = candidate.Home
+				selection.Major = candidate.Major
+				selection.Source = "toolchain"
+				return selection, nil
+			}
+		}
+	}
+	if s.inherited != nil && gradleSupportsJavaRuntime(build.GradleVersion, s.inherited.Major) {
+		selection.Home = s.inherited.Home
+		selection.Major = s.inherited.Major
+		selection.Source = "inherited"
+		return selection, nil
+	}
+	sort.SliceStable(candidates, func(left, right int) bool {
+		return candidates[left].Major > candidates[right].Major
+	})
+	for _, candidate := range candidates {
+		if gradleSupportsJavaRuntime(build.GradleVersion, candidate.Major) {
+			selection.Home = candidate.Home
+			selection.Major = candidate.Major
+			selection.Source = "compatible-configured"
+			return selection, nil
+		}
+	}
+	if build.GradleVersion == "" && len(candidates) == 0 {
+		selection.Source = "inherited"
+		return selection, nil
+	}
+	if len(candidates) > 0 {
+		selection.Home = candidates[0].Home
+		selection.Major = candidates[0].Major
+		selection.Source = candidates[0].Source
+	}
+	return selection, incompatibleJDKFailure(build, selection)
+}
+
+func incompatibleJDKFailure(build gradleBuild, selection jdkSelection) error {
+	detail := "no compatible configured JDK is available"
+	if selection.Major > 0 {
+		detail = fmt.Sprintf("Java %d cannot run Gradle %s", selection.Major, build.GradleVersion)
+	}
+	return &failure{
+		Category: FailureJDKIncompatibleWrapper,
+		Summary:  "No configured JDK can run this repository's Gradle wrapper.",
+		Cause:    errors.New(detail),
+	}
+}
+
+func gradleSupportsJavaRuntime(gradleVersion string, javaMajor int) bool {
+	if gradleVersion == "" || javaMajor == 0 {
+		return true
+	}
+	if javaMajor < 8 {
+		return false
+	}
+	gradle := parseNumericVersion(gradleVersion)
+	if len(gradle) == 0 {
+		return true
+	}
+	if gradle[0] >= 9 && javaMajor < 17 {
+		return false
+	}
+	minimum, known := minimumGradleForJava(javaMajor)
+	if !known {
+		return false
+	}
+	return compareNumericVersions(gradle, minimum) >= 0
+}
+
+func minimumGradleForJava(javaMajor int) ([]int, bool) {
+	minimum := map[int][]int{
+		8: {2, 0}, 9: {4, 3}, 10: {4, 7}, 11: {5, 0},
+		12: {5, 4}, 13: {6, 0}, 14: {6, 3}, 15: {6, 7},
+		16: {7, 0}, 17: {7, 3}, 18: {7, 5}, 19: {7, 6},
+		20: {8, 3}, 21: {8, 5}, 22: {8, 8}, 23: {8, 10},
+		24: {8, 14}, 25: {9, 1, 0}, 26: {9, 4, 0},
+	}
+	version, ok := minimum[javaMajor]
+	return version, ok
+}
+
+func parseNumericVersion(value string) []int {
+	parts := strings.Split(strings.TrimSpace(value), ".")
+	version := make([]int, 0, len(parts))
+	for _, part := range parts {
+		digits := strings.TrimLeftFunc(part, func(character rune) bool {
+			return character < '0' || character > '9'
+		})
+		end := strings.IndexFunc(digits, func(character rune) bool {
+			return character < '0' || character > '9'
+		})
+		if end >= 0 {
+			digits = digits[:end]
+		}
+		if digits == "" {
+			break
+		}
+		number, err := strconv.Atoi(digits)
+		if err != nil {
+			return nil
+		}
+		version = append(version, number)
+	}
+	return version
+}
+
+func compareNumericVersions(left, right []int) int {
+	length := max(len(left), len(right))
+	for index := 0; index < length; index++ {
+		leftPart, rightPart := 0, 0
+		if index < len(left) {
+			leftPart = left[index]
+		}
+		if index < len(right) {
+			rightPart = right[index]
+		}
+		if leftPart < rightPart {
+			return -1
+		}
+		if leftPart > rightPart {
+			return 1
+		}
+	}
+	return 0
+}
+
+func (s *Service) buildEnvironment(selection jdkSelection) []string {
+	environment := append([]string(nil), os.Environ()...)
+	if selection.Home != "" {
+		environment = setEnvironment(environment, "JAVA_HOME", selection.Home)
+		currentPath := environmentValue(environment, "PATH")
+		environment = setEnvironment(
+			environment,
+			"PATH",
+			javaBin(selection.Home)+string(os.PathListSeparator)+currentPath,
+		)
+	}
+	homes := make([]string, 0, len(s.jdks))
+	for _, installation := range s.jdks {
+		if !strings.Contains(installation.Home, ",") {
+			homes = append(homes, installation.Home)
+		}
+	}
+	if len(homes) > 0 {
+		option := "-Dorg.gradle.java.installations.paths=" + strings.Join(homes, ",")
+		if strings.ContainsAny(option, " \t") {
+			option = `"` + strings.ReplaceAll(option, `"`, `\"`) + `"`
+		}
+		current := strings.TrimSpace(environmentValue(environment, "GRADLE_OPTS"))
+		if current != "" {
+			option = current + " " + option
+		}
+		environment = setEnvironment(environment, "GRADLE_OPTS", option)
+	}
+	return environment
+}
+
+func javaBin(home string) string {
+	return filepath.Join(home, "bin")
+}
+
+func environmentValue(environment []string, key string) string {
+	for _, entry := range environment {
+		name, value, found := strings.Cut(entry, "=")
+		if found && strings.EqualFold(name, key) {
+			return value
+		}
+	}
+	return ""
+}
+
+func setEnvironment(environment []string, key, value string) []string {
+	for index, entry := range environment {
+		name, _, found := strings.Cut(entry, "=")
+		if found && strings.EqualFold(name, key) {
+			environment[index] = key + "=" + value
+			return environment
+		}
+	}
+	return append(environment, key+"="+value)
 }
 
 func removeWorktree(ctx context.Context, repositoryPath, worktree string) error {
@@ -512,10 +1038,10 @@ func inspectGradleRepository(
 	ctx context.Context,
 	repository catalog.Repository,
 	revision string,
-) (buildRoot string, applicable bool, reason string, err error) {
+) (build gradleBuild, applicable bool, reason string, err error) {
 	output, err := runGit(ctx, repository.Path, "ls-tree", "-r", "-z", "--name-only", revision)
 	if err != nil {
-		return "", false, "", fmt.Errorf("list committed files: %w", err)
+		return gradleBuild{}, false, "", fmt.Errorf("list committed files: %w", err)
 	}
 	files := strings.Split(strings.TrimSuffix(output, "\x00"), "\x00")
 	javaFiles := make([]string, 0)
@@ -537,14 +1063,14 @@ func inspectGradleRepository(
 		}
 	}
 	if len(javaFiles) == 0 {
-		return "", false, "No committed Java sources.", nil
+		return gradleBuild{}, false, "No committed Java sources.", nil
 	}
 	roots := settingsRoots
 	if len(roots) == 0 {
 		roots = buildRoots
 	}
 	if len(roots) == 0 {
-		return "", false, "Java sources found, but no Gradle build was detected.", nil
+		return gradleBuild{}, false, "Java sources found, but no Gradle build was detected.", nil
 	}
 	candidates := make([]string, 0, len(roots))
 	for root := range roots {
@@ -562,10 +1088,85 @@ func inspectGradleRepository(
 	})
 	for _, candidate := range candidates {
 		if containsEveryPath(candidate, javaFiles) {
-			return candidate, true, "", nil
+			build, err := inspectGradleMetadata(ctx, repository.Path, revision, candidate, files)
+			if err != nil {
+				return gradleBuild{}, true, "", err
+			}
+			return build, true, "", nil
 		}
 	}
-	return "", true, "", errors.New("multiple independent Gradle roots are not supported; index each build as a separate repository")
+	return gradleBuild{}, true, "", errors.New("multiple independent Gradle roots are not supported; index each build as a separate repository")
+}
+
+func inspectGradleMetadata(
+	ctx context.Context,
+	repositoryPath, revision, root string,
+	files []string,
+) (gradleBuild, error) {
+	build := gradleBuild{Root: root}
+	wrapperPath := path.Join(root, "gradle/wrapper/gradle-wrapper.properties")
+	daemonJVMPath := path.Join(root, "gradle/gradle-daemon-jvm.properties")
+	toolchainVersions := make(map[int]struct{})
+	daemonJVMVersion := 0
+	metadataFiles := make([]string, 0)
+	for _, file := range files {
+		if !withinRoot(root, file) {
+			continue
+		}
+		base := path.Base(file)
+		if file == wrapperPath || file == daemonJVMPath ||
+			base == "build.gradle" || base == "build.gradle.kts" {
+			metadataFiles = append(metadataFiles, file)
+		}
+	}
+	sort.Strings(metadataFiles)
+	if len(metadataFiles) > maximumGradleMetadataFiles {
+		return gradleBuild{}, fmt.Errorf(
+			"Gradle metadata inspection exceeds the %d-file limit",
+			maximumGradleMetadataFiles,
+		)
+	}
+	for _, file := range metadataFiles {
+		content, readErr := runGit(ctx, repositoryPath, "show", revision+":"+file)
+		if readErr != nil {
+			return gradleBuild{}, fmt.Errorf("read committed Gradle metadata %q: %w", file, readErr)
+		}
+		if len(content) > maximumGradleMetadataBytes {
+			return gradleBuild{}, fmt.Errorf(
+				"committed Gradle metadata %q exceeds the %d-byte limit",
+				file,
+				maximumGradleMetadataBytes,
+			)
+		}
+		if file == wrapperPath {
+			if match := gradleDistributionPattern.FindStringSubmatch(content); len(match) == 2 {
+				build.GradleVersion = match[1]
+			}
+		}
+		for _, pattern := range javaToolchainPatterns {
+			for _, match := range pattern.FindAllStringSubmatch(content, -1) {
+				if len(match) != 2 {
+					continue
+				}
+				major, parseErr := strconv.Atoi(match[1])
+				if parseErr == nil && major > 0 {
+					if file == daemonJVMPath {
+						daemonJVMVersion = major
+					} else {
+						toolchainVersions[major] = struct{}{}
+					}
+				}
+			}
+		}
+	}
+	if daemonJVMVersion > 0 {
+		build.ToolchainVersion = daemonJVMVersion
+	} else if len(toolchainVersions) == 1 {
+		for major := range toolchainVersions {
+			build.ToolchainVersion = major
+		}
+	}
+	return build, nil
 }
 
 func pathDirectory(file string) string {

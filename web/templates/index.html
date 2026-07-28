@@ -646,7 +646,9 @@
         <div class="min-w-0">
           <p class="text-xs text-ink-soft">Java SCIP · <span class="{{if eq .SCIPJava.State "ready"}}text-emerald-300{{else if eq .SCIPJava.State "failed"}}text-rose-300{{else}}text-amber-300{{end}}">{{scipStatusLabel .SCIPJava.State}}</span></p>
           {{if eq .SCIPJava.State "ready"}}
-          <p class="mt-0.5 truncate font-mono text-[0.68rem] text-ink-faint">{{.SCIPJava.Documents}} files · {{.SCIPJava.Occurrences}} occurrences · {{shortCommit .SCIPJava.Revision}}</p>
+          <p class="mt-0.5 truncate font-mono text-[0.68rem] text-ink-faint">{{.SCIPJava.Documents}} files · {{.SCIPJava.Occurrences}} occurrences · {{shortCommit .SCIPJava.Revision}}{{if .SCIPJava.JDKVersion}} · Java {{.SCIPJava.JDKVersion}}{{if and .SCIPJava.RequestedJDKVersion (ne .SCIPJava.JDKVersion .SCIPJava.RequestedJDKVersion)}} (toolchain {{.SCIPJava.RequestedJDKVersion}}){{end}}{{end}}{{if .SCIPJava.GradleVersion}} / Gradle {{.SCIPJava.GradleVersion}}{{end}}</p>
+          {{else if .SCIPJava.FailureSummary}}
+          <p class="mt-0.5 line-clamp-2 text-[0.68rem] leading-4 text-ink-faint" title="{{.SCIPJava.Error}}"><span class="text-rose-300/80">{{scipFailureLabel .SCIPJava.FailureCategory}}:</span> {{.SCIPJava.FailureSummary}}</p>
           {{else if .SCIPJava.Error}}
           <p class="mt-0.5 line-clamp-2 text-[0.68rem] leading-4 text-ink-faint" title="{{.SCIPJava.Error}}">{{.SCIPJava.Error}}</p>
           {{end}}
