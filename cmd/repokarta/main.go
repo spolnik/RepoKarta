@@ -20,7 +20,7 @@ import (
 	"github.com/spolnik/RepoKarta/internal/store"
 )
 
-var version = "0.90.0-dev"
+var version = "0.91.0-dev"
 
 type stringList []string
 
@@ -229,9 +229,16 @@ func serveMCP(args []string) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
+	remoteServices := mcpserver.NewRemoteServices(*baseURL)
 	return mcpserver.RunStdio(
 		ctx,
-		mcpserver.Config{Version: version, BaseURL: *baseURL},
+		mcpserver.Config{
+			Version:      version,
+			BaseURL:      *baseURL,
+			Artifacts:    remoteServices,
+			Insights:     remoteServices,
+			Dependencies: remoteServices,
+		},
 		codeintel.NewClient(*baseURL),
 	)
 }

@@ -4928,6 +4928,17 @@ a.brand-mark:hover,
   outline: 2px solid rgb(52 211 153 / 0.12);
 }
 
+.conversation-source-link-unverified {
+  text-decoration-style: dashed;
+  text-decoration-color: #f59e0b;
+}
+
+.conversation-source-link-unverified::after {
+  color: #f59e0b;
+  content: " (unverified)";
+  font-size: 0.78em;
+}
+
 .source-intelligence-search > button {
   align-self: end;
   justify-content: center;

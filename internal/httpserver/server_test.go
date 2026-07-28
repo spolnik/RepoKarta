@@ -1237,7 +1237,7 @@ func TestMCPSetupPageProvidesCopyableReadOnlyConfiguration(t *testing.T) {
 		`read_dependency_findings`,
 		`list_deep_wiki_pages`,
 		`read_generated_document`,
-		`18 tools · no writes`,
+		`19 tools · no writes`,
 	} {
 		if !strings.Contains(response.Body.String(), expected) {
 			t.Fatalf("MCP setup page does not contain %q", expected)
@@ -3283,7 +3283,7 @@ func TestHTTPBoundaryAndFormattingHelpers(t *testing.T) {
 	if dependencyURL("/dependencies", 7, options, 30) == "" {
 		t.Fatal("dependency URL is empty")
 	}
-	if data := buildMCPPageData("http://localhost/mcp", "secret-token-value", "repokarta", "http://localhost"); len(data.Tools) != 18 {
+	if data := buildMCPPageData("http://localhost/mcp", "secret-token-value", "repokarta", "http://localhost"); len(data.Tools) != 19 {
 		t.Fatalf("MCP page tools = %d", len(data.Tools))
 	}
 

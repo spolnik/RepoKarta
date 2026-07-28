@@ -36,6 +36,7 @@ import (
 	"github.com/spolnik/RepoKarta/internal/identity"
 	"github.com/spolnik/RepoKarta/internal/insights"
 	"github.com/spolnik/RepoKarta/internal/maintenance"
+	"github.com/spolnik/RepoKarta/internal/mcpserver"
 	"github.com/spolnik/RepoKarta/internal/scipjava"
 	"github.com/spolnik/RepoKarta/internal/search"
 	"github.com/spolnik/RepoKarta/internal/security"
@@ -3046,6 +3047,11 @@ func buildMCPPageData(endpoint, token, command, stdioBaseURL string) mcpPageData
 	if len(token) > 20 {
 		tokenPreview = token[:8] + "••••••••" + token[len(token)-8:]
 	}
+	catalog := mcpserver.ToolCatalog()
+	tools := make([]mcpToolView, len(catalog))
+	for index, tool := range catalog {
+		tools[index] = mcpToolView{Name: tool.Name, Description: tool.Description}
+	}
 	return mcpPageData{
 		Endpoint:       endpoint,
 		Token:          token,
@@ -3053,26 +3059,7 @@ func buildMCPPageData(endpoint, token, command, stdioBaseURL string) mcpPageData
 		HTTPConfig:     string(httpConfiguration),
 		HTTPConfigView: strings.ReplaceAll(string(httpConfiguration), "Bearer "+token, "Bearer <current-token>"),
 		StdioConfig:    string(stdioConfiguration),
-		Tools: []mcpToolView{
-			{Name: "list_repositories", Description: "Indexed repositories, stable IDs, and pinned commits."},
-			{Name: "list_named_contexts", Description: "Permission-checked personal and administrator-published reusable scopes."},
-			{Name: "resolve_effective_contexts", Description: "Exact explicit, named, and default contexts with provenance and canonical URLs."},
-			{Name: "search_code", Description: "Literal, regex, Zoekt, or AST-reference search with explicit completeness metadata."},
-			{Name: "find_symbol", Description: "Commit-pinned symbol definitions from the Zoekt/ctags index."},
-			{Name: "find_references", Description: "Compiler-precise SCIP references when available, with labeled syntax-backed AST fallback."},
-			{Name: "get_file", Description: "Bounded source reads with exact revision and citation URLs."},
-			{Name: "list_tree", Description: "Bounded repository trees at an exact indexed commit."},
-			{Name: "git_log", Description: "Newest-first commit history with truncation metadata."},
-			{Name: "git_diff", Description: "Resolved revisions and bounded unified patches."},
-			{Name: "read_repository_map", Description: "Complete static snapshot: structure, routes, entry points, dependencies, and edges."},
-			{Name: "read_dependency_inventory", Description: "Focused manifests, versioned coordinates, and outbound HTTP calls."},
-			{Name: "read_system_topology", Description: "Directed component-level HTTP, gRPC, Kafka, database, MCP, and runtime-observed relationships."},
-			{Name: "read_dependency_findings", Description: "Compact scope-aware OSV findings with manifest and advisory-snapshot evidence."},
-			{Name: "list_deep_wiki_pages", Description: "Persisted Wiki plan, page slugs, hierarchy, status, and provenance."},
-			{Name: "read_generated_document", Description: "Generated Deep Wiki pages and their grounded evidence."},
-			{Name: "read_code_insights", Description: "Normalized metrics, findings, history, provenance, and advisory thresholds without executing scanners."},
-			{Name: "compare_code_insights", Description: "Metric deltas and introduced or resolved findings between exact stored revisions."},
-		},
+		Tools:          tools,
 	}
 }
 

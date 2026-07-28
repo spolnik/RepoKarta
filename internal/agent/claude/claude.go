@@ -19,6 +19,7 @@ import (
 
 	"github.com/spolnik/RepoKarta/internal/agent"
 	"github.com/spolnik/RepoKarta/internal/agent/localcommand"
+	"github.com/spolnik/RepoKarta/internal/agent/processgroup"
 )
 
 const providerInstructions = `You are RepoKarta's read-only code intelligence assistant.
@@ -38,12 +39,26 @@ const (
 
 // Adapter starts local Claude Code stream-json sessions.
 type Adapter struct {
-	Command string
+	Command  string
+	statusMu sync.Mutex
+	statusAt time.Time
+	status   agent.Status
 }
 
 func (a *Adapter) ID() string { return "claude" }
 
 func (a *Adapter) Status(ctx context.Context) agent.Status {
+	a.statusMu.Lock()
+	defer a.statusMu.Unlock()
+	if !a.statusAt.IsZero() && time.Since(a.statusAt) < 15*time.Second {
+		return a.status
+	}
+	a.status = a.probeStatus(ctx)
+	a.statusAt = time.Now()
+	return a.status
+}
+
+func (a *Adapter) probeStatus(ctx context.Context) agent.Status {
 	efforts := []string{"low", "medium", "high", "xhigh", "max"}
 	status := agent.Status{
 		ID:   a.ID(),
@@ -126,6 +141,7 @@ func (a *Adapter) Start(ctx context.Context, config agent.SessionConfig) (agent.
 	arguments := commandArguments(config, mcpConfigPath, attachments.Directory())
 
 	process := newCommand(context.WithoutCancel(ctx), command, arguments, attachments.Directory())
+	processgroup.Configure(process)
 	// Run from the attachment sandbox rather than a repository or user project
 	// directory. Only user settings are loaded, so operational env, hooks, and
 	// telemetry apply while project/local settings and repository memory do not.
@@ -140,23 +156,33 @@ func (a *Adapter) Start(ctx context.Context, config agent.SessionConfig) (agent.
 		_ = attachments.Close()
 		return nil, fmt.Errorf("open Claude stdout: %w", err)
 	}
-	var stderr strings.Builder
+	var stderr processgroup.Buffer
 	process.Stderr = &stderr
 	if err := process.Start(); err != nil {
 		stdin.Close()
 		_ = attachments.Close()
 		return nil, fmt.Errorf("start Claude Code: %w", err)
 	}
+	group, err := processgroup.Attach(process)
+	if err != nil {
+		_ = process.Process.Kill()
+		_ = process.Wait()
+		stdin.Close()
+		_ = attachments.Close()
+		return nil, fmt.Errorf("contain Claude process tree: %w", err)
+	}
 	s := &session{
-		command:     process,
-		stdin:       stdin,
-		messages:    make(chan json.RawMessage, 128),
-		readError:   make(chan error, 1),
-		stderr:      &stderr,
-		attachments: attachments,
-		pending:     make(map[string]chan controlResponse),
-		sessionID:   strings.TrimSpace(config.ResumeCursor),
-		restored:    strings.TrimSpace(config.ResumeCursor) != "",
+		command:      process,
+		processGroup: group,
+		stdin:        stdin,
+		messages:     make(chan json.RawMessage, 128),
+		readDone:     make(chan struct{}),
+		closed:       make(chan struct{}),
+		stderr:       &stderr,
+		attachments:  attachments,
+		pending:      make(map[string]chan controlResponse),
+		sessionID:    strings.TrimSpace(config.ResumeCursor),
+		restored:     strings.TrimSpace(config.ResumeCursor) != "",
 	}
 	go s.read(stdout)
 	return s, nil
@@ -218,23 +244,27 @@ func newCommand(ctx context.Context, command string, arguments []string, directo
 }
 
 type session struct {
-	command     *exec.Cmd
-	stdin       io.WriteCloser
-	messages    chan json.RawMessage
-	readError   chan error
-	stderr      *strings.Builder
-	attachments *agent.AttachmentStore
-	writeMu     sync.Mutex
-	pendingMu   sync.Mutex
-	pending     map[string]chan controlResponse
-	nextControl atomic.Uint64
-	active      atomic.Bool
-	interrupted atomic.Bool
-	sendMu      sync.Mutex
-	cursorMu    sync.RWMutex
-	sessionID   string
-	restored    bool
-	closeOnce   sync.Once
+	command      *exec.Cmd
+	processGroup *processgroup.Group
+	stdin        io.WriteCloser
+	messages     chan json.RawMessage
+	readDone     chan struct{}
+	readErrMu    sync.Mutex
+	readErr      error
+	closed       chan struct{}
+	stderr       *processgroup.Buffer
+	attachments  *agent.AttachmentStore
+	writeMu      sync.Mutex
+	pendingMu    sync.Mutex
+	pending      map[string]chan controlResponse
+	nextControl  atomic.Uint64
+	active       atomic.Bool
+	interrupted  atomic.Bool
+	sendMu       sync.Mutex
+	cursorMu     sync.RWMutex
+	sessionID    string
+	restored     bool
+	closeOnce    sync.Once
 }
 
 func (s *session) Send(ctx context.Context, turn agent.Turn, emit func(agent.Event) error) error {
@@ -281,7 +311,8 @@ func (s *session) Send(ctx context.Context, turn agent.Turn, emit func(agent.Eve
 			_ = s.Interrupt(interruptContext)
 			cancel()
 			return ctx.Err()
-		case err := <-s.readError:
+		case <-s.readDone:
+			err := s.readFailure()
 			detail := strings.TrimSpace(s.stderr.String())
 			if detail != "" {
 				return fmt.Errorf("Claude Code stopped: %w: %s", err, detail)
@@ -445,8 +476,8 @@ func (s *session) control(ctx context.Context, request map[string]any) (json.Raw
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
-	case err := <-s.readError:
-		return nil, err
+	case <-s.readDone:
+		return nil, s.readFailure()
 	case response := <-responseChannel:
 		if response.Subtype != "success" {
 			if response.Error == "" {
@@ -539,29 +570,45 @@ func (s *session) read(reader io.Reader) {
 			channel := s.pending[envelope.Response.RequestID]
 			s.pendingMu.Unlock()
 			if channel != nil {
-				channel <- envelope.Response
+				select {
+				case channel <- envelope.Response:
+				case <-s.closed:
+					return
+				}
 			}
 			continue
 		}
-		s.messages <- raw
+		select {
+		case s.messages <- raw:
+		case <-s.closed:
+			return
+		}
 	}
 	err := scanner.Err()
 	if err == nil {
 		err = io.EOF
 	}
-	select {
-	case s.readError <- err:
-	default:
+	s.readErrMu.Lock()
+	s.readErr = err
+	s.readErrMu.Unlock()
+	close(s.readDone)
+}
+
+func (s *session) readFailure() error {
+	s.readErrMu.Lock()
+	defer s.readErrMu.Unlock()
+	if s.readErr == nil {
+		return io.EOF
 	}
+	return s.readErr
 }
 
 func (s *session) Close() error {
 	var closeError error
 	s.closeOnce.Do(func() {
+		close(s.closed)
 		_ = s.stdin.Close()
-		if s.command.Process != nil {
-			_ = s.command.Process.Kill()
-		}
+		_ = s.processGroup.Kill()
 		closeError = s.command.Wait()
 		closeError = errors.Join(closeError, s.attachments.Close())
 	})

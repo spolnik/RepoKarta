@@ -2501,6 +2501,28 @@ function enableConversations(debug?: DebugLogger): void {
     renderEvidenceSources();
   };
 
+  const markInlineSourceVerification = (message: HTMLElement): void => {
+    const verified = new Set<string>();
+    for (const source of evidenceSources.values()) {
+      verified.add(source.url);
+      try {
+        verified.add(new URL(source.url, location.origin).href);
+      } catch {
+        // Invalid tracker URLs are already excluded from authoritative source UI.
+      }
+    }
+    message.querySelectorAll<HTMLAnchorElement>(".conversation-content a").forEach((link) => {
+      const raw = link.getAttribute("href") ?? "";
+      const trusted = verified.has(raw) || verified.has(link.href);
+      link.classList.toggle("conversation-source-link-verified", trusted);
+      link.classList.toggle("conversation-source-link-unverified", !trusted);
+      if (!trusted) {
+        link.title = "Unverified model-provided link; this URL was not returned by a tool in this turn.";
+        link.setAttribute("aria-label", `${link.textContent ?? "Link"} (unverified)`);
+      }
+    });
+  };
+
   const syncConversationChrome = (): void => {
     const summary = conversationSummaries.find((candidate) => candidate.id === conversationID);
     title.textContent = summary?.title || "New conversation";
@@ -3360,6 +3382,7 @@ function enableConversations(debug?: DebugLogger): void {
       container.append(link);
     }
     message.append(container);
+    markInlineSourceVerification(message);
   };
 
   const conversationAuthorLabel = (author: ConversationAuthor | undefined): string => {
@@ -4216,6 +4239,7 @@ function enableConversations(debug?: DebugLogger): void {
               link.rel = "noreferrer";
               sources.append(link);
             }
+            markInlineSourceVerification(assistant);
           } else if (message.type === "images" && message.images?.length) {
             const renderedImages = appendConversationImages(assistant, message.images, "output");
             debug?.add(renderedImages === message.images.length ? "info" : "warn", "chat.stream.images", {
@@ -4237,6 +4261,7 @@ function enableConversations(debug?: DebugLogger): void {
           } else if (message.type === "interrupted") {
             streamCompleted = true;
             renderMetrics = timelineRenderer?.finish();
+            markInlineSourceVerification(assistant);
             const notice = document.createElement("p");
             notice.className = "conversation-turn-status conversation-turn-status-interrupted";
             notice.textContent = "Interrupted by you.";
@@ -4250,6 +4275,7 @@ function enableConversations(debug?: DebugLogger): void {
           } else if (message.type === "done") {
             streamCompleted = true;
             renderMetrics = timelineRenderer?.finish();
+            markInlineSourceVerification(assistant);
             void refreshConversationHistory();
             debug?.add("info", "chat.stream.completed", {
               delta_events: deltaEvents,
@@ -4269,6 +4295,7 @@ function enableConversations(debug?: DebugLogger): void {
         if (done) {
           if (!streamCompleted) {
             renderMetrics = timelineRenderer?.finish();
+            markInlineSourceVerification(assistant);
             debug?.add("warn", "chat.stream.closed-without-done", {
               delta_events: deltaEvents,
               answer_characters: answerCharacters,
@@ -4280,6 +4307,7 @@ function enableConversations(debug?: DebugLogger): void {
       }
     } catch (error: unknown) {
       renderMetrics = timelineRenderer?.finish();
+      markInlineSourceVerification(assistant);
       debug?.add("error", "chat.request.failed", {
         endpoint: "/api/chat",
         online: navigator.onLine,

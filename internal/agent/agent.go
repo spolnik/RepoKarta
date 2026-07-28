@@ -233,16 +233,17 @@ func (c *managedConversation) replaceSession(session Session) {
 // transcripts. Provider-native session identifiers are opaque resume cursors
 // stored separately from user-visible messages.
 type Manager struct {
-	mu               sync.RWMutex
-	adapters         map[string]Adapter
-	conversations    map[string]*managedConversation
-	ephemeralAuthors map[string]ConversationAuthor
-	repositoryRoot   string
-	mcpURL           string
-	mcpToken         string
-	mcpTokenIssuer   MCPTokenIssuer
-	citations        CitationSource
-	persistence      ConversationStore
+	mu                 sync.RWMutex
+	adapters           map[string]Adapter
+	conversations      map[string]*managedConversation
+	conversationStarts map[string]*sync.Mutex
+	ephemeralAuthors   map[string]ConversationAuthor
+	repositoryRoot     string
+	mcpURL             string
+	mcpToken           string
+	mcpTokenIssuer     MCPTokenIssuer
+	citations          CitationSource
+	persistence        ConversationStore
 }
 
 // MCPTokenIssuer creates and revokes credentials bound to one conversation.
@@ -264,12 +265,13 @@ func NewManager(repositoryRoot, mcpURL, mcpToken string, adapters ...Adapter) *M
 		byID[adapter.ID()] = adapter
 	}
 	return &Manager{
-		adapters:         byID,
-		conversations:    make(map[string]*managedConversation),
-		ephemeralAuthors: make(map[string]ConversationAuthor),
-		repositoryRoot:   repositoryRoot,
-		mcpURL:           mcpURL,
-		mcpToken:         mcpToken,
+		adapters:           byID,
+		conversations:      make(map[string]*managedConversation),
+		conversationStarts: make(map[string]*sync.Mutex),
+		ephemeralAuthors:   make(map[string]ConversationAuthor),
+		repositoryRoot:     repositoryRoot,
+		mcpURL:             mcpURL,
+		mcpToken:           mcpToken,
 	}
 }
 
@@ -744,6 +746,9 @@ func (m *Manager) Interrupt(ctx context.Context, conversationID string) error {
 func (m *Manager) conversation(ctx context.Context, request TurnRequest) (*managedConversation, string, error) {
 	request.Author = normalizeConversationAuthor(request.Author)
 	if request.ConversationID != "" {
+		startLock := m.conversationStartLock(request.ConversationID)
+		startLock.Lock()
+		defer startLock.Unlock()
 		m.mu.RLock()
 		conversation := m.conversations[request.ConversationID]
 		m.mu.RUnlock()
@@ -772,8 +777,14 @@ func (m *Manager) conversation(ctx context.Context, request TurnRequest) (*manag
 				conversation.rehydrate = false
 			}
 			m.mu.Lock()
-			m.conversations[request.ConversationID] = conversation
-			m.mu.Unlock()
+			if existing := m.conversations[request.ConversationID]; existing != nil {
+				m.mu.Unlock()
+				_ = conversation.currentSession().Close()
+				conversation = existing
+			} else {
+				m.conversations[request.ConversationID] = conversation
+				m.mu.Unlock()
+			}
 		}
 		if conversation == nil {
 			return nil, "", ErrConversationNotFound
@@ -838,6 +849,17 @@ func (m *Manager) conversation(ctx context.Context, request TurnRequest) (*manag
 	m.conversations[conversationID] = conversation
 	m.mu.Unlock()
 	return conversation, conversationID, nil
+}
+
+func (m *Manager) conversationStartLock(id string) *sync.Mutex {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	lock := m.conversationStarts[id]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		m.conversationStarts[id] = lock
+	}
+	return lock
 }
 
 func normalizeConversationAuthor(author ConversationAuthor) ConversationAuthor {

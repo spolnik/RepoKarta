@@ -16,6 +16,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/spolnik/RepoKarta/internal/agent"
 	"github.com/spolnik/RepoKarta/internal/codeintel"
+	"github.com/spolnik/RepoKarta/internal/contextscope"
 )
 
 const (
@@ -45,6 +46,14 @@ type Intelligence interface {
 	ListTree(context.Context, codeintel.TreeRequest) (codeintel.TreeResponse, error)
 	GitLog(context.Context, codeintel.GitLogRequest) (codeintel.GitLogResponse, error)
 	GitDiff(context.Context, codeintel.GitDiffRequest) (codeintel.GitDiffResponse, error)
+}
+
+type structuralIntelligence interface {
+	SearchAST(context.Context, codeintel.ASTSearchRequest) (codeintel.ASTSearchResponse, error)
+}
+
+type namedContextIntelligence interface {
+	ListNamedContexts(context.Context) (contextscope.NamedContextList, error)
 }
 
 // CitationRecorder receives exact URLs observed in deterministic tool output.
@@ -129,6 +138,7 @@ type session struct {
 	sendMu       sync.Mutex
 	activeMu     sync.Mutex
 	activeCancel context.CancelFunc
+	interrupted  atomic.Bool
 	messages     []anthropicapi.MessageParam
 	closed       atomic.Bool
 }
@@ -143,6 +153,7 @@ func (s *session) Send(ctx context.Context, turn agent.Turn, emit func(agent.Eve
 		return errors.New("Anthropic API conversation is closed")
 	}
 	activeContext, cancel := context.WithCancel(ctx)
+	s.interrupted.Store(false)
 	s.activeMu.Lock()
 	s.activeCancel = cancel
 	s.activeMu.Unlock()
@@ -218,7 +229,10 @@ func (s *session) Send(ctx context.Context, turn agent.Turn, emit func(agent.Eve
 		_ = stream.Close()
 		if streamError != nil {
 			if errors.Is(activeContext.Err(), context.Canceled) {
-				return agent.ErrInterrupted
+				if s.interrupted.Swap(false) {
+					return agent.ErrInterrupted
+				}
+				return activeContext.Err()
 			}
 			return fmt.Errorf("Anthropic Messages API: %w", streamError)
 		}
@@ -268,6 +282,7 @@ func (s *session) Interrupt(context.Context) error {
 	if cancel == nil {
 		return agent.ErrNoActiveTurn
 	}
+	s.interrupted.Store(true)
 	cancel()
 	return nil
 }
@@ -308,6 +323,12 @@ func (s *session) executeTool(ctx context.Context, name string, input json.RawMe
 	switch name {
 	case "list_repositories":
 		return s.intelligence.Repositories(ctx)
+	case "list_named_contexts":
+		intelligence, ok := s.intelligence.(namedContextIntelligence)
+		if !ok {
+			return nil, errors.New("named contexts are unavailable")
+		}
+		return intelligence.ListNamedContexts(ctx)
 	case "search_code":
 		var request codeintel.SearchRequest
 		if err := json.Unmarshal(input, &request); err != nil {
@@ -336,6 +357,22 @@ func (s *session) executeTool(ctx context.Context, name string, input json.RawMe
 		result, err := s.intelligence.FindReferences(ctx, request)
 		if err == nil {
 			s.recordSearchCitations(result)
+		}
+		return result, err
+	case "search_ast":
+		intelligence, ok := s.intelligence.(structuralIntelligence)
+		if !ok {
+			return nil, errors.New("AST search is unavailable")
+		}
+		var request codeintel.ASTSearchRequest
+		if err := json.Unmarshal(input, &request); err != nil {
+			return nil, err
+		}
+		result, err := intelligence.SearchAST(ctx, request)
+		if err == nil {
+			for _, match := range result.Matches {
+				s.recordCitation(match.Citation, match.SourceURL, nil)
+			}
 		}
 		return result, err
 	case "get_file":
@@ -373,12 +410,14 @@ func (s *session) executeTool(ctx context.Context, name string, input json.RawMe
 		if err := json.Unmarshal(input, &request); err != nil {
 			return nil, err
 		}
-		return s.intelligence.ListTree(ctx, codeintel.TreeRequest{
+		result, err := s.intelligence.ListTree(ctx, codeintel.TreeRequest{
 			RepositoryID: request.RepositoryID,
 			Revision:     request.Revision,
 			Path:         request.Path,
 			Offset:       request.Offset,
 		})
+		s.recordCitation(result.Citation, result.SourceURL, err)
+		return result, err
 	case "git_log":
 		var request struct {
 			RepositoryID int64  `json:"repository_id"`
@@ -389,12 +428,14 @@ func (s *session) executeTool(ctx context.Context, name string, input json.RawMe
 		if err := json.Unmarshal(input, &request); err != nil {
 			return nil, err
 		}
-		return s.intelligence.GitLog(ctx, codeintel.GitLogRequest{
+		result, err := s.intelligence.GitLog(ctx, codeintel.GitLogRequest{
 			RepositoryID: request.RepositoryID,
 			Revision:     request.Revision,
 			Path:         request.Path,
 			Limit:        request.Limit,
 		})
+		s.recordCitation(result.Citation, result.SourceURL, err)
+		return result, err
 	case "git_diff":
 		var request struct {
 			RepositoryID int64  `json:"repository_id"`
@@ -406,15 +447,23 @@ func (s *session) executeTool(ctx context.Context, name string, input json.RawMe
 		if err := json.Unmarshal(input, &request); err != nil {
 			return nil, err
 		}
-		return s.intelligence.GitDiff(ctx, codeintel.GitDiffRequest{
+		result, err := s.intelligence.GitDiff(ctx, codeintel.GitDiffRequest{
 			RepositoryID: request.RepositoryID,
 			FromRevision: request.FromRevision,
 			ToRevision:   request.ToRevision,
 			Path:         request.Path,
 			ContextLines: request.ContextLines,
 		})
+		s.recordCitation(result.Citation, result.SourceURL, err)
+		return result, err
 	default:
 		return nil, fmt.Errorf("unknown read-only tool %q", name)
+	}
+}
+
+func (s *session) recordCitation(label, sourceURL string, resultError error) {
+	if resultError == nil && s.citations != nil && sourceURL != "" {
+		s.citations.Record(s.conversationID, agent.Citation{Label: label, URL: sourceURL})
 	}
 }
 
@@ -442,15 +491,17 @@ func (s *session) recordSearchCitations(result codeintel.SearchResponse) {
 func toolDefinitions() []anthropicapi.ToolUnionParam {
 	return []anthropicapi.ToolUnionParam{
 		tool("list_repositories", "List every indexed repository and its exact indexed commit.", nil, nil),
+		tool("list_named_contexts", "List visible personal and managed named contexts for reusable fail-closed scope.", nil, nil),
 		tool("search_code", "Search every deterministic result family. Prefer compact literal search for globally unique text and fleet discovery; use find_references for syntax precision, then get_file selectively.", map[string]any{
-			"query":         stringProperty("Source or evidence text and query fields such as repository:, revision:, language:, path:, file:, content:, result_type:, and negative -field:value filters."),
-			"repository_id": integerProperty("Optional repository ID returned by list_repositories."),
-			"language":      stringProperty("Optional language filter."),
-			"path":          stringProperty("Optional path substring."),
-			"file":          stringProperty("Optional file-name substring."),
-			"mode":          enumProperty("literal", "regex", "zoekt", "references"),
-			"limit":         integerProperty("Maximum files, 1 to 500."),
-			"compact":       booleanProperty("Return paths, line numbers, citations, and typed metadata without snippet bodies, ranking, facets, or actions."),
+			"query":             stringProperty("Source or evidence text and query fields such as repository:, revision:, language:, path:, file:, content:, result_type:, and negative -field:value filters."),
+			"repository_id":     integerProperty("Optional repository ID returned by list_repositories."),
+			"language":          stringProperty("Optional language filter."),
+			"path":              stringProperty("Optional path substring."),
+			"file":              stringProperty("Optional file-name substring."),
+			"mode":              enumProperty("literal", "regex", "zoekt", "references"),
+			"limit":             integerProperty("Maximum files, 1 to 500."),
+			"compact":           booleanProperty("Return paths, line numbers, citations, and typed metadata without snippet bodies, ranking, facets, or actions."),
+			"named_context_ids": stringArrayProperty("Optional named context IDs returned by list_named_contexts."),
 		}, []string{"query"}),
 		tool("find_symbol", "Find indexed symbol definitions by exact name, with commit-pinned citations.", map[string]any{
 			"symbol":        stringProperty("Exact symbol name."),
@@ -460,14 +511,23 @@ func toolDefinitions() []anthropicapi.ToolUnionParam {
 			"compact":       booleanProperty("Return paths, line numbers, and citations without snippet bodies."),
 		}, []string{"symbol"}),
 		tool("find_references", "Find compiler-precise SCIP references when complete exact-revision artifacts resolve one symbol, with labeled syntax-backed fallback. Compact mode reads cached artifacts without reopening every matched source blob.", map[string]any{
-			"symbol":        stringProperty("Exact source-level symbol name."),
-			"repository_id": integerProperty("Optional repository ID returned by list_repositories."),
-			"language":      stringProperty("Optional parser language filter."),
-			"path":          stringProperty("Optional path substring."),
-			"file":          stringProperty("Optional file-name substring."),
-			"limit":         integerProperty("Maximum files, 1 to 500."),
-			"compact":       booleanProperty("Return paths, line numbers, citations, and relation metadata directly from cached structural artifacts without snippets."),
+			"symbol":            stringProperty("Exact source-level symbol name."),
+			"repository_id":     integerProperty("Optional repository ID returned by list_repositories."),
+			"language":          stringProperty("Optional parser language filter."),
+			"path":              stringProperty("Optional path substring."),
+			"file":              stringProperty("Optional file-name substring."),
+			"limit":             integerProperty("Maximum files, 1 to 500."),
+			"compact":           booleanProperty("Return paths, line numbers, citations, and relation metadata directly from cached structural artifacts without snippets."),
+			"named_context_ids": stringArrayProperty("Optional named context IDs returned by list_named_contexts."),
 		}, []string{"symbol"}),
+		tool("search_ast", "Run a bounded Tree-sitter query over persisted Java or Go structural candidates with explicit readiness and truncation.", map[string]any{
+			"repository_id": integerProperty("Optional repository ID returned by list_repositories."),
+			"language":      enumProperty("java", "go"),
+			"query":         stringProperty("Tree-sitter query with named captures."),
+			"path_prefix":   stringProperty("Optional safe repository-relative path prefix."),
+			"limit":         integerProperty("Maximum matches, 1 to 200."),
+			"cursor":        stringProperty("Opaque next_cursor from a previous page."),
+		}, []string{"language", "query"}),
 		tool("get_file", "Read a bounded line range from committed source at an exact reachable revision.", map[string]any{
 			"repository_id": integerProperty("Repository ID returned by list_repositories."),
 			"revision":      stringProperty("Exact reachable commit; omit for indexed commit."),
@@ -523,6 +583,13 @@ func integerProperty(description string) map[string]any {
 
 func booleanProperty(description string) map[string]any {
 	return map[string]any{"type": "boolean", "description": description}
+}
+
+func stringArrayProperty(description string) map[string]any {
+	return map[string]any{
+		"type": "array", "description": description,
+		"items": map[string]any{"type": "string"},
+	}
 }
 
 func enumProperty(values ...string) map[string]any {

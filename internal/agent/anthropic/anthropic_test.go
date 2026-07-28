@@ -102,13 +102,13 @@ func TestNativeToolSchemasUseMCPRepositoryIDContract(t *testing.T) {
 	if strings.Contains(schema, `"repository":{`) {
 		t.Fatalf("native tool schema still exposes repository name selector: %s", schema)
 	}
-	if count := strings.Count(schema, `"repository_id":{`); count != 7 {
-		t.Fatalf("repository_id schema count = %d, want 7: %s", count, schema)
+	if count := strings.Count(schema, `"repository_id":{`); count != 8 {
+		t.Fatalf("repository_id schema count = %d, want 8: %s", count, schema)
 	}
 	if count := strings.Count(schema, `"compact":{`); count != 3 {
 		t.Fatalf("compact schema count = %d, want 3: %s", count, schema)
 	}
-	for _, required := range []string{"get_file", "list_tree", "git_log", "git_diff"} {
+	for _, required := range []string{"list_named_contexts", "search_ast", "get_file", "list_tree", "git_log", "git_diff"} {
 		if !strings.Contains(schema, `"name":"`+required+`"`) {
 			t.Fatalf("missing native tool %q", required)
 		}

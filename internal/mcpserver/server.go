@@ -29,7 +29,7 @@ import (
 )
 
 const (
-	maxCitations = 12
+	maxCitations = 24
 )
 
 // Config controls the local MCP endpoint.
@@ -145,12 +145,18 @@ func NewToken() (string, error) {
 // CitationTracker records exact source URLs returned by MCP tools.
 type CitationTracker struct {
 	mu       sync.Mutex
-	byThread map[string]map[string]agent.Citation
+	sequence uint64
+	byThread map[string]map[string]trackedCitation
+}
+
+type trackedCitation struct {
+	citation agent.Citation
+	sequence uint64
 }
 
 // NewCitationTracker constructs an empty citation recorder.
 func NewCitationTracker() *CitationTracker {
-	return &CitationTracker{byThread: make(map[string]map[string]agent.Citation)}
+	return &CitationTracker{byThread: make(map[string]map[string]trackedCitation)}
 }
 
 // Record adds one exact citation to a conversation.
@@ -161,9 +167,13 @@ func (t *CitationTracker) Record(conversationID string, citation agent.Citation)
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.byThread[conversationID] == nil {
-		t.byThread[conversationID] = make(map[string]agent.Citation)
+		t.byThread[conversationID] = make(map[string]trackedCitation)
 	}
-	t.byThread[conversationID][citation.URL] = citation
+	t.sequence++
+	t.byThread[conversationID][citation.URL] = trackedCitation{
+		citation: citation,
+		sequence: t.sequence,
+	}
 }
 
 // List returns a stable copy of citations observed for a conversation.
@@ -173,17 +183,21 @@ func (t *CitationTracker) List(conversationID string) []agent.Citation {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	values := make([]agent.Citation, 0, len(t.byThread[conversationID]))
+	values := make([]trackedCitation, 0, len(t.byThread[conversationID]))
 	for _, citation := range t.byThread[conversationID] {
 		values = append(values, citation)
 	}
 	sort.Slice(values, func(left, right int) bool {
-		return values[left].URL < values[right].URL
+		return values[left].sequence > values[right].sequence
 	})
 	if len(values) > maxCitations {
 		values = values[:maxCitations]
 	}
-	return values
+	citations := make([]agent.Citation, len(values))
+	for index, value := range values {
+		citations[index] = value.citation
+	}
+	return citations
 }
 
 // Clear discards citations for one ephemeral turn.
@@ -435,6 +449,7 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 		if err != nil {
 			return nil, listTreeOutput{}, err
 		}
+		tracker.Record(conversationID, agent.Citation{Label: tree.Citation, URL: tree.SourceURL})
 		return nil, tree, nil
 	})
 
@@ -459,6 +474,7 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 		if err != nil {
 			return nil, gitLogOutput{}, err
 		}
+		tracker.Record(conversationID, agent.Citation{Label: history.Citation, URL: history.SourceURL})
 		return nil, history, nil
 	})
 
@@ -484,6 +500,7 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 		if err != nil {
 			return nil, gitDiffOutput{}, err
 		}
+		tracker.Record(conversationID, agent.Citation{Label: diff.Citation, URL: diff.SourceURL})
 		return nil, diff, nil
 	})
 

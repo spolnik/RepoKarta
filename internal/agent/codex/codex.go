@@ -18,6 +18,7 @@ import (
 
 	"github.com/spolnik/RepoKarta/internal/agent"
 	"github.com/spolnik/RepoKarta/internal/agent/localcommand"
+	"github.com/spolnik/RepoKarta/internal/agent/processgroup"
 )
 
 const providerInstructions = `You are RepoKarta's read-only code intelligence assistant.
@@ -32,12 +33,26 @@ If the indexed evidence is insufficient, say so plainly.`
 
 // Adapter starts local Codex app-server sessions.
 type Adapter struct {
-	Command string
+	Command  string
+	statusMu sync.Mutex
+	statusAt time.Time
+	status   agent.Status
 }
 
 func (a *Adapter) ID() string { return "codex" }
 
 func (a *Adapter) Status(ctx context.Context) agent.Status {
+	a.statusMu.Lock()
+	defer a.statusMu.Unlock()
+	if !a.statusAt.IsZero() && time.Since(a.statusAt) < 15*time.Second {
+		return a.status
+	}
+	a.status = a.probeStatus(ctx)
+	a.statusAt = time.Now()
+	return a.status
+}
+
+func (a *Adapter) probeStatus(ctx context.Context) agent.Status {
 	status := agent.Status{
 		ID:   a.ID(),
 		Name: "OpenAI Codex",
@@ -96,13 +111,17 @@ func (a *Adapter) Start(ctx context.Context, config agent.SessionConfig) (agent.
 
 type session struct {
 	command       *exec.Cmd
+	processGroup  *processgroup.Group
 	stdin         io.WriteCloser
 	nextID        atomic.Int64
 	writeMu       sync.Mutex
 	pendingMu     sync.Mutex
 	pending       map[string]chan rpcMessage
 	notifications chan rpcMessage
-	readError     chan error
+	readDone      chan struct{}
+	readErrMu     sync.Mutex
+	readErr       error
+	closed        chan struct{}
 	threadID      string
 	effort        string
 	attachments   *agent.AttachmentStore
@@ -132,6 +151,7 @@ func startSession(ctx context.Context, command string, config agent.SessionConfi
 	}
 	arguments := codexCommandArguments(config, attachments.Directory())
 	process := exec.CommandContext(context.WithoutCancel(ctx), command, arguments...)
+	processgroup.Configure(process)
 	// Keep the harness outside every indexed repository. RepoKarta source is
 	// available only through the authenticated read-only MCP surface.
 	process.Dir = attachments.Directory()
@@ -147,20 +167,30 @@ func startSession(ctx context.Context, command string, config agent.SessionConfi
 		_ = attachments.Close()
 		return nil, fmt.Errorf("open Codex stdout: %w", err)
 	}
-	var stderr strings.Builder
+	var stderr processgroup.Buffer
 	process.Stderr = &stderr
 	if err := process.Start(); err != nil {
 		stdin.Close()
 		_ = attachments.Close()
 		return nil, fmt.Errorf("start Codex app-server: %w", err)
 	}
+	group, err := processgroup.Attach(process)
+	if err != nil {
+		_ = process.Process.Kill()
+		_ = process.Wait()
+		stdin.Close()
+		_ = attachments.Close()
+		return nil, fmt.Errorf("contain Codex process tree: %w", err)
+	}
 
 	s := &session{
 		command:       process,
+		processGroup:  group,
 		stdin:         stdin,
 		pending:       make(map[string]chan rpcMessage),
 		notifications: make(chan rpcMessage, 128),
-		readError:     make(chan error, 1),
+		readDone:      make(chan struct{}),
+		closed:        make(chan struct{}),
 		effort:        config.Effort,
 		attachments:   attachments,
 	}
@@ -277,8 +307,8 @@ func (s *session) Send(ctx context.Context, turn agent.Turn, emit func(agent.Eve
 			_ = s.Interrupt(interruptContext)
 			cancel()
 			return ctx.Err()
-		case err := <-s.readError:
-			return err
+		case <-s.readDone:
+			return s.readFailure()
 		case message := <-s.notifications:
 			switch message.Method {
 			case "item/agentMessage/delta":
@@ -287,7 +317,7 @@ func (s *session) Send(ctx context.Context, turn agent.Turn, emit func(agent.Eve
 					ItemID string `json:"itemId"`
 					TurnID string `json:"turnId"`
 				}
-				if json.Unmarshal(message.Params, &delta) == nil && (delta.TurnID == "" || delta.TurnID == turnID) && delta.Delta != "" {
+				if json.Unmarshal(message.Params, &delta) == nil && delta.TurnID == turnID && delta.Delta != "" {
 					if err := emit(agent.Event{Type: agent.EventDelta, SegmentID: delta.ItemID, Text: delta.Delta}); err != nil {
 						return err
 					}
@@ -498,8 +528,8 @@ func (s *session) call(ctx context.Context, method string, params any, result an
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case err := <-s.readError:
-		return err
+	case <-s.readDone:
+		return s.readFailure()
 	case response := <-responseChannel:
 		if response.Error != nil {
 			return fmt.Errorf("Codex RPC %s (%d): %s", method, response.Error.Code, response.Error.Message)
@@ -553,31 +583,47 @@ func (s *session) read(reader io.Reader) {
 			channel := s.pending[id]
 			s.pendingMu.Unlock()
 			if channel != nil {
-				channel <- message
+				select {
+				case channel <- message:
+				case <-s.closed:
+					return
+				}
 			}
 			continue
 		}
 		if message.Method != "" {
-			s.notifications <- message
+			select {
+			case s.notifications <- message:
+			case <-s.closed:
+				return
+			}
 		}
 	}
 	err := scanner.Err()
 	if err == nil {
 		err = io.EOF
 	}
-	select {
-	case s.readError <- err:
-	default:
+	s.readErrMu.Lock()
+	s.readErr = err
+	s.readErrMu.Unlock()
+	close(s.readDone)
+}
+
+func (s *session) readFailure() error {
+	s.readErrMu.Lock()
+	defer s.readErrMu.Unlock()
+	if s.readErr == nil {
+		return io.EOF
 	}
+	return s.readErr
 }
 
 func (s *session) Close() error {
 	var closeError error
 	s.closeOnce.Do(func() {
+		close(s.closed)
 		_ = s.stdin.Close()
-		if s.command.Process != nil {
-			_ = s.command.Process.Kill()
-		}
+		_ = s.processGroup.Kill()
 		closeError = s.command.Wait()
 		closeError = errors.Join(closeError, s.attachments.Close())
 	})

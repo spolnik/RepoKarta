@@ -409,6 +409,8 @@ type TreeResponse struct {
 	Limit      int         `json:"limit"`
 	Offset     int         `json:"offset"`
 	NextOffset int         `json:"next_offset,omitempty"`
+	Citation   string      `json:"citation,omitempty"`
+	SourceURL  string      `json:"source_url,omitempty"`
 }
 
 // TreeEntry is one Git tree item.
@@ -437,6 +439,8 @@ type GitLogResponse struct {
 	Limit           int         `json:"limit"`
 	ReturnedBytes   int         `json:"returned_bytes"`
 	MaximumBytes    int         `json:"maximum_bytes"`
+	Citation        string      `json:"citation,omitempty"`
+	SourceURL       string      `json:"source_url,omitempty"`
 }
 
 // GitCommit is immutable metadata for one reachable commit.
@@ -474,6 +478,8 @@ type GitDiffResponse struct {
 	Truncated     bool   `json:"truncated"`
 	ReturnedBytes int    `json:"returned_bytes"`
 	MaximumBytes  int    `json:"maximum_bytes"`
+	Citation      string `json:"citation,omitempty"`
+	SourceURL     string `json:"source_url,omitempty"`
 }
 
 // Repositories returns stable repository metadata.
@@ -1881,6 +1887,11 @@ func (s *Service) ListTree(ctx context.Context, request TreeRequest) (TreeRespon
 		Limit:      MaximumTreeEntries,
 		Offset:     pageOffset,
 		NextOffset: nextOffset,
+		Citation:   entityCitation(repository.Name, revision, treePath),
+		SourceURL: s.entityURL(
+			"/projects/"+strconv.FormatInt(repository.ID, 10),
+			url.Values{"revision": {revision}, "path": {treePath}},
+		),
 	}, nil
 }
 
@@ -1917,6 +1928,11 @@ func (s *Service) GitLog(ctx context.Context, request GitLogRequest) (GitLogResp
 		Limit:           limit,
 		ReturnedBytes:   returnedBytes,
 		MaximumBytes:    MaximumGitLogBytes,
+		Citation:        entityCitation(repository.Name, revision, "history"),
+		SourceURL: s.entityURL(
+			"/api/git/log/"+strconv.FormatInt(repository.ID, 10),
+			url.Values{"revision": {revision}, "path": {strings.TrimSpace(strings.ReplaceAll(request.Path, "\\", "/"))}},
+		),
 	}
 	for _, commit := range commits {
 		output.Commits = append(output.Commits, GitCommit{
@@ -1971,6 +1987,15 @@ func (s *Service) GitDiff(ctx context.Context, request GitDiffRequest) (GitDiffR
 		Truncated:     diff.Truncated,
 		ReturnedBytes: diff.ReturnedBytes,
 		MaximumBytes:  MaximumDiffBytes,
+		Citation:      entityCitation(repository.Name, diff.ToRevision, "diff"),
+		SourceURL: s.entityURL(
+			"/api/git/diff/"+strconv.FormatInt(repository.ID, 10),
+			url.Values{
+				"from": {diff.FromRevision},
+				"to":   {diff.ToRevision},
+				"path": {strings.TrimSpace(strings.ReplaceAll(request.Path, "\\", "/"))},
+			},
+		),
 	}, nil
 }
 
