@@ -20,6 +20,12 @@ import (
 
 const topologyEvidenceLimit = 12
 
+const (
+	componentRejectionInvalidName    = "invalid_name"
+	componentRejectionGenericLabel   = "generic_label"
+	componentRejectionInfrastructure = "infrastructure_host"
+)
+
 var (
 	topologyURLPattern = regexp.MustCompile(
 		`(?i)\b(?:https?|lb)://[a-z0-9][a-z0-9._-]*(?::[0-9]{2,5})?`,
@@ -288,7 +294,7 @@ func (b *builder) addDetectedConnections(
 			target, targetResolved := b.knownServiceTarget(host, sourceID)
 			if !targetResolved {
 				targetName := topologyExternalPeerName(host)
-				if targetName == "" || isInfrastructureHost(targetName) {
+				if targetName == "" {
 					continue
 				}
 				target = b.externalSystemComponent(
@@ -332,7 +338,7 @@ func topologyRepositoryIsDeploymentOnly(contents map[string][]byte) bool {
 
 func topologyMapServiceCandidate(value string) string {
 	candidate := normalizeServiceName(value)
-	if candidate == "" || genericExternalHostLabels[candidate] {
+	if candidate == "" {
 		return ""
 	}
 	switch candidate {
@@ -487,11 +493,7 @@ func topologyExternalPeerName(host string) string {
 		return ""
 	}
 	if net.ParseIP(host) != nil || !strings.Contains(host, ".") {
-		name := normalizeServiceName(host)
-		if genericExternalHostLabels[name] {
-			return ""
-		}
-		return name
+		return normalizeServiceName(host)
 	}
 	if name, err := publicsuffix.EffectiveTLDPlusOne(host); err == nil && name != "" {
 		return name
@@ -571,7 +573,27 @@ func isTopologyFile(filePath string) bool {
 	return false
 }
 
-func (b *builder) addSystemComponent(component SystemComponent) {
+// addSystemComponent is the only component creation choke point. Every
+// extractor supplies a candidate here so name policy cannot drift between
+// services, resources, declared components, and deployment formats.
+func (b *builder) addSystemComponent(component SystemComponent) bool {
+	component.Name = strings.TrimSpace(component.Name)
+	if reason := b.systemComponentRejectionReason(component); reason != "" {
+		b.rejectedComponentCounts[reason]++
+		if component.External {
+			b.rejectedExternalCount++
+		}
+		b.rejectedComponentIDs[component.ID] = true
+		delete(b.components, component.ID)
+		for id, connection := range b.connections {
+			if connection.Source == component.ID || connection.Target == component.ID {
+				delete(b.connections, id)
+				b.rejectedComponentConnections++
+			}
+		}
+		return false
+	}
+	delete(b.rejectedComponentIDs, component.ID)
 	component.Aliases = normalizedAliases(component.Name, component.Aliases...)
 	component.Capabilities = uniqueSorted(component.Capabilities)
 	if existing, ok := b.components[component.ID]; ok {
@@ -583,9 +605,43 @@ func (b *builder) addSystemComponent(component SystemComponent) {
 		}
 		existing.Candidate = existing.Candidate || component.Candidate
 		b.components[component.ID] = existing
-		return
+		return true
 	}
 	b.components[component.ID] = component
+	return true
+}
+
+func (b *builder) systemComponentRejectionReason(component SystemComponent) string {
+	// Explicit topology is the user-authored correction layer and may carry a
+	// human display label (for example, "API Gateway"). Extracted component
+	// identifiers still share the policy below.
+	if strings.Contains(component.ID, ":declared:") {
+		return ""
+	}
+	name := component.Name
+	if name == "" || strings.Contains(name, "${") ||
+		strings.ContainsAny(name, ")} \t\r\n") ||
+		!topologyExternalHostLetterPattern.MatchString(name) ||
+		topologyExternalTokenPattern.MatchString(name) {
+		return componentRejectionInvalidName
+	}
+	normalized := normalizeServiceName(name)
+	if normalized == "" {
+		return componentRejectionInvalidName
+	}
+	if genericExternalHostLabels[normalized] {
+		return componentRejectionGenericLabel
+	}
+	if isInfrastructureHost(name) {
+		return componentRejectionInfrastructure
+	}
+	if component.External && component.Kind == "service" &&
+		!strings.Contains(name, ".") && !component.Candidate &&
+		!strings.Contains(normalized, "-") &&
+		b.serviceTargets[normalized] == "" {
+		return componentRejectionInvalidName
+	}
+	return ""
 }
 
 func normalizedAliases(name string, values ...string) []string {
@@ -614,10 +670,6 @@ func (b *builder) externalSystemComponentWithCandidate(
 	candidate bool,
 ) string {
 	name = strings.TrimSpace(name)
-	if kind == "service" && !b.validExternalHostName(name, candidate) {
-		b.rejectedExternalCount++
-		return ""
-	}
 	id := "external:" + kind + ":" + normalizeID(name)
 	b.addSystemComponent(SystemComponent{
 		ID: id, Name: name, Kind: kind, Technology: technology,
@@ -626,27 +678,13 @@ func (b *builder) externalSystemComponentWithCandidate(
 	return id
 }
 
-func (b *builder) validExternalHostName(name string, candidate bool) bool {
-	if name == "" || strings.ContainsAny(name, ")} \t\r\n") ||
-		!topologyExternalHostLetterPattern.MatchString(name) ||
-		topologyExternalTokenPattern.MatchString(name) {
-		return false
-	}
-	normalized := normalizeServiceName(name)
-	if normalized == "" || genericExternalHostLabels[normalized] {
-		return false
-	}
-	if strings.Contains(name, ".") {
-		return true
-	}
-	if candidate || strings.Contains(normalized, "-") {
-		return true
-	}
-	return b.serviceTargets[normalized] != ""
-}
-
 func (b *builder) addSystemConnection(connection SystemConnection) {
 	if connection.Source == "" || connection.Target == "" || connection.Source == connection.Target {
+		return
+	}
+	if b.rejectedComponentIDs[connection.Source] ||
+		b.rejectedComponentIDs[connection.Target] {
+		b.rejectedComponentConnections++
 		return
 	}
 	if connection.Confidence == "" {

@@ -167,21 +167,24 @@ type TopologySummary struct {
 }
 
 type Topology struct {
-	GeneratedAt   time.Time              `json:"generated_at"`
-	SnapshotID    string                 `json:"snapshot_id"`
-	Components    []TopologyComponent    `json:"components"`
-	Connections   []TopologyConnection   `json:"connections"`
-	Unresolved    []TopologyUnresolved   `json:"unresolved"`
-	Summary       TopologySummary        `json:"summary"`
-	Protocols     []string               `json:"protocols"`
-	Providers     []string               `json:"providers"`
-	Environments  []string               `json:"environments"`
-	Scope         graph.Scope            `json:"scope"`
-	BuildProgress graph.ArtifactProgress `json:"build_progress"`
-	Partial       bool                   `json:"partial"`
-	Warnings      []TopologyWarning      `json:"warnings,omitempty"`
-	Neighborhood  *TopologyNeighborhood  `json:"neighborhood,omitempty"`
-	Options       TopologyOptions        `json:"-"`
+	GeneratedAt                    time.Time              `json:"generated_at"`
+	SnapshotID                     string                 `json:"snapshot_id"`
+	Components                     []TopologyComponent    `json:"components"`
+	Connections                    []TopologyConnection   `json:"connections"`
+	Unresolved                     []TopologyUnresolved   `json:"unresolved"`
+	Summary                        TopologySummary        `json:"summary"`
+	Protocols                      []string               `json:"protocols"`
+	Providers                      []string               `json:"providers"`
+	Environments                   []string               `json:"environments"`
+	Scope                          graph.Scope            `json:"scope"`
+	BuildProgress                  graph.ArtifactProgress `json:"build_progress"`
+	RejectedExternalComponentCount int                    `json:"rejected_external_component_count"`
+	RejectedComponentCounts        map[string]int         `json:"rejected_component_counts,omitempty"`
+	RejectedComponentConnections   int                    `json:"rejected_component_connection_count"`
+	Partial                        bool                   `json:"partial"`
+	Warnings                       []TopologyWarning      `json:"warnings,omitempty"`
+	Neighborhood                   *TopologyNeighborhood  `json:"neighborhood,omitempty"`
+	Options                        TopologyOptions        `json:"-"`
 }
 
 // Topology merges immutable static facts with independently timestamped runtime
@@ -449,8 +452,14 @@ func buildTopology(
 		Connections: make([]TopologyConnection, 0),
 		Unresolved:  make([]TopologyUnresolved, 0),
 		Scope:       snapshot.Scope, BuildProgress: progress,
-		Partial: snapshot.Truncated || !snapshot.Scope.Complete,
-		Options: options,
+		RejectedExternalComponentCount: snapshot.RejectedExternalCount,
+		RejectedComponentCounts:        make(map[string]int, len(snapshot.RejectedComponentCounts)),
+		RejectedComponentConnections:   snapshot.RejectedComponentConnections,
+		Partial:                        snapshot.Truncated || !snapshot.Scope.Complete,
+		Options:                        options,
+	}
+	for reason, count := range snapshot.RejectedComponentCounts {
+		output.RejectedComponentCounts[reason] = count
 	}
 	output.Summary.SuppressedSourceEdges = snapshot.SuppressedSourceEdges
 	if missingComponentReferences > 0 {

@@ -1,7 +1,9 @@
 package dependencies
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"testing"
@@ -207,8 +209,11 @@ func TestTopologyStripsConnectionsWithMissingComponentsAndWarns(t *testing.T) {
 					Interaction: "calls", EvidenceOrigin: "static",
 				},
 			},
-			SuppressedSourceEdges: 4,
-			Scope:                 graph.Scope{Complete: true},
+			RejectedExternalCount:        1,
+			RejectedComponentCounts:      map[string]int{"invalid_name": 1},
+			RejectedComponentConnections: 1,
+			SuppressedSourceEdges:        4,
+			Scope:                        graph.Scope{Complete: true},
 		},
 		graph.ArtifactProgress{State: "ready"},
 		nil,
@@ -229,6 +234,27 @@ func TestTopologyStripsConnectionsWithMissingComponentsAndWarns(t *testing.T) {
 	}
 	if topology.Summary.SuppressedSourceEdges != 4 {
 		t.Fatalf("suppressed source edge summary = %+v", topology.Summary)
+	}
+	if topology.RejectedExternalComponentCount != 1 ||
+		topology.RejectedComponentCounts["invalid_name"] != 1 ||
+		topology.RejectedComponentConnections != 1 {
+		t.Fatalf(
+			"rejected component diagnostics were not preserved: external=%d reasons=%v connections=%d",
+			topology.RejectedExternalComponentCount,
+			topology.RejectedComponentCounts,
+			topology.RejectedComponentConnections,
+		)
+	}
+	encoded, err := json.Marshal(topology)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(encoded, []byte(
+		`"rejected_component_counts":{"invalid_name":1}`,
+	)) || !bytes.Contains(encoded, []byte(
+		`"rejected_component_connection_count":1`,
+	)) {
+		t.Fatalf("rejection diagnostics missing from topology payload: %s", encoded)
 	}
 }
 

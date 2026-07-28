@@ -598,8 +598,7 @@ func (b *builder) resolvedEnvironmentTarget(
 	if name == "" {
 		return resolvedEnvironmentTarget{}, false
 	}
-	candidate := !strings.Contains(host, ".") &&
-		!genericExternalHostLabels[normalizeServiceName(host)]
+	candidate := !strings.Contains(host, ".")
 	targetID := b.externalSystemComponentWithCandidate(
 		"service", name, strings.ToUpper(transport),
 		[]string{name, host, normalizeServiceName(host)}, candidate,
@@ -688,11 +687,13 @@ func (b *builder) registeredServiceComponent(
 	if repository == "" {
 		repository = name
 	}
-	b.addSystemComponent(SystemComponent{
+	if !b.addSystemComponent(SystemComponent{
 		ID: componentID, Name: name, Kind: "service",
 		RepositoryID: node.RepositoryID, Repository: repository,
 		Path: ".", Aliases: []string{name, alias}, Evidence: node.Evidence,
-	})
+	}) {
+		return "", false
+	}
 	return componentID, true
 }
 

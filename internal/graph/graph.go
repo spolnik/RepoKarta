@@ -34,7 +34,7 @@ import (
 )
 
 const (
-	snapshotVersion       = 20
+	snapshotVersion       = 21
 	maximumFiles          = 20_000
 	maximumSourceFiles    = 5_000
 	maximumSourceFileSize = 1 << 20
@@ -283,6 +283,8 @@ type Snapshot struct {
 	EnvironmentAssignments       []EnvironmentAssignment        `json:"environment_assignments,omitempty"`
 	ExcludedEnvironmentVariables []string                       `json:"excluded_environment_variables,omitempty"`
 	RejectedExternalCount        int                            `json:"rejected_external_component_count,omitempty"`
+	RejectedComponentCounts      map[string]int                 `json:"rejected_component_counts,omitempty"`
+	RejectedComponentConnections int                            `json:"rejected_component_connection_count,omitempty"`
 	SuppressedSourceEdges        int                            `json:"suppressed_source_edges,omitempty"`
 	TopologyFleetGeneratedAt     time.Time                      `json:"topology_fleet_generated_at,omitempty"`
 	TopologySelectedGeneratedAt  time.Time                      `json:"topology_selected_generated_at,omitempty"`
@@ -657,6 +659,11 @@ func (s *Service) ReadTopologySnapshot(
 			merged.environmentAssignments, result.snapshot.EnvironmentAssignments...,
 		)
 		merged.rejectedExternalCount += result.snapshot.RejectedExternalCount
+		for reason, count := range result.snapshot.RejectedComponentCounts {
+			merged.rejectedComponentCounts[reason] += count
+		}
+		merged.rejectedComponentConnections +=
+			result.snapshot.RejectedComponentConnections
 		for _, variable := range result.snapshot.ExcludedEnvironmentVariables {
 			merged.excludedEnvironmentVariables[variable] = true
 		}
@@ -670,6 +677,12 @@ func (s *Service) ReadTopologySnapshot(
 		merged.components, merged.connections,
 	)
 	output.SuppressedSourceEdges = suppressedSourceEdges + newlySuppressed
+	output.RejectedExternalCount = merged.rejectedExternalCount
+	output.RejectedComponentCounts = cloneStringIntMap(
+		merged.rejectedComponentCounts,
+	)
+	output.RejectedComponentConnections =
+		merged.rejectedComponentConnections
 	output.UnresolvedTopology = append(
 		[]UnresolvedTopologyConnection(nil), merged.unresolvedTopology...,
 	)
@@ -1014,6 +1027,9 @@ type builder struct {
 	environmentAssignments       []EnvironmentAssignment
 	excludedEnvironmentVariables map[string]bool
 	rejectedExternalCount        int
+	rejectedComponentCounts      map[string]int
+	rejectedComponentIDs         map[string]bool
+	rejectedComponentConnections int
 	structureTruncated           bool
 	fileCount                    int
 	truncated                    bool
@@ -1036,7 +1052,20 @@ func newBuilder(baseURL string) *builder {
 		connections:                  make(map[string]SystemConnection),
 		serviceTargets:               make(map[string]string),
 		excludedEnvironmentVariables: make(map[string]bool),
+		rejectedComponentCounts:      make(map[string]int),
+		rejectedComponentIDs:         make(map[string]bool),
 	}
+}
+
+func cloneStringIntMap(values map[string]int) map[string]int {
+	if len(values) == 0 {
+		return nil
+	}
+	cloned := make(map[string]int, len(values))
+	for key, value := range values {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 func (b *builder) snapshot(signature string) Snapshot {
@@ -1092,6 +1121,8 @@ func (b *builder) snapshot(signature string) Snapshot {
 		EnvironmentAssignments:       append([]EnvironmentAssignment(nil), b.environmentAssignments...),
 		ExcludedEnvironmentVariables: sortedEnvironmentVariables(b.excludedEnvironmentVariables),
 		RejectedExternalCount:        b.rejectedExternalCount,
+		RejectedComponentCounts:      cloneStringIntMap(b.rejectedComponentCounts),
+		RejectedComponentConnections: b.rejectedComponentConnections,
 		SuppressedSourceEdges:        suppressedSourceEdges,
 		Structure:                    b.structure,
 		StructureTruncated:           b.structureTruncated,
@@ -1934,6 +1965,11 @@ var infrastructureHosts = map[string]bool{
 	"xmlns":             true,
 }
 
+var infrastructureHostSuffixes = []string{
+	".cluster.local",
+	".svc.cluster.local",
+}
+
 func isInfrastructureHost(value string) bool {
 	value = strings.ToLower(strings.TrimSpace(value))
 	value = strings.TrimPrefix(value, "http://")
@@ -1942,8 +1978,16 @@ func isInfrastructureHost(value string) bool {
 	value = strings.SplitN(value, "/", 2)[0]
 	value = strings.TrimSuffix(value, ".")
 	value = strings.SplitN(value, ":", 2)[0]
-	return infrastructureHosts[value] ||
-		infrastructureHosts[normalizeServiceName(value)]
+	if infrastructureHosts[value] ||
+		infrastructureHosts[normalizeServiceName(value)] {
+		return true
+	}
+	for _, suffix := range infrastructureHostSuffixes {
+		if strings.HasSuffix(value, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 func (b *builder) addGradleManifests(

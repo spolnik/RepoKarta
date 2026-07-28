@@ -138,6 +138,19 @@ spring:
 			t.Fatalf("malformed database host became component: %+v", component)
 		}
 	}
+	if snapshot.RejectedComponentCounts[componentRejectionInvalidName] != 3 ||
+		snapshot.RejectedExternalCount != 3 {
+		t.Fatalf(
+			"database rejection diagnostics = reasons=%v external=%d, want invalid=3 external=3",
+			snapshot.RejectedComponentCounts, snapshot.RejectedExternalCount,
+		)
+	}
+	if snapshot.RejectedComponentConnections != 3 {
+		t.Fatalf(
+			"rejected database connections = %d, want 3",
+			snapshot.RejectedComponentConnections,
+		)
+	}
 }
 
 func TestTopologyComposeServiceNamesUseComponentNameBlocklist(t *testing.T) {
@@ -167,6 +180,19 @@ services:
 	if worker := topologyComponentNamed(snapshot.Components, "billing-worker"); worker.ID == "" {
 		t.Fatalf("valid compose service was suppressed: %+v", snapshot.Components)
 	}
+	if len(snapshot.Connections) != 0 ||
+		snapshot.RejectedComponentConnections != 2 {
+		t.Fatalf(
+			"connections referencing rejected compose component survived: connections=%+v rejected=%d",
+			snapshot.Connections, snapshot.RejectedComponentConnections,
+		)
+	}
+	if snapshot.RejectedComponentCounts[componentRejectionGenericLabel] != 1 {
+		t.Fatalf(
+			"compose rejection diagnostics = %v, want generic_label=1",
+			snapshot.RejectedComponentCounts,
+		)
+	}
 }
 
 func TestTopologyInfrastructureHostSuffixesAreRejectedAtComponentCreation(t *testing.T) {
@@ -194,6 +220,13 @@ upstreams:
 		t.Fatalf(
 			"infrastructure rejection counter = %d, want 2",
 			snapshot.RejectedExternalCount,
+		)
+	}
+	if snapshot.RejectedComponentCounts[componentRejectionInfrastructure] != 2 ||
+		snapshot.RejectedComponentConnections != 2 {
+		t.Fatalf(
+			"infrastructure rejection diagnostics = reasons=%v connections=%d",
+			snapshot.RejectedComponentCounts, snapshot.RejectedComponentConnections,
 		)
 	}
 }
