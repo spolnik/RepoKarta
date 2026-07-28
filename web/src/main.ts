@@ -1902,6 +1902,9 @@ function conversationMessage(role: "user" | "assistant" | "error", text = ""): H
 }
 
 function enableConversations(debug?: DebugLogger): void {
+  if (location.pathname !== "/chat" && !document.querySelector("[data-chat-workspace]")) {
+    return;
+  }
   const form = document.querySelector<HTMLFormElement>("#conversation-form");
   const messages = document.querySelector<HTMLElement>("#conversation-messages");
   const empty = document.querySelector<HTMLElement>("[data-conversation-empty]");
@@ -1964,6 +1967,86 @@ function enableConversations(debug?: DebugLogger): void {
   const evidenceList = document.querySelector<HTMLOListElement>("#conversation-evidence-list");
   const evidenceEmpty = document.querySelector<HTMLElement>("[data-evidence-empty]");
   const evidenceCounts = Array.from(document.querySelectorAll<HTMLElement>("[data-evidence-count]"));
+  const initializationChecks = [
+    { selector: "#conversation-form", expected: "1", actual: Number(Boolean(form)) },
+    { selector: "#conversation-messages", expected: "1", actual: Number(Boolean(messages)) },
+    { selector: "#conversation-provider", expected: "1", actual: Number(Boolean(provider)) },
+    { selector: "#conversation-model", expected: "1", actual: Number(Boolean(model)) },
+    { selector: "#conversation-effort", expected: "1", actual: Number(Boolean(effort)) },
+    { selector: "#conversation-timeout", expected: "1", actual: Number(Boolean(timeout)) },
+    { selector: "#conversation-token-budget", expected: "1", actual: Number(Boolean(tokenBudget)) },
+    { selector: "[data-token-budget-field]", expected: "1", actual: Number(Boolean(tokenBudgetField)) },
+    { selector: "#conversation-message", expected: "1", actual: Number(Boolean(input)) },
+    { selector: "#conversation-image-input", expected: "1", actual: Number(Boolean(imageInput)) },
+    { selector: "[data-image-attach]", expected: "1", actual: Number(Boolean(attachButton)) },
+    { selector: "#conversation-attachments", expected: "1", actual: Number(Boolean(attachmentTray)) },
+    { selector: "#conversation-contexts", expected: "1", actual: Number(Boolean(contextTray)) },
+    { selector: "#conversation-context-error", expected: "1", actual: Number(Boolean(contextError)) },
+    { selector: "#conversation-context-suggestions", expected: "1", actual: Number(Boolean(contextSuggestions)) },
+    { selector: "[data-context-add]", expected: "1", actual: Number(Boolean(contextAdd)) },
+    { selector: "[data-named-contexts]", expected: "1", actual: Number(Boolean(namedContextButton)) },
+    { selector: "#named-context-dialog", expected: "1", actual: Number(Boolean(namedContextDialog)) },
+    { selector: "[data-named-context-close]", expected: "1", actual: Number(Boolean(namedContextClose)) },
+    { selector: "[data-named-context-new]", expected: "1", actual: Number(Boolean(namedContextNew)) },
+    { selector: "[data-named-context-cancel]", expected: "1", actual: Number(Boolean(namedContextCancel)) },
+    { selector: "[data-named-context-list]", expected: "1", actual: Number(Boolean(namedContextList)) },
+    { selector: "[data-named-context-feedback]", expected: "1", actual: Number(Boolean(namedContextFeedback)) },
+    { selector: "[data-named-context-form]", expected: "1", actual: Number(Boolean(namedContextForm)) },
+    { selector: "[data-named-context-editor-title]", expected: "1", actual: Number(Boolean(namedContextEditorTitle)) },
+    { selector: "[data-named-context-editor-error]", expected: "1", actual: Number(Boolean(namedContextEditorError)) },
+    { selector: "#conversation-activity", expected: "1", actual: Number(Boolean(composerActivity)) },
+    { selector: "#image-support-detail", expected: "1", actual: Number(Boolean(imageSupportDetail)) },
+    { selector: "#conversation-submit", expected: "1", actual: Number(Boolean(submit)) },
+    { selector: "#conversation-interrupt", expected: "1", actual: Number(Boolean(interrupt)) },
+    { selector: "#conversation-runtime", expected: "1", actual: Number(Boolean(runtime)) },
+    { selector: "#conversation-context-value", expected: "1", actual: Number(Boolean(contextValue)) },
+    { selector: "#conversation-context-meter", expected: "1", actual: Number(Boolean(contextMeter)) },
+    { selector: "#conversation-usage-value", expected: "1", actual: Number(Boolean(usageValue)) },
+    { selector: "#provider-detail", expected: "1", actual: Number(Boolean(detail)) },
+    { selector: "[data-new-conversation]", expected: "at least 1", actual: newConversationButtons.length },
+    { selector: "#conversation-history", expected: "1", actual: Number(Boolean(history)) },
+    { selector: "[data-conversation-history-empty]", expected: "1", actual: Number(Boolean(historyEmpty)) },
+    { selector: "[data-conversation-filter]", expected: "1", actual: Number(Boolean(historyFilter)) },
+    { selector: "[data-conversation-scope]", expected: "1..2", actual: historyScopeButtons.length },
+    {
+      selector: '[data-conversation-scope="own"]',
+      expected: "1",
+      actual: historyScopeButtons.filter((button) => button.dataset.conversationScope === "own").length
+    },
+    {
+      selector: '[data-conversation-scope="all"]',
+      expected: historyScopeButtons.length === 2 ? "1" : "0",
+      actual: historyScopeButtons.filter((button) => button.dataset.conversationScope === "all").length
+    },
+    { selector: ".conversation-author-filter", expected: "1", actual: Number(Boolean(authorFilterField)) },
+    { selector: "[data-conversation-author-filter]", expected: "1", actual: Number(Boolean(authorFilter)) },
+    { selector: "[data-chat-workspace]", expected: "1", actual: Number(Boolean(workspace)) },
+    { selector: "[data-session-panel]", expected: "1", actual: Number(Boolean(sessionPanel)) },
+    { selector: "[data-session-panel-open]", expected: "1", actual: Number(Boolean(sessionPanelOpen)) },
+    { selector: "[data-session-panel-close]", expected: "1", actual: Number(Boolean(sessionPanelClose)) },
+    { selector: "[data-session-panel-scrim]", expected: "1", actual: Number(Boolean(sessionPanelScrim)) },
+    { selector: "[data-inspector]", expected: "1", actual: Number(Boolean(inspector)) },
+    { selector: "[data-inspector-toggle]", expected: "1", actual: Number(Boolean(inspectorToggle)) },
+    { selector: "[data-inspector-close]", expected: "1", actual: Number(Boolean(inspectorClose)) },
+    { selector: "[data-inspector-scrim]", expected: "1", actual: Number(Boolean(inspectorScrim)) },
+    { selector: "#conversation-title", expected: "1", actual: Number(Boolean(title)) },
+    { selector: "[data-conversation-title-edit]", expected: "1", actual: Number(Boolean(titleEdit)) },
+    { selector: "#conversation-header-status", expected: "1", actual: Number(Boolean(headerStatus)) },
+    { selector: "#conversation-provider-label", expected: "1", actual: Number(Boolean(providerLabel)) },
+    { selector: ".conversation-settings", expected: "1", actual: Number(Boolean(settings)) },
+    { selector: "#conversation-evidence-list", expected: "1", actual: Number(Boolean(evidenceList)) },
+    { selector: "[data-evidence-empty]", expected: "1", actual: Number(Boolean(evidenceEmpty)) },
+    { selector: "[data-evidence-count]", expected: "at least 1", actual: evidenceCounts.length }
+  ];
+  const initializationMismatches = initializationChecks.filter((check) => {
+    if (check.expected === "at least 1") {
+      return check.actual < 1;
+    }
+    if (check.expected === "1..2") {
+      return check.actual < 1 || check.actual > 2;
+    }
+    return check.actual !== Number.parseInt(check.expected, 10);
+  });
   if (
     !form ||
     !messages ||
@@ -2004,7 +2087,11 @@ function enableConversations(debug?: DebugLogger): void {
     !history ||
     !historyEmpty ||
     !historyFilter ||
-    historyScopeButtons.length !== 2 ||
+    historyScopeButtons.length < 1 ||
+    historyScopeButtons.length > 2 ||
+    historyScopeButtons.filter((button) => button.dataset.conversationScope === "own").length !== 1 ||
+    historyScopeButtons.filter((button) => button.dataset.conversationScope === "all").length !==
+      (historyScopeButtons.length === 2 ? 1 : 0) ||
     !authorFilterField ||
     !authorFilter ||
     !workspace ||
@@ -2025,7 +2112,61 @@ function enableConversations(debug?: DebugLogger): void {
     !evidenceEmpty ||
     evidenceCounts.length === 0
   ) {
+    debug?.add("error", "chat.initialization.failed", {
+      mismatches: initializationMismatches
+    });
+    debug?.open();
+    const failureHeading = "Chat failed to initialise";
+    const failureDetail = "The page is incomplete. Open Debug for the missing interface details, then reload after updating RepoKarta.";
+    const visibleHistoryError = historyEmpty ??
+      document.querySelector<HTMLElement>("[data-conversation-history-empty]");
+    if (visibleHistoryError) {
+      visibleHistoryError.hidden = false;
+      visibleHistoryError.textContent = `${failureHeading}. Open Debug for details.`;
+    }
+    const visibleHeaderStatus = headerStatus ??
+      document.querySelector<HTMLElement>("#conversation-header-status");
+    if (visibleHeaderStatus) {
+      visibleHeaderStatus.textContent = failureHeading;
+    }
+    const visibleMessages = messages ??
+      document.querySelector<HTMLElement>("#conversation-messages");
+    const visibleFailure = document.createElement("section");
+    visibleFailure.className = "conversation-initialization-error";
+    visibleFailure.dataset.conversationInitializationError = "";
+    visibleFailure.setAttribute("role", "alert");
+    const visibleFailureHeading = document.createElement("h3");
+    visibleFailureHeading.textContent = failureHeading;
+    const visibleFailureDetail = document.createElement("p");
+    visibleFailureDetail.textContent = failureDetail;
+    visibleFailure.append(visibleFailureHeading, visibleFailureDetail);
+    if (visibleMessages) {
+      visibleMessages.replaceChildren(visibleFailure);
+    } else {
+      document.querySelector<HTMLElement>("[data-conversation]")?.prepend(visibleFailure);
+    }
+    const visibleInput = input ??
+      document.querySelector<HTMLTextAreaElement>("#conversation-message");
+    if (visibleInput) {
+      visibleInput.disabled = true;
+      visibleInput.placeholder = "Chat unavailable";
+    }
+    const visibleSubmit = submit ??
+      document.querySelector<HTMLButtonElement>("#conversation-submit");
+    if (visibleSubmit) {
+      visibleSubmit.disabled = true;
+    }
     return;
+  }
+
+  const singleScope = historyScopeButtons.length === 1;
+  const historyScope = historyScopeButtons[0].closest<HTMLElement>(".conversation-history-scope");
+  if (historyScope) {
+    historyScope.dataset.singleScope = String(singleScope);
+  }
+  for (const button of historyScopeButtons) {
+    button.disabled = singleScope;
+    button.setAttribute("aria-disabled", String(singleScope));
   }
 
   const runSettingsStorageKey = "repokarta:conversation-run-settings:v1";
@@ -3202,8 +3343,8 @@ function enableConversations(debug?: DebugLogger): void {
       }
       const result = await response.json() as ConversationHistoryResponse;
       conversationViewer = result.viewer;
-      canViewAllConversations = result.can_view_all;
-      conversationScope = result.scope;
+      canViewAllConversations = !singleScope && result.can_view_all;
+      conversationScope = canViewAllConversations && result.scope === "all" ? "all" : "own";
       conversationSummaries = result.conversations ?? [];
       renderConversationHistory();
     } catch (error: unknown) {

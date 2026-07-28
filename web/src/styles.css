@@ -5308,6 +5308,10 @@ a.brand-mark:hover,
   grid-template-columns: 1fr;
 }
 
+.conversation-history-scope[data-single-scope="true"] {
+  grid-template-columns: 1fr;
+}
+
 .conversation-history-scope button {
   min-height: 1.75rem;
   border-radius: var(--r-sm);
@@ -5322,10 +5326,42 @@ a.brand-mark:hover,
   background: rgb(255 255 255 / 0.035);
 }
 
+.conversation-history-scope[data-single-scope="true"] button {
+  cursor: default;
+}
+
+.conversation-history-scope[data-single-scope="true"] button:hover {
+  color: var(--color-ai-soft);
+  background: rgb(139 92 246 / 0.12);
+}
+
 .conversation-history-scope button[aria-pressed="true"] {
   background: rgb(139 92 246 / 0.12);
   color: var(--color-ai-soft);
   box-shadow: inset 0 0 0 1px rgb(167 139 250 / 0.13);
+}
+
+.conversation-initialization-error {
+  width: min(34rem, calc(100% - 2rem));
+  margin: auto;
+  border: 1px solid rgb(251 113 133 / 0.28);
+  border-radius: var(--r-lg);
+  padding: 1.1rem 1.2rem;
+  background: rgb(136 19 55 / 0.12);
+  color: var(--color-ink-soft);
+}
+
+.conversation-initialization-error h3 {
+  margin-bottom: 0.35rem;
+  color: var(--color-danger);
+  font-size: var(--fs-body);
+  font-weight: 700;
+}
+
+.conversation-initialization-error p {
+  max-width: 56ch;
+  font-size: var(--fs-small);
+  line-height: 1.55;
 }
 
 .conversation-author-filter {

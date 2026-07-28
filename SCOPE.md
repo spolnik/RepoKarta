@@ -957,7 +957,7 @@ completion criteria include:
 
 ## Current implementation version
 
-`0.81.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
+`0.82.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
 The M9 dependency inventory, public registry refresh, lockfile resolution,
 explicit private-registry routing, reproducible OSV advisory snapshots,
 ecosystem-correct fleet CVE matching, scope-aware UI/JSON/MCP findings, and
@@ -980,7 +980,9 @@ Linked-worktree discovery deduplication and M10 enterprise identity and
 administration are complete; conversations are strictly owner-only, Wiki/admin
 actions retain principal-scoped audit evidence, advisory results are grouped
 without losing manifest occurrences, and every repository-aware MCP tool
-accepts an exact name with ambiguity errors. M11 is complete. The implemented M7-M11 slices
+accepts an exact name with ambiguity errors. Chat initialization keeps the
+owner-only scope usable without a view-all toggle and exposes selector-contract
+failures in both the page and debug log. M11 is complete. The implemented M7-M11 slices
 now resolve directory Git trees and exact syntax-backed symbol declarations
 alongside repository/file identities, scope deterministic matches to symbol
 line ranges, and turn pasted same-origin RepoKarta URLs into permission-checked
