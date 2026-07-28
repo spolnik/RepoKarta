@@ -514,6 +514,8 @@ rendering an unreadable file-level hairball.
 - [x] Source citations and Mermaid validation.
 - [x] Three-pane Deep Wiki reader with hierarchy, filtering, page outline, and
   relevant source files.
+- [x] Editorial Wiki page typography, reading metadata, visible section rhythm,
+  and generation quality gates that reject wall-of-text prose.
 - [x] Full-screen Mermaid zoom and SVG download.
 - [x] Commit-aware staleness and selective regeneration.
 - [x] `.repokarta.yml` steering.

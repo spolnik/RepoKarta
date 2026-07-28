@@ -36,7 +36,8 @@ provider, an API key, Docker, or a cloud account.
   commit-pinned source evidence, and separately timestamped runtime signals.
 - **Ask questions with citations.** Use Codex, Claude Code, or the Anthropic
   API to answer questions against RepoKarta's read-only code tools.
-- **Create living documentation.** Generate commit-pinned repository pages,
+- **Create living documentation.** Generate beautifully structured,
+  human-readable, commit-pinned repository pages,
   review their citations, and export them as Markdown.
 - **Review engineering signals.** Import coverage and static-analysis reports,
   compare revisions, and inspect dependency versions without running project

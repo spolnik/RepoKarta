@@ -41,6 +41,7 @@ import {
   sourceSelection
 } from "./source-intelligence.mjs";
 import { filterTopologyConnections } from "./topology-integrity.mjs";
+import { enhanceWikiArticle } from "./wiki-article.mjs";
 import { wikiPrimaryAction } from "./wiki-run-state.mjs";
 import "./styles.css";
 
@@ -6133,6 +6134,7 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
         return;
       }
       renderAssistantMarkdown(content, loaded.markdown || "", debug, true);
+      enhanceWikiArticle(content);
       bindWikiLinks();
       renderOutline();
       renderProvenance(loaded);
