@@ -34,6 +34,7 @@ import { activeContextMention } from "./context-mention.mjs";
 import { parseRepoKartaContextURL } from "./context-url.mjs";
 import { buildContextualChatURL, normaliseContextMode } from "./contextual-chat.mjs";
 import { applyQueryCompletion, type QueryCompletionEdit } from "./query-completion.mjs";
+import { filterTopologyConnections } from "./topology-integrity.mjs";
 import { wikiPrimaryAction } from "./wiki-run-state.mjs";
 import "./styles.css";
 
@@ -6520,6 +6521,7 @@ type TopologyPayload = {
   components: TopologyComponentPayload[];
   connections: TopologyConnectionPayload[];
   build_progress: { state: string; pending_repositories: number };
+  warnings?: Array<{ code: string; message: string; count: number }>;
 };
 
 function enableDependencyTopology(debug?: DebugLogger): void {
@@ -6530,6 +6532,9 @@ function enableDependencyTopology(debug?: DebugLogger): void {
   const reset = workspace?.querySelector<HTMLButtonElement>("[data-topology-reset]");
   const listToggle = workspace?.querySelector<HTMLButtonElement>("[data-topology-list]");
   const table = workspace?.querySelector<HTMLElement>("[data-topology-table]");
+  const warning = workspace?.querySelector<HTMLElement>("[data-topology-warning]");
+  const warningText = workspace?.querySelector<HTMLElement>("[data-topology-warning-text]");
+  const warningDismiss = workspace?.querySelector<HTMLButtonElement>("[data-topology-warning-dismiss]");
   const inspectorEmpty = workspace?.querySelector<HTMLElement>("[data-topology-inspector-empty]");
   const inspector = workspace?.querySelector<HTMLElement>("[data-topology-inspector]");
   const inspectorKind = workspace?.querySelector<HTMLElement>("[data-topology-inspector-kind]");
@@ -6538,6 +6543,7 @@ function enableDependencyTopology(debug?: DebugLogger): void {
   const inspectorMeta = workspace?.querySelector<HTMLElement>("[data-topology-inspector-meta]");
   const inspectorEvidence = workspace?.querySelector<HTMLOListElement>("[data-topology-evidence]");
   if (!workspace || !canvas || !empty || !focus || !reset || !listToggle || !table ||
+    !warning || !warningText || !warningDismiss ||
     !inspectorEmpty || !inspector || !inspectorKind || !inspectorTitle ||
     !inspectorSubtitle || !inspectorMeta || !inspectorEvidence) {
     return;
@@ -6551,6 +6557,19 @@ function enableDependencyTopology(debug?: DebugLogger): void {
   type TopologySingular = import("cytoscape").NodeSingular | import("cytoscape").EdgeSingular;
   let graph: TopologyCore | undefined;
   let selected: TopologySingular | undefined;
+  const showIntegrityWarning = (count: number): void => {
+    if (count <= 0) {
+      warning.hidden = true;
+      return;
+    }
+    warningText.textContent = count === 1
+      ? "1 connection referenced missing components and was hidden"
+      : `${count} connections referenced missing components and were hidden`;
+    warning.hidden = false;
+  };
+  warningDismiss.addEventListener("click", () => {
+    warning.hidden = true;
+  });
 
   const metadata = (entries: Array<[string, string | number | undefined]>): void => {
     inspectorMeta.replaceChildren();
@@ -6797,15 +6816,25 @@ function enableDependencyTopology(debug?: DebugLogger): void {
         throw new Error(await responseErrorMessage(response, `Topology request failed (${response.status})`));
       }
       const rawPayload = await response.json() as TopologyPayload;
+      const integrity = filterTopologyConnections(
+        rawPayload.components ?? [],
+        rawPayload.connections ?? []
+      );
+      const serverHiddenCount = (rawPayload.warnings ?? [])
+        .filter((warning) => warning.code === "missing_component_reference")
+        .reduce((count, warning) => count + warning.count, 0);
       const payload: TopologyPayload = {
         ...rawPayload,
         components: rawPayload.components ?? [],
-        connections: rawPayload.connections ?? []
+        connections: integrity.connections
       };
+      const hiddenConnections = Math.max(integrity.hiddenCount, serverHiddenCount);
+      showIntegrityWarning(hiddenConnections);
       await render(payload);
       debug?.add("info", "dependency.topology.rendered", {
         components: payload.components.length,
         connections: payload.connections.length,
+        hidden_connections: hiddenConnections,
         partial: payload.build_progress.pending_repositories > 0,
         duration_ms: Math.round(performance.now() - started)
       });

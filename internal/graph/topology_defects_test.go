@@ -162,6 +162,36 @@ infrastructure:
 	}
 }
 
+func TestDeploymentOnlyRepositoryDropsConnectionsFromSuppressedSource(t *testing.T) {
+	builder := newBuilder("http://127.0.0.1:7331")
+	repository := catalog.Repository{
+		ID: 104, Name: "deployment-config", IndexedCommit: "10410410",
+	}
+	builder.addDistributedTopology(
+		repository, repository.IndexedCommit, "README.md", map[string][]byte{
+			"README.md": []byte("# Deployment configuration"),
+			"infrastructure/deploy/production/deployment.yaml": []byte(`
+orders:
+  vendor-url: https://api.example-vendor.com/v2
+`),
+		},
+	)
+
+	snapshot := builder.snapshot("deployment-only-suppressed-source")
+	if len(snapshot.Components) != 0 {
+		t.Fatalf("deployment-only repository emitted components: %+v", snapshot.Components)
+	}
+	if len(snapshot.Connections) != 0 {
+		t.Fatalf("deployment-only repository emitted connections: %+v", snapshot.Connections)
+	}
+	if snapshot.SuppressedSourceEdges != 1 {
+		t.Fatalf(
+			"suppressed source edges = %d, want 1",
+			snapshot.SuppressedSourceEdges,
+		)
+	}
+}
+
 func TestTopologyThreeRepositoryRegressionFixture(t *testing.T) {
 	builder := newBuilder("http://127.0.0.1:7331")
 	consumer := catalog.Repository{

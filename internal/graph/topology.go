@@ -695,6 +695,55 @@ func systemConnectionID(connection SystemConnection) string {
 	}, ":"))
 }
 
+// assembleSystemTopology is the structural choke point for emitted topology.
+// Connections can only leave the builder when both endpoints are emitted
+// components. Missing sources identify facts collected from repositories whose
+// component was intentionally suppressed, so those edges are counted rather
+// than misattributed. External components orphaned by filtering are omitted.
+func assembleSystemTopology(
+	componentMap map[string]SystemComponent,
+	connectionMap map[string]SystemConnection,
+) ([]SystemComponent, []SystemConnection, int) {
+	connections := make([]SystemConnection, 0, len(connectionMap))
+	usedComponentIDs := make(map[string]bool)
+	suppressedSourceEdges := 0
+	for _, connection := range connectionMap {
+		if _, exists := componentMap[connection.Source]; !exists {
+			suppressedSourceEdges++
+			continue
+		}
+		if _, exists := componentMap[connection.Target]; !exists {
+			continue
+		}
+		connections = append(connections, connection)
+		usedComponentIDs[connection.Source] = true
+		usedComponentIDs[connection.Target] = true
+	}
+	slices.SortFunc(connections, func(left, right SystemConnection) int {
+		return strings.Compare(left.ID, right.ID)
+	})
+
+	components := make([]SystemComponent, 0, len(componentMap))
+	for id, component := range componentMap {
+		if component.External && !usedComponentIDs[id] {
+			continue
+		}
+		component.Aliases = uniqueSorted(component.Aliases)
+		component.Capabilities = uniqueSorted(component.Capabilities)
+		components = append(components, component)
+	}
+	slices.SortFunc(components, func(left, right SystemComponent) int {
+		if left.External != right.External {
+			if left.External {
+				return 1
+			}
+			return -1
+		}
+		return strings.Compare(strings.ToLower(left.Name), strings.ToLower(right.Name))
+	})
+	return components, connections, suppressedSourceEdges
+}
+
 func confidenceRank(value string) int {
 	switch value {
 	case "high":

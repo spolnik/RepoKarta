@@ -1853,6 +1853,7 @@ func (s *Server) apiDependencyTopology(response http.ResponseWriter, request *ht
 		writeAPIError(response, http.StatusInternalServerError, errors.New("runtime topology observations could not be loaded"))
 		return
 	}
+	topology = dependencies.SanitizeTopology(topology)
 	status := http.StatusOK
 	if progress.State == "building" {
 		status = http.StatusAccepted

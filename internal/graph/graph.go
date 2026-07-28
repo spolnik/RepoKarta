@@ -34,7 +34,7 @@ import (
 )
 
 const (
-	snapshotVersion       = 19
+	snapshotVersion       = 20
 	maximumFiles          = 20_000
 	maximumSourceFiles    = 5_000
 	maximumSourceFileSize = 1 << 20
@@ -283,6 +283,7 @@ type Snapshot struct {
 	EnvironmentAssignments       []EnvironmentAssignment        `json:"environment_assignments,omitempty"`
 	ExcludedEnvironmentVariables []string                       `json:"excluded_environment_variables,omitempty"`
 	RejectedExternalCount        int                            `json:"rejected_external_component_count,omitempty"`
+	SuppressedSourceEdges        int                            `json:"suppressed_source_edges,omitempty"`
 	Structure                    []StructuralDocument           `json:"structure,omitempty"`
 	StructureTruncated           bool                           `json:"structure_truncated"`
 	FileCount                    int                            `json:"file_count"`
@@ -625,6 +626,7 @@ func (s *Service) ReadTopologySnapshot(
 		inScope[repository.ID] = true
 	}
 	merged := newBuilder(s.currentBaseURL())
+	suppressedSourceEdges := 0
 	for _, result := range results {
 		if !result.ok {
 			continue
@@ -655,35 +657,21 @@ func (s *Service) ReadTopologySnapshot(
 			merged.excludedEnvironmentVariables[variable] = true
 		}
 		if selected {
+			suppressedSourceEdges += result.snapshot.SuppressedSourceEdges
 			output.Truncated = output.Truncated || result.snapshot.Truncated
 			output.Scope.AnalyzedRepositories++
 		}
 	}
 	merged.resolveTopologyPlaceholders()
 	merged.resolveSystemConnections()
-	for _, component := range merged.components {
-		component.Aliases = uniqueSorted(component.Aliases)
-		component.Capabilities = uniqueSorted(component.Capabilities)
-		output.Components = append(output.Components, component)
-	}
-	for _, connection := range merged.connections {
-		output.Connections = append(output.Connections, connection)
-	}
+	var newlySuppressed int
+	output.Components, output.Connections, newlySuppressed = assembleSystemTopology(
+		merged.components, merged.connections,
+	)
+	output.SuppressedSourceEdges = suppressedSourceEdges + newlySuppressed
 	output.UnresolvedTopology = append(
 		[]UnresolvedTopologyConnection(nil), merged.unresolvedTopology...,
 	)
-	slices.SortFunc(output.Components, func(left, right SystemComponent) int {
-		if left.External != right.External {
-			if left.External {
-				return 1
-			}
-			return -1
-		}
-		return strings.Compare(strings.ToLower(left.Name), strings.ToLower(right.Name))
-	})
-	slices.SortFunc(output.Connections, func(left, right SystemConnection) int {
-		return strings.Compare(left.ID, right.ID)
-	})
 	slices.SortFunc(output.UnresolvedTopology, func(left, right UnresolvedTopologyConnection) int {
 		return strings.Compare(left.ID, right.ID)
 	})
@@ -1069,28 +1057,9 @@ func (b *builder) snapshot(signature string) Snapshot {
 		edges = append(edges, edge)
 	}
 	slices.SortFunc(edges, func(left, right Edge) int { return strings.Compare(left.ID, right.ID) })
-	components := make([]SystemComponent, 0, len(b.components))
-	for _, component := range b.components {
-		component.Aliases = uniqueSorted(component.Aliases)
-		component.Capabilities = uniqueSorted(component.Capabilities)
-		components = append(components, component)
-	}
-	slices.SortFunc(components, func(left, right SystemComponent) int {
-		if left.External != right.External {
-			if left.External {
-				return 1
-			}
-			return -1
-		}
-		return strings.Compare(strings.ToLower(left.Name), strings.ToLower(right.Name))
-	})
-	connections := make([]SystemConnection, 0, len(b.connections))
-	for _, connection := range b.connections {
-		connections = append(connections, connection)
-	}
-	slices.SortFunc(connections, func(left, right SystemConnection) int {
-		return strings.Compare(left.ID, right.ID)
-	})
+	components, connections, suppressedSourceEdges := assembleSystemTopology(
+		b.components, b.connections,
+	)
 	slices.SortFunc(b.unresolvedTopology, func(left, right UnresolvedTopologyConnection) int {
 		return strings.Compare(left.ID, right.ID)
 	})
@@ -1122,6 +1091,7 @@ func (b *builder) snapshot(signature string) Snapshot {
 		EnvironmentAssignments:       append([]EnvironmentAssignment(nil), b.environmentAssignments...),
 		ExcludedEnvironmentVariables: sortedEnvironmentVariables(b.excludedEnvironmentVariables),
 		RejectedExternalCount:        b.rejectedExternalCount,
+		SuppressedSourceEdges:        suppressedSourceEdges,
 		Structure:                    b.structure,
 		StructureTruncated:           b.structureTruncated,
 		FileCount:                    b.fileCount,

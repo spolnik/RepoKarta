@@ -953,7 +953,7 @@ completion criteria include:
 
 ## Current implementation version
 
-`0.79.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
+`0.80.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
 The M9 dependency inventory, public registry refresh, lockfile resolution,
 explicit private-registry routing, reproducible OSV advisory snapshots,
 ecosystem-correct fleet CVE matching, scope-aware UI/JSON/MCP findings, and
@@ -963,7 +963,10 @@ M12 distributed dependency topology is complete: the Dependencies landing view
 now models deployable components and directed HTTP, gRPC, Kafka, database, and
 MCP relationships; type-aware fleet reconciliation, explicit declarations,
 runtime observation import/retention, static-vs-runtime drift, JSON, MCP, and
-the interactive evidence view are implemented. Placeholder resolution now
+the interactive evidence view are implemented. Referential-integrity
+enforcement and resilient partial rendering prevent dangling connections from
+blanking the graph. Deployment-only repositories retain diagnostic counts for
+connections dropped from suppressed source components. Placeholder resolution now
 includes service-map keys, ranked fleet assignments, candidate and unresolved
 payloads, registrable-domain naming, and resolved/candidate/unresolved honesty
 counts.

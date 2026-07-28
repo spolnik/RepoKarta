@@ -1597,16 +1597,23 @@ func TestDependencyTopologyIsDefaultAndExposesDirectedProtocolEvidence(t *testin
 			{ID: "checkout", Name: "checkout", Kind: "service", RepositoryID: 4, Repository: "checkout"},
 			{ID: "orders", Name: "orders", Kind: "service", External: true},
 		},
-		Connections: []graph.SystemConnection{{
-			ID: "http-checkout-orders", Source: "checkout", Target: "orders",
-			Protocol: "http", Interaction: "calls", Transport: "https",
-			Confidence: "high", EvidenceOrigin: "static",
-			Evidence: []graph.Evidence{{
-				RepositoryID: 4, Repository: "checkout", Revision: strings.Repeat("a", 40),
-				Path: "internal/client.go", Line: 22,
-				URL: "http://127.0.0.1:7331/source/4#L22",
-			}},
-		}},
+		Connections: []graph.SystemConnection{
+			{
+				ID: "http-checkout-orders", Source: "checkout", Target: "orders",
+				Protocol: "http", Interaction: "calls", Transport: "https",
+				Confidence: "high", EvidenceOrigin: "static",
+				Evidence: []graph.Evidence{{
+					RepositoryID: 4, Repository: "checkout", Revision: strings.Repeat("a", 40),
+					Path: "internal/client.go", Line: 22,
+					URL: "http://127.0.0.1:7331/source/4#L22",
+				}},
+			},
+			{
+				ID: "http-suppressed-orders", Source: "suppressed-deployment", Target: "orders",
+				Protocol: "http", Interaction: "calls", Transport: "https",
+				Confidence: "high", EvidenceOrigin: "static",
+			},
+		},
 	}}
 	registry := &testDependencyService{}
 	server, err := New(
@@ -1630,7 +1637,8 @@ func TestDependencyTopologyIsDefaultAndExposesDirectedProtocolEvidence(t *testin
 	for _, expected := range []string{
 		`System topology`, `Who talks to what, and how`, `HTTP`, `MCP`,
 		`Resolved`, `Candidates`, `Unresolved`,
-		`data-topology-workspace`, `/api/dependencies/topology?repository=4`,
+		`data-topology-workspace`, `data-topology-warning`,
+		`/api/dependencies/topology?repository=4`,
 	} {
 		if !strings.Contains(pageResponse.Body.String(), expected) {
 			t.Fatalf("topology page does not contain %q", expected)
@@ -1646,7 +1654,10 @@ func TestDependencyTopologyIsDefaultAndExposesDirectedProtocolEvidence(t *testin
 	if apiResponse.Code != http.StatusOK ||
 		!strings.Contains(apiResponse.Body.String(), `"protocol":"http"`) ||
 		!strings.Contains(apiResponse.Body.String(), `"source":"checkout"`) ||
-		!strings.Contains(apiResponse.Body.String(), `"target":"orders"`) {
+		!strings.Contains(apiResponse.Body.String(), `"target":"orders"`) ||
+		!strings.Contains(apiResponse.Body.String(), `"code":"missing_component_reference"`) ||
+		!strings.Contains(apiResponse.Body.String(), `"count":1`) ||
+		strings.Contains(apiResponse.Body.String(), `"source":"suppressed-deployment"`) {
 		t.Fatalf("topology API status = %d, body = %s", apiResponse.Code, apiResponse.Body.String())
 	}
 }

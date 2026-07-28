@@ -112,6 +112,12 @@ type TopologyUnresolved struct {
 	SourceName string `json:"source_name"`
 }
 
+type TopologyWarning struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+	Count   int    `json:"count"`
+}
+
 type TopologySummary struct {
 	ComponentCount             int `json:"component_count"`
 	ConnectionCount            int `json:"connection_count"`
@@ -124,6 +130,7 @@ type TopologySummary struct {
 	CandidateCount             int `json:"candidate_count"`
 	UnresolvedCount            int `json:"unresolved_count"`
 	UnresolvedPlaceholderCount int `json:"unresolved_placeholder_count"`
+	SuppressedSourceEdges      int `json:"suppressed_source_edges"`
 }
 
 type Topology struct {
@@ -139,6 +146,7 @@ type Topology struct {
 	Scope         graph.Scope            `json:"scope"`
 	BuildProgress graph.ArtifactProgress `json:"build_progress"`
 	Partial       bool                   `json:"partial"`
+	Warnings      []TopologyWarning      `json:"warnings,omitempty"`
 	Options       TopologyOptions        `json:"-"`
 }
 
@@ -318,7 +326,16 @@ func buildTopology(
 	}
 
 	connections := make(map[string]TopologyConnection)
+	missingComponentReferences := 0
 	for _, connection := range snapshot.Connections {
+		if _, sourceExists := nodes[connection.Source]; !sourceExists {
+			missingComponentReferences++
+			continue
+		}
+		if _, targetExists := nodes[connection.Target]; !targetExists {
+			missingComponentReferences++
+			continue
+		}
 		view := TopologyConnection{
 			Source: connection.Source, Target: connection.Target,
 			Protocol: connection.Protocol, Interaction: connection.Interaction,
@@ -400,6 +417,10 @@ func buildTopology(
 		Scope:       snapshot.Scope, BuildProgress: progress,
 		Partial: snapshot.Truncated || !snapshot.Scope.Complete,
 		Options: options,
+	}
+	output.Summary.SuppressedSourceEdges = snapshot.SuppressedSourceEdges
+	if missingComponentReferences > 0 {
+		addMissingComponentWarning(&output, missingComponentReferences)
 	}
 	protocols := make(map[string]bool)
 	visibleNodeIDs := make(map[string]bool)
@@ -495,6 +516,92 @@ func buildTopology(
 	output.Providers = sortedSet(providers)
 	output.Environments = sortedSet(environments)
 	return output
+}
+
+// SanitizeTopology is the final response-level guard for topology consumers.
+// The builder owns the invariant, but API adapters call this again so a stale
+// artifact or alternate service implementation cannot expose dangling edges.
+func SanitizeTopology(topology Topology) Topology {
+	componentByID := make(map[string]TopologyComponent, len(topology.Components))
+	for _, component := range topology.Components {
+		componentByID[component.ID] = component
+	}
+	connections := make([]TopologyConnection, 0, len(topology.Connections))
+	hidden := 0
+	for _, connection := range topology.Connections {
+		_, sourceExists := componentByID[connection.Source]
+		_, targetExists := componentByID[connection.Target]
+		if !sourceExists || !targetExists {
+			hidden++
+			continue
+		}
+		connections = append(connections, connection)
+	}
+	if hidden == 0 {
+		return topology
+	}
+	topology.Connections = connections
+	addMissingComponentWarning(&topology, hidden)
+
+	topology.Summary.ConnectionCount = len(connections)
+	topology.Summary.ConfirmedCount = 0
+	topology.Summary.StaticOnlyCount = 0
+	topology.Summary.RuntimeOnlyCount = 0
+	topology.Summary.ResolvedCount = 0
+	topology.Summary.CandidateCount = 0
+	runtimeUnresolved := 0
+	protocols := make(map[string]bool)
+	for _, connection := range connections {
+		protocols[connection.Protocol] = true
+		switch connection.State {
+		case "confirmed":
+			topology.Summary.ConfirmedCount++
+		case "runtime_only":
+			topology.Summary.RuntimeOnlyCount++
+		default:
+			topology.Summary.StaticOnlyCount++
+		}
+		target := componentByID[connection.Target]
+		if target.Candidate {
+			topology.Summary.CandidateCount++
+		} else if strings.HasPrefix(connection.Target, "runtime:") &&
+			!connection.TargetResolved {
+			runtimeUnresolved++
+		} else {
+			topology.Summary.ResolvedCount++
+		}
+	}
+	topology.Summary.UnresolvedCount =
+		topology.Summary.UnresolvedPlaceholderCount + runtimeUnresolved
+	topology.Protocols = sortedSet(protocols)
+	return topology
+}
+
+func addMissingComponentWarning(topology *Topology, count int) {
+	for index := range topology.Warnings {
+		if topology.Warnings[index].Code == "missing_component_reference" {
+			topology.Warnings[index].Count += count
+			topology.Warnings[index].Message =
+				missingComponentWarningMessage(topology.Warnings[index].Count)
+			return
+		}
+	}
+	topology.Warnings = append(topology.Warnings, TopologyWarning{
+		Code:    "missing_component_reference",
+		Message: missingComponentWarningMessage(count),
+		Count:   count,
+	})
+}
+
+func missingComponentWarningMessage(count int) string {
+	noun, verb := "connections", "were"
+	if count == 1 {
+		noun, verb = "connection", "was"
+	}
+	return fmt.Sprintf(
+		"%d %s referenced missing components and %s hidden",
+		count, noun, verb,
+	)
 }
 
 func runtimeKindCanResolve(observedKind string, candidate graph.SystemComponent) bool {

@@ -184,6 +184,90 @@ func TestEmptyTopologyUsesJSONArrays(t *testing.T) {
 	}
 }
 
+func TestTopologyStripsConnectionsWithMissingComponentsAndWarns(t *testing.T) {
+	topology := buildTopology(
+		graph.Snapshot{
+			ID: "referential-integrity",
+			Components: []graph.SystemComponent{
+				{ID: "checkout", Name: "checkout", Kind: "service"},
+				{ID: "orders", Name: "orders", Kind: "service"},
+			},
+			Connections: []graph.SystemConnection{
+				{
+					Source: "checkout", Target: "orders", Protocol: "http",
+					Interaction: "calls", EvidenceOrigin: "static",
+				},
+				{
+					Source: "suppressed-deployment", Target: "orders", Protocol: "http",
+					Interaction: "calls", EvidenceOrigin: "static",
+				},
+				{
+					Source: "checkout", Target: "missing-target", Protocol: "grpc",
+					Interaction: "calls", EvidenceOrigin: "static",
+				},
+			},
+			SuppressedSourceEdges: 4,
+			Scope:                 graph.Scope{Complete: true},
+		},
+		graph.ArtifactProgress{State: "ready"},
+		nil,
+		TopologyOptions{},
+		time.Now(),
+	)
+
+	if len(topology.Connections) != 1 ||
+		topology.Connections[0].Source != "checkout" ||
+		topology.Connections[0].Target != "orders" {
+		t.Fatalf("connections with missing endpoints were not stripped: %+v", topology.Connections)
+	}
+	if len(topology.Warnings) != 1 ||
+		topology.Warnings[0].Code != "missing_component_reference" ||
+		topology.Warnings[0].Count != 2 ||
+		topology.Warnings[0].Message != "2 connections referenced missing components and were hidden" {
+		t.Fatalf("referential-integrity warnings = %+v", topology.Warnings)
+	}
+	if topology.Summary.SuppressedSourceEdges != 4 {
+		t.Fatalf("suppressed source edge summary = %+v", topology.Summary)
+	}
+}
+
+func TestSanitizeTopologyChecksFinalResponsePayload(t *testing.T) {
+	topology := SanitizeTopology(Topology{
+		Components: []TopologyComponent{
+			{SystemComponent: graph.SystemComponent{ID: "checkout", Name: "checkout", Kind: "service"}},
+			{SystemComponent: graph.SystemComponent{ID: "orders", Name: "orders", Kind: "service"}},
+		},
+		Connections: []TopologyConnection{
+			{
+				ID: "valid", Source: "checkout", Target: "orders",
+				Protocol: "http", State: "static_only", TargetResolved: true,
+			},
+			{
+				ID: "dangling", Source: "suppressed-deployment", Target: "orders",
+				Protocol: "grpc", State: "static_only", TargetResolved: true,
+			},
+		},
+		Summary: TopologySummary{
+			ConnectionCount: 2, StaticOnlyCount: 2, ResolvedCount: 2,
+		},
+		Protocols: []string{"grpc", "http"},
+	})
+
+	if len(topology.Connections) != 1 || topology.Connections[0].ID != "valid" {
+		t.Fatalf("final response retained dangling connections: %+v", topology.Connections)
+	}
+	if topology.Summary.ConnectionCount != 1 ||
+		topology.Summary.StaticOnlyCount != 1 ||
+		topology.Summary.ResolvedCount != 1 ||
+		!slices.Equal(topology.Protocols, []string{"http"}) {
+		t.Fatalf("sanitized response summary = %+v, protocols = %v", topology.Summary, topology.Protocols)
+	}
+	if len(topology.Warnings) != 1 ||
+		topology.Warnings[0].Message != "1 connection referenced missing components and was hidden" {
+		t.Fatalf("sanitized response warnings = %+v", topology.Warnings)
+	}
+}
+
 func TestTopologyReportsAndFiltersStaticPlaceholderMetadata(t *testing.T) {
 	snapshot := graph.Snapshot{
 		ID: "placeholder-summary",
