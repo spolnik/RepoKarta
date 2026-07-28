@@ -7996,6 +7996,7 @@ a.brand-mark:hover,
   display: grid;
   min-width: 0;
   min-height: 0;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr);
 }
 
@@ -8111,7 +8112,9 @@ a.brand-mark:hover,
 
 .wiki-article-scroll {
   position: relative;
+  min-width: 0;
   min-height: 0;
+  overflow-x: hidden;
   overflow-y: auto;
   scrollbar-color: rgb(51 65 85 / 0.6) transparent;
   scrollbar-width: thin;
@@ -8119,39 +8122,163 @@ a.brand-mark:hover,
 
 .wiki-markdown {
   /*
-   * Generated pages run to ~2,400 words. 68ch keeps the measure inside the
-   * comfortable 45-85ch band; the previous 58rem box held ~116 characters.
+   * Generated pages are editorial documents rather than chat transcripts.
+   * Keep the measure calm and readable while leaving room for tables and
+   * diagrams to use the article width.
    */
-  width: min(100%, 68ch);
-  box-sizing: content-box;
+  width: min(100%, 84ch);
+  box-sizing: border-box;
   margin: 0 auto;
-  padding: 3rem clamp(1.25rem, 4vw, 3rem) 6rem;
+  padding: 3.5rem clamp(1.25rem, 4vw, 3.5rem) 7rem;
   color: var(--color-ink);
-  font-size: var(--fs-body-lg);
-  line-height: 1.75;
+  font-size: 1rem;
+  line-height: 1.78;
 }
 
 .wiki-markdown > h1:first-child {
   margin-top: 0;
+  margin-bottom: 0;
   color: var(--color-ink-strong);
-  font-size: clamp(1.9rem, 4vw, 2.6rem);
-  letter-spacing: -0.045em;
+  font-size: clamp(2.15rem, 4vw, 3.25rem);
+  font-weight: 720;
+  letter-spacing: -0.055em;
+  line-height: 1.04;
+  text-wrap: balance;
+}
+
+.wiki-reading-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-top: 1.15rem;
+  color: var(--color-ink-faint);
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+}
+
+.wiki-reading-meta span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.wiki-reading-meta span + span::before {
+  color: rgb(52 211 153 / 0.55);
+  content: "•";
+}
+
+.wiki-article-intro {
+  margin: 2rem 0 3.1rem;
+  border-left: 3px solid rgb(52 211 153 / 0.72);
+  border-radius: 0 var(--r-md) var(--r-md) 0;
+  padding: 1.05rem 1.25rem;
+  background:
+    linear-gradient(90deg, rgb(16 185 129 / 0.075), rgb(16 185 129 / 0.015) 70%, transparent);
+  color: var(--color-ink-soft);
+}
+
+.wiki-article-intro > :first-child,
+.wiki-article-section > :first-child {
+  margin-top: 0;
+}
+
+.wiki-article-intro > :last-child,
+.wiki-article-section > :last-child {
+  margin-bottom: 0;
+}
+
+.wiki-article-intro p:first-child {
+  color: var(--color-ink);
+  font-size: clamp(1.05rem, 2vw, 1.18rem);
+  line-height: 1.7;
+  text-wrap: pretty;
+}
+
+.wiki-article-section {
+  position: relative;
+  margin-top: 3.25rem;
+  border-top: 1px solid rgb(148 163 184 / 0.11);
+  padding-top: 1.55rem;
+}
+
+.wiki-article-section::before {
+  position: absolute;
+  top: -0.62rem;
+  left: 0;
+  padding-right: 0.65rem;
+  background: #0a0c10;
+  color: rgb(52 211 153 / 0.72);
+  content: attr(data-section);
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  font-weight: 700;
+  letter-spacing: 0.08em;
 }
 
 .wiki-markdown h2 {
-  margin-top: 2.5rem;
-  border-bottom: 1px solid rgb(148 163 184 / 0.08);
-  padding-bottom: 0.55rem;
-  color: var(--color-ink);
-  font-size: var(--fs-title);
-  letter-spacing: -0.025em;
+  margin: 0 0 1.25rem;
+  color: var(--color-ink-strong);
+  font-size: clamp(1.35rem, 2vw, 1.65rem);
+  font-weight: 680;
+  letter-spacing: -0.035em;
+  line-height: 1.2;
+  text-wrap: balance;
 }
 
 .wiki-markdown h3 {
-  margin-top: 1.8rem;
+  margin: 2rem 0 0.75rem;
   color: var(--color-ink);
-  font-size: var(--fs-body-lg);
-  letter-spacing: -0.015em;
+  font-size: 1.05rem;
+  font-weight: 680;
+  letter-spacing: -0.02em;
+  line-height: 1.35;
+}
+
+.wiki-markdown h4 {
+  margin: 1.55rem 0 0.6rem;
+  color: var(--color-ink-soft);
+  font-size: 0.95rem;
+  font-weight: 680;
+}
+
+.wiki-markdown p {
+  margin: 0.9rem 0;
+  text-wrap: pretty;
+}
+
+.wiki-markdown strong {
+  color: var(--color-ink-strong);
+  font-weight: 680;
+}
+
+.wiki-markdown ul,
+.wiki-markdown ol {
+  display: grid;
+  gap: 0.55rem;
+  margin: 1.15rem 0 1.35rem;
+  padding-left: 1.35rem;
+}
+
+.wiki-markdown ul {
+  list-style: disc;
+}
+
+.wiki-markdown ol {
+  list-style: decimal;
+}
+
+.wiki-markdown li {
+  padding-left: 0.3rem;
+}
+
+.wiki-markdown li::marker {
+  color: rgb(52 211 153 / 0.78);
+  font-family: var(--font-mono);
+  font-weight: 700;
+}
+
+.wiki-markdown li > p {
+  margin: 0.25rem 0;
 }
 
 .wiki-markdown a {
@@ -8166,23 +8293,87 @@ a.brand-mark:hover,
 }
 
 .wiki-markdown table {
+  display: block;
   width: 100%;
+  max-width: 100%;
+  margin: 1.4rem 0 1.8rem;
+  overflow-x: auto;
+  border: 1px solid rgb(148 163 184 / 0.11);
+  border-radius: var(--r-md);
   border-collapse: collapse;
+  background: rgb(15 23 42 / 0.28);
   font-size: var(--fs-caption);
 }
 
 .wiki-markdown th,
 .wiki-markdown td {
-  border-bottom: 1px solid rgb(148 163 184 / 0.08);
-  padding: 0.55rem 0.65rem;
+  border-bottom: 1px solid rgb(148 163 184 / 0.09);
+  padding: 0.72rem 0.85rem;
   text-align: left;
+  vertical-align: top;
 }
 
 .wiki-markdown th {
+  background: rgb(15 23 42 / 0.55);
   color: var(--color-ink-soft);
   font-family: var(--font-mono);
   font-size: var(--fs-meta);
   text-transform: uppercase;
+}
+
+.wiki-markdown tr:last-child td {
+  border-bottom: 0;
+}
+
+.wiki-markdown blockquote {
+  margin: 1.35rem 0;
+  border: 1px solid rgb(167 139 250 / 0.14);
+  border-left: 3px solid rgb(167 139 250 / 0.58);
+  border-radius: 0 var(--r-md) var(--r-md) 0;
+  padding: 0.75rem 1rem;
+  background: rgb(139 92 246 / 0.045);
+  color: var(--color-ink-soft);
+}
+
+.wiki-markdown blockquote p {
+  margin: 0.3rem 0;
+}
+
+.wiki-markdown code {
+  border: 1px solid rgb(148 163 184 / 0.11);
+  border-radius: var(--r-xs);
+  padding: 0.08rem 0.3rem;
+  background: rgb(15 23 42 / 0.72);
+  color: #c4b5fd;
+  font-family: var(--font-mono);
+  font-size: 0.86em;
+}
+
+.wiki-markdown pre {
+  max-width: 100%;
+  margin: 1.35rem 0;
+  overflow: auto;
+  border: 1px solid rgb(148 163 184 / 0.11);
+  border-radius: var(--r-md);
+  background: rgb(2 6 23 / 0.82);
+  box-shadow: 0 18px 45px rgb(0 0 0 / 0.14);
+}
+
+.wiki-markdown pre code {
+  display: block;
+  min-width: max-content;
+  border: 0;
+  padding: 1rem 1.1rem;
+  background: transparent;
+  color: var(--color-ink);
+  font-size: var(--fs-caption);
+  line-height: 1.5rem;
+}
+
+.wiki-markdown hr {
+  margin: 2.5rem 0;
+  border: 0;
+  border-top: 1px solid rgb(148 163 184 / 0.11);
 }
 
 .wiki-empty,
@@ -8438,6 +8629,10 @@ a.brand-mark:hover,
 }
 
 @media (max-width: 1180px) {
+  body:has(.wiki-workspace) {
+    overflow-x: clip;
+  }
+
   .wiki-workspace {
     grid-template-columns: 19.5rem minmax(0, 1fr);
   }
@@ -8476,7 +8671,8 @@ a.brand-mark:hover,
 
 @media (max-width: 760px) {
   body:has(.wiki-workspace) {
-    overflow: auto;
+    overflow-x: clip;
+    overflow-y: auto;
   }
 
   .wiki-workspace {

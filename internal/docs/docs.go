@@ -72,6 +72,7 @@ var (
 	knowledgeSlug             = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 	planEnvelope              = regexp.MustCompile(`(?s)<repokarta_wiki_plan>\s*(\{.*\})\s*</repokarta_wiki_plan>`)
 	markdownSourceURL         = regexp.MustCompile(`https?://[^\s<>()]+`)
+	numberedMarkdownItem      = regexp.MustCompile(`^\d+[.)]\s+`)
 )
 
 // ErrPageNotFound is returned for an unknown or excluded page.
@@ -1750,7 +1751,8 @@ func knowledgePagePrompt(page Page, site Site, survey string) string {
 		citationRule = "Use at least two exact citations across at least two distinct repository files."
 		diagramRule = "Define only repository-specific or genuinely ambiguous terms. Omit general industry " +
 			"vocabulary, near-synonyms, and terms already clear from their names. Use 8-12 entries, one short " +
-			"definition each. Definitions identify what a term means in this repository; they do not summarize " +
+			"definition each, presented in a compact Markdown table or bullet list. Definitions identify what a " +
+			"term means in this repository; they do not summarize " +
 			"subsystem behavior or make absence, uncertainty, coverage, or limitation claims. Omit any term whose " +
 			"definition is not established by the saved survey. Do not include a Mermaid diagram."
 	}
@@ -1768,6 +1770,11 @@ missing or unclear for this page. Use at most %d tool calls; do not repeat broad
 Requirements:
 - Return only publication-ready Markdown beginning with "# %s".
 - Stay within %s and use %s descriptive ## sections. Add ### subsections only where they improve navigation.
+- After the H1, open with one orientation paragraph of no more than 90 words that tells the reader what
+  they will understand. Keep every later prose paragraph under 120 words and focused on one idea.
+- Build visible reading rhythm: use at least two evidence-backed scan anchors chosen from a short bullet or
+  numbered list, a comparison table, a blockquote callout, a code example, or the required Mermaid diagram.
+  Use lists for real sequences, choices, or responsibility sets and tables only for genuine comparisons.
 - Explain only the responsibilities, flows, boundaries, failure behavior, and tests named by this page's
   generation brief. The ownership map below defines the exclusions too: do not explain another page's
   scope beyond one boundary sentence and a link.
@@ -2194,10 +2201,91 @@ func validateKnowledgePage(page Page) error {
 			minimumFiles,
 		)
 	}
+	if err := validateKnowledgeReadability(page.Markdown); err != nil {
+		return err
+	}
 	if page.Slug == "architecture-overview" && !mermaidFence.MatchString(page.Markdown) {
 		return errors.New("architecture overview needs one source-grounded Mermaid diagram")
 	}
 	return nil
+}
+
+func validateKnowledgeReadability(markdown string) error {
+	const maximumParagraphWords = 140
+	for _, paragraph := range markdownProseParagraphs(markdown) {
+		if words := len(strings.Fields(paragraph)); words > maximumParagraphWords {
+			return fmt.Errorf(
+				"knowledge page contains a %d-word wall-of-text paragraph; keep paragraphs under %d words",
+				words,
+				maximumParagraphWords,
+			)
+		}
+	}
+	if countMarkdownScanAnchors(markdown) == 0 {
+		return errors.New(
+			"knowledge page needs a scannable list, table, callout, code example, or Mermaid diagram",
+		)
+	}
+	return nil
+}
+
+func markdownProseParagraphs(markdown string) []string {
+	lines := strings.Split(strings.ReplaceAll(markdown, "\r\n", "\n"), "\n")
+	paragraphs := make([]string, 0)
+	current := make([]string, 0)
+	inFence := false
+	flush := func() {
+		if len(current) > 0 {
+			paragraphs = append(paragraphs, strings.Join(current, " "))
+			current = current[:0]
+		}
+	}
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "```") {
+			flush()
+			inFence = !inFence
+			continue
+		}
+		if inFence || trimmed == "" {
+			flush()
+			continue
+		}
+		if strings.HasPrefix(trimmed, "#") ||
+			strings.HasPrefix(trimmed, "- ") ||
+			strings.HasPrefix(trimmed, "* ") ||
+			strings.HasPrefix(trimmed, "+ ") ||
+			strings.HasPrefix(trimmed, ">") ||
+			strings.HasPrefix(trimmed, "|") ||
+			numberedMarkdownItem.MatchString(trimmed) {
+			flush()
+			continue
+		}
+		current = append(current, trimmed)
+	}
+	flush()
+	return paragraphs
+}
+
+func countMarkdownScanAnchors(markdown string) int {
+	lines := strings.Split(strings.ReplaceAll(markdown, "\r\n", "\n"), "\n")
+	count := 0
+	inBlock := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		block := strings.HasPrefix(trimmed, "```") ||
+			strings.HasPrefix(trimmed, "- ") ||
+			strings.HasPrefix(trimmed, "* ") ||
+			strings.HasPrefix(trimmed, "+ ") ||
+			strings.HasPrefix(trimmed, ">") ||
+			strings.HasPrefix(trimmed, "|") ||
+			numberedMarkdownItem.MatchString(trimmed)
+		if block && !inBlock {
+			count++
+		}
+		inBlock = block
+	}
+	return count
 }
 
 func validateGeneratedPage(page Page, revision string) error {

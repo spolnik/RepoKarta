@@ -959,6 +959,8 @@ func TestPagePromptReusesSurveyAndAppliesCompactWritingBudget(t *testing.T) {
 		"Use at most 4 tool calls",
 		"exactly one compact Mermaid diagram",
 		"State each important point once",
+		"orientation paragraph of no more than 90 words",
+		"use at least two evidence-backed scan anchors",
 		"<saved_repository_survey>",
 		"Saved evidence.",
 		"Runtime (slug=runtime): Own startup, shutdown",
@@ -978,6 +980,7 @@ func TestPagePromptReusesSurveyAndAppliesCompactWritingBudget(t *testing.T) {
 	glossaryPrompt := knowledgePagePrompt(glossary, site, "# Repository Survey\n\nSaved evidence.")
 	for _, expected := range []string{
 		"8-12 entries",
+		"compact Markdown table or bullet list",
 		"Omit general industry vocabulary",
 		"do not summarize subsystem behavior",
 		"make absence, uncertainty, coverage, or limitation claims",
@@ -994,6 +997,42 @@ func TestPagePromptReusesSurveyAndAppliesCompactWritingBudget(t *testing.T) {
 	)
 	if !strings.Contains(runtimePrompt, "Do not include a Mermaid diagram") {
 		t.Fatalf("focused page prompt still invites redundant diagrams:\n%s", runtimePrompt)
+	}
+}
+
+func TestKnowledgePageReadabilityRejectsWallsOfText(t *testing.T) {
+	t.Parallel()
+	longParagraph := strings.Repeat("repository-specific evidence remains readable and precise ", 24)
+	err := validateKnowledgeReadability(
+		"# Runtime\n\n" + longParagraph + "\n\n## Flow\n\n- Start\n- Serve\n- Stop\n",
+	)
+	if err == nil || !strings.Contains(err.Error(), "wall-of-text paragraph") {
+		t.Fatalf("long paragraph error = %v", err)
+	}
+}
+
+func TestKnowledgePageReadabilityRequiresAVisualAnchor(t *testing.T) {
+	t.Parallel()
+	err := validateKnowledgeReadability(`# Runtime
+
+The command constructs the service from repository-specific components.
+
+## Flow
+
+Requests move through one explicit coordinator and return cited results.
+`)
+	if err == nil || !strings.Contains(err.Error(), "scannable list") {
+		t.Fatalf("unstructured page error = %v", err)
+	}
+
+	for _, markdown := range []string{
+		"# Runtime\n\n## Flow\n\n- Start\n- Serve\n- Stop\n",
+		"# Runtime\n\n## Flow\n\n```go\nserve()\n```\n",
+		"# Runtime\n\n## Flow\n\n> Failed work remains retryable.\n",
+	} {
+		if err := validateKnowledgeReadability(markdown); err != nil {
+			t.Fatalf("structured page rejected: %v\n%s", err, markdown)
+		}
 	}
 }
 
