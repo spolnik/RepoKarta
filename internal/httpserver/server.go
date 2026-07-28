@@ -46,6 +46,7 @@ import (
 
 const (
 	maximumSourceLines      = 500
+	maximumSourceRoutes     = 24
 	maximumChatRequestBytes = (agent.MaximumImagesPerTurn * agent.MaximumImageBytes * 4 / 3) + (1 << 20)
 	eventPollInterval       = time.Second
 )
@@ -82,6 +83,7 @@ type MapService interface {
 	Snapshot(context.Context, int64, bool) (graph.Snapshot, error)
 	ReadDependencySnapshot(context.Context, int64) (graph.Snapshot, graph.ArtifactProgress, error)
 	ReadTopologySnapshot(context.Context, int64) (graph.Snapshot, graph.ArtifactProgress, error)
+	ReadRouteSnapshot(context.Context, int64) (graph.Snapshot, graph.ArtifactProgress, error)
 	StructureProgress(context.Context, int64) (graph.ArtifactProgress, error)
 }
 
@@ -288,6 +290,33 @@ type sourcePageData struct {
 	NextEnd       int
 	FocusStart    int
 	FocusEnd      int
+	Intelligence  sourceIntelligenceView
+}
+
+type sourceIntelligenceView struct {
+	Routes        []sourceRouteView
+	RouteCount    int
+	OmittedRoutes int
+	Callers       []sourceCallerView
+	State         string
+	Message       string
+	Partial       bool
+	TopologyURL   string
+}
+
+type sourceRouteView struct {
+	Label         string
+	Line          int
+	URL           string
+	VisibleWindow bool
+	Callers       []sourceCallerView
+}
+
+type sourceCallerView struct {
+	Name       string
+	State      string
+	Confidence string
+	Evidence   graph.Evidence
 }
 
 type projectPageData struct {
@@ -2569,8 +2598,295 @@ func (s *Server) source(response http.ResponseWriter, request *http.Request) {
 		NextEnd:       nextEnd,
 		FocusStart:    focusStart,
 		FocusEnd:      focusEnd,
+		Intelligence: s.sourceIntelligence(
+			request.Context(),
+			repositoryID,
+			file.Revision,
+			file.Path,
+			file.StartLine,
+			file.EndLine,
+		),
 	}
 	s.render(response, "source", data)
+}
+
+func (s *Server) sourceIntelligence(
+	ctx context.Context,
+	repositoryID int64,
+	revision, filePath string,
+	startLine, endLine int,
+) sourceIntelligenceView {
+	view := sourceIntelligenceView{
+		Routes:  []sourceRouteView{},
+		Callers: []sourceCallerView{},
+		State:   "ready",
+		TopologyURL: fmt.Sprintf(
+			"/dependencies?repository=%d&protocol=http&direction=inbound&depth=1",
+			repositoryID,
+		),
+	}
+	if s.maps == nil {
+		view.State = "unavailable"
+		view.Message = "Route and caller artifacts are unavailable in this runtime."
+		return view
+	}
+
+	routeSnapshot, routeProgress, err := s.maps.ReadRouteSnapshot(ctx, repositoryID)
+	if err != nil {
+		view.State = "unavailable"
+		view.Message = "Route artifacts could not be read."
+		return view
+	}
+	for _, node := range routeSnapshot.Nodes {
+		if node.Kind != "route" {
+			continue
+		}
+		evidence, ok := routeEvidenceForFile(node, repositoryID, filePath)
+		if !ok {
+			continue
+		}
+		if evidence.URL == "" {
+			evidenceRevision := evidence.Revision
+			if evidenceRevision == "" {
+				evidenceRevision = revision
+			}
+			evidence.URL = sourceEvidenceURL(
+				repositoryID,
+				evidenceRevision,
+				filePath,
+				evidence.Line,
+			)
+		}
+		view.Routes = append(view.Routes, sourceRouteView{
+			Label:         node.Label,
+			Line:          max(1, evidence.Line),
+			URL:           evidence.URL,
+			VisibleWindow: evidence.Line >= startLine && evidence.Line <= endLine,
+		})
+	}
+	sort.Slice(view.Routes, func(left, right int) bool {
+		if view.Routes[left].VisibleWindow != view.Routes[right].VisibleWindow {
+			return view.Routes[left].VisibleWindow
+		}
+		if view.Routes[left].Line != view.Routes[right].Line {
+			return view.Routes[left].Line < view.Routes[right].Line
+		}
+		return view.Routes[left].Label < view.Routes[right].Label
+	})
+	view.RouteCount = len(view.Routes)
+	if len(view.Routes) > maximumSourceRoutes {
+		view.OmittedRoutes = len(view.Routes) - maximumSourceRoutes
+		view.Routes = view.Routes[:maximumSourceRoutes]
+	}
+	if routeProgress.State == "building" || !routeSnapshot.Scope.Complete {
+		view.Partial = true
+		view.State = "building"
+	}
+	if len(view.Routes) == 0 {
+		if view.Partial {
+			view.Message = "Route artifacts are still building; endpoints in this file may not be available yet."
+		} else {
+			view.Message = "No supported HTTP route declaration was detected in this file."
+		}
+		return view
+	}
+	if s.dependencies == nil {
+		view.State = "unavailable"
+		view.Message = "Routes were detected, but caller topology is unavailable in this runtime."
+		return view
+	}
+
+	topologySnapshot, topologyProgress, err := s.maps.ReadTopologySnapshot(ctx, repositoryID)
+	if err != nil {
+		view.State = "unavailable"
+		view.Message = "Routes were detected, but caller topology could not be read."
+		return view
+	}
+	topology, err := s.dependencies.Topology(
+		ctx,
+		topologySnapshot,
+		topologyProgress,
+		dependencies.TopologyOptions{Protocol: "http", Direction: "both", Depth: 1},
+	)
+	if err != nil {
+		view.State = "unavailable"
+		view.Message = "Routes were detected, but inbound callers could not be resolved."
+		return view
+	}
+	routeComponentIDs := sourceComponentIDs(topology.Components, repositoryID, filePath)
+	seenCallers := make(map[string]bool)
+	routeCallers := make([]map[string]bool, len(view.Routes))
+	for routeIndex := range routeCallers {
+		routeCallers[routeIndex] = make(map[string]bool)
+	}
+	for _, connection := range topology.Connections {
+		if !strings.EqualFold(connection.Protocol, "http") ||
+			!routeComponentIDs[connection.Target] ||
+			connection.Source == connection.Target {
+			continue
+		}
+		caller := sourceCallerView{
+			Name:       connection.SourceName,
+			State:      connection.State,
+			Confidence: connection.Confidence,
+		}
+		if len(connection.Evidence) > 0 {
+			caller.Evidence = connection.Evidence[0]
+		}
+		key := strings.ToLower(caller.Name) + "\x00" + caller.State + "\x00" + caller.Evidence.URL
+		if !seenCallers[key] {
+			seenCallers[key] = true
+			view.Callers = append(view.Callers, caller)
+		}
+		for routeIndex := range view.Routes {
+			if routeMatchesCallerEvidence(view.Routes[routeIndex].Label, connection.Evidence) &&
+				!routeCallers[routeIndex][key] {
+				routeCallers[routeIndex][key] = true
+				view.Routes[routeIndex].Callers = append(
+					view.Routes[routeIndex].Callers,
+					caller,
+				)
+			}
+		}
+	}
+	sort.Slice(view.Callers, func(left, right int) bool {
+		return strings.ToLower(view.Callers[left].Name) < strings.ToLower(view.Callers[right].Name)
+	})
+	for routeIndex := range view.Routes {
+		sort.Slice(view.Routes[routeIndex].Callers, func(left, right int) bool {
+			return strings.ToLower(view.Routes[routeIndex].Callers[left].Name) <
+				strings.ToLower(view.Routes[routeIndex].Callers[right].Name)
+		})
+	}
+	if topology.Partial || topologyProgress.State == "building" {
+		view.Partial = true
+		view.State = "building"
+	}
+	if len(view.Callers) == 0 {
+		view.Message = "No inbound HTTP caller evidence is currently indexed for this service."
+	} else {
+		view.Message = "Callers are attributed at service level; route badges require a matching commit-pinned URL path."
+	}
+	return view
+}
+
+func sourceComponentIDs(
+	components []dependencies.TopologyComponent,
+	repositoryID int64,
+	filePath string,
+) map[string]bool {
+	filePath = strings.Trim(strings.ReplaceAll(filePath, "\\", "/"), "/")
+	selected := make(map[string]bool)
+	longestRoot := -1
+	for _, component := range components {
+		if component.RepositoryID != repositoryID {
+			continue
+		}
+		root := strings.Trim(strings.ReplaceAll(component.Path, "\\", "/"), "/")
+		if root == "" || root == "." {
+			root = ""
+		}
+		if root != "" && filePath != root && !strings.HasPrefix(filePath, root+"/") {
+			continue
+		}
+		if len(root) < longestRoot {
+			continue
+		}
+		if len(root) > longestRoot {
+			clear(selected)
+			longestRoot = len(root)
+		}
+		selected[component.ID] = true
+	}
+	return selected
+}
+
+func routeEvidenceForFile(
+	node graph.Node,
+	repositoryID int64,
+	filePath string,
+) (graph.Evidence, bool) {
+	for _, evidence := range node.Evidence {
+		if evidence.RepositoryID == repositoryID && evidence.Path == filePath {
+			return evidence, true
+		}
+	}
+	if node.RepositoryID == repositoryID && node.Path == filePath {
+		if len(node.Evidence) > 0 {
+			return node.Evidence[0], true
+		}
+		return graph.Evidence{
+			RepositoryID: repositoryID,
+			Path:         filePath,
+			Line:         1,
+			Label:        node.Label,
+		}, true
+	}
+	return graph.Evidence{}, false
+}
+
+func sourceEvidenceURL(repositoryID int64, revision, filePath string, line int) string {
+	line = max(1, line)
+	values := url.Values{
+		"rev":   []string{revision},
+		"path":  []string{filePath},
+		"focus": []string{fmt.Sprintf("%d-%d", line, line)},
+	}
+	return fmt.Sprintf("/source/%d?%s#L%d", repositoryID, values.Encode(), line)
+}
+
+func routeMatchesCallerEvidence(routeLabel string, evidence []graph.Evidence) bool {
+	routePath := endpointPath(routeLabel)
+	if routePath == "" {
+		return false
+	}
+	for _, item := range evidence {
+		if routePathMatches(routePath, endpointPath(item.Label)) {
+			return true
+		}
+	}
+	return false
+}
+
+func endpointPath(value string) string {
+	value = strings.TrimSpace(value)
+	if fields := strings.Fields(value); len(fields) > 1 &&
+		strings.HasPrefix(fields[len(fields)-1], "/") {
+		value = fields[len(fields)-1]
+	}
+	if parsed, err := url.Parse(value); err == nil && parsed.Path != "" {
+		value = parsed.Path
+	}
+	if !strings.HasPrefix(value, "/") {
+		return ""
+	}
+	value = strings.TrimSuffix(path.Clean(value), "/")
+	if value == "" {
+		return "/"
+	}
+	return value
+}
+
+func routePathMatches(routePath, evidencePath string) bool {
+	if routePath == "" || evidencePath == "" {
+		return false
+	}
+	routeParts := strings.Split(strings.Trim(routePath, "/"), "/")
+	evidenceParts := strings.Split(strings.Trim(evidencePath, "/"), "/")
+	if len(routeParts) != len(evidenceParts) {
+		return false
+	}
+	for index, routePart := range routeParts {
+		if (strings.HasPrefix(routePart, "{") && strings.HasSuffix(routePart, "}")) ||
+			strings.HasPrefix(routePart, ":") ||
+			routePart == "*" {
+			continue
+		}
+		if routePart != evidenceParts[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Server) events(response http.ResponseWriter, request *http.Request) {

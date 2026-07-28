@@ -27,9 +27,10 @@ provider, an API key, Docker, or a cloud account.
 - **Search across repositories.** Find text, files, symbols, references,
   implementations, routes, dependencies, commits, diffs, Wiki pages, and code
   insights from one search box.
-- **Browse the indexed revision.** Open a repository tree, follow stable line
-  links, and inspect history or diffs without changing branches in your
-  worktree.
+- **Browse and investigate the indexed revision.** Open a repository tree,
+  select a class, enum, method, or function to find its usages, search the
+  repository without leaving the editor, and inspect history or diffs without
+  changing branches in your worktree.
 - **See how a system fits together.** Follow component-to-component HTTP,
   gRPC, Kafka, database, and MCP communication with visible direction,
   commit-pinned source evidence, and separately timestamped runtime signals.
@@ -97,8 +98,8 @@ go run ./cmd/repokarta serve -open=false C:\Work\GitHub
 Once at least one repository is ready:
 
 1. Search for a class, function, route, error message, or filename.
-2. Open a result and use the repository tree and line links to inspect it in
-   context.
+2. Open a result, select an identifier to find its usages, or use the embedded
+   repository-scoped search without leaving the source editor.
 3. Open **Maps** to explore packages, entry points, and relationships.
 4. Open **Dependencies** to explore the distributed component topology, then
    switch to package inventory or security findings when needed.
@@ -264,6 +265,7 @@ boundary. A few useful read-only endpoints are:
 ```text
 GET /api/repositories
 GET /api/search?q=OpenFile&repo=RepoKarta
+GET /api/search?q=OpenFile&repo=RepoKarta&mode=references
 POST /api/ast/search
 GET /api/symbol?symbol=OpenFile&repo=RepoKarta
 GET /api/file/{repository}?rev={commit}&path={path}&lines=1-200
@@ -349,6 +351,7 @@ $version = go run ./cmd/repokarta version
 - [Enterprise identity and audit operations](./docs/enterprise-administration.md)
 - [Dependency advisory data and refresh behavior](./docs/dependency-advisories.md)
 - [Distributed dependency topology and runtime observations](./docs/distributed-topology.md)
+- [Source editor search, usages, routes, and caller evidence](./docs/source-intelligence.md)
 - [Compiler-precise SCIP index imports](./docs/scip-indexes.md)
 - [Structural AST query syntax and completeness](./docs/ast-search.md)
 - [Pinned Zoekt revision and Windows portability](./docs/zoekt-windows-portability.md)

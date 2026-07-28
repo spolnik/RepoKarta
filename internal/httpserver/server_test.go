@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -1127,6 +1128,20 @@ func (s *testMapService) ReadDependencySnapshot(
 }
 
 func (s *testMapService) ReadTopologySnapshot(
+	_ context.Context,
+	repositoryID int64,
+) (graph.Snapshot, graph.ArtifactProgress, error) {
+	s.repositoryID = repositoryID
+	progress := s.progress
+	if progress.State == "" {
+		progress = graph.ArtifactProgress{
+			State: "ready", RequestedRepositories: 1, ReadyRepositories: 1,
+		}
+	}
+	return s.snapshot, progress, nil
+}
+
+func (s *testMapService) ReadRouteSnapshot(
 	_ context.Context,
 	repositoryID int64,
 ) (graph.Snapshot, graph.ArtifactProgress, error) {
@@ -2295,11 +2310,43 @@ func TestReadOnlyHTTPAPIsAgainstCommittedRepository(t *testing.T) {
 	conversations := &testConversations{}
 	maps := &testMapService{progress: graph.ArtifactProgress{
 		State: "building", RequestedRepositories: 1, PendingRepositories: 1,
+	}, snapshot: graph.Snapshot{
+		Scope: graph.Scope{
+			Kind: "repository", Complete: true, TotalRepositories: 1,
+			AnalyzedRepositories: 1, RequestedRepositoryID: 12,
+		},
+		Nodes: []graph.Node{{
+			ID: "route-ready", Kind: "route", Label: "GET /ready",
+			RepositoryID: 12, Repository: "example/repository", Path: "main.go",
+			Evidence: []graph.Evidence{{
+				RepositoryID: 12, Repository: "example/repository",
+				Revision: secondRevision, Path: "main.go", Line: 3,
+			}},
+		}},
+		Components: []graph.SystemComponent{
+			{
+				ID: "example", Name: "example", Kind: "service",
+				RepositoryID: 12, Repository: "example/repository",
+			},
+			{ID: "caller", Name: "checkout", Kind: "service", RepositoryID: 13},
+		},
+		Connections: []graph.SystemConnection{{
+			ID: "caller-example", Source: "caller", Target: "example",
+			Protocol: "http", Interaction: "calls", Transport: "https",
+			Confidence: "high", EvidenceOrigin: "static", TargetResolved: true,
+			Evidence: []graph.Evidence{{
+				RepositoryID: 13, Repository: "checkout",
+				Revision: strings.Repeat("c", 40), Path: "client.go", Line: 9,
+				Label: "https://example.internal/ready",
+				URL:   "http://127.0.0.1:7331/source/13?path=client.go&focus=9-9#L9",
+			}},
+		}},
 	}}
 	server, err := New(
 		Config{
 			Address: "127.0.0.1:7331", Version: "coverage-test",
 			RepositoryRoot: repositoryDirectory, Conversations: conversations, Maps: maps,
+			Dependencies: &testDependencyService{},
 		},
 		codeintel.New(testStore{repositories: []catalog.Repository{repository}}, testSearcher{}, "http://127.0.0.1:7331"),
 		testRefresher{},
@@ -2338,6 +2385,27 @@ func TestReadOnlyHTTPAPIsAgainstCommittedRepository(t *testing.T) {
 		}
 		if response.Header().Get("X-Request-ID") == "" {
 			t.Fatalf("%s did not receive a correlation ID", testCase.target)
+		}
+	}
+	sourceRequest := httptest.NewRequest(
+		http.MethodGet,
+		"http://127.0.0.1:7331/source/12?path=main.go&lines=1-3",
+		nil,
+	)
+	sourceResponse := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(sourceResponse, sourceRequest)
+	for _, expected := range []string{
+		`data-source-intelligence`,
+		`data-repository-id="12"`,
+		`Find usages`,
+		`Search this repository`,
+		`GET /ready`,
+		`checkout`,
+		`route-path evidence`,
+		`direction=inbound`,
+	} {
+		if !strings.Contains(sourceResponse.Body.String(), expected) {
+			t.Fatalf("source editor does not contain %q: %s", expected, sourceResponse.Body.String())
 		}
 	}
 
@@ -2979,6 +3047,126 @@ func TestFocusRangeParsing(t *testing.T) {
 		if start != testCase.start || end != testCase.end {
 			t.Fatalf("parseFocusRange(%q) = %d-%d, want %d-%d", testCase.value, start, end, testCase.start, testCase.end)
 		}
+	}
+}
+
+func TestRoutePathMatchesCommitPinnedCallerEvidence(t *testing.T) {
+	for _, testCase := range []struct {
+		route    string
+		evidence string
+		want     bool
+	}{
+		{"GET /orders/{orderId}", "https://orders.internal/orders/42", true},
+		{"POST /orders", "https://orders.internal/orders?dryRun=true", true},
+		{"GET /orders/{orderId}", "https://orders.internal/orders/42/items", false},
+		{"GET /orders", "orders-service", false},
+	} {
+		got := routeMatchesCallerEvidence(testCase.route, []graph.Evidence{{
+			Label: testCase.evidence,
+		}})
+		if got != testCase.want {
+			t.Fatalf(
+				"routeMatchesCallerEvidence(%q, %q) = %v, want %v",
+				testCase.route,
+				testCase.evidence,
+				got,
+				testCase.want,
+			)
+		}
+	}
+}
+
+func TestSourceIntelligenceBoundsRoutesAndPrioritizesVisibleWindow(t *testing.T) {
+	nodes := make([]graph.Node, 0, 30)
+	for line := 1; line <= 30; line++ {
+		nodes = append(nodes, graph.Node{
+			ID: fmt.Sprintf("route-%d", line), Kind: "route",
+			Label:        fmt.Sprintf("GET /route/%d", line),
+			RepositoryID: 7, Path: "Controller.java",
+			Evidence: []graph.Evidence{{
+				RepositoryID: 7, Path: "Controller.java", Line: line,
+			}},
+		})
+	}
+	server := &Server{maps: &testMapService{snapshot: graph.Snapshot{
+		Nodes: nodes,
+		Scope: graph.Scope{
+			Complete: true, TotalRepositories: 1, AnalyzedRepositories: 1,
+			RequestedRepositoryID: 7,
+		},
+	}}}
+	view := server.sourceIntelligence(
+		t.Context(),
+		7,
+		strings.Repeat("a", 40),
+		"Controller.java",
+		20,
+		22,
+	)
+	if view.RouteCount != 30 || len(view.Routes) != maximumSourceRoutes ||
+		view.OmittedRoutes != 6 {
+		t.Fatalf(
+			"bounded routes = total %d, returned %d, omitted %d",
+			view.RouteCount,
+			len(view.Routes),
+			view.OmittedRoutes,
+		)
+	}
+	for index, want := range []int{20, 21, 22} {
+		if view.Routes[index].Line != want || !view.Routes[index].VisibleWindow {
+			t.Fatalf("prioritized route %d = %#v, want visible line %d", index, view.Routes[index], want)
+		}
+	}
+}
+
+func TestSourceIntelligenceAttributesMonorepoCallerToOwningRouteComponent(t *testing.T) {
+	snapshot := graph.Snapshot{
+		Scope: graph.Scope{
+			Kind: "repository", Complete: true, TotalRepositories: 1,
+			AnalyzedRepositories: 1, RequestedRepositoryID: 7,
+		},
+		Nodes: []graph.Node{{
+			ID: "orders-route", Kind: "route", Label: "GET /orders/{id}",
+			RepositoryID: 7, Path: "apps/orders/Controller.java",
+			Evidence: []graph.Evidence{{
+				RepositoryID: 7, Path: "apps/orders/Controller.java", Line: 21,
+			}},
+		}},
+		Components: []graph.SystemComponent{
+			{
+				ID: "orders", Name: "orders", Kind: "service",
+				RepositoryID: 7, Path: "apps/orders",
+			},
+			{
+				ID: "checkout", Name: "checkout", Kind: "service",
+				RepositoryID: 7, Path: "apps/checkout",
+			},
+		},
+		Connections: []graph.SystemConnection{{
+			ID: "checkout-orders", Source: "checkout", Target: "orders",
+			Protocol: "http", Interaction: "calls", Transport: "https",
+			Confidence: "high", EvidenceOrigin: "static", TargetResolved: true,
+			Evidence: []graph.Evidence{{
+				RepositoryID: 7, Path: "apps/checkout/OrdersClient.java", Line: 14,
+				Label: "https://orders.internal/orders/42",
+			}},
+		}},
+	}
+	server := &Server{
+		maps:         &testMapService{snapshot: snapshot},
+		dependencies: &testDependencyService{},
+	}
+	view := server.sourceIntelligence(
+		t.Context(),
+		7,
+		strings.Repeat("a", 40),
+		"apps/orders/Controller.java",
+		1,
+		100,
+	)
+	if len(view.Callers) != 1 || view.Callers[0].Name != "checkout" ||
+		len(view.Routes) != 1 || len(view.Routes[0].Callers) != 1 {
+		t.Fatalf("monorepo source intelligence = %#v", view)
 	}
 }
 

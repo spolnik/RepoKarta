@@ -107,6 +107,14 @@ repositories on managed Windows and Apple Silicon macOS laptops.
 
 - Repository and directory tree.
 - Syntax-highlighted file viewer.
+- Embed repository-scoped code search and symbol-usage discovery directly in
+  the file viewer. Selecting an identifier prepares syntax-backed or
+  compiler-precise reference search without making the user reselect the
+  repository scope.
+- On files with detected HTTP routes, show commit-pinned endpoints and inbound
+  service callers from the distributed topology. Distinguish an exact matching
+  route-path witness from a service-level caller edge, and preserve partial or
+  still-building artifact states.
 - Stable URLs containing repository, revision, path, and line range.
 - Copyable citations.
 - Links to the configured remote origin when one exists.
@@ -960,7 +968,7 @@ completion criteria include:
 
 ## Current implementation version
 
-`0.82.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
+`0.83.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
 The M9 dependency inventory, public registry refresh, lockfile resolution,
 explicit private-registry routing, reproducible OSV advisory snapshots,
 ecosystem-correct fleet CVE matching, scope-aware UI/JSON/MCP findings, and
@@ -979,6 +987,10 @@ payloads, registrable-domain naming, and resolved/candidate/unresolved honesty
 counts. Repository scope is a fleet-backed, depth-one inbound/outbound
 neighborhood with bounded overflow groups, optional depth-two context, possible
 unresolved inbound callers, and explicit fleet freshness/partiality.
+The commit-pinned source editor now embeds repository-scoped Zoekt search and
+SCIP/AST usage discovery. Detected HTTP controller routes are shown beside
+inbound topology callers; only caller evidence with a matching URL path is
+labeled route-specific, while other edges remain explicitly service-level.
 Linked-worktree discovery deduplication and M10 enterprise identity and
 administration are complete; conversations are strictly owner-only, Wiki/admin
 actions retain principal-scoped audit evidence, advisory results are grouped

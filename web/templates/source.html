@@ -70,6 +70,103 @@
             <code>{{.Citation}}</code>
           </div>
 
+          <section
+            class="source-intelligence"
+            data-source-intelligence
+            data-repository-id="{{.File.Repository.ID}}"
+            data-repository-name="{{.File.Repository.Name}}"
+          >
+            <form class="source-intelligence-search" data-source-intelligence-form>
+              <label for="source-intelligence-query">
+                <span>Search this repository</span>
+                <input
+                  id="source-intelligence-query"
+                  name="query"
+                  type="search"
+                  autocomplete="off"
+                  placeholder="Select a symbol below, or enter code"
+                  data-source-intelligence-query
+                >
+              </label>
+              <label for="source-intelligence-mode">
+                <span>Mode</span>
+                <select id="source-intelligence-mode" name="mode" data-source-intelligence-mode>
+                  <option value="references">Find usages</option>
+                  <option value="zoekt">Code search</option>
+                </select>
+              </label>
+              <button class="search-button" type="submit">Search</button>
+              <button class="secondary-button" type="button" data-source-intelligence-close hidden>Close results</button>
+            </form>
+            <div class="source-intelligence-context">
+              <span>Scope locked to <strong>{{.File.Repository.Name}}</strong></span>
+              <span>Select an identifier in the editor to prepare a usage search.</span>
+            </div>
+            <p class="source-intelligence-status" data-source-intelligence-status aria-live="polite"></p>
+            <div class="source-intelligence-results" data-source-intelligence-results hidden></div>
+
+            <details class="source-api-surface" {{if and .Intelligence.Routes (le .Intelligence.RouteCount 12)}}open{{end}}>
+              <summary>
+                <span>API surface and inbound callers</span>
+                <small>
+                  {{.Intelligence.RouteCount}} routes
+                  ·
+                  {{len .Intelligence.Callers}} service callers
+                  {{if .Intelligence.Partial}}· partial{{end}}
+                </small>
+              </summary>
+              <div class="source-api-content">
+                <p class="source-api-note">
+                  {{.Intelligence.Message}}
+                  {{if .Intelligence.TopologyURL}}<a href="{{.Intelligence.TopologyURL}}">Open caller topology</a>{{end}}
+                </p>
+                {{if .Intelligence.OmittedRoutes}}
+                <p class="source-api-note">
+                  Showing {{len .Intelligence.Routes}} of {{.Intelligence.RouteCount}} routes; declarations in the displayed source window are prioritized.
+                </p>
+                {{end}}
+                {{if .Intelligence.Routes}}
+                <ol class="source-route-list">
+                  {{range .Intelligence.Routes}}
+                  <li>
+                    <div>
+                      <a href="{{.URL}}"><code>{{.Label}}</code></a>
+                      <span>line {{.Line}}</span>
+                    </div>
+                    {{if .Callers}}
+                    <ul aria-label="Callers with matching endpoint-path evidence">
+                      {{range .Callers}}
+                      <li>
+                        <strong>{{.Name}}</strong>
+                        <span>{{.State}} · {{.Confidence}} · route-path evidence</span>
+                        {{if .Evidence.URL}}<a href="{{.Evidence.URL}}">source</a>{{end}}
+                      </li>
+                      {{end}}
+                    </ul>
+                    {{end}}
+                  </li>
+                  {{end}}
+                </ol>
+                {{end}}
+                {{if .Intelligence.Callers}}
+                <div class="source-service-callers">
+                  <h3>Services calling this service</h3>
+                  <ul>
+                    {{range .Intelligence.Callers}}
+                    <li>
+                      <strong>{{.Name}}</strong>
+                      <span>{{.State}} · {{.Confidence}}</span>
+                      {{if .Evidence.URL}}<a href="{{.Evidence.URL}}">evidence</a>{{end}}
+                    </li>
+                    {{end}}
+                  </ul>
+                  <p>These edges prove a call to the service. Only route badges above prove a matching URL path; neither claim invents a runtime invocation.</p>
+                </div>
+                {{end}}
+              </div>
+            </details>
+          </section>
+
           <section class="source-viewer" aria-label="Source code">
             {{range .File.Lines}}
             <div class="source-line{{if lineFocused .Number $.FocusStart $.FocusEnd}} source-line-focused{{end}}" id="L{{.Number}}">

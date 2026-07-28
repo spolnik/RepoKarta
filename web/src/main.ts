@@ -34,6 +34,11 @@ import { activeContextMention } from "./context-mention.mjs";
 import { parseRepoKartaContextURL } from "./context-url.mjs";
 import { buildContextualChatURL, normaliseContextMode } from "./contextual-chat.mjs";
 import { applyQueryCompletion, type QueryCompletionEdit } from "./query-completion.mjs";
+import {
+  sourceSearchSummary,
+  sourceSearchURL,
+  sourceSelection
+} from "./source-intelligence.mjs";
 import { filterTopologyConnections } from "./topology-integrity.mjs";
 import { wikiPrimaryAction } from "./wiki-run-state.mjs";
 import "./styles.css";
@@ -633,6 +638,205 @@ function focusSourceLine(): void {
   }
   window.requestAnimationFrame(() => {
     target.scrollIntoView({ block: "center", inline: "nearest" });
+  });
+}
+
+type SourceIntelligenceLine = {
+  number: number;
+  text?: string;
+  reference_kind?: string;
+  reference_target?: string;
+  reference_receiver?: string;
+  reference_confidence?: string;
+};
+
+type SourceIntelligenceMatch = {
+  repository_id?: number;
+  repository: string;
+  revision: string;
+  path: string;
+  language?: string;
+  source_url?: string;
+  lines?: SourceIntelligenceLine[];
+};
+
+type SourceIntelligencePayload = {
+  match_count: number;
+  returned_files: number;
+  truncated: boolean;
+  matches?: SourceIntelligenceMatch[];
+  warnings?: Array<{ code: string; message: string }>;
+  reference_index?: {
+    provider: string;
+    state: string;
+    requested_repositories: number;
+    ready_repositories: number;
+    pending_repositories: number;
+  };
+};
+
+function enableSourceIntelligence(): void {
+  const workspace = document.querySelector<HTMLElement>("[data-source-intelligence]");
+  const viewer = document.querySelector<HTMLElement>(".source-viewer");
+  const form = workspace?.querySelector<HTMLFormElement>("[data-source-intelligence-form]");
+  const query = workspace?.querySelector<HTMLInputElement>("[data-source-intelligence-query]");
+  const mode = workspace?.querySelector<HTMLSelectElement>("[data-source-intelligence-mode]");
+  const close = workspace?.querySelector<HTMLButtonElement>("[data-source-intelligence-close]");
+  const status = workspace?.querySelector<HTMLElement>("[data-source-intelligence-status]");
+  const results = workspace?.querySelector<HTMLElement>("[data-source-intelligence-results]");
+  const repositoryID = Number(workspace?.dataset.repositoryId);
+  if (!workspace || !viewer || !form || !query || !mode || !close || !status || !results ||
+    !Number.isInteger(repositoryID) || repositoryID <= 0) {
+    return;
+  }
+
+  let requestController: AbortController | undefined;
+  const clearResults = (): void => {
+    requestController?.abort();
+    results.replaceChildren();
+    results.hidden = true;
+    close.hidden = true;
+    status.textContent = "";
+  };
+  const resultSourceURL = (match: SourceIntelligenceMatch, line: SourceIntelligenceLine): string => {
+    if (match.source_url) {
+      try {
+        const target = new URL(match.source_url, location.origin);
+        target.searchParams.set("focus", `${line.number}-${line.number}`);
+        target.hash = `L${line.number}`;
+        return target.pathname + target.search + target.hash;
+      } catch {
+        return match.source_url;
+      }
+    }
+    const parameters = new URLSearchParams({
+      rev: match.revision,
+      path: match.path,
+      focus: `${line.number}-${line.number}`
+    });
+    return `/source/${match.repository_id ?? repositoryID}?${parameters.toString()}#L${line.number}`;
+  };
+  const render = (payload: SourceIntelligencePayload): void => {
+    results.replaceChildren();
+    const matches = payload.matches ?? [];
+    if (matches.length === 0) {
+      const empty = document.createElement("p");
+      empty.className = "source-intelligence-empty";
+      empty.textContent = mode.value === "references"
+        ? "No indexed usages matched this symbol in the current repository."
+        : "No code matched this query in the current repository.";
+      results.append(empty);
+    }
+    for (const match of matches) {
+      const article = document.createElement("article");
+      article.className = "source-intelligence-result";
+      const heading = document.createElement("div");
+      heading.className = "source-intelligence-result-heading";
+      const title = document.createElement("strong");
+      title.textContent = match.path;
+      const repository = document.createElement("span");
+      repository.textContent = `${match.repository} · ${match.revision.slice(0, 8)}`;
+      heading.append(title, repository);
+      article.append(heading);
+
+      const lines = match.lines ?? [];
+      for (const line of lines) {
+        const link = document.createElement("a");
+        link.className = "source-intelligence-line";
+        link.href = resultSourceURL(match, line);
+        const number = document.createElement("span");
+        number.textContent = `L${line.number}`;
+        const code = document.createElement("code");
+        code.textContent = line.text || line.reference_target || query.value;
+        if (match.language) {
+          code.dataset.searchHighlightLanguage = match.language;
+        }
+        const metadata = document.createElement("small");
+        metadata.textContent = [
+          line.reference_kind,
+          line.reference_receiver ? `receiver ${line.reference_receiver}` : "",
+          line.reference_confidence
+        ].filter(Boolean).join(" · ");
+        link.append(number, code, metadata);
+        article.append(link);
+      }
+      results.append(article);
+    }
+    for (const warning of payload.warnings ?? []) {
+      const item = document.createElement("p");
+      item.className = "source-intelligence-warning";
+      item.textContent = warning.message;
+      results.append(item);
+    }
+    results.hidden = false;
+    close.hidden = false;
+    status.textContent = sourceSearchSummary(payload);
+    highlightSearchResults(results);
+  };
+
+  const prepareSelection = (): void => {
+    const selection = document.getSelection();
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+      return;
+    }
+    const range = selection.getRangeAt(0);
+    if (!viewer.contains(range.commonAncestorContainer)) {
+      return;
+    }
+    const selected = sourceSelection(selection.toString());
+    if (!selected) {
+      return;
+    }
+    query.value = selected.query;
+    mode.value = selected.mode;
+    status.textContent = selected.mode === "references"
+      ? `Ready to find usages of ${selected.query}.`
+      : "Ready to search the selected code in this repository.";
+  };
+
+  viewer.addEventListener("mouseup", prepareSelection);
+  viewer.addEventListener("keyup", prepareSelection);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const searchQuery = query.value.trim();
+    if (!searchQuery) {
+      query.focus();
+      status.textContent = "Select a symbol or enter code to search.";
+      return;
+    }
+    requestController?.abort();
+    requestController = new AbortController();
+    status.textContent = mode.value === "references"
+      ? `Finding usages of ${searchQuery}…`
+      : `Searching ${workspace.dataset.repositoryName ?? "this repository"}…`;
+    results.hidden = true;
+    try {
+      const response = await fetch(sourceSearchURL(repositoryID, searchQuery, mode.value), {
+        cache: "no-store",
+        headers: { Accept: "application/json" },
+        signal: requestController.signal
+      });
+      if (!response.ok && response.status !== 202) {
+        throw new Error(await responseErrorMessage(response, `Search failed (${response.status})`));
+      }
+      render(await response.json() as SourceIntelligencePayload);
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        return;
+      }
+      status.textContent = error instanceof Error ? error.message : "The repository search failed.";
+      results.hidden = true;
+      close.hidden = true;
+    }
+  });
+  close.addEventListener("click", clearResults);
+  document.addEventListener("keydown", (event) => {
+    if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "f") {
+      event.preventDefault();
+      mode.value = "zoekt";
+      query.focus();
+      query.select();
+    }
   });
 }
 
@@ -7123,6 +7327,7 @@ enableMCPSecretControls();
 enableTokenBudgetHelp();
 highlightSource();
 focusSourceLine();
+enableSourceIntelligence();
 highlightSearchResults();
 const debugLogger = enableDebugLogger();
 enableMermaidViewer(debugLogger);
