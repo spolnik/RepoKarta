@@ -114,6 +114,90 @@ func TestTopologyRejectsInvalidExternalHostNamesAtCreationChokePoint(t *testing.
 	}
 }
 
+func TestTopologyDatabaseURLRejectsMalformedHostComponents(t *testing.T) {
+	builder := newBuilder("http://127.0.0.1:7331")
+	repository := catalog.Repository{
+		ID: 105, Name: "reporting-service", IndexedCommit: "10510510",
+	}
+	builder.addDistributedTopology(
+		repository, repository.IndexedCommit, "README.md", map[string][]byte{
+			"README.md": []byte("# Reporting"),
+			"src/main/resources/application.yml": []byte(`
+spring:
+  datasource:
+    malformed: jdbc:postgresql://db)
+    numeric: postgresql://0
+    truncated: postgresql://...)
+`),
+		},
+	)
+
+	snapshot := builder.snapshot("malformed-database-hosts")
+	for _, component := range snapshot.Components {
+		if component.Kind == "database" {
+			t.Fatalf("malformed database host became component: %+v", component)
+		}
+	}
+}
+
+func TestTopologyComposeServiceNamesUseComponentNameBlocklist(t *testing.T) {
+	builder := newBuilder("http://127.0.0.1:7331")
+	repository := catalog.Repository{
+		ID: 106, Name: "billing-platform", IndexedCommit: "10610610",
+	}
+	builder.addDistributedTopology(
+		repository, repository.IndexedCommit, "src/main.go", map[string][]byte{
+			"src/main.go": []byte("package main"),
+			"deploy/docker-compose.yml": []byte(`
+services:
+  app:
+    depends_on:
+      - billing-worker
+  billing-worker:
+    depends_on:
+      - app
+`),
+		},
+	)
+
+	snapshot := builder.snapshot("compose-component-blocklist")
+	if app := topologyComponentNamed(snapshot.Components, "app"); app.ID != "" {
+		t.Fatalf("blocklisted compose service became component: %+v", app)
+	}
+	if worker := topologyComponentNamed(snapshot.Components, "billing-worker"); worker.ID == "" {
+		t.Fatalf("valid compose service was suppressed: %+v", snapshot.Components)
+	}
+}
+
+func TestTopologyInfrastructureHostSuffixesAreRejectedAtComponentCreation(t *testing.T) {
+	builder := newBuilder("http://127.0.0.1:7331")
+	repository := catalog.Repository{
+		ID: 107, Name: "routing-service", IndexedCommit: "10710710",
+	}
+	builder.addDistributedTopology(
+		repository, repository.IndexedCommit, "README.md", map[string][]byte{
+			"README.md": []byte("# Routing"),
+			"src/main/resources/application.yml": []byte(`
+upstreams:
+  service-url: http://something.svc.cluster.local
+  cluster-url: http://cluster.local
+`),
+		},
+	)
+
+	snapshot := builder.snapshot("infrastructure-host-suffixes")
+	if len(snapshot.Components) != 1 ||
+		snapshot.Components[0].Name != repository.Name {
+		t.Fatalf("infrastructure hosts became components: %+v", snapshot.Components)
+	}
+	if snapshot.RejectedExternalCount != 2 {
+		t.Fatalf(
+			"infrastructure rejection counter = %d, want 2",
+			snapshot.RejectedExternalCount,
+		)
+	}
+}
+
 func TestGenericExternalHostLabelsBlocklistIsExhaustive(t *testing.T) {
 	expected := map[string]bool{
 		"api": true, "auth": true, "www": true, "app": true, "gateway": true,
