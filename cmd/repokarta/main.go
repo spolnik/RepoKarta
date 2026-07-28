@@ -20,7 +20,7 @@ import (
 	"github.com/spolnik/RepoKarta/internal/store"
 )
 
-var version = "0.83.0-dev"
+var version = "0.84.0-dev"
 
 type stringList []string
 

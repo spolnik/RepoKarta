@@ -419,6 +419,10 @@ logs, generated documents, repository configuration, or browser local storage.
 
 - The HTTP listener defaults to loopback and rejects unexpected Host/Origin
   values.
+- Frontend installs use a committed npm lockfile with integrity metadata.
+  Fresh dependency resolution waits at least 14 days after publication, saves
+  new direct dependencies exactly, rejects unbounded direct specifications,
+  and requires explicit approval for guarded major-version lines.
 - All repository paths are canonicalized and checked against configured roots.
 - Symlinks and junctions must not escape configured roots silently.
 - Ignore `.git` internals, secrets, credentials, dependency caches, build
@@ -968,7 +972,7 @@ completion criteria include:
 
 ## Current implementation version
 
-`0.83.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
+`0.84.0-dev`. M0 through M6 are complete; M7 is in progress; M8 is complete.
 The M9 dependency inventory, public registry refresh, lockfile resolution,
 explicit private-registry routing, reproducible OSV advisory snapshots,
 ecosystem-correct fleet CVE matching, scope-aware UI/JSON/MCP findings, and

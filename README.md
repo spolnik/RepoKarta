@@ -70,7 +70,7 @@ and bare repositories recursively.
 You need Go 1.26 or newer, Node.js 24 or newer, and Git. From this repository:
 
 ```sh
-npm --prefix web ci
+npm --userconfig .npmrc --prefix web ci
 npm --prefix web run build
 go run ./cmd/repokarta serve /path/to/repositories
 ```
@@ -78,7 +78,7 @@ go run ./cmd/repokarta serve /path/to/repositories
 Windows example:
 
 ```powershell
-npm --prefix web ci
+npm --userconfig .npmrc --prefix web ci
 npm --prefix web run build
 go run ./cmd/repokarta serve C:\Work\GitHub
 ```
@@ -313,6 +313,29 @@ npm --prefix web test
 npm --prefix web run typecheck
 npm --prefix web run build
 ```
+
+Frontend dependency changes are deliberately conservative. The committed
+`web/package-lock.json` supplies exact artifacts and integrity hashes to
+`npm ci`; the repository `.npmrc` saves new direct dependencies exactly and
+applies a 14-day release-age window when npm performs a fresh resolution. Pass
+that policy explicitly whenever npm can change the dependency tree:
+
+```sh
+npm --userconfig .npmrc --prefix web install <package>
+```
+
+The `check:dependencies` script rejects unbounded direct specifications and
+unapproved major-line changes. In particular, the browser test runtime stays
+on `jsdom ^29.1.1` until its policy entry is deliberately reviewed. Run the
+policy check directly with:
+
+```sh
+npm --prefix web run check:dependencies
+```
+
+The release-age window creates review time; it does not prove that an older
+package is benign. Dependency upgrades still require lockfile review and the
+normal test suite.
 
 Run the standard Go test suite:
 

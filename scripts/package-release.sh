@@ -22,7 +22,7 @@ mkdir -p "$output_directory" "$stage_directory/licenses"
 mkdir -p "$stage_directory/docs" "$stage_directory/deploy"
 
 if [ "${REPOKARTA_SKIP_VALIDATION:-}" != "1" ]; then
-    npm --prefix "$repository_root/web" ci
+    npm --userconfig "$repository_root/.npmrc" --prefix "$repository_root/web" ci
     npm --prefix "$repository_root/web" test
     npm --prefix "$repository_root/web" run typecheck
     npm --prefix "$repository_root/web" run build

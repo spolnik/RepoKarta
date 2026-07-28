@@ -4,7 +4,10 @@
   "type": "module",
   "scripts": {
     "build": "vite build",
+    "check:dependencies": "node scripts/check-dependency-policy.mjs",
     "dev": "vite build --watch",
+    "prebuild": "npm run check:dependencies",
+    "pretest": "npm run check:dependencies",
     "test": "node --test src/*.test.mjs",
     "typecheck": "tsc --noEmit"
   },
@@ -19,7 +22,7 @@
   "devDependencies": {
     "@tailwindcss/vite": "4.3.3",
     "@types/node": "26.1.1",
-    "jsdom": "30.0.0",
+    "jsdom": "^29.1.1",
     "tailwindcss": "4.3.3",
     "type-fest": "5.8.0",
     "typescript": "7.0.2",

@@ -28,7 +28,7 @@ if (Test-Path -LiteralPath $gitMarkerPath) {
     }
 }
 
-npm --prefix (Join-Path $repositoryRoot "web") ci
+npm --userconfig (Join-Path $repositoryRoot ".npmrc") --prefix (Join-Path $repositoryRoot "web") ci
 if ($LASTEXITCODE -ne 0) { throw "npm ci failed" }
 
 npm --prefix (Join-Path $repositoryRoot "web") test

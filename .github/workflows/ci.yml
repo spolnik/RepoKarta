@@ -30,7 +30,7 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
       - name: Install frontend dependencies
-        run: npm --prefix web ci
+        run: npm --userconfig .npmrc --prefix web ci
       - name: Check and build frontend
         run: |
           npm --prefix web test
@@ -65,7 +65,7 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - name: Install and build frontend
         run: |
-          npm --prefix web ci
+          npm --userconfig .npmrc --prefix web ci
           npm --prefix web run build
       - name: Package Windows
         if: matrix.name == 'windows-amd64'

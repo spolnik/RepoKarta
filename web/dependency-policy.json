@@ -1,0 +1,10 @@
+{
+  "minimumReleaseAgeDays": 14,
+  "approvedDependencies": {
+    "jsdom": {
+      "manifestRange": "^29.1.1",
+      "major": 29,
+      "reason": "Keep the browser test runtime on the reviewed 29.x line until a major upgrade is explicitly approved."
+    }
+  }
+}
