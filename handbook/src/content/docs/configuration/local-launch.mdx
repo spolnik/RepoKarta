@@ -1,0 +1,60 @@
+---
+title: Local launch profiles
+description: Start RepoKarta with deliberate data, provider, indexing, and browser behavior.
+---
+
+import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+
+## Everyday local workspace
+
+<Tabs>
+	<TabItem label="Windows">
+		```powershell
+		go run ./cmd/repokarta serve `
+		  -open=false `
+		  -data-dir C:\RepoKartaData `
+		  C:\Users\jacek\Documents\GitHub
+		```
+	</TabItem>
+	<TabItem label="macOS or Linux">
+		```sh
+		go run ./cmd/repokarta serve \
+		  -open=false \
+		  -data-dir /var/tmp/repokarta-data \
+		  /path/to/repositories
+		```
+	</TabItem>
+</Tabs>
+
+## Java navigation profile
+
+```powershell
+go run ./cmd/repokarta serve `
+  -scip-java-mode=auto `
+  -scip-java-command C:\Tools\scip-java.exe `
+  -scip-java-concurrency=1 `
+  C:\Users\jacek\Documents\GitHub
+```
+
+`auto` keeps ordinary indexing available if compiler-backed generation cannot
+run. `required` turns an unavailable or invalid `scip-java` configuration into
+a startup failure.
+
+## Local AI providers
+
+```powershell
+go run ./cmd/repokarta serve `
+  -codex-command C:\Tools\codex.exe `
+  -claude-command C:\Tools\claude.exe `
+  C:\Users\jacek\Documents\GitHub
+```
+
+RepoKarta uses the existing CLI login sessions. Direct Anthropic API use reads
+`ANTHROPIC_API_KEY` from the launch environment and does not persist it in the
+metadata database.
+
+<Aside type="caution" title="Do not publish local capture state">
+	The handbook capture profile uses an isolated data directory and synthetic
+	repositories. Tokens, provider attachments, databases, and indexes stay out
+	of the committed handbook.
+</Aside>

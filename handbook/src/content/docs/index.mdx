@@ -1,0 +1,52 @@
+---
+title: RepoKarta Handbook
+description: A visual, evidence-backed guide to understanding the code you already have.
+template: splash
+hero:
+  tagline: Search, explore, map, and document real software systems from one local workspace.
+  image:
+    file: ../../assets/repokarta-mark.png
+  actions:
+    - text: Build the demo workspace
+      link: /start/demo-workspace/
+      icon: rocket
+    - text: Take the visual tour
+      link: /workflows/search/
+      icon: right-arrow
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+RepoKarta keeps its answers attached to the exact repository, revision, path,
+and line that produced them. This handbook teaches the product through three
+real systems: RepoKarta itself, Spring Petclinic Microservices, and Bank of
+Anthos.
+
+<CardGrid stagger>
+	<Card title="Search with context" icon="magnifier">
+		Move from an ordinary phrase to exact symbols, routes, commits, and
+		references without memorizing a query language.
+	</Card>
+	<Card title="Read the indexed revision" icon="document">
+		Browse committed source, follow usages, inspect history, and copy a
+		revision-pinned citation.
+	</Card>
+	<Card title="See the system" icon="seti">
+		Explore packages, entry points, routes, dependencies, and distributed
+		service connections with source evidence.
+	</Card>
+	<Card title="Trust the boundary" icon="shield-check">
+		Learn how RepoKarta reports building, stale, partial, unresolved, and
+		truncated results instead of guessing.
+	</Card>
+</CardGrid>
+
+## Three ways to read
+
+**First hour** follows a practical path from launch to the first useful search.
+**Feature chapters** explain each workflow in depth. **Configuration pages**
+collect exact launch profiles, defaults, and operational trade-offs.
+
+Every visual is captured from a local RepoKarta process against a recorded Git
+commit. No product screen in this handbook is a mock-up.

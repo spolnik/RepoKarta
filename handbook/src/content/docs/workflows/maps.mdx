@@ -1,0 +1,64 @@
+---
+title: Repository maps
+description: Explore structural and distributed relationships without losing the source evidence.
+---
+
+import { Aside, Card, CardGrid, Steps } from '@astrojs/starlight/components';
+import Figure from '../../../components/Figure.astro';
+import VideoFrame from '../../../components/VideoFrame.astro';
+import repositoryMap from '../../../assets/captures/repository-map.png';
+
+Maps turn indexed facts into a navigable system view. The graph is an
+investigation surface, not an illustration: selecting a fact opens its
+repository, path, layer, and supporting citations.
+
+<Figure
+	image={repositoryMap}
+	alt="RepoKarta route map for Spring Petclinic microservices with controllers and HTTP routes."
+	caption="The Routes view separates controller and endpoint facts while keeping the evidence snapshot visible."
+	meta="81 facts · 157 relationships · snapshot 7b7c6838"
+/>
+
+<VideoFrame
+	src="/media/captures/repository-map.webm"
+	poster={repositoryMap.src}
+	label="Silent walkthrough of loading the Spring Petclinic repository map and choosing the Routes view."
+	caption="Silent walkthrough: wait for the structural artifact, then isolate route evidence."
+	meta="Automated local Chromium capture"
+/>
+
+## Four useful views
+
+<CardGrid>
+	<Card title="System" icon="seti">
+		Repositories, packages, entry points, routes, and dependencies in one
+		bounded structural view.
+	</Card>
+	<Card title="Packages" icon="puzzle">
+		Focus on source organization and the strongest package relationships.
+	</Card>
+	<Card title="Dependencies" icon="link">
+		Inspect declared packages separately from deployable service
+		communication.
+	</Card>
+	<Card title="Routes" icon="globe">
+		Find served endpoints and connect them back to the source declaration.
+	</Card>
+</CardGrid>
+
+## Read a map deliberately
+
+<Steps>
+1. Choose one repository before moving to the broader fleet view.
+2. Search for a package, route, entry point, or dependency by name.
+3. Select the node and open the evidence drawer.
+4. Use **Focus neighbors** to reduce visual noise.
+5. Switch to list view when exact inventory is more useful than spatial
+   relationships.
+</Steps>
+
+<Aside type="note" title="Package use is not a service call">
+	The repository map and package inventory answer structural questions.
+	Distributed topology separately models HTTP, gRPC, Kafka, database, and MCP
+	communication between running components.
+</Aside>

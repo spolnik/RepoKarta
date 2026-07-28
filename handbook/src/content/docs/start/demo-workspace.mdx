@@ -1,0 +1,75 @@
+---
+title: The demo workspace
+description: Build a varied, reproducible local workspace for every handbook example.
+---
+
+import { Aside, Card, CardGrid, Steps } from '@astrojs/starlight/components';
+
+The handbook uses three sibling repositories. Together they cover Go, Java,
+Python, JavaScript, SQL, Docker Compose, Kubernetes, HTTP, databases, Spring,
+MCP, and code-intelligence workflows without relying on private source code.
+
+<CardGrid>
+	<Card title="RepoKarta" icon="open-book">
+		The Go application we are learning: HTTP, MCP, SQLite/PostgreSQL,
+		indexing, maps, generated documentation, and a substantial browser UI.
+	</Card>
+	<Card title="Spring Petclinic Microservices" icon="puzzle">
+		Eight Java 17 and Spring Boot services with Maven, REST, service
+		discovery, configuration, resilience, tracing, and Docker Compose.
+	</Card>
+	<Card title="Bank of Anthos" icon="building">
+		A Python-led banking system connected to Java ledger services and
+		PostgreSQL through HTTP and Kubernetes configuration.
+	</Card>
+</CardGrid>
+
+## Expected layout
+
+```text
+C:\Users\jacek\Documents\GitHub\
+├── RepoKarta\
+├── spring-petclinic-microservices\
+└── bank-of-anthos\
+```
+
+The handbook capture manifest currently pins:
+
+| Repository | Demonstration revision |
+| --- | --- |
+| RepoKarta | recorded at capture time |
+| Spring Petclinic Microservices | `305a1f13e4f961001d4e6cb50a9db51dc3fc5967` |
+| Bank of Anthos | `1e40564f9ff572a28281198903e19da93e506770` |
+
+<Aside type="note" title="Why full clones?">
+	Full Git history lets RepoKarta demonstrate commit search, history, diffs,
+	and revision-pinned browsing. Shallow clones hide much of that story.
+</Aside>
+
+## Start the local catalogue
+
+<Steps>
+1. Build RepoKarta’s browser assets.
+
+   ```powershell
+   npm --userconfig .npmrc --prefix web ci
+   npm --prefix web run build
+   ```
+
+2. Start RepoKarta against the parent workspace.
+
+   ```powershell
+   go run ./cmd/repokarta serve -open=false C:\Users\jacek\Documents\GitHub
+   ```
+
+3. Open `http://127.0.0.1:7331` and watch the repository drawer. Repositories
+   become useful independently; you do not need to wait for the entire fleet.
+</Steps>
+
+## What we will investigate
+
+- trace a Spring controller from search result to source and callers;
+- compare Python authentication code with Java transaction handling;
+- inspect cross-language service and database relationships;
+- explain which topology edges are confirmed, inferred, or unresolved;
+- compare dependency evidence across Maven, Python, npm, and Go modules.

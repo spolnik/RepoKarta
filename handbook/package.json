@@ -1,0 +1,22 @@
+{
+  "name": "handbook",
+  "type": "module",
+  "version": "0.0.1",
+  "scripts": {
+    "dev": "astro dev",
+    "start": "astro dev",
+    "build": "astro build && node scripts/prepare-sites-build.mjs",
+    "preview": "astro preview",
+    "astro": "astro",
+    "capture": "playwright test --config capture/playwright.config.ts",
+    "capture:headed": "playwright test --config capture/playwright.config.ts --headed"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "^0.41.5",
+    "astro": "^7.0.2",
+    "sharp": "^0.35.3"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.2"
+  }
+}

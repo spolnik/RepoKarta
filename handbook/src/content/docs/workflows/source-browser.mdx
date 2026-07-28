@@ -1,0 +1,63 @@
+---
+title: Source browser
+description: Inspect the committed file, follow symbols, and keep every citation revision pinned.
+---
+
+import { Aside, Card, CardGrid, Steps } from '@astrojs/starlight/components';
+import Figure from '../../../components/Figure.astro';
+import VideoFrame from '../../../components/VideoFrame.astro';
+import sourceBrowser from '../../../assets/captures/source-browser.png';
+
+The source browser opens the committed file associated with a result. It does
+not silently substitute an uncommitted working-tree version.
+
+<Figure
+	image={sourceBrowser}
+	alt="RepoKarta source browser focused on the Spring Petclinic OwnerResource Java class."
+	caption="The focused line range preserves its surrounding file tree, detected routes, and exact committed source."
+	meta="RepoKarta c9ec132 · Spring Petclinic 305a1f1"
+/>
+
+<VideoFrame
+	src="/media/captures/source-browser.webm"
+	poster={sourceBrowser.src}
+	label="Silent walkthrough of opening the commit-pinned OwnerResource Java source."
+	caption="Silent walkthrough: open a pinned Java file at the relevant declaration and line range."
+	meta="Automated local Chromium capture"
+/>
+
+## From result to investigation
+
+<Steps>
+1. Open a search result at the matching line.
+2. Select or enter an identifier in the source-intelligence panel.
+3. Choose definitions, references, implementations, routes, or callers.
+4. Follow a result while keeping the repository and indexed revision visible.
+5. Copy the citation when you need to share the exact evidence.
+</Steps>
+
+## Precision is explicit
+
+<CardGrid>
+	<Card title="Text and syntax" icon="document">
+		Available during ordinary indexing and useful across all supported source
+		languages.
+	</Card>
+	<Card title="SCIP" icon="puzzle">
+		Optional compiler-produced indexes can improve Java definitions,
+		references, and implementations.
+	</Card>
+	<Card title="Route evidence" icon="seti">
+		Framework routes and client paths connect code navigation to an HTTP
+		investigation.
+	</Card>
+	<Card title="History" icon="git-branch">
+		Commit and diff reads stay separate from the working tree and accept an
+		explicit revision.
+	</Card>
+</CardGrid>
+
+<Aside type="caution" title="An unreferenced symbol is not automatically dead">
+	Framework injection, profiles, reflection, configuration, generated code,
+	and missing compiler coverage can all hide a valid reachability edge.
+</Aside>

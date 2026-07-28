@@ -1,0 +1,82 @@
+---
+title: Search
+description: Find text, files, symbols, routes, commits, and structural evidence across a repository fleet.
+---
+
+import { Aside, Card, CardGrid, Steps } from '@astrojs/starlight/components';
+import Figure from '../../../components/Figure.astro';
+import VideoFrame from '../../../components/VideoFrame.astro';
+import searchOverview from '../../../assets/captures/search-overview.png';
+
+Search is the fastest entry point into RepoKarta. Begin with the words you
+already know, then add one constraint when the result set tells you what is
+ambiguous.
+
+## The first useful query
+
+```text
+OwnerResource repository:spring-petclinic-microservices
+```
+
+This combines an ordinary identifier with an exact repository constraint. The
+result cards retain file paths, line numbers, indexed revisions, match
+fragments, and actions into source, maps, history, or related symbol reads.
+
+<Figure
+	image={searchOverview}
+	alt="RepoKarta search results for OwnerResource, scoped to Spring Petclinic microservices."
+	caption="One identifier becomes a commit-pinned Java source result with language, path, and repository facets."
+	meta="RepoKarta c9ec132 · Spring Petclinic 305a1f1"
+/>
+
+<VideoFrame
+	src="/media/captures/search-overview.webm"
+	poster={searchOverview.src}
+	label="Silent walkthrough of entering and running a repository-scoped OwnerResource search."
+	caption="Silent walkthrough: type the identifier, select the repository, and inspect the first result."
+	meta="Automated local Chromium capture"
+/>
+
+## Refine progressively
+
+<Steps>
+1. Search for the name, message, route, or concept you remember.
+2. Add `repository:`, `path:`, `file:`, or `language:` when the result set is
+   broader than the question.
+3. Choose a specialized `result_type:` only when you need definitions,
+   implementations, routes, commits, or another evidence class.
+4. Open the source result and continue the investigation from the exact line.
+</Steps>
+
+```text
+"connection refused" language:Go -path:vendor
+OwnerResource result_type:symbol_definition
+"/api/search" result_type:route repository:RepoKarta
+author:"Alex Smith" result_type:commit after:2026-01-01
+```
+
+## What the result state means
+
+<CardGrid>
+	<Card title="Ready" icon="approve-check">
+		The requested search backend completed for the indexed revision.
+	</Card>
+	<Card title="Building" icon="sync">
+		A useful result may already exist, but a structural or symbol artifact is
+		still being prepared.
+	</Card>
+	<Card title="Truncated" icon="warning">
+		The response reached an explicit match, candidate, or work budget. Refine
+		the query before drawing a negative conclusion.
+	</Card>
+	<Card title="Fallback" icon="puzzle">
+		A more precise provider was unavailable and RepoKarta used a documented
+		lower-precision path.
+	</Card>
+</CardGrid>
+
+<Aside type="note" title="Ranking changes order, not evidence">
+	RepoKarta can promote coherent identifier and path matches or demote ordinary
+	test and example paths. Zoekt remains authoritative for which textual matches
+	exist.
+</Aside>

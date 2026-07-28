@@ -1,0 +1,43 @@
+---
+title: Command-line reference
+description: The current serve, MCP, database, and SCIP configuration surface.
+---
+
+This page is initially generated from the current command definitions. The
+handbook build will eventually verify it against `repokarta help` so new flags
+cannot land without appearing here.
+
+## `repokarta serve`
+
+| Option | Purpose |
+| --- | --- |
+| `-listen` | HTTP listen address |
+| `-data-dir` | RepoKarta-owned database, index, map, and generated-artifact directory |
+| `-open` | Open the dashboard in the default browser |
+| `-exclude` | Directory name to skip; repeat for multiple names |
+| `-codex-command` | Codex CLI executable name or absolute path |
+| `-claude-command` | Claude Code executable name or absolute path |
+| `-scip-java-mode` | Java SCIP generation: `off`, `auto`, or `required` |
+| `-scip-java-command` | `scip-java` executable name or absolute path |
+| `-scip-java-timeout` | Maximum time for one compiler-backed Java build |
+| `-scip-java-concurrency` | Concurrent Java SCIP builds, from 1 through 4 |
+| `-scip-java-jdk-home` | JDK home forced for every Java SCIP build |
+| `-auth-mode` | `local`, `cloudflare-access`, `saml`, or `open` |
+| `-public-url` | Public HTTPS URL for shared authentication |
+| `-admin-user` | Bootstrap administrator username |
+| `-admin-password-file` | File containing the bootstrap administrator password |
+| `-scim-token-file` | File containing the SCIM bearer token |
+| `-repository-sync-interval` | Managed-repository synchronization interval |
+| `-github-api`, `-gitlab-api` | Repository-discovery API base URLs |
+| `-github-host`, `-gitlab-host` | Allowed HTTPS Git hosts |
+
+## Other commands
+
+- `repokarta mcp` starts the stdio adapter for a running RepoKarta server.
+- `repokarta scip import` imports an external SCIP index for an exact repository
+  revision.
+- `repokarta database migrate-sqlite-to-postgres` performs the explicit
+  metadata migration workflow.
+
+Use `repokarta help` as the executable source of truth while the product is in
+pre-release development.

@@ -1,0 +1,40 @@
+---
+title: Evidence and completeness
+description: Read RepoKarta results without mistaking a partial index or heuristic for certainty.
+---
+
+import { Aside, Card, CardGrid } from '@astrojs/starlight/components';
+
+RepoKarta treats provenance as part of the answer. A result is useful only when
+you can see where it came from and whether the relevant index was ready.
+
+<CardGrid>
+	<Card title="Revision pinned" icon="git-branch">
+		Source, maps, Wiki pages, and citations identify the indexed commit—not
+		whatever happens to be in the working tree now.
+	</Card>
+	<Card title="Bounded" icon="stopwatch">
+		Searches and structural reads have explicit work and result budgets.
+		Truncation is returned as data.
+	</Card>
+	<Card title="Stateful" icon="information">
+		Building, ready, stale, empty, failed, and unsupported are different
+		states with different next actions.
+	</Card>
+	<Card title="Evidence backed" icon="approve-check">
+		Topology and generated explanations preserve links to the source and
+		configuration that support them.
+	</Card>
+</CardGrid>
+
+## A useful reading rule
+
+When a result says **partial**, do not translate that into “no more matches.”
+When a topology target says **unresolved**, do not rename it to the most
+plausible nearby service. When Java navigation says **syntax**, do not describe
+it as compiler-precise.
+
+<Aside type="tip" title="The visible uncertainty is a feature">
+	RepoKarta is most valuable during difficult investigations precisely because
+	it distinguishes confirmed evidence from a useful but incomplete lead.
+</Aside>

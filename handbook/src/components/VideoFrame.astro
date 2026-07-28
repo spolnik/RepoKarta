@@ -1,0 +1,29 @@
+---
+interface Props {
+	src: string;
+	poster: string;
+	label: string;
+	caption: string;
+	meta: string;
+}
+
+const { src, poster, label, caption, meta } = Astro.props;
+---
+
+<figure class="visual-frame">
+	<video
+		aria-label={label}
+		controls
+		muted
+		playsinline
+		preload="metadata"
+		poster={poster}
+	>
+		<source src={src} type="video/webm" />
+		Your browser does not support embedded WebM video.
+	</video>
+	<figcaption>
+		<span>{caption}</span>
+		<span>{meta}</span>
+	</figcaption>
+</figure>
