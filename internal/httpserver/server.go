@@ -368,12 +368,13 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 		"lineFocused": func(line, start, end int) bool {
 			return start > 0 && line >= start && line <= end
 		},
-		"shortCommit":     shortCommit,
-		"statusLabel":     statusLabel,
-		"scipStatusLabel": scipStatusLabel,
-		"nextSearchLimit": nextSearchLimit,
-		"indexProgress":   indexProgress,
-		"formatBytes":     formatBytes,
+		"shortCommit":      shortCommit,
+		"statusLabel":      statusLabel,
+		"scipStatusLabel":  scipStatusLabel,
+		"scipFailureLabel": scipFailureLabel,
+		"nextSearchLimit":  nextSearchLimit,
+		"indexProgress":    indexProgress,
+		"formatBytes":      formatBytes,
 		"formatAgeSeconds": func(seconds int64) string {
 			return formatDuration(time.Duration(seconds) * time.Second)
 		},
@@ -3146,6 +3147,19 @@ func scipStatusLabel(state string) string {
 	}
 }
 
+func scipFailureLabel(category string) string {
+	switch category {
+	case scipjava.FailureEnvironment:
+		return "Environment"
+	case scipjava.FailureJDKIncompatibleWrapper:
+		return "JDK / Gradle compatibility"
+	case scipjava.FailureCompileError:
+		return "Compilation"
+	default:
+		return "Build"
+	}
+}
+
 // staticAssets serves the embedded frontend with a build-derived validator.
 //
 // Asset paths are unversioned (/assets/app.js, /assets/app.css) and embed.FS
@@ -3231,7 +3245,11 @@ func repositorySignature(repositories []catalog.Repository) string {
 				if repository.SCIPJava == nil {
 					return ""
 				}
-				return repository.SCIPJava.State + ":" + repository.SCIPJava.Revision + ":" + repository.SCIPJava.Error
+				return repository.SCIPJava.State + ":" +
+					repository.SCIPJava.Revision + ":" +
+					repository.SCIPJava.FailureCategory + ":" +
+					repository.SCIPJava.FailureSummary + ":" +
+					repository.SCIPJava.Error
 			}(),
 		)
 	}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,6 +21,8 @@ func TestDefaultConfigReadsBoundedEnvironment(t *testing.T) {
 	t.Setenv("REPOKARTA_GITHUB_API", " https://api.github.test ")
 	t.Setenv("REPOKARTA_SCIP_JAVA_MODE", " auto ")
 	t.Setenv("REPOKARTA_SCIP_JAVA_COMMAND", " C:\\tools\\scip-java.exe ")
+	t.Setenv("REPOKARTA_SCIP_JAVA_JDK_HOME", " C:\\Java\\default ")
+	t.Setenv("REPOKARTA_SCIP_JAVA_JDK_HOMES", "8=C:\\Java\\8,17=C:\\Java\\17")
 	t.Setenv("REPOKARTA_DEPENDENCY_REGISTRIES", `[{
 		"ecosystem":"npm",
 		"base_url":"https://npm.example.com",
@@ -40,6 +43,9 @@ func TestDefaultConfigReadsBoundedEnvironment(t *testing.T) {
 		config.SCIPJavaCommand != `C:\tools\scip-java.exe` ||
 		config.SCIPJavaTimeout <= 0 ||
 		config.SCIPJavaConcurrency != 1 ||
+		config.SCIPJavaJDKHome != `C:\Java\default` ||
+		config.SCIPJavaJDKHomes[8] != `C:\Java\8` ||
+		config.SCIPJavaJDKHomes[17] != `C:\Java\17` ||
 		len(config.DependencyRegistries) != 1 ||
 		config.DependencyRegistries[0].TokenEnv != "ACME_NPM_TOKEN" ||
 		filepath.Base(config.DataDirectory) != "RepoKarta" {
@@ -57,6 +63,14 @@ func TestDefaultConfigRequiresExplicitSCIPJavaCommand(t *testing.T) {
 	}
 	if config.SCIPJavaMode != "required" {
 		t.Fatalf("SCIP Java mode = %q, want required", config.SCIPJavaMode)
+	}
+}
+
+func TestDefaultConfigRejectsMalformedSCIPJavaJDKHomes(t *testing.T) {
+	t.Setenv("REPOKARTA_SCIP_JAVA_JDK_HOMES", `17:C:\Java\17`)
+	if _, err := DefaultConfig(); err == nil ||
+		!strings.Contains(err.Error(), "REPOKARTA_SCIP_JAVA_JDK_HOMES") {
+		t.Fatalf("malformed JDK homes error = %v", err)
 	}
 }
 

@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	currentSchemaVersion = 19
+	currentSchemaVersion = 20
 
 	schemaV1 = `
 CREATE TABLE IF NOT EXISTS repositories (
@@ -532,6 +532,18 @@ CREATE TABLE IF NOT EXISTS repository_scip_indexes (
 );
 CREATE INDEX IF NOT EXISTS repository_scip_indexes_state_index
 ON repository_scip_indexes(state, revision);`
+
+	// Version 20 makes Java build failures actionable and records which
+	// repository-specific Gradle runtime was selected without exposing a local
+	// JDK path through the API.
+	schemaV20 = `
+ALTER TABLE repository_scip_indexes ADD COLUMN gradle_version TEXT NOT NULL DEFAULT '';
+ALTER TABLE repository_scip_indexes ADD COLUMN requested_jdk_version INTEGER NOT NULL DEFAULT 0 CHECK(requested_jdk_version >= 0);
+ALTER TABLE repository_scip_indexes ADD COLUMN jdk_version INTEGER NOT NULL DEFAULT 0 CHECK(jdk_version >= 0);
+ALTER TABLE repository_scip_indexes ADD COLUMN jdk_source TEXT NOT NULL DEFAULT '';
+ALTER TABLE repository_scip_indexes ADD COLUMN failure_category TEXT NOT NULL DEFAULT ''
+    CHECK(failure_category IN ('', 'environment', 'jdk_incompatible_wrapper', 'compile_error'));
+ALTER TABLE repository_scip_indexes ADD COLUMN failure_summary TEXT NOT NULL DEFAULT '';`
 )
 
 // SchemaVersion is the current durable SQLite format. Diagnostics and upgrade
@@ -620,6 +632,8 @@ func migrate(db *sql.DB) error {
 			migration = schemaV18
 		case 19:
 			migration = schemaV19
+		case 20:
+			migration = schemaV20
 		default:
 			return fmt.Errorf("missing migration for schema version %d", next)
 		}
@@ -948,8 +962,11 @@ SELECT
     r.scan_state, r.scan_error, r.index_state, r.index_error, r.indexed_commit,
     r.discovered_at, r.scanned_at, r.indexed_at, r.acquisition_id,
     si.provider, si.state, si.applicable, si.revision, si.configuration,
-    si.indexer, si.version, si.build_root, si.documents, si.symbols,
-    si.occurrences, si.error, si.queued_at, si.started_at, si.finished_at
+    si.indexer, si.version, si.build_root, si.gradle_version,
+    si.requested_jdk_version, si.jdk_version, si.jdk_source,
+    si.documents, si.symbols, si.occurrences,
+    si.failure_category, si.failure_summary, si.error,
+    si.queued_at, si.started_at, si.finished_at
 FROM repositories r
 LEFT JOIN repository_scip_indexes si ON si.repository_id = r.id`
 	arguments := []any{}
@@ -996,8 +1013,11 @@ SELECT
     r.scan_state, r.scan_error, r.index_state, r.index_error, r.indexed_commit,
     r.discovered_at, r.scanned_at, r.indexed_at, r.acquisition_id,
     si.provider, si.state, si.applicable, si.revision, si.configuration,
-    si.indexer, si.version, si.build_root, si.documents, si.symbols,
-    si.occurrences, si.error, si.queued_at, si.started_at, si.finished_at
+    si.indexer, si.version, si.build_root, si.gradle_version,
+    si.requested_jdk_version, si.jdk_version, si.jdk_source,
+    si.documents, si.symbols, si.occurrences,
+    si.failure_category, si.failure_summary, si.error,
+    si.queued_at, si.started_at, si.finished_at
 FROM repositories r
 LEFT JOIN repository_scip_indexes si ON si.repository_id = r.id`
 	arguments := []any{id}
@@ -1191,9 +1211,11 @@ func (s *Store) UpdateSCIPIndexStatus(ctx context.Context, repositoryID int64, s
 	result, err := s.db.ExecContext(ctx, `
 INSERT INTO repository_scip_indexes (
     repository_id, provider, state, applicable, revision, configuration,
-    indexer, version, build_root, documents, symbols, occurrences, error,
+    indexer, version, build_root, gradle_version, requested_jdk_version,
+    jdk_version, jdk_source,
+    documents, symbols, occurrences, failure_category, failure_summary, error,
     queued_at, started_at, finished_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(repository_id) DO UPDATE SET
     provider = excluded.provider,
     state = excluded.state,
@@ -1203,9 +1225,15 @@ ON CONFLICT(repository_id) DO UPDATE SET
     indexer = excluded.indexer,
     version = excluded.version,
     build_root = excluded.build_root,
+    gradle_version = excluded.gradle_version,
+    requested_jdk_version = excluded.requested_jdk_version,
+    jdk_version = excluded.jdk_version,
+    jdk_source = excluded.jdk_source,
     documents = excluded.documents,
     symbols = excluded.symbols,
     occurrences = excluded.occurrences,
+    failure_category = excluded.failure_category,
+    failure_summary = excluded.failure_summary,
     error = excluded.error,
     queued_at = excluded.queued_at,
     started_at = excluded.started_at,
@@ -1219,9 +1247,15 @@ ON CONFLICT(repository_id) DO UPDATE SET
 		status.Indexer,
 		status.Version,
 		status.BuildRoot,
+		status.GradleVersion,
+		status.RequestedJDKVersion,
+		status.JDKVersion,
+		status.JDKSource,
 		status.Documents,
 		status.Symbols,
 		status.Occurrences,
+		status.FailureCategory,
+		status.FailureSummary,
 		status.Error,
 		formatTime(status.QueuedAt),
 		formatTime(status.StartedAt),
@@ -1249,9 +1283,12 @@ func scanRepository(row rowScanner) (catalog.Repository, error) {
 	var discoveredAt, scannedAt, indexedAt string
 	var (
 		scipProvider, scipState, scipRevision, scipConfiguration sql.NullString
-		scipIndexer, scipVersion, scipBuildRoot, scipError       sql.NullString
+		scipIndexer, scipVersion, scipBuildRoot                  sql.NullString
+		scipGradleVersion, scipJDKSource                         sql.NullString
+		scipFailureCategory, scipFailureSummary, scipError       sql.NullString
 		scipQueuedAt, scipStartedAt, scipFinishedAt              sql.NullString
 		scipApplicable                                           sql.NullBool
+		scipRequestedJDKVersion, scipJDKVersion                  sql.NullInt64
 		scipDocuments, scipSymbols, scipOccurrences              sql.NullInt64
 	)
 	if err := row.Scan(
@@ -1279,9 +1316,15 @@ func scanRepository(row rowScanner) (catalog.Repository, error) {
 		&scipIndexer,
 		&scipVersion,
 		&scipBuildRoot,
+		&scipGradleVersion,
+		&scipRequestedJDKVersion,
+		&scipJDKVersion,
+		&scipJDKSource,
 		&scipDocuments,
 		&scipSymbols,
 		&scipOccurrences,
+		&scipFailureCategory,
+		&scipFailureSummary,
 		&scipError,
 		&scipQueuedAt,
 		&scipStartedAt,
@@ -1294,21 +1337,27 @@ func scanRepository(row rowScanner) (catalog.Repository, error) {
 	repository.IndexedAt = parseTime(indexedAt)
 	if scipState.Valid {
 		repository.SCIPJava = &catalog.SCIPIndexStatus{
-			Provider:      scipProvider.String,
-			State:         scipState.String,
-			Applicable:    scipApplicable.Bool,
-			Revision:      scipRevision.String,
-			Configuration: scipConfiguration.String,
-			Indexer:       scipIndexer.String,
-			Version:       scipVersion.String,
-			BuildRoot:     scipBuildRoot.String,
-			Documents:     int(scipDocuments.Int64),
-			Symbols:       int(scipSymbols.Int64),
-			Occurrences:   int(scipOccurrences.Int64),
-			Error:         scipError.String,
-			QueuedAt:      parseTime(scipQueuedAt.String),
-			StartedAt:     parseTime(scipStartedAt.String),
-			FinishedAt:    parseTime(scipFinishedAt.String),
+			Provider:            scipProvider.String,
+			State:               scipState.String,
+			Applicable:          scipApplicable.Bool,
+			Revision:            scipRevision.String,
+			Configuration:       scipConfiguration.String,
+			Indexer:             scipIndexer.String,
+			Version:             scipVersion.String,
+			BuildRoot:           scipBuildRoot.String,
+			GradleVersion:       scipGradleVersion.String,
+			RequestedJDKVersion: int(scipRequestedJDKVersion.Int64),
+			JDKVersion:          int(scipJDKVersion.Int64),
+			JDKSource:           scipJDKSource.String,
+			Documents:           int(scipDocuments.Int64),
+			Symbols:             int(scipSymbols.Int64),
+			Occurrences:         int(scipOccurrences.Int64),
+			FailureCategory:     scipFailureCategory.String,
+			FailureSummary:      scipFailureSummary.String,
+			Error:               scipError.String,
+			QueuedAt:            parseTime(scipQueuedAt.String),
+			StartedAt:           parseTime(scipStartedAt.String),
+			FinishedAt:          parseTime(scipFinishedAt.String),
 		}
 	}
 	return repository, nil

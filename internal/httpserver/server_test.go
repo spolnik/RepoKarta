@@ -498,7 +498,14 @@ func TestJavaSCIPStatusAndRetryAPI(t *testing.T) {
 		ID: 7, Name: "payments", IndexState: "ready", IndexedCommit: "abc123",
 		SCIPJava: &catalog.SCIPIndexStatus{
 			Provider: "scip-java", State: "failed", Applicable: true,
-			Revision: "abc123", Error: "fixture failure",
+			Revision:            "abc123",
+			GradleVersion:       "8.4",
+			RequestedJDKVersion: 21,
+			JDKVersion:          17,
+			JDKSource:           "compatible-configured",
+			FailureCategory:     scipjava.FailureJDKIncompatibleWrapper,
+			FailureSummary:      "The selected JDK cannot run this repository's Gradle wrapper.",
+			Error:               "fixture failure",
 		},
 	}
 	server, err := New(
@@ -519,6 +526,16 @@ func TestJavaSCIPStatusAndRetryAPI(t *testing.T) {
 		!strings.Contains(response.Body.String(), `"version":"v-test"`) {
 		t.Fatalf("provider response = %d, %q", response.Code, response.Body.String())
 	}
+	request = httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7331/api/repositories", nil)
+	response = httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK ||
+		!strings.Contains(response.Body.String(), `"failure_category":"jdk_incompatible_wrapper"`) ||
+		!strings.Contains(response.Body.String(), `"failure_summary":"The selected JDK cannot run`) ||
+		!strings.Contains(response.Body.String(), `"requested_jdk_version":21`) ||
+		!strings.Contains(response.Body.String(), `"jdk_version":17`) {
+		t.Fatalf("repository SCIP response = %d, %q", response.Code, response.Body.String())
+	}
 	request = httptest.NewRequest(http.MethodPost, "http://127.0.0.1:7331/api/scip/java/retry/7", nil)
 	response = httptest.NewRecorder()
 	server.server.Handler.ServeHTTP(response, request)
@@ -530,7 +547,8 @@ func TestJavaSCIPStatusAndRetryAPI(t *testing.T) {
 	server.server.Handler.ServeHTTP(response, request)
 	if response.Code != http.StatusOK ||
 		!strings.Contains(response.Body.String(), "Java SCIP") ||
-		!strings.Contains(response.Body.String(), "fixture failure") {
+		!strings.Contains(response.Body.String(), "JDK / Gradle compatibility") ||
+		!strings.Contains(response.Body.String(), "The selected JDK cannot run") {
 		t.Fatalf("home Java SCIP status = %d, %q", response.Code, response.Body.String())
 	}
 }

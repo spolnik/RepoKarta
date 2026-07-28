@@ -2,6 +2,7 @@ package scipjava
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -58,7 +59,7 @@ func (executor *fixtureExecutor) Verify(context.Context, string) (string, error)
 	return executor.version, nil
 }
 
-func (executor *fixtureExecutor) Run(_ context.Context, _ string, directory string) ([]byte, error) {
+func (executor *fixtureExecutor) Run(_ context.Context, _ string, directory string, _ []string) ([]byte, error) {
 	executor.runs++
 	symbol := "scip-java maven com.acme:payments 1.0.0 com/acme/PaymentService#run()."
 	occurrence := &scip.Occurrence{Symbol: symbol, SymbolRoles: int32(scip.SymbolRole_ReadAccess)}
@@ -193,6 +194,163 @@ func TestInspectGradleRepositoryExplainsIneligibleRepositories(t *testing.T) {
 	}
 }
 
+func TestInspectGradleRepositoryReadsExactWrapperAndToolchain(t *testing.T) {
+	repositoryPath := t.TempDir()
+	runGitTest(t, repositoryPath, "init", "-q")
+	runGitTest(t, repositoryPath, "config", "user.name", "RepoKarta Test")
+	runGitTest(t, repositoryPath, "config", "user.email", "test@repokarta.local")
+	for _, directory := range []string{
+		filepath.Join(repositoryPath, "gradle", "wrapper"),
+		filepath.Join(repositoryPath, "src", "main", "java"),
+	} {
+		if err := os.MkdirAll(directory, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files := map[string]string{
+		"settings.gradle.kts": `rootProject.name = "legacy"`,
+		"build.gradle.kts": `
+plugins { java }
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+}`,
+		filepath.Join("gradle", "wrapper", "gradle-wrapper.properties"): "distributionUrl=https\\://services.gradle.org/distributions/gradle-6.9.4-bin.zip\n",
+		filepath.Join("src", "main", "java", "Legacy.java"):             "class Legacy {}\n",
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(repositoryPath, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runGitTest(t, repositoryPath, "add", ".")
+	runGitTest(t, repositoryPath, "commit", "-qm", "fixture")
+	revision := strings.TrimSpace(runGitTest(t, repositoryPath, "rev-parse", "HEAD"))
+	build, applicable, reason, err := inspectGradleRepository(
+		context.Background(),
+		catalog.Repository{Path: repositoryPath},
+		revision,
+	)
+	if err != nil || !applicable || reason != "" ||
+		build.Root != "" || build.GradleVersion != "6.9.4" ||
+		build.ToolchainVersion != 17 {
+		t.Fatalf("inspection = %#v, %v, %q, %v", build, applicable, reason, err)
+	}
+
+	if err := os.WriteFile(
+		filepath.Join(repositoryPath, "gradle", "gradle-daemon-jvm.properties"),
+		[]byte("toolchainVersion=11\n"),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, repositoryPath, "add", ".")
+	runGitTest(t, repositoryPath, "commit", "-qm", "pin daemon JVM")
+	revision = strings.TrimSpace(runGitTest(t, repositoryPath, "rev-parse", "HEAD"))
+	build, applicable, reason, err = inspectGradleRepository(
+		context.Background(),
+		catalog.Repository{Path: repositoryPath},
+		revision,
+	)
+	if err != nil || !applicable || reason != "" || build.ToolchainVersion != 11 {
+		t.Fatalf("daemon JVM inspection = %#v, %v, %q, %v", build, applicable, reason, err)
+	}
+}
+
+func TestSelectJDKUsesToolchainOrLegacyCompatibleLauncher(t *testing.T) {
+	service := &Service{
+		jdks: []jdkInstallation{
+			{Home: "jdk-11", Major: 11, Source: "configured"},
+			{Home: "jdk-17", Major: 17, Source: "configured"},
+			{Home: "jdk-21", Major: 21, Source: "configured"},
+		},
+		inherited: &jdkInstallation{Home: "jdk-25", Major: 25, Source: "inherited"},
+	}
+	selection, err := service.selectJDK(gradleBuild{
+		GradleVersion: "8.7", ToolchainVersion: 17,
+	})
+	if err != nil || selection.Major != 17 || selection.Source != "toolchain" {
+		t.Fatalf("modern selection = %#v, %v", selection, err)
+	}
+	selection, err = service.selectJDK(gradleBuild{
+		GradleVersion: "8.4", ToolchainVersion: 21,
+	})
+	if err != nil || selection.Major != 17 || selection.Source != "compatible-configured" {
+		t.Fatalf("legacy selection = %#v, %v", selection, err)
+	}
+
+	service.jdks = []jdkInstallation{{Home: "jdk-25", Major: 25, Source: "override"}}
+	service.inherited = nil
+	selection, err = service.selectJDK(gradleBuild{GradleVersion: "6.9.4"})
+	var classified *failure
+	if !errors.As(err, &classified) ||
+		classified.Category != FailureJDKIncompatibleWrapper ||
+		selection.Major != 25 {
+		t.Fatalf("incompatible override = %#v, %T %v", selection, err, err)
+	}
+}
+
+func TestClassifyBuildFailureBucketsActionableCauses(t *testing.T) {
+	tests := []struct {
+		name     string
+		output   string
+		category string
+	}{
+		{
+			name: "docker", output: "Cannot connect to the Docker daemon",
+			category: FailureEnvironment,
+		},
+		{
+			name: "wrapper", output: "Unsupported class file major version 65",
+			category: FailureJDKIncompatibleWrapper,
+		},
+		{
+			name: "compile", output: "Execution failed for task ':compileJava'. symbol not found",
+			category: FailureCompileError,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := classifyBuildFailure(errors.New("exit status 1"), test.output)
+			category, summary := classifyFailure(err)
+			if category != test.category || summary == "" {
+				t.Fatalf("classification = %q, %q, %v", category, summary, err)
+			}
+		})
+	}
+}
+
+func TestParseJDKHomes(t *testing.T) {
+	homes, err := ParseJDKHomes(`8=C:\Java\8,17=C:\Java\17`)
+	if err != nil || homes[8] != `C:\Java\8` || homes[17] != `C:\Java\17` {
+		t.Fatalf("JDK homes = %#v, %v", homes, err)
+	}
+	if _, err := ParseJDKHomes(`17=C:\one,17=C:\two`); err == nil {
+		t.Fatal("duplicate Java version was accepted")
+	}
+}
+
+func TestGradleJavaRuntimeCompatibilityBoundaries(t *testing.T) {
+	tests := []struct {
+		gradle string
+		java   int
+		want   bool
+	}{
+		{gradle: "6.9.4", java: 11, want: true},
+		{gradle: "6.9.4", java: 17, want: false},
+		{gradle: "8.5", java: 21, want: true},
+		{gradle: "8.4", java: 21, want: false},
+		{gradle: "9.1.0", java: 25, want: true},
+		{gradle: "9.1.0", java: 11, want: false},
+	}
+	for _, test := range tests {
+		if got := gradleSupportsJavaRuntime(test.gradle, test.java); got != test.want {
+			t.Errorf("Gradle %s with Java %d = %v, want %v", test.gradle, test.java, got, test.want)
+		}
+	}
+}
+
 func TestAutoModeReportsMissingCommandWithoutFailingStartup(t *testing.T) {
 	command := filepath.Join(t.TempDir(), "missing-scip-java")
 	artifacts, err := scipindex.New(t.TempDir())
@@ -206,8 +364,68 @@ func TestAutoModeReportsMissingCommandWithoutFailingStartup(t *testing.T) {
 		t.Fatal(err)
 	}
 	status := service.ProviderStatus()
-	if !status.Enabled || status.Available || status.Error == "" {
+	if !status.Enabled || status.Available || status.Error == "" ||
+		status.FailureCategory != FailureEnvironment ||
+		status.FailureSummary == "" {
 		t.Fatalf("provider status = %#v", status)
+	}
+}
+
+func TestBuildEnvironmentSelectsLauncherAndAdvertisesToolchains(t *testing.T) {
+	service := &Service{jdks: []jdkInstallation{
+		{Home: filepath.Join("C:", "Java", "11"), Major: 11, Source: "configured"},
+		{Home: filepath.Join("C:", "Java", "17"), Major: 17, Source: "configured"},
+	}}
+	environment := service.buildEnvironment(jdkSelection{
+		Home: service.jdks[0].Home, Major: 11, Source: "compatible-configured",
+	})
+	if got := environmentValue(environment, "JAVA_HOME"); got != service.jdks[0].Home {
+		t.Fatalf("JAVA_HOME = %q", got)
+	}
+	if got := environmentValue(environment, "PATH"); !strings.HasPrefix(got, javaBin(service.jdks[0].Home)) {
+		t.Fatalf("PATH = %q", got)
+	}
+	gradleOptions := environmentValue(environment, "GRADLE_OPTS")
+	if !strings.Contains(gradleOptions, "org.gradle.java.installations.paths=") ||
+		!strings.Contains(gradleOptions, service.jdks[0].Home) ||
+		!strings.Contains(gradleOptions, service.jdks[1].Home) {
+		t.Fatalf("GRADLE_OPTS = %q", gradleOptions)
+	}
+}
+
+func TestRecordFailurePersistsClassificationAndRuntime(t *testing.T) {
+	repositories := &memoryRepositoryStore{repository: catalog.Repository{
+		ID: 7, Path: t.TempDir(),
+	}}
+	service := &Service{
+		config: Config{DataDirectory: t.TempDir()},
+		store:  repositories,
+		provider: ProviderStatus{
+			Configuration: "fixture", Version: "v-test",
+		},
+	}
+	cause := classifyBuildFailure(
+		errors.New("scip-java index failed"),
+		"Unsupported class file major version 65",
+	)
+	err := service.recordFailure(
+		context.Background(),
+		repositories.repository,
+		"abc123",
+		gradleBuild{GradleVersion: "8.4", ToolchainVersion: 21},
+		jdkSelection{Major: 17, Source: "compatible-configured"},
+		true,
+		cause,
+	)
+	status := repositories.status()
+	if err == nil || status == nil ||
+		status.FailureCategory != FailureJDKIncompatibleWrapper ||
+		status.FailureSummary == "" ||
+		status.GradleVersion != "8.4" ||
+		status.RequestedJDKVersion != 21 ||
+		status.JDKVersion != 17 ||
+		status.JDKSource != "compatible-configured" {
+		t.Fatalf("failure status = %#v, error = %v", status, err)
 	}
 }
 

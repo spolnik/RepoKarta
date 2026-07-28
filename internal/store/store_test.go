@@ -241,6 +241,8 @@ func TestJavaSCIPStatusIsIndependentAndRoundTrips(t *testing.T) {
 		Provider: "scip-java", State: "ready", Applicable: true,
 		Revision: "abc123", Configuration: "fingerprint",
 		Indexer: "scip-java", Version: "v-test", BuildRoot: "backend",
+		GradleVersion: "8.4", RequestedJDKVersion: 21,
+		JDKVersion: 17, JDKSource: "compatible-configured",
 		Documents: 12, Symbols: 34, Occurrences: 56, FinishedAt: finished,
 	}
 	if err := storage.UpdateSCIPIndexStatus(ctx, repositoryID, status); err != nil {
@@ -254,18 +256,25 @@ func TestJavaSCIPStatusIsIndependentAndRoundTrips(t *testing.T) {
 		repository.SCIPJava == nil ||
 		repository.SCIPJava.State != "ready" ||
 		repository.SCIPJava.Configuration != "fingerprint" ||
+		repository.SCIPJava.GradleVersion != "8.4" ||
+		repository.SCIPJava.RequestedJDKVersion != 21 ||
+		repository.SCIPJava.JDKVersion != 17 ||
 		repository.SCIPJava.Documents != 12 ||
 		!repository.SCIPJava.FinishedAt.Equal(finished) {
 		t.Fatalf("repository with Java SCIP = %#v", repository)
 	}
 	status.State = "failed"
 	status.Error = "compiler failed"
+	status.FailureCategory = "compile_error"
+	status.FailureSummary = "The repository did not compile."
 	if err := storage.UpdateSCIPIndexStatus(ctx, repositoryID, status); err != nil {
 		t.Fatal(err)
 	}
 	repository, err = storage.RepositoryByID(ctx, repositoryID)
 	if err != nil || repository.IndexState != "ready" ||
-		repository.SCIPJava == nil || repository.SCIPJava.State != "failed" {
+		repository.SCIPJava == nil || repository.SCIPJava.State != "failed" ||
+		repository.SCIPJava.FailureCategory != "compile_error" ||
+		repository.SCIPJava.FailureSummary == "" {
 		t.Fatalf("independent failed Java SCIP = %#v, %v", repository, err)
 	}
 }
