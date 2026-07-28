@@ -288,7 +288,7 @@ func (b *builder) addDetectedConnections(
 			target, targetResolved := b.knownServiceTarget(host, sourceID)
 			if !targetResolved {
 				targetName := topologyExternalPeerName(host)
-				if targetName == "" || infrastructureHosts[targetName] {
+				if targetName == "" || isInfrastructureHost(targetName) {
 					continue
 				}
 				target = b.externalSystemComponent(

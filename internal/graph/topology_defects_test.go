@@ -137,6 +137,31 @@ func TestGenericExternalHostLabelsBlocklistIsExhaustive(t *testing.T) {
 	}
 }
 
+func TestTopologyFiltersKubernetesInfrastructureOnlyHosts(t *testing.T) {
+	builder := newBuilder("http://127.0.0.1:7331")
+	repository := catalog.Repository{
+		ID: 100, Name: "configuration-service", IndexedCommit: "10010010",
+	}
+	builder.addDistributedTopology(
+		repository, repository.IndexedCommit, "README.md", map[string][]byte{
+			"README.md": []byte("# Configuration"),
+			"src/main/resources/application.yml": []byte(`
+infrastructure:
+  cluster: http://cluster.local
+  service-dns: http://svc.cluster.local
+`),
+		},
+	)
+
+	snapshot := builder.snapshot("kubernetes-infrastructure-hosts")
+	if len(snapshot.Components) != 1 || snapshot.Components[0].Name != repository.Name {
+		t.Fatalf("infrastructure-only hosts became components: %+v", snapshot.Components)
+	}
+	if len(snapshot.Connections) != 0 {
+		t.Fatalf("infrastructure-only hosts became connections: %+v", snapshot.Connections)
+	}
+}
+
 func TestTopologyThreeRepositoryRegressionFixture(t *testing.T) {
 	builder := newBuilder("http://127.0.0.1:7331")
 	consumer := catalog.Repository{

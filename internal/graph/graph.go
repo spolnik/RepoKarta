@@ -34,7 +34,7 @@ import (
 )
 
 const (
-	snapshotVersion       = 18
+	snapshotVersion       = 19
 	maximumFiles          = 20_000
 	maximumSourceFiles    = 5_000
 	maximumSourceFileSize = 1 << 20
@@ -1917,47 +1917,62 @@ var (
 	)
 )
 
-// infrastructureHosts are hostname labels that never identify a sibling service
-// in the indexed collection. They keep license headers, XML schema namespaces,
-// and package registries from inventing inter-service relationships.
+// infrastructureHosts are hostnames and normalized hostname labels that never
+// identify a sibling service in the indexed collection. They keep cluster DNS
+// roots, license headers, XML schema namespaces, and package registries from
+// inventing inter-service relationships.
 var infrastructureHosts = map[string]bool{
-	"0-0-0-0":         true,
-	"127-0-0-1":       true,
-	"apache":          true,
-	"amazonaws":       true,
-	"azure":           true,
-	"bitbucket":       true,
-	"cloudflare":      true,
-	"docker":          true,
-	"eclipse":         true,
-	"example":         true,
-	"github":          true,
-	"gitlab":          true,
-	"google":          true,
-	"googleapis":      true,
-	"host":            true,
-	"java":            true,
-	"jcenter":         true,
-	"jetbrains":       true,
-	"json-schema":     true,
-	"localhost":       true,
-	"maven":           true,
-	"microsoft":       true,
-	"mozilla":         true,
-	"mvnrepository":   true,
-	"npmjs":           true,
-	"opensource":      true,
-	"oracle":          true,
-	"plugins":         true,
-	"registry":        true,
-	"repo1":           true,
-	"schemas":         true,
-	"sonatype":        true,
-	"springframework": true,
-	"sun":             true,
-	"w3":              true,
-	"www":             true,
-	"xmlns":           true,
+	"0-0-0-0":           true,
+	"127-0-0-1":         true,
+	"apache":            true,
+	"amazonaws":         true,
+	"azure":             true,
+	"bitbucket":         true,
+	"cluster.local":     true,
+	"cloudflare":        true,
+	"docker":            true,
+	"eclipse":           true,
+	"example":           true,
+	"github":            true,
+	"gitlab":            true,
+	"google":            true,
+	"googleapis":        true,
+	"host":              true,
+	"java":              true,
+	"jcenter":           true,
+	"jetbrains":         true,
+	"json-schema":       true,
+	"localhost":         true,
+	"maven":             true,
+	"microsoft":         true,
+	"mozilla":           true,
+	"mvnrepository":     true,
+	"npmjs":             true,
+	"opensource":        true,
+	"oracle":            true,
+	"plugins":           true,
+	"registry":          true,
+	"repo1":             true,
+	"schemas":           true,
+	"sonatype":          true,
+	"springframework":   true,
+	"svc.cluster.local": true,
+	"sun":               true,
+	"w3":                true,
+	"www":               true,
+	"xmlns":             true,
+}
+
+func isInfrastructureHost(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.TrimPrefix(value, "http://")
+	value = strings.TrimPrefix(value, "https://")
+	value = strings.TrimPrefix(value, "lb://")
+	value = strings.SplitN(value, "/", 2)[0]
+	value = strings.TrimSuffix(value, ".")
+	value = strings.SplitN(value, ":", 2)[0]
+	return infrastructureHosts[value] ||
+		infrastructureHosts[normalizeServiceName(value)]
 }
 
 func (b *builder) addGradleManifests(
@@ -2773,14 +2788,18 @@ func springClientTargets(content []byte) []springClientTarget {
 		} else if quoted := quotedJavaString.FindStringSubmatch(arguments); len(quoted) == 2 {
 			target = quoted[1]
 		}
+		if isInfrastructureHost(target) {
+			continue
+		}
 		if target = normalizeServiceName(target); target != "" {
 			byName[target] = springClientTarget{name: target, line: lineAtOffset(content, match[0])}
 		}
 	}
 	if springClientIndicator.Match(content) {
 		for _, match := range serviceURLPattern.FindAllSubmatchIndex(content, -1) {
-			target := normalizeServiceName(string(content[match[2]:match[3]]))
-			if target == "" || infrastructureHosts[target] {
+			host := string(content[match[2]:match[3]])
+			target := normalizeServiceName(host)
+			if target == "" || isInfrastructureHost(host) {
 				continue
 			}
 			byName[target] = springClientTarget{
@@ -2819,7 +2838,7 @@ func normalizeServiceName(value string) string {
 // callable service.
 func (b *builder) registerServiceTarget(name, repositoryNodeID string) {
 	normalized := normalizeServiceName(name)
-	if normalized == "" || infrastructureHosts[normalized] {
+	if normalized == "" || isInfrastructureHost(name) {
 		return
 	}
 	b.serviceTargets[normalized] = repositoryNodeID
@@ -2942,8 +2961,9 @@ func serviceConfigurationTargets(content []byte) []springClientTarget {
 		}
 		foundURL := false
 		for _, match := range serviceURLPattern.FindAllStringSubmatch(line, -1) {
-			target := normalizeServiceName(match[1])
-			if target == "" || infrastructureHosts[target] {
+			host := match[1]
+			target := normalizeServiceName(host)
+			if target == "" || isInfrastructureHost(host) {
 				continue
 			}
 			foundURL = true
@@ -2951,7 +2971,7 @@ func serviceConfigurationTargets(content []byte) []springClientTarget {
 		}
 		if !foundURL {
 			target := configuredServiceName(configuredValue)
-			if target != "" && !infrastructureHosts[target] {
+			if target != "" && !isInfrastructureHost(configuredValue) {
 				byName[target] = springClientTarget{name: target, line: lineNumber}
 			}
 		}

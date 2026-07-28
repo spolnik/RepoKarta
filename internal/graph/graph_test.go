@@ -1258,6 +1258,18 @@ class Clients {
         return RestClient.builder().baseUrl("lb://shipping-service").build();
     }
 
+    WebClient clusterInfrastructure() {
+        return WebClient.builder().baseUrl("http://cluster.local").build();
+    }
+
+    WebClient serviceDNSInfrastructure() {
+        return WebClient.builder().baseUrl("http://svc.cluster.local").build();
+    }
+
+    WebClient inventoryInKubernetes() {
+        return WebClient.builder().baseUrl("http://inventory-service.default.svc.cluster.local").build();
+    }
+
     RestTemplate unresolved(RestTemplateBuilder builder) {
         return builder.rootUri("http://${pricing.host}/api").build();
     }
@@ -1353,6 +1365,9 @@ func TestServiceConfigurationAndMainSourceEvidenceOutrankTests(t *testing.T) {
     base-url: ${PRICING_HOST:pricing-service:9090}
 docs:
   url: https://docs.example.com
+infrastructure:
+  cluster: http://cluster.local
+  service-dns: http://svc.cluster.local
 `))
 	if len(targets) != 2 ||
 		targets[0].name != "inventory-service" || targets[0].line != 3 ||
