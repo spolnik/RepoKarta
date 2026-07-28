@@ -1,0 +1,10 @@
+# Merge this fragment into datadog.yaml. The receiver remains local-only.
+otlp_config:
+  receiver:
+    protocols:
+      grpc:
+        endpoint: 127.0.0.1:4317
+      http:
+        endpoint: 127.0.0.1:4318
+  logs:
+    enabled: true

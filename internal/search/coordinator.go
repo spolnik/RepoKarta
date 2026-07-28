@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 
 	"github.com/spolnik/RepoKarta/internal/catalog"
+	"github.com/spolnik/RepoKarta/internal/telemetry"
 )
 
 const maximumDerivedIndexConcurrency = 8
@@ -98,7 +99,9 @@ func (c *Coordinator) Start(ctx context.Context) error {
 }
 
 // Refresh manually rescans the configured root and queues changed repositories.
-func (c *Coordinator) Refresh(ctx context.Context) error {
+func (c *Coordinator) Refresh(ctx context.Context) (resultErr error) {
+	ctx, finish := telemetry.StartOperation(ctx, telemetry.OperationCatalogueRefresh, telemetry.Labels{})
+	defer func() { finish(resultErr) }()
 	repositories, err := catalog.DiscoverWithOptions(c.root, catalog.DiscoverOptions{Exclude: c.excludes})
 	if err != nil {
 		return fmt.Errorf("discover repositories: %w", err)
@@ -177,28 +180,35 @@ func (c *Coordinator) indexPending(ctx context.Context) {
 			}
 
 			indexedAny = true
-			if err := c.store.UpdateIndexState(ctx, repository.ID, "indexing", repository.IndexedCommit, ""); err != nil {
-				slog.Error("record indexing start", "repository", repository.Name, "error", err)
-				continue
+			if err := c.indexRepository(ctx, repository); err != nil {
+				slog.ErrorContext(ctx, "index repository", "repository", repository.Name, "error", err)
 			}
-
-			_, indexError := c.engine.Index(ctx, repository)
-			if indexError != nil {
-				slog.Error("index repository", "repository", repository.Name, "error", indexError)
-				_ = c.store.UpdateIndexState(ctx, repository.ID, "error", repository.IndexedCommit, indexError.Error())
-				continue
-			}
-			if err := c.store.UpdateIndexState(ctx, repository.ID, "ready", repository.HeadCommit, ""); err != nil {
-				slog.Error("record indexing completion", "repository", repository.Name, "error", err)
-				continue
-			}
-			c.queueIndexed(ctx, repository.ID)
 		}
 
 		if !indexedAny {
 			return
 		}
 	}
+}
+
+func (c *Coordinator) indexRepository(ctx context.Context, repository catalog.Repository) (resultErr error) {
+	ctx, finish := telemetry.StartOperation(ctx, telemetry.OperationIndexBuild, telemetry.Labels{
+		Kind: repository.ScanState,
+	})
+	defer func() { finish(resultErr) }()
+	if err := c.store.UpdateIndexState(ctx, repository.ID, "indexing", repository.IndexedCommit, ""); err != nil {
+		return fmt.Errorf("record indexing start: %w", err)
+	}
+	_, err := c.engine.Index(ctx, repository)
+	if err != nil {
+		_ = c.store.UpdateIndexState(ctx, repository.ID, "error", repository.IndexedCommit, err.Error())
+		return err
+	}
+	if err := c.store.UpdateIndexState(ctx, repository.ID, "ready", repository.HeadCommit, ""); err != nil {
+		return fmt.Errorf("record indexing completion: %w", err)
+	}
+	c.queueIndexed(ctx, repository.ID)
+	return nil
 }
 
 func (c *Coordinator) queueIndexed(ctx context.Context, repositoryID int64) {

@@ -94,11 +94,40 @@ func TestEveryPackagePathCarriesRequiredLicensesAndVerification(t *testing.T) {
 			"enterprise-administration.md",
 			"advanced-search.md",
 			"dependency-management.md",
+			"opentelemetry.md",
 			"repokarta.env.example",
+			"collector-debug.yaml",
+			"collector-datadog.yaml",
+			"datadog-agent.yaml",
 		} {
 			if !strings.Contains(script, expected) {
 				t.Fatalf("release packager is missing shared operations artifact %q", expected)
 			}
+		}
+	}
+}
+
+func TestOpenTelemetryExamplesAreValidAndLocalByDefault(t *testing.T) {
+	root := repositoryRoot(t)
+	for _, relative := range []string{
+		filepath.Join("deploy", "otel", "collector-debug.yaml"),
+		filepath.Join("deploy", "otel", "collector-datadog.yaml"),
+		filepath.Join("deploy", "otel", "datadog-agent.yaml"),
+	} {
+		content := readFile(t, root, relative)
+		var document any
+		if err := yaml.Unmarshal(content, &document); err != nil {
+			t.Fatalf("%s is not valid YAML: %v", relative, err)
+		}
+		if !strings.Contains(string(content), "127.0.0.1:4317") ||
+			!strings.Contains(string(content), "127.0.0.1:4318") {
+			t.Fatalf("%s does not keep both OTLP receivers on loopback", relative)
+		}
+	}
+	datadog := string(readFile(t, root, filepath.Join("deploy", "otel", "collector-datadog.yaml")))
+	for _, expected := range []string{"${env:DD_API_KEY}", "${env:DD_SITE}", "datadog/connector"} {
+		if !strings.Contains(datadog, expected) {
+			t.Fatalf("Datadog Collector example is missing %q", expected)
 		}
 	}
 }

@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/spolnik/RepoKarta/internal/catalog"
+	"github.com/spolnik/RepoKarta/internal/telemetry"
 )
 
 const (
@@ -159,7 +160,12 @@ func (s *Service) List(ctx context.Context) ([]Repository, error) {
 }
 
 // Discover returns a bounded preview without cloning or modifying repositories.
-func (s *Service) Discover(ctx context.Context, request DiscoverRequest) ([]Candidate, error) {
+func (s *Service) Discover(ctx context.Context, request DiscoverRequest) (result []Candidate, resultErr error) {
+	ctx, finish := telemetry.StartOperation(ctx, telemetry.OperationRepositoryImport, telemetry.Labels{
+		Kind:    "discover",
+		Trigger: "request",
+	})
+	defer func() { finish(resultErr) }()
 	request.Provider = strings.ToLower(strings.TrimSpace(request.Provider))
 	request.Location = strings.TrimSpace(request.Location)
 	request.CredentialRef = strings.TrimSpace(request.CredentialRef)
@@ -255,7 +261,12 @@ func (s *Service) Discover(ctx context.Context, request DiscoverRequest) ([]Cand
 
 // Acquire approves one preview candidate and makes its verified checkout
 // available to the normal commit-pinned catalogue/indexing flow.
-func (s *Service) Acquire(ctx context.Context, candidate Candidate, credentialRef string) (Repository, error) {
+func (s *Service) Acquire(ctx context.Context, candidate Candidate, credentialRef string) (result Repository, resultErr error) {
+	ctx, finish := telemetry.StartOperation(ctx, telemetry.OperationRepositoryImport, telemetry.Labels{
+		Kind:    candidate.Provider,
+		Trigger: "request",
+	})
+	defer func() { finish(resultErr) }()
 	s.operation.Lock()
 	defer s.operation.Unlock()
 	credentialRef = strings.TrimSpace(credentialRef)
@@ -411,7 +422,9 @@ func (s *Service) clone(ctx context.Context, record Repository) (Repository, err
 }
 
 // Sync fetches one owned checkout or reinspects one user-owned local repository.
-func (s *Service) Sync(ctx context.Context, id int64) (Repository, error) {
+func (s *Service) Sync(ctx context.Context, id int64) (result Repository, resultErr error) {
+	ctx, finish := telemetry.StartOperation(ctx, telemetry.OperationRepositorySync, telemetry.Labels{})
+	defer func() { finish(resultErr) }()
 	s.operation.Lock()
 	defer s.operation.Unlock()
 	record, err := s.registry.AcquisitionByID(ctx, id)
@@ -497,7 +510,12 @@ func (s *Service) syncOwned(ctx context.Context, record Repository) (Repository,
 
 // Remove unregisters a local repository without touching it. RepoKarta-owned
 // checkouts are moved into RepoKarta's trash directory for recoverability.
-func (s *Service) Remove(ctx context.Context, id int64) (string, error) {
+func (s *Service) Remove(ctx context.Context, id int64) (result string, resultErr error) {
+	ctx, finish := telemetry.StartOperation(ctx, telemetry.OperationRepositoryImport, telemetry.Labels{
+		Kind:    "remove",
+		Trigger: "request",
+	})
+	defer func() { finish(resultErr) }()
 	s.operation.Lock()
 	defer s.operation.Unlock()
 	record, err := s.registry.AcquisitionByID(ctx, id)
@@ -654,7 +672,11 @@ func (s *Service) runGitWithCredential(ctx context.Context, record Repository, a
 	return s.runGitEnvironment(ctx, environment, arguments...)
 }
 
-func (s *Service) runGitEnvironment(ctx context.Context, environment map[string]string, arguments ...string) (string, error) {
+func (s *Service) runGitEnvironment(ctx context.Context, environment map[string]string, arguments ...string) (result string, resultErr error) {
+	ctx, finish := telemetry.StartOperation(ctx, telemetry.OperationGitCommand, telemetry.Labels{
+		Kind: gitOperation(arguments),
+	})
+	defer func() { finish(resultErr) }()
 	if s.gitEnvironmentOverride != nil {
 		return s.gitEnvironmentOverride(ctx, environment, arguments...)
 	}
@@ -683,6 +705,21 @@ func (s *Service) runGitEnvironment(ctx context.Context, environment map[string]
 		return "", fmt.Errorf("git %s: %s", safeGitAction(arguments), message)
 	}
 	return strings.TrimSpace(string(output)), nil
+}
+
+func gitOperation(arguments []string) string {
+	for _, argument := range arguments {
+		if strings.HasPrefix(argument, "-") {
+			continue
+		}
+		switch argument {
+		case "clone", "fetch", "init", "remote", "rev-parse", "show-ref", "symbolic-ref":
+			return argument
+		default:
+			return "other"
+		}
+	}
+	return "other"
 }
 
 func gitCredentialEnvironment(record Repository) (map[string]string, error) {

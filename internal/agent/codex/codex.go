@@ -19,6 +19,7 @@ import (
 	"github.com/spolnik/RepoKarta/internal/agent"
 	"github.com/spolnik/RepoKarta/internal/agent/localcommand"
 	"github.com/spolnik/RepoKarta/internal/agent/processgroup"
+	"github.com/spolnik/RepoKarta/internal/telemetry"
 )
 
 const providerInstructions = `You are RepoKarta's read-only code intelligence assistant.
@@ -279,7 +280,12 @@ func (s *session) ResumeCursor() string { return s.threadID }
 
 func (s *session) Restored() bool { return s.restored }
 
-func (s *session) Send(ctx context.Context, turn agent.Turn, emit func(agent.Event) error) error {
+func (s *session) Send(ctx context.Context, turn agent.Turn, emit func(agent.Event) error) (resultErr error) {
+	ctx, finish := telemetry.StartOperation(ctx, telemetry.OperationProviderProcess, telemetry.Labels{
+		Provider: "codex",
+		Kind:     "turn",
+	})
+	defer func() { finish(resultErr) }()
 	imagePaths, err := s.attachments.Write(turn.Images)
 	if err != nil {
 		return fmt.Errorf("prepare Codex image attachments: %w", err)

@@ -34,6 +34,7 @@ import (
 	zoektadapter "github.com/spolnik/RepoKarta/internal/search/zoekt"
 	"github.com/spolnik/RepoKarta/internal/security"
 	"github.com/spolnik/RepoKarta/internal/store"
+	"github.com/spolnik/RepoKarta/internal/telemetry"
 )
 
 type Config struct {
@@ -63,6 +64,7 @@ type Config struct {
 	SCIPJavaConcurrency    int
 	SCIPJavaJDKHome        string
 	SCIPJavaJDKHomes       map[int]string
+	Telemetry              telemetry.Config
 }
 
 func DefaultConfig() (Config, error) {
@@ -154,6 +156,21 @@ func DefaultConfig() (Config, error) {
 }
 
 func Run(ctx context.Context, cfg Config) error {
+	if cfg.Telemetry.Version == "" {
+		cfg.Telemetry.Version = cfg.Version
+	}
+	observability, err := telemetry.New(ctx, cfg.Telemetry)
+	if err != nil {
+		return fmt.Errorf("initialize OpenTelemetry: %w", err)
+	}
+	defer func() {
+		shutdownContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := observability.Shutdown(shutdownContext); err != nil {
+			slog.Error("flush OpenTelemetry", "error", err)
+		}
+	}()
+
 	if err := os.MkdirAll(cfg.DataDirectory, 0o755); err != nil {
 		return fmt.Errorf("create data directory: %w", err)
 	}
@@ -242,6 +259,7 @@ func Run(ctx context.Context, cfg Config) error {
 	acquisitions, err := acquisition.New(acquisition.Config{
 		DataDirectory: cfg.DataDirectory,
 		Version:       cfg.Version,
+		HTTPClient:    observability.HTTPClient(30*time.Second, nil),
 		GitHubAPI:     cfg.AcquisitionGitHubAPI,
 		GitLabAPI:     cfg.AcquisitionGitLabAPI,
 		GitHubHost:    cfg.AcquisitionGitHubHost,
@@ -297,6 +315,7 @@ func Run(ctx context.Context, cfg Config) error {
 	codeInsights := insights.New(database, baseURL)
 	codeInsights.StartPolling(ctx)
 	dependencyRegistry := dependencies.NewService(ctx, database, nil)
+	dependencyRegistry.UseHTTPTransport(observability.HTTPTransport)
 	dependencyRegistry.UseRegistries(cfg.DependencyRegistries)
 	if err := dependencyRegistry.UseAdvisoryDirectory(filepath.Join(cfg.DataDirectory, "advisories")); err != nil {
 		return fmt.Errorf("initialize dependency advisories: %w", err)
@@ -327,6 +346,30 @@ func Run(ctx context.Context, cfg Config) error {
 	}, database)
 	if err != nil {
 		return fmt.Errorf("initialize maintenance: %w", err)
+	}
+	if err := observability.RegisterRuntimeSnapshot(func(snapshotContext context.Context) (telemetry.RuntimeSnapshot, error) {
+		currentRepositories, err := database.ListRepositories(snapshotContext)
+		if err != nil {
+			return telemetry.RuntimeSnapshot{}, err
+		}
+		repositoryStates := map[string]int64{"total": int64(len(currentRepositories))}
+		for _, repository := range currentRepositories {
+			repositoryStates["scan."+repository.ScanState]++
+			repositoryStates["index."+repository.IndexState]++
+		}
+		stats := database.DatabaseStats()
+		return telemetry.RuntimeSnapshot{
+			Repositories: repositoryStates,
+			Database: map[string]int64{
+				"open":     int64(stats.OpenConnections),
+				"in_use":   int64(stats.InUse),
+				"idle":     int64(stats.Idle),
+				"max_open": int64(stats.MaxOpenConnections),
+				"waits":    stats.WaitCount,
+			},
+		}, nil
+	}); err != nil {
+		return fmt.Errorf("register OpenTelemetry runtime metrics: %w", err)
 	}
 	securityManager.SetChangeHandler(func(settings security.Settings) {
 		updatedBaseURL := internalBaseURL
@@ -400,6 +443,7 @@ func Run(ctx context.Context, cfg Config) error {
 		Insights:     codeInsights,
 		Dependencies: dependencyRegistry,
 		SCIPJava:     javaSCIP,
+		Telemetry:    observability,
 	}, intelligence, coordinator)
 	if err != nil {
 		return err

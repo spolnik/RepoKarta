@@ -17,6 +17,7 @@ import (
 	"github.com/spolnik/RepoKarta/internal/agent"
 	"github.com/spolnik/RepoKarta/internal/codeintel"
 	"github.com/spolnik/RepoKarta/internal/contextscope"
+	"github.com/spolnik/RepoKarta/internal/telemetry"
 )
 
 const (
@@ -143,7 +144,12 @@ type session struct {
 	closed       atomic.Bool
 }
 
-func (s *session) Send(ctx context.Context, turn agent.Turn, emit func(agent.Event) error) error {
+func (s *session) Send(ctx context.Context, turn agent.Turn, emit func(agent.Event) error) (resultErr error) {
+	ctx, finish := telemetry.StartOperation(ctx, telemetry.OperationProviderProcess, telemetry.Labels{
+		Provider: "anthropic",
+		Kind:     "turn",
+	})
+	defer func() { finish(resultErr) }()
 	s.sendMu.Lock()
 	defer s.sendMu.Unlock()
 	if len(turn.Images) > 0 {

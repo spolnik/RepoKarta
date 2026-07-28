@@ -30,6 +30,7 @@ import (
 
 	"github.com/spolnik/RepoKarta/internal/analysis"
 	"github.com/spolnik/RepoKarta/internal/catalog"
+	"github.com/spolnik/RepoKarta/internal/telemetry"
 	"go.yaml.in/yaml/v4"
 )
 
@@ -866,7 +867,11 @@ func artifactProgress(requested, ready int) ArtifactProgress {
 
 // PrepareStructure builds or projects the compact relation and symbol artifact
 // in the background after normal code indexing completes.
-func (s *Service) PrepareStructure(ctx context.Context, repositoryID int64) error {
+func (s *Service) PrepareStructure(ctx context.Context, repositoryID int64) (resultErr error) {
+	ctx, finish := telemetry.StartOperation(ctx, telemetry.OperationTopologyBuild, telemetry.Labels{
+		Trigger: "index",
+	})
+	defer func() { finish(resultErr) }()
 	if repositoryID <= 0 {
 		return errors.New("repository ID is required for structural indexing")
 	}

@@ -942,64 +942,64 @@ operator can route application metrics, structured logs, and traces through an
 OpenTelemetry Collector or an OTLP-capable agent such as the Datadog Agent
 without adding a vendor SDK to RepoKarta.
 
-- [ ] Add one telemetry lifecycle at the application composition root for
+- [x] Add one telemetry lifecycle at the application composition root for
   resource detection, meters, log records, tracers, batching, bounded shutdown
   flush, and error reporting. Telemetry is disabled by default, creates no
   exporter network traffic when disabled, and never makes request handling or
   background work depend on collector availability.
-- [ ] Support OTLP over gRPC and HTTP/protobuf using the standard
+- [x] Support OTLP over gRPC and HTTP/protobuf using the standard
   `OTEL_*` environment-variable contract for endpoints, per-signal exporters,
   protocols, headers, TLS, timeouts, batching, sampling, and resource
   attributes. Reject invalid configured values at startup, but treat delivery
   failures after startup as bounded, observable degradation.
-- [ ] Identify every signal with stable OpenTelemetry resource attributes,
+- [x] Identify every signal with stable OpenTelemetry resource attributes,
   including `service.name=repokarta`, the built `service.version`, a
   non-secret service instance ID, and an operator-supplied deployment
   environment. Permit resource enrichment without allowing it to replace
   RepoKarta-owned identity attributes with empty or misleading values.
-- [ ] Replace ad hoc process output with one context-aware structured `slog`
+- [x] Replace ad hoc process output with one context-aware structured `slog`
   pipeline. Preserve useful local console logs, optionally bridge the same
   records to OTLP, normalize severity and attribute types, and attach request
   correlation ID plus trace/span IDs when present. Pin and isolate the
   OpenTelemetry Go log bridge while the Go log signal is not stable.
-- [ ] Instrument HTTP server requests with the current OpenTelemetry semantic
+- [x] Instrument HTTP server requests with the current OpenTelemetry semantic
   conventions: route-template, method, status class, duration, active requests,
   and response size. Never use raw URLs, query strings, source paths, user
   identities, repository names, or conversation IDs as metric attributes.
-- [ ] Publish Go runtime and process metrics plus bounded `repokarta.*`
+- [x] Publish Go runtime and process metrics plus bounded `repokarta.*`
   operational metrics for catalogue state, indexing queues and outcomes,
   search latency/errors/truncation, repository synchronization, AI and Wiki
   generation outcomes and token usage, dependency/advisory refresh, topology
   preparation, database-pool pressure, and maintenance jobs.
-- [ ] Define a cardinality and privacy contract for every custom instrument.
+- [x] Define a cardinality and privacy contract for every custom instrument.
   Metric dimensions are limited to small enumerations such as operation, state,
   outcome, provider kind, and access mode; repository-specific diagnosis uses
   redacted logs or spans instead of unbounded metric labels. Prompts, source
   content, search queries, credentials, tokens, headers, local paths, and
   database URLs are never telemetry payloads.
-- [ ] Add spans around HTTP requests, outbound HTTP calls, Git/provider
+- [x] Add spans around HTTP requests, outbound HTTP calls, Git/provider
   subprocesses, database operations where supported safely, and the indexing,
   acquisition, synchronization, generation, advisory, topology, and
   maintenance job lifecycles. Propagate context across queues and goroutines so
   correlated logs and metric exemplars can lead back to the initiating request
   or scheduled root span.
-- [ ] Bound exporter queues, payloads, retries, memory, and shutdown time;
+- [x] Bound exporter queues, payloads, retries, memory, and shutdown time;
   record dropped signals and the last export success/error without recursively
   exporting exporter failures. `/healthz` remains independent of an optional
   collector, while operator diagnostics expose enabled signals, protocol,
   sanitized endpoint identity, queue/drop state, and last delivery status.
-- [ ] Document a local OpenTelemetry Collector debug setup and production
+- [x] Document a local OpenTelemetry Collector debug setup and production
   examples for both the Collector Datadog exporter and Datadog Agent OTLP
   ingestion. Credentials remain collector/agent-managed, examples bind
   receivers to loopback unless explicitly deployed otherwise, and no
   Datadog-specific behavior is required for other OTLP backends.
-- [ ] Ship starter metric definitions, dashboard queries, and alert guidance
+- [x] Ship starter metric definitions, dashboard queries, and alert guidance
   for availability, HTTP error rate and latency, indexing backlog/failures,
   generation failures and duration, sync/advisory freshness, database
   saturation, and telemetry drops. Document temporality and histogram choices
   so OTLP-to-Datadog translation preserves useful counts and latency
   distributions.
-- [ ] Add deterministic tests with an in-process OTLP receiver that assert
+- [x] Add deterministic tests with an in-process OTLP receiver that assert
   resource identity, representative metrics, structured log correlation,
   trace parenting, redaction, and bounded attributes. Cover disabled mode,
   unreachable collectors, queue overflow, cancellation, shutdown flush, and
@@ -1065,7 +1065,7 @@ completion criteria include:
 
 ## Current implementation version
 
-`0.93.0-dev`. M0 through M12 are complete. M7 now includes qualified symbol
+`0.94.0-dev`. M0 through M12 are complete; M19 is also complete. M7 now includes qualified symbol
 search, precise optional SCIP data, commit-pinned CODEOWNERS, bounded evidence
 graph queries, saved searches and deterministic monitors, and permission-safe
 Deep Search with visible trace, budgets, retry, and revocable sharing. M9 now
@@ -1154,11 +1154,16 @@ status distinguishes environment or Docker failures, JDK-incompatible
 wrappers, and compilation errors. Exact-commit Gradle wrapper and Java
 toolchain metadata drive a compatible configured launcher JDK instead of
 blindly inheriting the server JVM.
+OpenTelemetry metrics, structured logs, and traces are available through
+standard OTLP gRPC or HTTP/protobuf exporters with a disabled-by-default,
+failure-isolated lifecycle. Stable service identity, correlated redacted logs,
+bounded route and operation dimensions, runtime/catalogue/database metrics,
+core job and outbound-call spans, administrator delivery diagnostics, local
+Collector and Datadog examples, and packaged operational guidance are included.
 
 ## Recommended next session
 
-Begin M19 with the disabled-by-default telemetry lifecycle, OTLP configuration,
-stable resource identity, and the privacy/cardinality contract before adding
-individual instruments. Preserve the completed permission, revision,
-ambiguity, registry-routing, evidence, and completeness boundaries when
-instrumenting search or dependency analysis.
+Continue structural framework reachability using explicit, revision-pinned
+roots and completeness metadata before making any dead-code classification.
+Preserve the completed permission, revision, ambiguity, registry-routing,
+evidence, privacy, cardinality, and completeness boundaries.

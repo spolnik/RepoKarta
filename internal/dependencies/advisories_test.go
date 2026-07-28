@@ -122,7 +122,7 @@ func TestAdvisoryFetchKeepsPartialResultsAndStopsOnFatalError(t *testing.T) {
 		defer server.Close()
 		service := NewService(t.Context(), &observationMemoryStore{}, server.Client())
 		service.advisoryBaseURL = server.URL
-		advisories, failed, err := service.fetchAdvisories([]string{"broken", "good"})
+		advisories, failed, err := service.fetchAdvisories(t.Context(), []string{"broken", "good"})
 		if err == nil || failed != 1 || len(advisories) != 1 || advisories[0].ID != "good" {
 			t.Fatalf("partial fetch = %+v, failed=%d, err=%v", advisories, failed, err)
 		}
@@ -141,7 +141,7 @@ func TestAdvisoryFetchKeepsPartialResultsAndStopsOnFatalError(t *testing.T) {
 		for index := range ids {
 			ids[index] = fmt.Sprintf("fatal-%d", index)
 		}
-		_, failed, err := service.fetchAdvisories(ids)
+		_, failed, err := service.fetchAdvisories(t.Context(), ids)
 		if err == nil || failed == 0 || requests.Load() >= int32(len(ids)) {
 			t.Fatalf("fatal fetch requests=%d failed=%d err=%v", requests.Load(), failed, err)
 		}

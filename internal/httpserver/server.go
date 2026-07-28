@@ -43,6 +43,7 @@ import (
 	"github.com/spolnik/RepoKarta/internal/security"
 	"github.com/spolnik/RepoKarta/internal/source"
 	"github.com/spolnik/RepoKarta/internal/store"
+	"github.com/spolnik/RepoKarta/internal/telemetry"
 	"github.com/spolnik/RepoKarta/web"
 )
 
@@ -174,6 +175,7 @@ type Config struct {
 	Insights              InsightService
 	Dependencies          DependencyService
 	SCIPJava              SCIPJavaService
+	Telemetry             *telemetry.System
 }
 
 // Server hosts RepoKarta's loopback interface.
@@ -196,6 +198,7 @@ type Server struct {
 	insights              InsightService
 	dependencies          DependencyService
 	scipJava              SCIPJavaService
+	telemetry             *telemetry.System
 }
 
 type pageData struct {
@@ -449,6 +452,7 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 		insights:              config.Insights,
 		dependencies:          config.Dependencies,
 		scipJava:              config.SCIPJava,
+		telemetry:             config.Telemetry,
 	}
 	server.history, _ = config.Conversations.(ConversationHistoryService)
 
@@ -551,6 +555,11 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 			mux.HandleFunc("PUT /api/admin/security", server.controlled(
 				identity.PermissionManageSecurity, "security.settings.update", "security-configuration", server.apiSecuritySettings,
 			))
+			if server.telemetry != nil {
+				mux.HandleFunc("GET /api/admin/telemetry", server.controlled(
+					identity.PermissionManageSecurity, "telemetry.status.read", "telemetry-configuration", server.apiTelemetryStatus,
+				))
+			}
 			mux.HandleFunc("GET /api/admin/audit/retention", server.controlled(
 				identity.PermissionManageAuditRetention, "audit.retention.read", "audit-log", server.apiAuditRetention,
 			))
@@ -691,14 +700,21 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 	}
 
 	handler := http.Handler(mux)
+	if server.telemetry != nil {
+		handler = server.telemetry.RouteHandler(handler)
+	}
 	if server.security != nil {
-		handler = server.security.Middleware(mux)
+		handler = server.security.Middleware(handler)
+	}
+	handler = securityHeaders(handler)
+	handler = requestLog(handler)
+	if server.telemetry != nil {
+		handler = server.telemetry.HTTPHandler(handler)
 	}
 	handler = correlationMiddleware(handler)
-	handler = securityHeaders(handler)
 	server.server = &http.Server{
 		Addr:              config.Address,
-		Handler:           requestLog(handler),
+		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
@@ -3328,6 +3344,10 @@ func (s *Server) health(response http.ResponseWriter, _ *http.Request) {
 	})
 }
 
+func (s *Server) apiTelemetryStatus(response http.ResponseWriter, _ *http.Request) {
+	writeJSON(response, http.StatusOK, s.telemetry.Status())
+}
+
 func (s *Server) pageData(ctx context.Context) (pageData, error) {
 	repositories, err := s.intelligence.CatalogRepositories(ctx)
 	if err != nil {
@@ -4103,12 +4123,19 @@ func openBrowser(localURL string) error {
 func requestLog(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		started := time.Now()
-		next.ServeHTTP(response, request)
-		slog.Debug(
+		tracker := &statusResponseWriter{ResponseWriter: response}
+		next.ServeHTTP(tracker, request)
+		status := tracker.status
+		if status == 0 {
+			status = http.StatusOK
+		}
+		slog.DebugContext(
+			request.Context(),
 			"HTTP request",
-			"method", request.Method,
-			"path", request.URL.Path,
-			"duration", time.Since(started),
+			"http.request.method", request.Method,
+			"http.route", telemetry.RoutePattern(request.Context()),
+			"http.response.status_code", status,
+			"duration_ms", float64(time.Since(started).Microseconds())/1000,
 		)
 	})
 }

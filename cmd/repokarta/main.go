@@ -18,9 +18,10 @@ import (
 	"github.com/spolnik/RepoKarta/internal/scipjava"
 	"github.com/spolnik/RepoKarta/internal/security"
 	"github.com/spolnik/RepoKarta/internal/store"
+	"github.com/spolnik/RepoKarta/internal/telemetry"
 )
 
-var version = "0.93.0-dev"
+var version = "0.94.0-dev"
 
 type stringList []string
 
@@ -324,6 +325,10 @@ func serve(args []string) error {
 			return errors.New("SCIM token file is empty")
 		}
 	}
+	telemetryConfig, err := telemetry.ConfigFromEnv(version)
+	if err != nil {
+		return fmt.Errorf("configure OpenTelemetry: %w", err)
+	}
 
 	cfg := app.Config{
 		ListenAddress:          *listenAddress,
@@ -350,6 +355,7 @@ func serve(args []string) error {
 		SCIPJavaConcurrency:    *scipJavaConcurrency,
 		SCIPJavaJDKHome:        *scipJavaJDKHome,
 		SCIPJavaJDKHomes:       defaults.SCIPJavaJDKHomes,
+		Telemetry:              telemetryConfig,
 		Security: security.Settings{
 			Mode:                 security.Mode(*authMode),
 			PublicURL:            *publicURL,

@@ -27,6 +27,7 @@ import (
 
 	"github.com/spolnik/RepoKarta/internal/agent"
 	"github.com/spolnik/RepoKarta/internal/catalog"
+	"github.com/spolnik/RepoKarta/internal/telemetry"
 )
 
 const (
@@ -345,7 +346,12 @@ func (s *Service) classifyMapRetention(inventory *Inventory) {
 }
 
 // Plan validates exact inventory IDs and returns a signed dry run.
-func (s *Service) Plan(ctx context.Context, targetIDs []string) (CleanupPlan, error) {
+func (s *Service) Plan(ctx context.Context, targetIDs []string) (result CleanupPlan, resultErr error) {
+	ctx, finish := telemetry.StartOperation(ctx, telemetry.OperationMaintenance, telemetry.Labels{
+		Kind:    "plan",
+		Trigger: "request",
+	})
+	defer func() { finish(resultErr) }()
 	targetIDs = uniqueTargets(targetIDs)
 	if len(targetIDs) == 0 {
 		return CleanupPlan{}, errors.New("select at least one cleanable item")
@@ -381,7 +387,12 @@ func (s *Service) Plan(ctx context.Context, targetIDs []string) (CleanupPlan, er
 }
 
 // Execute re-plans immediately and removes only unchanged, exact regular files.
-func (s *Service) Execute(ctx context.Context, targetIDs []string, token string) (CleanupResult, error) {
+func (s *Service) Execute(ctx context.Context, targetIDs []string, token string) (result CleanupResult, resultErr error) {
+	ctx, finish := telemetry.StartOperation(ctx, telemetry.OperationMaintenance, telemetry.Labels{
+		Kind:    "execute",
+		Trigger: "request",
+	})
+	defer func() { finish(resultErr) }()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	plan, err := s.Plan(ctx, targetIDs)
@@ -391,7 +402,7 @@ func (s *Service) Execute(ctx context.Context, targetIDs []string, token string)
 	if !hmac.Equal([]byte(plan.Token), []byte(strings.TrimSpace(token))) {
 		return CleanupResult{}, errors.New("cleanup plan changed; preview the targets again")
 	}
-	result := CleanupResult{}
+	result = CleanupResult{}
 	for _, item := range plan.Items {
 		if err := ctx.Err(); err != nil {
 			return result, err

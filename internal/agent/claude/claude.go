@@ -20,6 +20,7 @@ import (
 	"github.com/spolnik/RepoKarta/internal/agent"
 	"github.com/spolnik/RepoKarta/internal/agent/localcommand"
 	"github.com/spolnik/RepoKarta/internal/agent/processgroup"
+	"github.com/spolnik/RepoKarta/internal/telemetry"
 )
 
 const providerInstructions = `You are RepoKarta's read-only code intelligence assistant.
@@ -267,7 +268,12 @@ type session struct {
 	closeOnce    sync.Once
 }
 
-func (s *session) Send(ctx context.Context, turn agent.Turn, emit func(agent.Event) error) error {
+func (s *session) Send(ctx context.Context, turn agent.Turn, emit func(agent.Event) error) (resultErr error) {
+	ctx, finish := telemetry.StartOperation(ctx, telemetry.OperationProviderProcess, telemetry.Labels{
+		Provider: "claude",
+		Kind:     "turn",
+	})
+	defer func() { finish(resultErr) }()
 	s.sendMu.Lock()
 	defer s.sendMu.Unlock()
 	s.active.Store(true)

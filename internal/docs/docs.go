@@ -29,6 +29,7 @@ import (
 	"github.com/spolnik/RepoKarta/internal/agent"
 	"github.com/spolnik/RepoKarta/internal/catalog"
 	"github.com/spolnik/RepoKarta/internal/graph"
+	"github.com/spolnik/RepoKarta/internal/telemetry"
 	"go.yaml.in/yaml/v4"
 )
 
@@ -517,7 +518,13 @@ func (s *Service) plan(ctx context.Context, repositoryID int64) (Site, error) {
 
 // Generate builds planned, stale, failed, or explicitly refreshed pages.
 // Status is stored before each page so interrupted runs are resumable.
-func (s *Service) Generate(ctx context.Context, request GenerateRequest) (Site, error) {
+func (s *Service) Generate(ctx context.Context, request GenerateRequest) (result Site, resultErr error) {
+	ctx, finish := telemetry.StartOperation(ctx, telemetry.OperationGenerationWiki, telemetry.Labels{
+		Provider: request.Provider,
+		Kind:     request.Preset,
+		Trigger:  "request",
+	})
+	defer func() { finish(resultErr) }()
 	generationLock := s.generationLock(request.RepositoryID)
 	generationLock.Lock()
 	defer generationLock.Unlock()

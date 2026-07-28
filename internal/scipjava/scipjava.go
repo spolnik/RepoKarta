@@ -25,6 +25,7 @@ import (
 
 	"github.com/spolnik/RepoKarta/internal/catalog"
 	"github.com/spolnik/RepoKarta/internal/scipindex"
+	"github.com/spolnik/RepoKarta/internal/telemetry"
 )
 
 const (
@@ -601,7 +602,12 @@ func (s *Service) finish(repositoryID int64) {
 	s.mu.Unlock()
 }
 
-func (s *Service) indexRepository(ctx context.Context, repositoryID int64) error {
+func (s *Service) indexRepository(ctx context.Context, repositoryID int64) (resultErr error) {
+	ctx, finish := telemetry.StartOperation(ctx, telemetry.OperationSCIPBuild, telemetry.Labels{
+		Provider: "scip-java",
+		Trigger:  "background",
+	})
+	defer func() { finish(resultErr) }()
 	repository, err := s.store.RepositoryByID(ctx, repositoryID)
 	if err != nil {
 		return err

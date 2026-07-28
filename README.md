@@ -395,6 +395,7 @@ $version = go run ./cmd/repokarta version
 - [Source editor search, usages, routes, and caller evidence](./docs/source-intelligence.md)
 - [Compiler-precise SCIP index imports](./docs/scip-indexes.md)
 - [Structural AST query syntax and completeness](./docs/ast-search.md)
+- [OpenTelemetry metrics, logs, traces, and Datadog routing](./docs/opentelemetry.md)
 - [Pinned Zoekt revision and Windows portability](./docs/zoekt-windows-portability.md)
 
 RepoKarta vendors a pinned Zoekt revision under `third_party/zoekt`. Native

@@ -63,6 +63,14 @@ type databaseSQLState interface {
 	SQLState() string
 }
 
+// DatabaseStats returns a race-free snapshot of the active connection pool.
+func (s *Store) DatabaseStats() sql.DBStats {
+	if s == nil || s.db == nil || s.db.DB == nil {
+		return sql.DBStats{}
+	}
+	return s.db.Stats()
+}
+
 func isUniqueConstraint(err error) bool {
 	if err == nil {
 		return false

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/spolnik/RepoKarta/internal/graph"
+	"github.com/spolnik/RepoKarta/internal/telemetry"
 )
 
 var (
@@ -208,6 +209,23 @@ func NewService(ctx context.Context, store ObservationStore, client *http.Client
 	}
 }
 
+// UseHTTPTransport decorates dependency and advisory requests before workers
+// start. The existing TLS root configuration and timeouts remain authoritative.
+func (s *Service) UseHTTPTransport(decorate func(http.RoundTripper) http.RoundTripper) {
+	if s == nil || s.client == nil || decorate == nil {
+		return
+	}
+	client, ok := s.client.(*http.Client)
+	if !ok {
+		return
+	}
+	base := client.Transport
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	client.Transport = decorate(base)
+}
+
 // Inventory reads only SQLite-backed observations and joins them to the
 // commit-pinned declaration page.
 func (s *Service) Inventory(
@@ -333,6 +351,20 @@ func (s *Service) StartRefresh(
 }
 
 func (s *Service) runRefresh(keys []RegistryKey, prior map[string]Observation) {
+	ctx, finish := telemetry.StartOperation(s.ctx, telemetry.OperationDependencyRefresh, telemetry.Labels{
+		Trigger: "background",
+	})
+	defer func() {
+		progress := s.Progress()
+		switch {
+		case ctx.Err() != nil:
+			finish(ctx.Err())
+		case progress.Failed > 0:
+			finish(errors.New("one or more dependency registry refreshes failed"))
+		default:
+			finish(nil)
+		}
+	}()
 	jobs := make(chan RegistryKey)
 	var workers sync.WaitGroup
 	for range min(s.workerCount, len(keys)) {
@@ -341,9 +373,9 @@ func (s *Service) runRefresh(keys []RegistryKey, prior map[string]Observation) {
 			defer workers.Done()
 			for key := range jobs {
 				previous := prior[registryKeyString(key)]
-				observation := s.lookup(s.ctx, key, previous)
+				observation := s.lookup(ctx, key, previous)
 				failed := observation.Status == "error"
-				if err := s.store.UpsertDependencyObservation(s.ctx, observation); err != nil {
+				if err := s.store.UpsertDependencyObservation(ctx, observation); err != nil {
 					failed = true
 				}
 				s.mu.Lock()
@@ -357,7 +389,7 @@ func (s *Service) runRefresh(keys []RegistryKey, prior map[string]Observation) {
 	}
 	for _, key := range keys {
 		select {
-		case <-s.ctx.Done():
+		case <-ctx.Done():
 			close(jobs)
 			workers.Wait()
 			s.finishRefresh()

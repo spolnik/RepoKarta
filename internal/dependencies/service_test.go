@@ -179,7 +179,7 @@ func TestDefaultDependencyClientHonorsSSLCertFileForRegistriesAndOSV(t *testing.
 	}
 
 	service.advisoryBaseURL = server.URL
-	if _, err := service.queryAdvisoryBatch([]osvBatchQuery{{
+	if _, err := service.queryAdvisoryBatch(t.Context(), []osvBatchQuery{{
 		Package: OSVPackage{Ecosystem: "npm", Name: "marked"},
 	}}); err != nil {
 		t.Fatalf("OSV query through SSL_CERT_FILE trust failed: %v", err)

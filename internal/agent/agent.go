@@ -17,6 +17,7 @@ import (
 
 	"github.com/spolnik/RepoKarta/internal/access"
 	"github.com/spolnik/RepoKarta/internal/contextscope"
+	"github.com/spolnik/RepoKarta/internal/telemetry"
 )
 
 // EventType identifies one streamed conversation event.
@@ -442,7 +443,7 @@ func (m *Manager) DeleteConversation(ctx context.Context, id string) error {
 }
 
 // Send streams a single turn. New conversation IDs are generated server-side.
-func (m *Manager) Send(ctx context.Context, request TurnRequest, emit func(Event) error) error {
+func (m *Manager) Send(ctx context.Context, request TurnRequest, emit func(Event) error) (resultErr error) {
 	if request.Message == "" && len(request.Images) == 0 {
 		return fmt.Errorf("%w: message or image is required", ErrInvalidInput)
 	}
@@ -468,6 +469,12 @@ func (m *Manager) Send(ctx context.Context, request TurnRequest, emit func(Event
 	if err != nil {
 		return err
 	}
+	ctx, finish := telemetry.StartOperation(ctx, telemetry.OperationGenerationChat, telemetry.Labels{
+		Provider: conversation.provider,
+		Kind:     conversation.mode,
+		Trigger:  "request",
+	})
+	defer func() { finish(resultErr) }()
 	request.Mode = conversation.mode
 	if !conversation.active.CompareAndSwap(false, true) {
 		return errors.New("conversation already has an active turn")
@@ -515,6 +522,14 @@ func (m *Manager) Send(ctx context.Context, request TurnRequest, emit func(Event
 		Status:         "complete",
 		CreatedAt:      time.Now().UTC(),
 	}
+	defer func() {
+		telemetry.RecordGenerationTokens(
+			ctx,
+			conversation.provider,
+			assistantMessage.InputTokens,
+			assistantMessage.OutputTokens,
+		)
+	}()
 	startedAt := time.Now()
 	trace := func(stage, detail, coverageWarning string) error {
 		event := TraceEvent{

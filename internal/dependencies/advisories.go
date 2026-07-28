@@ -22,6 +22,7 @@ import (
 
 	"deps.dev/util/semver"
 	"github.com/spolnik/RepoKarta/internal/graph"
+	"github.com/spolnik/RepoKarta/internal/telemetry"
 )
 
 const (
@@ -1340,8 +1341,19 @@ func (s *Service) runAdvisoryRefresh(
 	digest string,
 	started time.Time,
 ) {
-	advisoryIDs, err := s.queryAdvisoryIDs(packages)
+	ctx, finish := telemetry.StartOperation(s.ctx, telemetry.OperationAdvisoryRefresh, telemetry.Labels{
+		Trigger: "background",
+	})
+	var completionErr error
+	defer func() {
+		if completionErr == nil {
+			completionErr = ctx.Err()
+		}
+		finish(completionErr)
+	}()
+	advisoryIDs, err := s.queryAdvisoryIDs(ctx, packages)
 	if err != nil {
+		completionErr = err
 		s.finishAdvisoryRefresh(started, err)
 		return
 	}
@@ -1351,7 +1363,7 @@ func (s *Service) runAdvisoryRefresh(
 		progress.Total = progress.PackageTotal + len(advisoryIDs)
 		progress.Completed = progress.PackageCompleted
 	})
-	advisories, failed, fetchErr := s.fetchAdvisories(advisoryIDs)
+	advisories, failed, fetchErr := s.fetchAdvisories(ctx, advisoryIDs)
 	retrievedAt := s.now().UTC()
 	snapshot := AdvisorySnapshot{
 		SchemaVersion: AdvisorySnapshotSchema, Source: "OSV.dev",
@@ -1361,6 +1373,7 @@ func (s *Service) runAdvisoryRefresh(
 	}
 	snapshot.Version = snapshotVersion(snapshot)
 	if err := s.writeAdvisorySnapshot(snapshot); err != nil {
+		completionErr = err
 		s.finishAdvisoryRefresh(started, err)
 		return
 	}
@@ -1385,6 +1398,7 @@ func (s *Service) runAdvisoryRefresh(
 		progress.SnapshotVersion = snapshot.Version
 		progress.SnapshotTimestamp = snapshot.RetrievedAt.Format(time.RFC3339)
 	})
+	completionErr = fetchErr
 }
 
 type osvBatchQuery struct {
@@ -1403,7 +1417,7 @@ type osvBatchResponse struct {
 	} `json:"results"`
 }
 
-func (s *Service) queryAdvisoryIDs(packages []AdvisoryPackage) ([]string, error) {
+func (s *Service) queryAdvisoryIDs(ctx context.Context, packages []AdvisoryPackage) ([]string, error) {
 	pending := make([]osvBatchQuery, 0, len(packages))
 	for _, pkg := range packages {
 		pending = append(pending, osvBatchQuery{
@@ -1417,7 +1431,7 @@ func (s *Service) queryAdvisoryIDs(packages []AdvisoryPackage) ([]string, error)
 		count := min(advisoryBatchSize, len(pending))
 		batch := append([]osvBatchQuery(nil), pending[:count]...)
 		pending = pending[count:]
-		response, err := s.queryAdvisoryBatch(batch)
+		response, err := s.queryAdvisoryBatch(ctx, batch)
 		if err != nil {
 			return nil, err
 		}
@@ -1453,8 +1467,8 @@ func (s *Service) queryAdvisoryIDs(packages []AdvisoryPackage) ([]string, error)
 		}
 		if len(pending) > 0 {
 			select {
-			case <-s.ctx.Done():
-				return nil, s.ctx.Err()
+			case <-ctx.Done():
+				return nil, ctx.Err()
 			case <-time.After(250 * time.Millisecond):
 			}
 		}
@@ -1467,7 +1481,7 @@ func (s *Service) queryAdvisoryIDs(packages []AdvisoryPackage) ([]string, error)
 	return output, nil
 }
 
-func (s *Service) queryAdvisoryBatch(queries []osvBatchQuery) (osvBatchResponse, error) {
+func (s *Service) queryAdvisoryBatch(ctx context.Context, queries []osvBatchQuery) (osvBatchResponse, error) {
 	body, err := json.Marshal(struct {
 		Queries []osvBatchQuery `json:"queries"`
 	}{Queries: queries})
@@ -1475,7 +1489,7 @@ func (s *Service) queryAdvisoryBatch(queries []osvBatchQuery) (osvBatchResponse,
 		return osvBatchResponse{}, err
 	}
 	request, err := http.NewRequestWithContext(
-		s.ctx, http.MethodPost,
+		ctx, http.MethodPost,
 		strings.TrimRight(s.osvBaseURL(), "/")+"/v1/querybatch",
 		strings.NewReader(string(body)),
 	)
@@ -1499,7 +1513,7 @@ func (s *Service) queryAdvisoryBatch(queries []osvBatchQuery) (osvBatchResponse,
 	return output, nil
 }
 
-func (s *Service) fetchAdvisories(ids []string) ([]OSVAdvisory, int, error) {
+func (s *Service) fetchAdvisories(ctx context.Context, ids []string) ([]OSVAdvisory, int, error) {
 	if len(ids) == 0 {
 		return []OSVAdvisory{}, 0, nil
 	}
@@ -1521,13 +1535,13 @@ func (s *Service) fetchAdvisories(ids []string) ([]OSVAdvisory, int, error) {
 			defer workers.Done()
 			for id := range jobs {
 				select {
-				case <-s.ctx.Done():
+				case <-ctx.Done():
 					fatalOnce.Do(func() { close(fatalSignal) })
-					results <- result{err: s.ctx.Err()}
+					results <- result{err: ctx.Err()}
 					return
 				case <-pace.C:
 				}
-				advisory, err := s.fetchAdvisory(id)
+				advisory, err := s.fetchAdvisory(ctx, id)
 				if isFatalAdvisoryError(err) {
 					fatalOnce.Do(func() { close(fatalSignal) })
 					results <- result{advisory: advisory, err: err}
@@ -1596,9 +1610,9 @@ func isFatalAdvisoryError(err error) bool {
 		errors.Is(err, context.DeadlineExceeded)
 }
 
-func (s *Service) fetchAdvisory(id string) (OSVAdvisory, error) {
+func (s *Service) fetchAdvisory(ctx context.Context, id string) (OSVAdvisory, error) {
 	request, err := http.NewRequestWithContext(
-		s.ctx, http.MethodGet,
+		ctx, http.MethodGet,
 		strings.TrimRight(s.osvBaseURL(), "/")+"/v1/vulns/"+url.PathEscape(id),
 		nil,
 	)

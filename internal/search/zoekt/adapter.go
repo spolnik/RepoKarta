@@ -26,6 +26,7 @@ import (
 	zoektsearch "github.com/sourcegraph/zoekt/search"
 	"github.com/spolnik/RepoKarta/internal/catalog"
 	"github.com/spolnik/RepoKarta/internal/search"
+	"github.com/spolnik/RepoKarta/internal/telemetry"
 )
 
 const (
@@ -169,8 +170,17 @@ func (a *Adapter) Index(ctx context.Context, repository catalog.Repository) (boo
 }
 
 // Search executes a bounded Zoekt query against all current shards.
-func (a *Adapter) Search(ctx context.Context, request search.Query) (search.Result, error) {
+func (a *Adapter) Search(ctx context.Context, request search.Query) (result search.Result, resultErr error) {
 	started := time.Now()
+	ctx, finish := telemetry.StartOperation(ctx, telemetry.OperationSearch, telemetry.Labels{
+		Kind: request.Mode,
+	})
+	defer func() {
+		finish(resultErr)
+		if resultErr == nil {
+			telemetry.RecordSearchResults(ctx, result.ReturnedFiles, result.Truncated, request.Mode)
+		}
+	}()
 	if strings.TrimSpace(request.Text) == "" {
 		return search.Result{}, errors.New("search query is required")
 	}
@@ -211,7 +221,7 @@ func (a *Adapter) Search(ctx context.Context, request search.Query) (search.Resu
 		return search.Result{}, fmt.Errorf("search Zoekt shards: %w", err)
 	}
 
-	result := search.Result{
+	result = search.Result{
 		Duration:        time.Since(started),
 		MatchCount:      response.Stats.MatchCount,
 		FileCount:       response.Stats.FileCount,
