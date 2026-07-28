@@ -85,6 +85,32 @@ func TestAdminSessionAndCSRF(t *testing.T) {
 	}
 }
 
+func TestBootstrapLoginBackoffIsSourceSpecificAndClearsOnSuccess(t *testing.T) {
+	t.Parallel()
+	manager, err := New(context.Background(), newMemorySettingsStore(), Config{
+		Address:       "127.0.0.1:7331",
+		AdminUser:     "admin",
+		AdminPassword: "correct horse battery staple",
+		Initial:       Settings{Mode: ModeLocal},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		manager.RecordAdminLogin("192.0.2.1:1000", false)
+	}
+	if retry := manager.AdminLoginRetryAfter("192.0.2.1:1000"); retry <= 0 {
+		t.Fatal("three failed attempts did not activate backoff")
+	}
+	if retry := manager.AdminLoginRetryAfter("192.0.2.2:1000"); retry != 0 {
+		t.Fatalf("backoff leaked to another source: %v", retry)
+	}
+	manager.RecordAdminLogin("192.0.2.1:1000", true)
+	if retry := manager.AdminLoginRetryAfter("192.0.2.1:1000"); retry != 0 {
+		t.Fatalf("successful login did not clear backoff: %v", retry)
+	}
+}
+
 func TestMiddlewareEnforcesLocalAndSharedBoundaries(t *testing.T) {
 	t.Parallel()
 	manager, err := New(context.Background(), newMemorySettingsStore(), Config{

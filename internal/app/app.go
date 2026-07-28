@@ -277,6 +277,7 @@ func Run(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return fmt.Errorf("create MCP bearer token: %w", err)
 	}
+	mcpTokens := mcpserver.NewTokenAuthority()
 	citations := mcpserver.NewCitationTracker()
 	conversations := agent.NewManager(
 		cfg.RepositoryRoot,
@@ -285,7 +286,7 @@ func Run(ctx context.Context, cfg Config) error {
 		&codex.Adapter{Command: cfg.CodexCommand},
 		&claude.Adapter{Command: cfg.ClaudeCommand},
 		&anthropicprovider.Adapter{Intelligence: intelligence, Citations: citations},
-	).UseCitations(citations).UsePersistence(database)
+	).UseMCPTokenIssuer(mcpTokens).UseCitations(citations).UsePersistence(database)
 	documents, err := docs.New(database, maps, filepath.Join(cfg.DataDirectory, "docs"))
 	if err != nil {
 		return err
@@ -336,12 +337,13 @@ func Run(ctx context.Context, cfg Config) error {
 		derivedEvidence.SetBaseURL(updatedBaseURL)
 	})
 	mcpHandler := mcpserver.NewHandler(mcpserver.Config{
-		Version:      cfg.Version,
-		BaseURL:      baseURL,
-		Token:        mcpToken,
-		Artifacts:    mcpserver.Artifacts{Maps: maps, Documents: documents},
-		Insights:     codeInsights,
-		Dependencies: dependencyRegistry,
+		Version:        cfg.Version,
+		BaseURL:        baseURL,
+		Token:          mcpToken,
+		TokenAuthority: mcpTokens,
+		Artifacts:      mcpserver.Artifacts{Maps: maps, Documents: documents},
+		Insights:       codeInsights,
+		Dependencies:   dependencyRegistry,
 		ResolveViewer: func(ctx context.Context, conversationID string) (access.Viewer, error) {
 			if author, ok := conversations.AuthorForMCP(conversationID); ok {
 				return access.Viewer{

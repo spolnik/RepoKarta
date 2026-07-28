@@ -246,7 +246,7 @@ func TestFindingsExposeUncoveredAndUnresolvableDeclarations(t *testing.T) {
 		},
 	)
 	snapshot := fixtureSnapshot(inventory)
-	response := buildFindings(inventory, &snapshot, nil, AdvisoryOptions{}, time.Now())
+	response := buildFindings(inventory, &snapshot, nil, AdvisoryOptions{}, snapshot.RetrievedAt)
 	if response.CheckState != "partial" || response.SkippedNoVersionCount != 1 ||
 		len(response.UncoveredEcosystems) != 1 ||
 		response.UncoveredEcosystems[0].Ecosystem != "unknown" ||

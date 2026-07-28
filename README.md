@@ -177,6 +177,13 @@ sessions. It does not ask for or store your ChatGPT or Claude subscription
 credentials. The direct Anthropic API key is read from the launch environment
 and is not written to RepoKarta's database.
 
+Provider subprocesses are capability-confined. Codex receives a filesystem
+permission profile that denies reads outside its attachment directory and
+minimal runtime files. Claude receives attachment-scoped reads and disallows
+shell, discovery, mutation, web, and subagent tools. Each provider session
+uses a revocable conversation-bound MCP credential; Claude's credential lives
+in a mode-0600 temporary configuration file rather than process arguments.
+
 If a CLI is installed in a non-standard location:
 
 ```powershell

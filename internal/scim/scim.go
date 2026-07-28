@@ -673,10 +673,12 @@ func writeStoreError(response http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		writeError(response, http.StatusNotFound, "SCIM resource not found", "")
-	case strings.Contains(strings.ToLower(err.Error()), "unique"):
+	case errors.Is(err, identity.ErrConflict):
 		writeError(response, http.StatusConflict, "SCIM resource conflicts with an existing stable identifier", "uniqueness")
+	case errors.Is(err, identity.ErrInvalid):
+		writeError(response, http.StatusBadRequest, "SCIM resource contains an invalid value", "invalidValue")
 	default:
-		writeError(response, http.StatusBadRequest, err.Error(), "invalidValue")
+		writeError(response, http.StatusInternalServerError, "SCIM provisioning store is unavailable", "")
 	}
 }
 

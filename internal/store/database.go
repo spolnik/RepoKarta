@@ -55,6 +55,30 @@ type transaction struct {
 	backend Backend
 }
 
+type databaseErrorCode interface {
+	Code() int
+}
+
+type databaseSQLState interface {
+	SQLState() string
+}
+
+func isUniqueConstraint(err error) bool {
+	if err == nil {
+		return false
+	}
+	var state databaseSQLState
+	if errors.As(err, &state) {
+		return state.SQLState() == "23505"
+	}
+	var coded databaseErrorCode
+	if errors.As(err, &coded) {
+		code := coded.Code()
+		return code == 2067 || code&0xff == 19
+	}
+	return false
+}
+
 // Open preserves the original zero-configuration SQLite API.
 func Open(path string) (*Store, error) {
 	return OpenConfig(Config{

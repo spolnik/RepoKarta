@@ -15,10 +15,11 @@ import (
 )
 
 func TestCommandArgumentsIncludeProviderModelAndEffort(t *testing.T) {
+	configPath := `/tmp/attachments/mcp.json`
 	arguments := commandArguments(agent.SessionConfig{
 		Model:  "claude-opus-5",
 		Effort: "high",
-	}, `{"mcpServers":{}}`, `/tmp/attachments`)
+	}, configPath, `/tmp/attachments`)
 
 	if !containsPair(arguments, "--model", "claude-opus-5") {
 		t.Fatalf("arguments do not include model: %#v", arguments)
@@ -31,6 +32,21 @@ func TestCommandArgumentsIncludeProviderModelAndEffort(t *testing.T) {
 	}
 	if !containsPair(arguments, "--setting-sources", "user") {
 		t.Fatalf("arguments do not load user settings only: %#v", arguments)
+	}
+	if !containsPair(arguments, "--mcp-config", configPath) {
+		t.Fatalf("arguments do not reference the protected MCP file: %#v", arguments)
+	}
+	joined := strings.Join(arguments, " ")
+	for _, blocked := range []string{"Glob", "Grep", "Task", "Agent"} {
+		if !strings.Contains(joined, blocked) {
+			t.Fatalf("disallowed tools omit %q: %#v", blocked, arguments)
+		}
+	}
+	if !strings.Contains(joined, "Read(/tmp/attachments/**)") {
+		t.Fatalf("attachment reads are not path-scoped: %#v", arguments)
+	}
+	if strings.Contains(joined, "test-token") {
+		t.Fatalf("provider token leaked into argv: %#v", arguments)
 	}
 	if !containsPair(statusCommandArguments(), "--setting-sources", "user") {
 		t.Fatalf("auth probe does not use the runtime setting source: %#v", statusCommandArguments())

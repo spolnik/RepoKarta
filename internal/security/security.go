@@ -93,6 +93,12 @@ type adminSession struct {
 	CSRFToken string
 }
 
+type adminLoginAttempt struct {
+	Failures     int
+	BlockedUntil time.Time
+	LastAttempt  time.Time
+}
+
 // Manager applies the active mode and owns ephemeral administrator sessions.
 type Manager struct {
 	store         Store
@@ -112,6 +118,7 @@ type Manager struct {
 	cloudflare     *CloudflareValidator
 	samlMiddleware *samlsp.Middleware
 	adminSessions  map[[32]byte]adminSession
+	adminAttempts  map[string]adminLoginAttempt
 	changeHandler  func(Settings)
 }
 
@@ -132,6 +139,7 @@ func New(ctx context.Context, store Store, config Config) (*Manager, error) {
 		identities:    config.Identities,
 		audit:         config.Audit,
 		adminSessions: make(map[[32]byte]adminSession),
+		adminAttempts: make(map[string]adminLoginAttempt),
 	}
 	if manager.adminUser != "" && config.AdminPassword != "" {
 		if len(config.AdminPassword) < minimumAdminPassword {
@@ -338,6 +346,56 @@ func (m *Manager) AuthenticateAdmin(username, password string) bool {
 	passwordHash := sha256.Sum256([]byte(password))
 	passwordOK := subtle.ConstantTimeCompare(passwordHash[:], m.adminPassword[:])
 	return usernameOK&passwordOK == 1
+}
+
+// AdminLoginRetryAfter returns the remaining source-specific bootstrap-login
+// backoff without trusting proxy-controlled forwarding headers.
+func (m *Manager) AdminLoginRetryAfter(source string) time.Duration {
+	source = strings.TrimSpace(source)
+	if source == "" {
+		source = "unknown"
+	}
+	now := time.Now()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.pruneAdminAttempts(now)
+	attempt := m.adminAttempts[source]
+	if !attempt.BlockedUntil.After(now) {
+		return 0
+	}
+	return attempt.BlockedUntil.Sub(now)
+}
+
+// RecordAdminLogin applies exponential backoff after three consecutive
+// failures. A successful authentication clears the source state.
+func (m *Manager) RecordAdminLogin(source string, success bool) {
+	source = strings.TrimSpace(source)
+	if source == "" {
+		source = "unknown"
+	}
+	now := time.Now()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if success {
+		delete(m.adminAttempts, source)
+		return
+	}
+	attempt := m.adminAttempts[source]
+	attempt.Failures++
+	attempt.LastAttempt = now
+	if attempt.Failures >= 3 {
+		exponent := min(attempt.Failures-3, 6)
+		attempt.BlockedUntil = now.Add(time.Second * time.Duration(1<<exponent))
+	}
+	m.adminAttempts[source] = attempt
+}
+
+func (m *Manager) pruneAdminAttempts(now time.Time) {
+	for source, attempt := range m.adminAttempts {
+		if now.Sub(attempt.LastAttempt) > time.Hour {
+			delete(m.adminAttempts, source)
+		}
+	}
 }
 
 func (m *Manager) CreateAdminSession(response http.ResponseWriter) (string, error) {

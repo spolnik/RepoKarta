@@ -31,7 +31,11 @@ const (
 	PermissionDestructiveOwnedData Permission = "owned-data.delete"
 )
 
-var ErrDeprovisioned = errors.New("identity is suspended or deprovisioned")
+var (
+	ErrDeprovisioned = errors.New("identity is suspended or deprovisioned")
+	ErrInvalid       = errors.New("invalid identity resource")
+	ErrConflict      = errors.New("identity resource conflicts with an existing stable identifier")
+)
 
 // User is a durable application identity. AuthProvider/AuthSubject are bound
 // when the user first authenticates if SCIM provisioned it ahead of login.

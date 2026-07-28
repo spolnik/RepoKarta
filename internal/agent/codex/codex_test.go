@@ -174,6 +174,28 @@ func TestAdapterRunsAuthenticatedStreamingSession(t *testing.T) {
 	session.clearActiveTurn("manual-turn")
 }
 
+func TestCommandArgumentsDenyFilesystemOutsideAttachments(t *testing.T) {
+	arguments := codexCommandArguments(agent.SessionConfig{
+		MCPURL:   "http://127.0.0.1:7331/mcp",
+		MCPToken: "must-not-appear",
+	}, `C:\Temp\repokarta-attachments`)
+	joined := strings.Join(arguments, "\n")
+	for _, expected := range []string{
+		`default_permissions="repokarta-mcp-only"`,
+		`permissions.repokarta-mcp-only.filesystem.":root"="deny"`,
+		`permissions.repokarta-mcp-only.filesystem.":minimal"="read"`,
+		`C:\\Temp\\repokarta-attachments`,
+		"tools.web_search=false",
+	} {
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("Codex boundary arguments omit %q:\n%s", expected, joined)
+		}
+	}
+	if strings.Contains(joined, "must-not-appear") {
+		t.Fatalf("MCP token leaked into Codex argv:\n%s", joined)
+	}
+}
+
 func TestAdapterFallsBackFromExpiredResumeCursor(t *testing.T) {
 	adapter := testCodexAdapter(t, "resume-fallback")
 	started, err := adapter.Start(context.Background(), agent.SessionConfig{

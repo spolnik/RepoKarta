@@ -38,7 +38,7 @@ func (s *Store) ResolveIdentity(ctx context.Context, claims identity.Claims) (id
 			Role:         identity.RoleReader,
 		}
 		user, err = s.SaveUser(ctx, user)
-		if err != nil && strings.Contains(strings.ToLower(err.Error()), "unique") {
+		if errors.Is(err, identity.ErrConflict) {
 			user.UserName = claims.Provider + ":" + claims.Subject
 			user, err = s.SaveUser(ctx, user)
 		}
@@ -169,7 +169,7 @@ func (s *Store) SaveUser(ctx context.Context, user identity.User) (identity.User
 	user.AuthSubject = strings.TrimSpace(user.AuthSubject)
 	user.Role = identity.NormalizeRole(user.Role)
 	if user.UserName == "" {
-		return identity.User{}, errors.New("userName is required")
+		return identity.User{}, fmt.Errorf("%w: userName is required", identity.ErrInvalid)
 	}
 	now := time.Now().UTC()
 	if user.CreatedAt.IsZero() {
@@ -196,6 +196,9 @@ ON CONFLICT(id) DO UPDATE SET
 		user.AuthProvider, user.AuthSubject, user.Active, user.Role,
 		user.SCIMManaged, formatTime(user.CreatedAt), formatTime(user.UpdatedAt))
 	if err != nil {
+		if isUniqueConstraint(err) {
+			return identity.User{}, identity.ErrConflict
+		}
 		return identity.User{}, fmt.Errorf("save identity: %w", err)
 	}
 	return s.User(ctx, user.ID)
@@ -283,7 +286,7 @@ func (s *Store) SaveGroup(ctx context.Context, group identity.Group) (identity.G
 	group.DisplayName = strings.TrimSpace(group.DisplayName)
 	group.Role = identity.NormalizeRole(group.Role)
 	if group.DisplayName == "" {
-		return identity.Group{}, errors.New("group displayName is required")
+		return identity.Group{}, fmt.Errorf("%w: group displayName is required", identity.ErrInvalid)
 	}
 	now := time.Now().UTC()
 	if group.CreatedAt.IsZero() {
@@ -306,6 +309,9 @@ ON CONFLICT(id) DO UPDATE SET
 		group.ID, group.ExternalID, group.DisplayName, group.Role,
 		formatTime(group.CreatedAt), formatTime(group.UpdatedAt))
 	if err != nil {
+		if isUniqueConstraint(err) {
+			return identity.Group{}, identity.ErrConflict
+		}
 		return identity.Group{}, fmt.Errorf("save identity group: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM identity_group_members WHERE group_id = ?`, group.ID); err != nil {
@@ -370,7 +376,7 @@ func (s *Store) SetRoleMapping(ctx context.Context, mapping identity.RoleMapping
 	mapping.GroupValue = strings.TrimSpace(mapping.GroupValue)
 	mapping.Role = identity.NormalizeRole(mapping.Role)
 	if mapping.Provider == "" || mapping.GroupValue == "" {
-		return errors.New("provider and group are required")
+		return fmt.Errorf("%w: provider and group are required", identity.ErrInvalid)
 	}
 	if mapping.ID > 0 {
 		result, err := s.db.ExecContext(ctx, `

@@ -130,12 +130,7 @@ func startSession(ctx context.Context, command string, config agent.SessionConfi
 	if err != nil {
 		return nil, fmt.Errorf("create Codex attachment store: %w", err)
 	}
-	arguments := []string{
-		"app-server",
-		"--stdio",
-		"-c", "mcp_servers.repokarta.url=" + config.MCPURL,
-		"-c", `mcp_servers.repokarta.bearer_token_env_var="REPOKARTA_MCP_BEARER_TOKEN"`,
-	}
+	arguments := codexCommandArguments(config, attachments.Directory())
 	process := exec.CommandContext(context.WithoutCancel(ctx), command, arguments...)
 	// Keep the harness outside every indexed repository. RepoKarta source is
 	// available only through the authenticated read-only MCP surface.
@@ -193,7 +188,6 @@ func startSession(ctx context.Context, command string, config agent.SessionConfi
 	params := map[string]any{
 		"cwd":                   attachments.Directory(),
 		"approvalPolicy":        "never",
-		"sandbox":               "read-only",
 		"developerInstructions": providerInstructions,
 	}
 	if config.Model != "" {
@@ -234,6 +228,21 @@ func startSession(ctx context.Context, command string, config agent.SessionConfi
 	s.threadID = started.Thread.ID
 	s.restored = method == "thread/resume"
 	return s, nil
+}
+
+func codexCommandArguments(config agent.SessionConfig, attachmentDirectory string) []string {
+	return []string{
+		"app-server",
+		"--stdio",
+		"-c", "mcp_servers.repokarta.url=" + config.MCPURL,
+		"-c", `mcp_servers.repokarta.bearer_token_env_var="REPOKARTA_MCP_BEARER_TOKEN"`,
+		"-c", "tools.web_search=false",
+		"-c", `default_permissions="repokarta-mcp-only"`,
+		"-c", `permissions.repokarta-mcp-only.extends=":read-only"`,
+		"-c", `permissions.repokarta-mcp-only.filesystem.":root"="deny"`,
+		"-c", `permissions.repokarta-mcp-only.filesystem.":minimal"="read"`,
+		"-c", "permissions.repokarta-mcp-only.filesystem." + strconv.Quote(attachmentDirectory) + `="read"`,
+	}
 }
 
 func (s *session) ResumeCursor() string { return s.threadID }

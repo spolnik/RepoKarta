@@ -635,7 +635,9 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 		mux.HandleFunc("POST /api/insights/sonar/sync", server.syncSonar)
 	}
 	if config.MCPHandler != nil {
-		mux.HandleFunc("GET /mcp/setup", server.mcpPage)
+		mux.HandleFunc("GET /mcp/setup", server.controlled(
+			identity.PermissionGenerateAI, "mcp.setup.read", "mcp-configuration", server.mcpPage,
+		))
 		mux.Handle("/mcp", config.MCPHandler)
 	}
 	if config.SCIMHandler != nil {
@@ -660,11 +662,12 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 		}
 	}
 
-	handler := http.Handler(validateLocalRequest(config.Address, mux))
+	handler := http.Handler(mux)
 	if server.security != nil {
 		handler = server.security.Middleware(mux)
 	}
 	handler = correlationMiddleware(handler)
+	handler = securityHeaders(handler)
 	server.server = &http.Server{
 		Addr:              config.Address,
 		Handler:           requestLog(handler),
@@ -774,7 +777,7 @@ func writeConversationError(response http.ResponseWriter, err error) {
 		writeAPIError(response, http.StatusNotFound, errors.New("conversation not found"))
 	case errors.Is(err, agent.ErrConversationForbidden):
 		writeAPIError(response, http.StatusForbidden, err)
-	case strings.Contains(err.Error(), "required"), strings.Contains(err.Error(), "exceeds"):
+	case errors.Is(err, agent.ErrInvalidInput):
 		writeAPIError(response, http.StatusBadRequest, err)
 	default:
 		writeAPIError(response, http.StatusInternalServerError, err)
@@ -856,19 +859,21 @@ func (s *Server) interruptChat(response http.ResponseWriter, request *http.Reque
 		http.Error(response, "Conversation is required", http.StatusBadRequest)
 		return
 	}
-	if s.history != nil {
-		conversation, err := s.history.GetConversation(request.Context(), conversationID)
-		if err != nil {
-			writeConversationError(response, err)
-			return
-		}
-		if err := s.authorizeConversation(request.Context(), conversation); err != nil {
-			s.recordCrossAuthorConversation(request, conversation, "conversation.cross-author.interrupt", "denied")
-			writeConversationError(response, err)
-			return
-		}
-		s.recordCrossAuthorConversation(request, conversation, "conversation.cross-author.interrupt", "success")
+	if s.history == nil {
+		writeAPIError(response, http.StatusServiceUnavailable, errors.New("conversation authorization is unavailable"))
+		return
 	}
+	conversation, err := s.history.GetConversation(request.Context(), conversationID)
+	if err != nil {
+		writeConversationError(response, err)
+		return
+	}
+	if err := s.authorizeConversation(request.Context(), conversation); err != nil {
+		s.recordCrossAuthorConversation(request, conversation, "conversation.cross-author.interrupt", "denied")
+		writeConversationError(response, err)
+		return
+	}
+	s.recordCrossAuthorConversation(request, conversation, "conversation.cross-author.interrupt", "success")
 	if err := s.agents.Interrupt(request.Context(), conversationID); err != nil {
 		switch {
 		case errors.Is(err, agent.ErrConversationNotFound):
@@ -1445,6 +1450,10 @@ func (s *Server) contextPage(response http.ResponseWriter, request *http.Request
 	)
 	if err != nil {
 		writeContextPageError(response, err)
+		return
+	}
+	if len(effective.Contexts) == 0 {
+		http.Error(response, "Context resolved without a usable target", http.StatusUnprocessableEntity)
 		return
 	}
 	base, err := s.pageData(request.Context())
@@ -3681,37 +3690,18 @@ func remoteFileURL(origin, revision, filePath string, startLine, endLine int) st
 	return parsed.String()
 }
 
-func validateLocalRequest(address string, next http.Handler) http.Handler {
-	_, configuredPort, _ := net.SplitHostPort(address)
+func securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		host, port, err := net.SplitHostPort(request.Host)
-		if err != nil {
-			host = request.Host
-			port = ""
-		}
-		if !isLoopbackHost(host) || (configuredPort != "" && port != "" && port != configuredPort) {
-			http.Error(response, "Invalid Host", http.StatusForbidden)
-			return
-		}
-		if origin := request.Header.Get("Origin"); origin != "" {
-			parsed, err := url.Parse(origin)
-			if err != nil || !isLoopbackHost(parsed.Hostname()) ||
-				(configuredPort != "" && parsed.Port() != "" && parsed.Port() != configuredPort) {
-				http.Error(response, "Invalid Origin", http.StatusForbidden)
-				return
-			}
-		}
+		response.Header().Set("X-Content-Type-Options", "nosniff")
+		response.Header().Set("X-Frame-Options", "DENY")
+		response.Header().Set(
+			"Content-Security-Policy",
+			"default-src 'self'; base-uri 'self'; frame-ancestors 'none'; object-src 'none'; "+
+				"script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "+
+				"font-src 'self'; connect-src 'self'; form-action 'self'",
+		)
 		next.ServeHTTP(response, request)
 	})
-}
-
-func isLoopbackHost(host string) bool {
-	host = strings.Trim(host, "[]")
-	if strings.EqualFold(host, "localhost") {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
 }
 
 func openBrowser(localURL string) error {

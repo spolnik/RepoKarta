@@ -244,12 +244,3 @@ func newNamedContextID() (string, error) {
 	}
 	return hex.EncodeToString(bytes[:]), nil
 }
-
-func isUniqueConstraint(err error) bool {
-	if err == nil {
-		return false
-	}
-	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "unique constraint") ||
-		strings.Contains(message, "constraint failed: unique")
-}

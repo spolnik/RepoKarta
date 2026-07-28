@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spolnik/RepoKarta/internal/acquisition"
 	"github.com/spolnik/RepoKarta/internal/agent"
@@ -288,7 +289,21 @@ func (s *Server) adminLogin(response http.ResponseWriter, request *http.Request)
 		s.renderAdminError(response, "Invalid sign-in request")
 		return
 	}
-	if !s.security.AuthenticateAdmin(request.FormValue("username"), request.FormValue("password")) {
+	source := request.RemoteAddr
+	if retryAfter := s.security.AdminLoginRetryAfter(source); retryAfter > 0 {
+		response.Header().Set("Retry-After", strconv.Itoa(max(1, int(retryAfter.Round(time.Second)/time.Second))))
+		s.recordAdminEvent(request, "authentication.bootstrap", "administrator-session", "login", "failure", map[string]string{"reason": "throttled"})
+		response.WriteHeader(http.StatusTooManyRequests)
+		s.renderAdmin(response, adminPageData{
+			Version:      s.config.Version,
+			AdminEnabled: s.security.AdminEnabled(),
+			Error:        "Too many unsuccessful sign-in attempts. Wait before trying again.",
+		})
+		return
+	}
+	authenticated := s.security.AuthenticateAdmin(request.FormValue("username"), request.FormValue("password"))
+	s.security.RecordAdminLogin(source, authenticated)
+	if !authenticated {
 		s.recordAdminEvent(request, "authentication.bootstrap", "administrator-session", "login", "failure", nil)
 		s.renderAdminError(response, "The administrator credentials were not accepted")
 		return

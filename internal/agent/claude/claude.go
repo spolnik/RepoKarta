@@ -8,7 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -116,7 +118,12 @@ func (a *Adapter) Start(ctx context.Context, config agent.SessionConfig) (agent.
 		_ = attachments.Close()
 		return nil, err
 	}
-	arguments := commandArguments(config, string(mcpConfig), attachments.Directory())
+	mcpConfigPath := filepath.Join(attachments.Directory(), "mcp.json")
+	if err := os.WriteFile(mcpConfigPath, mcpConfig, 0o600); err != nil {
+		_ = attachments.Close()
+		return nil, fmt.Errorf("write Claude MCP configuration: %w", err)
+	}
+	arguments := commandArguments(config, mcpConfigPath, attachments.Directory())
 
 	process := newCommand(context.WithoutCancel(ctx), command, arguments, attachments.Directory())
 	// Run from the attachment sandbox rather than a repository or user project
@@ -155,7 +162,7 @@ func (a *Adapter) Start(ctx context.Context, config agent.SessionConfig) (agent.
 	return s, nil
 }
 
-func commandArguments(config agent.SessionConfig, mcpConfig, attachmentDirectory string) []string {
+func commandArguments(config agent.SessionConfig, mcpConfigPath, attachmentDirectory string) []string {
 	arguments := []string{
 		"-p",
 		"--input-format", "stream-json",
@@ -163,16 +170,21 @@ func commandArguments(config agent.SessionConfig, mcpConfig, attachmentDirectory
 		"--include-partial-messages",
 		"--verbose",
 		"--strict-mcp-config",
-		"--mcp-config", mcpConfig,
+		"--mcp-config", mcpConfigPath,
 		"--setting-sources", "user",
 		"--settings", "{}",
 		"--exclude-dynamic-system-prompt-sections",
 		"--permission-mode", "plan",
-		"--disallowed-tools", "Bash", "Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch",
+		"--disallowed-tools", "Bash", "Edit", "Write", "NotebookEdit", "Glob", "Grep", "Task", "Agent", "WebFetch", "WebSearch",
 		"--system-prompt", providerInstructions,
 	}
 	if attachmentDirectory != "" {
 		arguments = append(arguments, "--add-dir", attachmentDirectory)
+		arguments = append(arguments,
+			"--allowed-tools",
+			"mcp__repokarta__*",
+			"Read("+filepath.ToSlash(attachmentDirectory)+"/**)",
+		)
 	}
 	model := strings.TrimSpace(config.Model)
 	if model == "" {

@@ -2936,7 +2936,13 @@ func TestChatStreamsNDJSON(t *testing.T) {
 }
 
 func TestChatInterruptDelegatesToConversation(t *testing.T) {
-	conversations := &testConversations{}
+	conversations := &testHistoryConversations{conversation: agent.Conversation{
+		ID: "conversation",
+		Author: agent.ConversationAuthor{
+			ID:       "local:admin",
+			Provider: string(security.ModeLocal),
+		},
+	}}
 	server, err := New(
 		Config{
 			Address:       "127.0.0.1:7331",
@@ -2992,8 +2998,15 @@ func TestChatRejectsInvalidImageBeforeStreaming(t *testing.T) {
 }
 
 func TestServerRejectsUnexpectedHostAndOrigin(t *testing.T) {
+	securityManager, err := security.New(context.Background(), &testSettingsStore{values: make(map[string]string)}, security.Config{
+		Address: "127.0.0.1:7331",
+		Initial: security.Settings{Mode: security.ModeLocal},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	server, err := New(
-		Config{Address: "127.0.0.1:7331"},
+		Config{Address: "127.0.0.1:7331", Security: securityManager},
 		codeintel.New(testStore{}, testSearcher{}, "http://127.0.0.1:7331"),
 		testRefresher{},
 	)
@@ -3021,6 +3034,26 @@ func TestServerRejectsUnexpectedHostAndOrigin(t *testing.T) {
 				t.Fatalf("expected 403, got %d", response.Code)
 			}
 		})
+	}
+
+	goodRequest := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7331/healthz", nil)
+	goodResponse := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(goodResponse, goodRequest)
+	if goodResponse.Header().Get("X-Content-Type-Options") != "nosniff" ||
+		!strings.Contains(goodResponse.Header().Get("Content-Security-Policy"), "frame-ancestors 'none'") {
+		t.Fatalf("security headers missing: %#v", goodResponse.Header())
+	}
+}
+
+func TestAuditFilterPreservesEqualSinceAndUntil(t *testing.T) {
+	timestamp := "2026-07-28T12:00:00Z"
+	request := httptest.NewRequest(http.MethodGet, "/api/admin/audit?since="+timestamp+"&until="+timestamp, nil)
+	filter, err := auditFilter(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filter.Since.IsZero() || filter.Until.IsZero() || !filter.Since.Equal(filter.Until) {
+		t.Fatalf("equal audit bounds were not both preserved: %#v", filter)
 	}
 }
 
@@ -3238,10 +3271,8 @@ func TestHTTPBoundaryAndFormattingHelpers(t *testing.T) {
 		"https://github.com/example/repo/blob/abc/main.go#L2-L4" {
 		t.Fatal("GitHub remote URL changed")
 	}
-	if remoteFileURL("", "abc", "main.go", 1, 1) != "" ||
-		!isLoopbackHost("127.0.0.1") || !isLoopbackHost("[::1]") ||
-		isLoopbackHost("example.com") {
-		t.Fatal("request boundary helper changed")
+	if remoteFileURL("", "abc", "main.go", 1, 1) != "" {
+		t.Fatal("empty remote URL changed")
 	}
 	request := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/dependencies?repository=7&ecosystem=go&limit=25&offset=5", nil)
 	options, err := dependencyOptions(request)

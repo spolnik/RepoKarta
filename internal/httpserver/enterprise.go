@@ -345,6 +345,7 @@ func (s *Server) exportAudit(response http.ResponseWriter, request *http.Request
 	var events []audit.Event
 	truncated := false
 	for len(events) < 50000 {
+		previousBefore := filter.BeforeID
 		page, err := s.enterprise.AuditEvents(request.Context(), filter)
 		if err != nil {
 			writeAPIError(response, http.StatusInternalServerError, err)
@@ -353,6 +354,11 @@ func (s *Server) exportAudit(response http.ResponseWriter, request *http.Request
 		events = append(events, page.Events...)
 		if !page.Truncated {
 			break
+		}
+		if page.NextBefore <= 0 || page.NextBefore == previousBefore ||
+			(previousBefore > 0 && page.NextBefore >= previousBefore) {
+			writeAPIError(response, http.StatusInternalServerError, errors.New("audit export pagination did not make progress"))
+			return
 		}
 		filter.BeforeID = page.NextBefore
 	}
@@ -426,9 +432,14 @@ func auditFilter(request *http.Request) (audit.Filter, error) {
 		}
 		filter.BeforeID = before
 	}
-	for value, target := range map[string]*time.Time{
-		query.Get("since"): &filter.Since, query.Get("until"): &filter.Until,
+	for _, item := range []struct {
+		value  string
+		target *time.Time
+	}{
+		{query.Get("since"), &filter.Since},
+		{query.Get("until"), &filter.Until},
 	} {
+		value, target := item.value, item.target
 		if value == "" {
 			continue
 		}

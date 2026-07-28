@@ -66,8 +66,9 @@ func (s *Server) insightsPage(response http.ResponseWriter, request *http.Reques
 	}
 	data := insightsPageData{
 		pageData: base, Response: result, Filter: filter, SelectedID: selected,
-		View:   normalizeInsightsView(request.URL.Query().Get("view")),
-		Notice: request.URL.Query().Get("notice"), Error: request.URL.Query().Get("error"),
+		View:          normalizeInsightsView(request.URL.Query().Get("view")),
+		Notice:        insightBanner(request.URL.Query().Get("notice"), false),
+		Error:         insightBanner(request.URL.Query().Get("error"), true),
 		CanManage:     canManage,
 		CanAdminister: viewer.Admin,
 		SinceValue:    request.URL.Query().Get("since"), UntilValue: request.URL.Query().Get("until"),
@@ -295,7 +296,7 @@ func (s *Server) setInsightThreshold(response http.ResponseWriter, request *http
 		return
 	}
 	if !strings.HasPrefix(request.URL.Path, "/api/") {
-		http.Redirect(response, request, "/insights?repository="+strconv.FormatInt(updated.RepositoryID, 10)+"&notice="+urlQueryEscape("Advisory threshold saved"), http.StatusSeeOther)
+		http.Redirect(response, request, "/insights?repository="+strconv.FormatInt(updated.RepositoryID, 10)+"&notice=threshold-saved", http.StatusSeeOther)
 		return
 	}
 	writeJSON(response, http.StatusOK, updated)
@@ -343,7 +344,7 @@ func (s *Server) configureSonar(response http.ResponseWriter, request *http.Requ
 		return
 	}
 	if !strings.HasPrefix(request.URL.Path, "/api/") {
-		http.Redirect(response, request, "/insights?repository="+strconv.FormatInt(updated.RepositoryID, 10)+"&notice="+urlQueryEscape("SonarQube connection saved; credential value remains in the environment"), http.StatusSeeOther)
+		http.Redirect(response, request, "/insights?repository="+strconv.FormatInt(updated.RepositoryID, 10)+"&notice=sonar-saved", http.StatusSeeOther)
 		return
 	}
 	writeJSON(response, http.StatusOK, updated)
@@ -396,7 +397,7 @@ func (s *Server) writeInsightMutation(response http.ResponseWriter, request *htt
 		return
 	}
 	location := "/insights?repository=" + strconv.FormatInt(repositoryID, 10) +
-		"&notice=" + urlQueryEscape("Stored "+run.Tool+" run as "+run.Status)
+		"&notice=run-stored"
 	http.Redirect(response, request, location, http.StatusSeeOther)
 }
 
@@ -405,7 +406,26 @@ func (s *Server) writeInsightMutationError(response http.ResponseWriter, request
 		writeAPIError(response, http.StatusBadRequest, err)
 		return
 	}
-	http.Redirect(response, request, "/insights?error="+urlQueryEscape(err.Error()), http.StatusSeeOther)
+	http.Redirect(response, request, "/insights?error=mutation-failed", http.StatusSeeOther)
+}
+
+func insightBanner(code string, isError bool) string {
+	if isError {
+		if code == "mutation-failed" {
+			return "The insight operation could not be completed. Review the submitted values and try again."
+		}
+		return ""
+	}
+	switch code {
+	case "threshold-saved":
+		return "Advisory threshold saved."
+	case "sonar-saved":
+		return "SonarQube connection saved; credential value remains in the environment."
+	case "run-stored":
+		return "The insight run was stored with its reported status."
+	default:
+		return ""
+	}
 }
 
 func (s *Server) requireInsightAdmin(response http.ResponseWriter, request *http.Request) bool {

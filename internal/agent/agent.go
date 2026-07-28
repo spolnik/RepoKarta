@@ -51,6 +51,9 @@ var (
 	// ErrConversationForbidden means the authenticated author does not own the
 	// requested conversation and is not an administrator.
 	ErrConversationForbidden = errors.New("conversation belongs to another author")
+	// ErrInvalidInput classifies validation failures without requiring HTTP
+	// handlers to match human-readable error strings.
+	ErrInvalidInput = errors.New("invalid conversation input")
 )
 
 const (
@@ -237,8 +240,15 @@ type Manager struct {
 	repositoryRoot   string
 	mcpURL           string
 	mcpToken         string
+	mcpTokenIssuer   MCPTokenIssuer
 	citations        CitationSource
 	persistence      ConversationStore
+}
+
+// MCPTokenIssuer creates and revokes credentials bound to one conversation.
+type MCPTokenIssuer interface {
+	Issue(string, ConversationAuthor) (string, error)
+	Revoke(string)
 }
 
 // CitationSource records the exact source URLs returned to provider tools.
@@ -274,6 +284,13 @@ func (m *Manager) UseCitations(source CitationSource) *Manager {
 // manager retains its original process-local behavior.
 func (m *Manager) UsePersistence(store ConversationStore) *Manager {
 	m.persistence = store
+	return m
+}
+
+// UseMCPTokenIssuer replaces the process-wide provider credential with
+// independently revocable conversation credentials.
+func (m *Manager) UseMCPTokenIssuer(issuer MCPTokenIssuer) *Manager {
+	m.mcpTokenIssuer = issuer
 	return m
 }
 
@@ -330,6 +347,13 @@ func (m *Manager) RenameConversation(ctx context.Context, id, title string) erro
 	if m.persistence == nil {
 		return ErrConversationNotFound
 	}
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return fmt.Errorf("%w: conversation title is required", ErrInvalidInput)
+	}
+	if len(title) > 120 {
+		return fmt.Errorf("%w: conversation title exceeds 120 characters", ErrInvalidInput)
+	}
 	if err := m.persistence.RenameConversation(ctx, id, title); err != nil {
 		return err
 	}
@@ -363,6 +387,9 @@ func (m *Manager) DeleteConversation(ctx context.Context, id string) error {
 		}
 		_ = conversation.currentSession().Close()
 	}
+	if m.mcpTokenIssuer != nil {
+		m.mcpTokenIssuer.Revoke(id)
+	}
 	if m.citations != nil {
 		m.citations.Clear(id)
 	}
@@ -372,7 +399,7 @@ func (m *Manager) DeleteConversation(ctx context.Context, id string) error {
 // Send streams a single turn. New conversation IDs are generated server-side.
 func (m *Manager) Send(ctx context.Context, request TurnRequest, emit func(Event) error) error {
 	if request.Message == "" && len(request.Images) == 0 {
-		return errors.New("message or image is required")
+		return fmt.Errorf("%w: message or image is required", ErrInvalidInput)
 	}
 	if err := ValidateImages(request.Images); err != nil {
 		return err
@@ -588,7 +615,7 @@ func (m *Manager) RunEphemeral(
 	emit func(Event) error,
 ) (EphemeralResult, error) {
 	if request.Message == "" && len(request.Images) == 0 {
-		return EphemeralResult{}, errors.New("message or image is required")
+		return EphemeralResult{}, fmt.Errorf("%w: message or image is required", ErrInvalidInput)
 	}
 	if err := ValidateImages(request.Images); err != nil {
 		return EphemeralResult{}, err
@@ -616,6 +643,9 @@ func (m *Manager) RunEphemeral(
 		m.mu.Lock()
 		delete(m.ephemeralAuthors, conversationID)
 		m.mu.Unlock()
+		if m.mcpTokenIssuer != nil {
+			m.mcpTokenIssuer.Revoke(conversationID)
+		}
 	}()
 	conversation, err := m.startConversation(ctx, request, conversationID)
 	if err != nil {
@@ -752,16 +782,16 @@ func (m *Manager) conversation(ctx context.Context, request TurnRequest) (*manag
 			return nil, "", ErrConversationForbidden
 		}
 		if request.Provider != "" && request.Provider != conversation.provider {
-			return nil, "", errors.New("a conversation cannot switch providers")
+			return nil, "", fmt.Errorf("%w: a conversation cannot switch providers", ErrInvalidInput)
 		}
 		if request.Model != "" && request.Model != conversation.model {
-			return nil, "", errors.New("a conversation cannot switch models")
+			return nil, "", fmt.Errorf("%w: a conversation cannot switch models", ErrInvalidInput)
 		}
 		if request.Effort != "" && request.Effort != conversation.effort {
-			return nil, "", errors.New("a conversation cannot switch effort")
+			return nil, "", fmt.Errorf("%w: a conversation cannot switch effort", ErrInvalidInput)
 		}
 		if len(request.Images) > 0 && !conversation.imageInput {
-			return nil, "", errors.New("this provider does not support image input")
+			return nil, "", fmt.Errorf("%w: this provider does not support image input", ErrInvalidInput)
 		}
 		// Refresh IdP groups from the newly authenticated browser request before
 		// the provider can make conversation-scoped MCP calls. This prevents a
@@ -865,16 +895,27 @@ func (m *Manager) startConversation(ctx context.Context, request TurnRequest, co
 			request.Effort,
 		)
 	}
+	mcpToken := m.mcpToken
+	if m.mcpTokenIssuer != nil {
+		issuedToken, issueErr := m.mcpTokenIssuer.Issue(conversationID, normalizeConversationAuthor(request.Author))
+		if issueErr != nil {
+			return nil, fmt.Errorf("issue conversation MCP credential: %w", issueErr)
+		}
+		mcpToken = issuedToken
+	}
 	session, err := adapter.Start(ctx, SessionConfig{
 		ConversationID: conversationID,
 		Model:          request.Model,
 		Effort:         request.Effort,
 		RepositoryRoot: m.repositoryRoot,
 		MCPURL:         conversationMCPURL(m.mcpURL, conversationID),
-		MCPToken:       m.mcpToken,
+		MCPToken:       mcpToken,
 		ResumeCursor:   request.ResumeCursor,
 	})
 	if err != nil {
+		if m.mcpTokenIssuer != nil {
+			m.mcpTokenIssuer.Revoke(conversationID)
+		}
 		probeContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		refreshed := adapter.Status(probeContext)
 		cancel()
@@ -946,6 +987,9 @@ func (m *Manager) dropConversation(id string, conversation *managedConversation)
 	}
 	m.mu.Unlock()
 	_ = conversation.currentSession().Close()
+	if m.mcpTokenIssuer != nil {
+		m.mcpTokenIssuer.Revoke(id)
+	}
 	if m.citations != nil {
 		m.citations.Clear(id)
 	}
@@ -985,18 +1029,21 @@ func (m *Manager) StartIdleReaper(ctx context.Context, idle time.Duration) {
 
 func (m *Manager) reapIdle(cutoff time.Time) int {
 	m.mu.Lock()
-	var expired []*managedConversation
+	expired := make(map[string]*managedConversation)
 	for id, conversation := range m.conversations {
 		lastUsed := time.Unix(0, conversation.lastUsed.Load())
 		if conversation.active.Load() || !lastUsed.Before(cutoff) {
 			continue
 		}
 		delete(m.conversations, id)
-		expired = append(expired, conversation)
+		expired[id] = conversation
 	}
 	m.mu.Unlock()
-	for _, conversation := range expired {
+	for id, conversation := range expired {
 		_ = conversation.currentSession().Close()
+		if m.mcpTokenIssuer != nil {
+			m.mcpTokenIssuer.Revoke(id)
+		}
 	}
 	return len(expired)
 }
@@ -1009,9 +1056,12 @@ func (m *Manager) Close() error {
 	m.mu.Unlock()
 
 	var closeError error
-	for _, conversation := range conversations {
+	for id, conversation := range conversations {
 		if err := conversation.currentSession().Close(); err != nil && !errors.Is(err, io.EOF) {
 			closeError = errors.Join(closeError, err)
+		}
+		if m.mcpTokenIssuer != nil {
+			m.mcpTokenIssuer.Revoke(id)
 		}
 	}
 	return closeError
@@ -1031,7 +1081,8 @@ func normalizeTurnControls(timeoutSeconds int, tokenBudget int64) (int, int64, e
 	}
 	if timeoutSeconds < MinimumTurnTimeoutSeconds || timeoutSeconds > MaximumTurnTimeoutSeconds {
 		return 0, 0, fmt.Errorf(
-			"timeout_seconds must be from %d to %d",
+			"%w: timeout_seconds must be from %d to %d",
+			ErrInvalidInput,
 			MinimumTurnTimeoutSeconds,
 			MaximumTurnTimeoutSeconds,
 		)
@@ -1041,7 +1092,8 @@ func normalizeTurnControls(timeoutSeconds int, tokenBudget int64) (int, int64, e
 	}
 	if tokenBudget < 256 || tokenBudget > MaximumTokenBudget {
 		return 0, 0, fmt.Errorf(
-			"token_budget must be from 256 to %d",
+			"%w: token_budget must be from 256 to %d",
+			ErrInvalidInput,
 			MaximumTokenBudget,
 		)
 	}

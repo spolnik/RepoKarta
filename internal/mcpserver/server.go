@@ -34,14 +34,15 @@ const (
 
 // Config controls the local MCP endpoint.
 type Config struct {
-	Version       string
-	BaseURL       string
-	Token         string
-	Artifacts     ArtifactReader
-	Insights      InsightReader
-	Dependencies  DependencyReader
-	ResolveViewer func(context.Context, string) (access.Viewer, error)
-	AllowUnscoped func() bool
+	Version        string
+	BaseURL        string
+	Token          string
+	Artifacts      ArtifactReader
+	Insights       InsightReader
+	Dependencies   DependencyReader
+	TokenAuthority *TokenAuthority
+	ResolveViewer  func(context.Context, string) (access.Viewer, error)
+	AllowUnscoped  func() bool
 }
 
 // DependencyReader joins mutable, timestamped observations onto immutable
@@ -1327,16 +1328,24 @@ func recordEvidence(tracker *CitationTracker, conversationID string, evidence gr
 
 func bearerAuth(config Config, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		expected := "Bearer " + config.Token
-		actual := request.Header.Get("Authorization")
-		if config.Token == "" || len(actual) != len(expected) || subtle.ConstantTimeCompare([]byte(actual), []byte(expected)) != 1 {
+		actual := strings.TrimSpace(request.Header.Get("Authorization"))
+		token := strings.TrimSpace(strings.TrimPrefix(actual, "Bearer "))
+		conversationID := strings.TrimSpace(request.URL.Query().Get("conversation_id"))
+		authorized := false
+		if conversationID != "" && config.TokenAuthority != nil {
+			authorized = aToken(config.TokenAuthority, token, conversationID)
+		} else {
+			expected := "Bearer " + config.Token
+			authorized = config.Token != "" && len(actual) == len(expected) &&
+				subtle.ConstantTimeCompare([]byte(actual), []byte(expected)) == 1
+		}
+		if !authorized {
 			response.Header().Set("WWW-Authenticate", "Bearer")
 			http.Error(response, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
 		ctx := request.Context()
 		if config.ResolveViewer != nil {
-			conversationID := strings.TrimSpace(request.URL.Query().Get("conversation_id"))
 			if conversationID == "" {
 				if config.AllowUnscoped == nil || !config.AllowUnscoped() {
 					http.Error(response, "A conversation-scoped MCP endpoint is required in shared mode", http.StatusForbidden)
@@ -1354,6 +1363,10 @@ func bearerAuth(config Config, next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(response, request.WithContext(ctx))
 	})
+}
+
+func aToken(authority *TokenAuthority, token, conversationID string) bool {
+	return authority.Validate(token, conversationID)
 }
 
 func boolPointer(value bool) *bool {

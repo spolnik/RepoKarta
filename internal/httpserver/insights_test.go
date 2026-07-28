@@ -199,10 +199,10 @@ func TestInsightMutationAndComparisonAPIs(t *testing.T) {
 		{http.MethodGet, "/api/insights/sonar", "", "", http.StatusOK, `"connections"`},
 		{http.MethodPut, "/api/insights/sonar", `{"repository_id":8,"base_url":"https://sonar.example.com","project_key":"service"}`, "application/json", http.StatusOK, `"project_key":"service"`},
 		{http.MethodPost, "/api/insights/sonar/sync", `{"repository_id":8}`, "application/json", http.StatusCreated, `"tool":"SonarQube"`},
-		{http.MethodPost, "/insights/derive", "repository_id=8", "application/x-www-form-urlencoded", http.StatusSeeOther, "Stored%20derived%20run"},
-		{http.MethodPost, "/insights/threshold", "repository_id=8&key=coverage.line&operator=%3E%3D&value=80&severity=warning", "application/x-www-form-urlencoded", http.StatusSeeOther, "Advisory%20threshold%20saved"},
-		{http.MethodPost, "/insights/sonar", "repository_id=8&base_url=https%3A%2F%2Fsonar.example.com&project_key=service&poll_interval_minutes=30&retention_runs=10", "application/x-www-form-urlencoded", http.StatusSeeOther, "SonarQube%20connection%20saved"},
-		{http.MethodPost, "/insights/sonar/sync", "repository_id=8", "application/x-www-form-urlencoded", http.StatusSeeOther, "Stored%20SonarQube%20run"},
+		{http.MethodPost, "/insights/derive", "repository_id=8", "application/x-www-form-urlencoded", http.StatusSeeOther, "notice=run-stored"},
+		{http.MethodPost, "/insights/threshold", "repository_id=8&key=coverage.line&operator=%3E%3D&value=80&severity=warning", "application/x-www-form-urlencoded", http.StatusSeeOther, "notice=threshold-saved"},
+		{http.MethodPost, "/insights/sonar", "repository_id=8&base_url=https%3A%2F%2Fsonar.example.com&project_key=service&poll_interval_minutes=30&retention_runs=10", "application/x-www-form-urlencoded", http.StatusSeeOther, "notice=sonar-saved"},
+		{http.MethodPost, "/insights/sonar/sync", "repository_id=8", "application/x-www-form-urlencoded", http.StatusSeeOther, "notice=run-stored"},
 	} {
 		response := request(testCase.method, testCase.target, testCase.body, testCase.contentType)
 		if response.Code != testCase.status ||

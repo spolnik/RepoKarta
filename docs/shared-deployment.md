@@ -17,6 +17,9 @@ does not turn RepoKarta into a Git host or allow repository mutation.
   readable only by that account. The password, SCIM token, and SAML private
   key must not be copied into an environment file, command history, backup
   manifest, or diagnostic bundle.
+- Bootstrap sign-in is source-throttled with exponential backoff after
+  repeated failures. Monitor `authentication.bootstrap` audit events as the
+  alerting signal.
 - Block direct network access to the RepoKarta listener. The public URL must
   be the exact HTTPS origin presented by the reverse proxy.
 
@@ -50,6 +53,10 @@ private listener directly. The proxy must reject arbitrary `Host` values and
 must not log assertion tokens or cookies. For Cloudflare Access, forward
 `Cf-Access-Jwt-Assertion`. For SAML, preserve secure cookies and all `/saml/`
 paths.
+
+The MCP setup page requires AI-generation permission outside local mode.
+Provider harnesses receive revocable conversation-bound MCP credentials, so
+there is no shared deployment bearer token to copy from the page.
 
 If SCIM is enabled, expose `/scim/v2/*` only through the same trusted HTTPS
 origin, forward its `Authorization` header, and suppress that header in proxy
