@@ -780,9 +780,17 @@ func capNeighborhoodConnections(
 	if len(connections) <= limit {
 		return connections, nil
 	}
-	kept := append([]TopologyConnection(nil), connections[:limit]...)
+	ranked := append([]TopologyConnection(nil), connections...)
+	slices.SortStableFunc(ranked, func(left, right TopologyConnection) int {
+		if difference := topologyConnectionUsefulness(right) -
+			topologyConnectionUsefulness(left); difference != 0 {
+			return difference
+		}
+		return strings.Compare(left.ID, right.ID)
+	})
+	kept := append([]TopologyConnection(nil), ranked[:limit]...)
 	omittedComponents := make(map[string]bool)
-	for _, connection := range connections[limit:] {
+	for _, connection := range ranked[limit:] {
 		if !selected[connection.Source] {
 			omittedComponents[connection.Source] = true
 		}
@@ -803,6 +811,34 @@ func capNeighborhoodConnections(
 		OmittedConnectionCount: connectionCount,
 		OmittedComponentCount:  componentCount,
 	}
+}
+
+func topologyConnectionUsefulness(connection TopologyConnection) int {
+	score := 0
+	switch connection.State {
+	case "confirmed":
+		score += 100
+	case "static_only":
+		score += 60
+	case "runtime_only":
+		score += 40
+	}
+	switch connection.Confidence {
+	case "high":
+		score += 30
+	case "medium":
+		score += 20
+	case "low":
+		score += 10
+	}
+	if connection.TargetResolved {
+		score += 15
+	}
+	if connection.Runtime != nil {
+		score += min(10, int(connection.Runtime.RequestCount))
+	}
+	score += min(5, len(connection.Evidence))
+	return score
 }
 
 func componentIsInboundNeighbor(

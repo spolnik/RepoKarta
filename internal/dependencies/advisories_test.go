@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -67,6 +70,82 @@ func TestGoVersionMatchesOSVSemverRangeWithoutLeadingV(t *testing.T) {
 	if matched, _, _ := affectedVersion("go", "v1.3.0", affected); matched {
 		t.Fatal("fixed Go version matched SEMVER range")
 	}
+}
+
+func TestCVSS4CriticalVectorRanksAsCritical(t *testing.T) {
+	severity, _ := advisorySeverity(OSVAdvisory{Severity: []OSVSeverity{{
+		Type:  "CVSS_V4",
+		Score: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N",
+	}}}, OSVAffected{})
+	if severity != "critical" {
+		t.Fatalf("CVSS 4 severity = %q", severity)
+	}
+}
+
+func TestAffectedVersionSortsUnorderedOSVEventsByEcosystemVersion(t *testing.T) {
+	affected := OSVAffected{Ranges: []OSVRange{{
+		Type: "ECOSYSTEM",
+		Events: []OSVEvent{
+			{Fixed: "1.10.0"},
+			{Introduced: "1.2.0"},
+		},
+	}}}
+	if matched, _, fixed := affectedVersion("npm", "1.9.0", affected); !matched || fixed != "1.10.0" {
+		t.Fatalf("unordered range match = %t, fixed = %q", matched, fixed)
+	}
+}
+
+func TestPartialAdvisorySnapshotReportsPartialCheck(t *testing.T) {
+	inventory := findingInventory(graph.DependencyDeclaration{
+		Ecosystem: "npm", Package: "left-pad", Declared: "1.0.0",
+		Resolution: "exact", Evidence: findingEvidence("package.json", 1),
+	})
+	snapshot := fixtureSnapshot(inventory)
+	snapshot.Partial = true
+	snapshot.FailedCount = 2
+	response := buildFindings(inventory, &snapshot, nil, AdvisoryOptions{}, snapshot.RetrievedAt)
+	if response.CheckState != "partial" || response.Snapshot.State != "partial" ||
+		!strings.Contains(response.CheckMessage, "2 advisory fetches failed") {
+		t.Fatalf("partial response = %+v", response)
+	}
+}
+
+func TestAdvisoryFetchKeepsPartialResultsAndStopsOnFatalError(t *testing.T) {
+	t.Run("per-advisory failure keeps successful evidence", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+			if strings.HasSuffix(request.URL.Path, "/broken") {
+				http.Error(response, "temporary", http.StatusInternalServerError)
+				return
+			}
+			_ = json.NewEncoder(response).Encode(OSVAdvisory{ID: "good"})
+		}))
+		defer server.Close()
+		service := NewService(t.Context(), &observationMemoryStore{}, server.Client())
+		service.advisoryBaseURL = server.URL
+		advisories, failed, err := service.fetchAdvisories([]string{"broken", "good"})
+		if err == nil || failed != 1 || len(advisories) != 1 || advisories[0].ID != "good" {
+			t.Fatalf("partial fetch = %+v, failed=%d, err=%v", advisories, failed, err)
+		}
+	})
+
+	t.Run("fatal response stops new dispatch", func(t *testing.T) {
+		var requests atomic.Int32
+		server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+			requests.Add(1)
+			http.Error(response, "rate limited", http.StatusTooManyRequests)
+		}))
+		defer server.Close()
+		service := NewService(t.Context(), &observationMemoryStore{}, server.Client())
+		service.advisoryBaseURL = server.URL
+		ids := make([]string, 50)
+		for index := range ids {
+			ids[index] = fmt.Sprintf("fatal-%d", index)
+		}
+		_, failed, err := service.fetchAdvisories(ids)
+		if err == nil || failed == 0 || requests.Load() >= int32(len(ids)) {
+			t.Fatalf("fatal fetch requests=%d failed=%d err=%v", requests.Load(), failed, err)
+		}
+	})
 }
 
 func TestFindingsPreferResolvedVersionsAndPreserveTriageScope(t *testing.T) {

@@ -28,6 +28,9 @@ var (
 	environmentQuotedKeyValuePattern = regexp.MustCompile(
 		`["']([A-Z][A-Z0-9_]*)["']\s*[:=]\s*["']([^"']+)["']`,
 	)
+	applicationConfigurationValuePattern = regexp.MustCompile(
+		`^\s*([A-Za-z][A-Za-z0-9_.-]*)\s*[:=]\s*(.+?)\s*$`,
+	)
 	kubernetesEnvironmentNamePattern = regexp.MustCompile(
 		`^\s*-\s*name\s*:\s*["']?([A-Z][A-Z0-9_]*)["']?\s*$`,
 	)
@@ -269,6 +272,12 @@ func extractEnvironmentAssignments(
 		}
 		if match := environmentKeyValuePattern.FindStringSubmatch(line); len(match) == 3 {
 			add(match[1], match[2], lineNumber)
+		} else if rank == environmentAssignmentApplication {
+			if match := applicationConfigurationValuePattern.FindStringSubmatch(line); len(match) == 3 &&
+				strings.Contains(match[1], ".") &&
+				isConnectionEnvironmentVariable(match[1]) {
+				add(match[1], match[2], lineNumber)
+			}
 		}
 		for _, match := range environmentQuotedKeyValuePattern.FindAllStringSubmatch(line, -1) {
 			add(match[1], match[2], lineNumber)
@@ -311,6 +320,7 @@ func isConnectionEnvironmentVariable(variable string) bool {
 	variable = strings.ToUpper(strings.TrimSpace(variable))
 	for _, marker := range []string{
 		"URL", "URI", "HOST", "ENDPOINT", "ADDRESS", "UPSTREAM", "ROUTE", "SERVICE",
+		"BROKER", "BOOTSTRAP", "DATASOURCE", "TARGET",
 	} {
 		if strings.Contains(variable, marker) {
 			return true
@@ -324,9 +334,8 @@ func sanitizedEnvironmentAssignmentValue(variable, value string) (string, bool) 
 	if !ok {
 		return "", false
 	}
-	hasExplicitServiceScheme := strings.HasPrefix(strings.ToLower(strings.TrimSpace(value)), "http://") ||
-		strings.HasPrefix(strings.ToLower(strings.TrimSpace(value)), "https://") ||
-		strings.HasPrefix(strings.ToLower(strings.TrimSpace(value)), "lb://")
+	lowerValue := strings.ToLower(strings.TrimSpace(value))
+	hasExplicitServiceScheme := strings.Contains(lowerValue, "://")
 	if !hasExplicitServiceScheme && !isConnectionEnvironmentVariable(variable) {
 		return "", false
 	}
@@ -546,7 +555,7 @@ func (b *builder) topRankedEnvironmentAssignments(variable string) []Environment
 	assignments := make([]EnvironmentAssignment, 0)
 	maximumRank := 0
 	for _, assignment := range b.environmentAssignments {
-		if assignment.Variable != variable {
+		if !strings.EqualFold(assignment.Variable, variable) {
 			continue
 		}
 		if assignment.Rank > maximumRank {
@@ -588,6 +597,9 @@ func (b *builder) resolvedEnvironmentTarget(
 	if !ok {
 		return resolvedEnvironmentTarget{}, false
 	}
+	if transport == "http" && placeholder.Protocol != "" && placeholder.Protocol != "http" {
+		transport = placeholder.Protocol
+	}
 	if targetID, resolved := b.knownServiceTarget(host, placeholder.Source); resolved {
 		return resolvedEnvironmentTarget{
 			target: targetID, transport: transport, targetResolved: true,
@@ -614,13 +626,21 @@ func environmentTargetHost(value string) (string, string, bool) {
 		return "", "", false
 	}
 	if parsed, err := url.Parse(value); err == nil && parsed.Scheme != "" {
-		if parsed.Scheme != "http" && parsed.Scheme != "https" && parsed.Scheme != "lb" {
-			return "", "", false
+		// url.Parse treats a bare host:port as scheme:path. Only accept a
+		// scheme when the value actually has URI syntax; otherwise fall through
+		// to the host/port parser below.
+		if strings.Contains(value, "://") {
+			switch strings.ToLower(parsed.Scheme) {
+			case "http", "https", "lb", "grpc", "grpcs", "kafka", "amqp",
+				"postgres", "postgresql", "mysql", "mongodb", "redis", "rediss":
+			default:
+				return "", "", false
+			}
+			if parsed.Hostname() == "" {
+				return "", "", false
+			}
+			return strings.ToLower(parsed.Hostname()), strings.ToLower(parsed.Scheme), true
 		}
-		if parsed.Hostname() == "" {
-			return "", "", false
-		}
-		return strings.ToLower(parsed.Hostname()), strings.ToLower(parsed.Scheme), true
 	}
 	host := strings.Trim(strings.SplitN(value, "/", 2)[0], "[]")
 	if splitHost, _, err := net.SplitHostPort(host); err == nil {

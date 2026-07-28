@@ -20,6 +20,13 @@ import (
 	"github.com/spolnik/RepoKarta/internal/graph"
 )
 
+var (
+	registryTokenEnvironmentPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	prereleaseQualifierPattern      = regexp.MustCompile(
+		`(?i)(?:^|[0-9._+-])(?:snapshot|alpha|beta|rc|dev|pre|preview|milestone|m)(?:[0-9]*)(?:$|[._+-])`,
+	)
+)
+
 const (
 	PublicNPMRegistry     = "https://registry.npmjs.org"
 	PublicMavenRepository = "https://search.maven.org"
@@ -162,7 +169,7 @@ func ParseRegistryConfigs(value string) ([]RegistryConfig, error) {
 			}
 		}
 		if configs[index].TokenEnv != "" &&
-			!regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`).MatchString(configs[index].TokenEnv) {
+			!registryTokenEnvironmentPattern.MatchString(configs[index].TokenEnv) {
 			return nil, fmt.Errorf("dependency registry %d has an invalid token environment variable", index+1)
 		}
 	}
@@ -877,15 +884,8 @@ func genericStableVersion(version string) bool {
 	if lower == "" {
 		return false
 	}
-	for _, marker := range []string{
-		"snapshot", "alpha", "beta", "-rc", ".rc", "rc", "dev", "pre",
-		"preview", "milestone", "-m", ".m",
-	} {
-		if strings.Contains(lower, marker) {
-			return false
-		}
-	}
-	return len(numericVersionParts(version)) > 0
+	return !prereleaseQualifierPattern.MatchString(lower) &&
+		len(numericVersionParts(version)) > 0
 }
 
 func escapeGoModulePath(module string) string {

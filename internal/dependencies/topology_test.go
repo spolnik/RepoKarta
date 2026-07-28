@@ -535,3 +535,17 @@ func roleForComponent(components []TopologyComponent, id string) string {
 	}
 	return ""
 }
+
+func TestNeighborhoodCapPrefersUsefulConnectionsOverIDOrder(t *testing.T) {
+	connections := []TopologyConnection{
+		{ID: "a-low", Source: "selected", Target: "candidate", State: "static_only", Confidence: "low"},
+		{ID: "z-confirmed", Source: "selected", Target: "resolved", State: "confirmed", Confidence: "high", TargetResolved: true},
+	}
+	kept, group := capNeighborhoodConnections(
+		connections, "outbound", 1, map[string]bool{"selected": true},
+	)
+	if len(kept) != 1 || kept[0].ID != "z-confirmed" || group == nil ||
+		group.OmittedConnectionCount != 1 {
+		t.Fatalf("usefulness cap kept=%+v group=%+v", kept, group)
+	}
+}

@@ -40,13 +40,13 @@ var (
 		`(?i)(?:topic(?:s)?|destination)\s*(?:=|:|\()\s*["'` + "`" + `]([a-z0-9][a-z0-9._-]{1,126})`,
 	)
 	topologyKafkaCallPattern = regexp.MustCompile(
-		`(?i)(?:subscribe|consumer|listener|consume|receive|producerrecord|publish|produce|send)\s*\(\s*["'` + "`" + `]([a-z0-9][a-z0-9._-]{1,126})`,
+		`(?i)\b(?:subscribe|consumer|listener|consume|receive|producerrecord|publish|produce|send)\b\s*\(\s*["'` + "`" + `]([a-z0-9][a-z0-9._-]{1,126})`,
 	)
 	topologyMCPServerIndicator = regexp.MustCompile(
 		`(?i)(?:@modelcontextprotocol/sdk|mcpserver|mcp\.newserver|servercapabilities|streamablehttpservertransport|handlefunc\(\s*["'` + "`" + `](?:post )?/mcp)`,
 	)
 	topologyPlaceholderPattern = regexp.MustCompile(
-		`\$\{([A-Z][A-Z0-9_]*)(?::([^}]+))?\}`,
+		`\$\{([A-Za-z][A-Za-z0-9_.-]*)(?::([^}]+))?\}`,
 	)
 	topologyYAMLKeyPattern = regexp.MustCompile(
 		`^(\s*)([A-Za-z][A-Za-z0-9_.-]*)\s*:\s*(.*?)\s*$`,
@@ -155,7 +155,7 @@ func (b *builder) addDetectedConnections(
 ) {
 	isMCPConfig := strings.Contains(strings.ToLower(path.Base(filePath)), "mcp") &&
 		bytes.Contains(bytes.ToLower(content), []byte("mcpservers"))
-	kafkaSource := isKafkaSource(filePath, content)
+	kafkaMarker := kafkaSourceMarker(filePath, content)
 	scanner := bufio.NewScanner(bytes.NewReader(content))
 	scanner.Buffer(make([]byte, 0, 64*1024), maximumSourceFileSize)
 	lineNumber := 0
@@ -197,10 +197,11 @@ func (b *builder) addDetectedConnections(
 				if len(match) > 2 {
 					defaultValue = strings.TrimSpace(match[2])
 				}
+				protocol, interaction := placeholderProtocol(lower)
 				b.topologyPlaceholders = append(b.topologyPlaceholders, TopologyPlaceholder{
 					Source: sourceID, Variable: match[1], Default: defaultValue,
 					MapKeyCandidate: mapKeyCandidate,
-					Protocol:        "http", Interaction: "calls",
+					Protocol:        protocol, Interaction: interaction,
 					ConsumptionEvidence: b.evidence(
 						repository, revision, filePath, lineNumber, match[0],
 					),
@@ -258,14 +259,17 @@ func (b *builder) addDetectedConnections(
 			})
 		}
 
-		if kafkaSource {
+		if kafkaMarker != "" {
 			topic, interaction := kafkaInteraction(line, lower)
 			if topic != "" {
 				topicID := b.externalSystemComponent("queue", topic, "Kafka", []string{topic})
 				connection := SystemConnection{
 					Protocol: "kafka", Interaction: interaction, Transport: "kafka",
 					Confidence: confidence, EvidenceOrigin: "static",
-					Evidence: []Evidence{b.evidence(repository, revision, filePath, lineNumber, topic)},
+					Evidence: []Evidence{b.evidence(
+						repository, revision, filePath, lineNumber,
+						topic+" via "+kafkaMarker,
+					)},
 				}
 				if interaction == "consumes" {
 					connection.Source, connection.Target = topicID, sourceID
@@ -367,6 +371,13 @@ func topologyPlaceholderConsumerLine(line, filePath string) bool {
 	if httpClientLine(lower, filePath) {
 		return true
 	}
+	for _, marker := range []string{
+		"kafka", "broker", "bootstrap", "datasource", "database", "jdbc", "grpc",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
 	for _, match := range topologyPlaceholderPattern.FindAllStringSubmatch(line, -1) {
 		if len(match) > 1 && nameShapeServiceCandidate(strings.ToUpper(match[1])) != "" {
 			return true
@@ -380,11 +391,8 @@ func topologyPlaceholderConsumerLine(line, filePath string) bool {
 	return false
 }
 
-func isKafkaSource(filePath string, content []byte) bool {
+func kafkaSourceMarker(filePath string, content []byte) string {
 	normalizedPath := strings.ToLower(strings.ReplaceAll(filePath, "\\", "/"))
-	if strings.Contains(path.Base(normalizedPath), "kafka") {
-		return true
-	}
 	lower := strings.ToLower(string(content))
 	for _, marker := range []string{
 		"@kafkalistener", "kafkatemplate", "producerrecord",
@@ -394,10 +402,35 @@ func isKafkaSource(filePath string, content []byte) bool {
 		"spring.kafka.", "bootstrap.servers", "kafka.bootstrap",
 	} {
 		if strings.Contains(lower, marker) {
-			return true
+			return marker
 		}
 	}
-	return false
+	if strings.Contains(lower, "stomptemplate") ||
+		strings.Contains(lower, "websocket") ||
+		strings.Contains(lower, "simpmessage") {
+		return ""
+	}
+	if strings.Contains(path.Base(normalizedPath), "kafka") {
+		return "kafka filename"
+	}
+	return ""
+}
+
+func placeholderProtocol(lower string) (string, string) {
+	switch {
+	case strings.Contains(lower, "kafka"), strings.Contains(lower, "broker"),
+		strings.Contains(lower, "bootstrap.servers"):
+		return "kafka", "publishes"
+	case strings.Contains(lower, "datasource"), strings.Contains(lower, "database"),
+		strings.Contains(lower, "jdbc"), strings.Contains(lower, "postgres"),
+		strings.Contains(lower, "mysql"), strings.Contains(lower, "mongodb"),
+		strings.Contains(lower, "redis"):
+		return "database", "reads_writes"
+	case strings.Contains(lower, "grpc"):
+		return "grpc", "calls"
+	default:
+		return "http", "calls"
+	}
 }
 
 func isTopologyTestArtifact(filePath string) bool {
@@ -495,12 +528,10 @@ func topologyExternalPeerName(host string) string {
 	if net.ParseIP(host) != nil || !strings.Contains(host, ".") {
 		return normalizeServiceName(host)
 	}
-	if name, err := publicsuffix.EffectiveTLDPlusOne(host); err == nil && name != "" {
-		return name
-	}
-	labels := strings.Split(host, ".")
-	if len(labels) >= 2 {
-		return strings.Join(labels[len(labels)-2:], ".")
+	if _, icann := publicsuffix.PublicSuffix(host); icann {
+		if name, err := publicsuffix.EffectiveTLDPlusOne(host); err == nil && name != "" {
+			return name
+		}
 	}
 	return host
 }

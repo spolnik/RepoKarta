@@ -99,6 +99,60 @@ func TestClient(t *testing.T) {
 	}
 }
 
+func TestEnvironmentTargetHostFallsBackForBareHostPort(t *testing.T) {
+	host, transport, ok := environmentTargetHost("service:8080")
+	if !ok || host != "service" || transport != "http" {
+		t.Fatalf("bare host target = %q, %q, %t", host, transport, ok)
+	}
+}
+
+func TestTopologyPlaceholdersPreserveProtocolAndDottedSpringKeys(t *testing.T) {
+	builder := newBuilder("http://127.0.0.1:7331")
+	repository := catalog.Repository{ID: 91, Name: "orders", IndexedCommit: "aaaaaaaa"}
+	builder.addDistributedTopology(repository, repository.IndexedCommit, "README.md", map[string][]byte{
+		"README.md": []byte("# Orders"),
+		"src/main/resources/application.properties": []byte(`
+spring.kafka.bootstrap-servers=${spring.kafka.brokers}
+spring.kafka.brokers=kafka.private.corp:9092
+spring.datasource.url=${spring.datasource.target}
+spring.datasource.target=postgresql://db.private.corp:5432/orders
+`),
+	})
+	snapshot := builder.snapshot("protocol-placeholders")
+	protocols := map[string]SystemConnection{}
+	for _, connection := range snapshot.Connections {
+		if connection.EnvironmentVariable != "" {
+			protocols[connection.Protocol] = connection
+		}
+	}
+	if protocols["kafka"].Transport != "kafka" ||
+		protocols["kafka"].Interaction != "publishes" ||
+		protocols["database"].Transport != "postgresql" ||
+		protocols["database"].Interaction != "reads_writes" {
+		t.Fatalf("placeholder protocols = %+v", protocols)
+	}
+	if topologyExternalPeerName("db.private.corp") != "db.private.corp" ||
+		topologyExternalPeerName("api.stripe.com") != "stripe.com" {
+		t.Fatal("private and public FQDN naming rules were not distinguished")
+	}
+}
+
+func TestKafkaClassifierExcludesWebSocketTemplatesAndRecordsMarker(t *testing.T) {
+	if marker := kafkaSourceMarker("Socket.java", []byte(
+		`webSocketTemplate.send("orders.created"); STOMPTemplate.publish("orders.created");`,
+	)); marker != "" {
+		t.Fatalf("WebSocket/STOMP source qualified as Kafka via %q", marker)
+	}
+	if marker := kafkaSourceMarker("Producer.java", []byte(
+		`KafkaTemplate.send("orders.created");`,
+	)); marker != "kafkatemplate" {
+		t.Fatalf("Kafka marker = %q", marker)
+	}
+	if topic, _ := kafkaInteraction(`resend("orders.created")`, `resend("orders.created")`); topic != "" {
+		t.Fatalf("substring send verb produced topic %q", topic)
+	}
+}
+
 func TestExplicitTopologyProvidesHighConfidenceCorrectionLayer(t *testing.T) {
 	builder := newBuilder("http://127.0.0.1:7331")
 	repository := catalog.Repository{ID: 7, Name: "platform", IndexedCommit: "cccccccc"}

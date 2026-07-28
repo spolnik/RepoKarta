@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/spolnik/RepoKarta/internal/analysis"
@@ -129,6 +131,7 @@ func TestReadRouteSnapshotUsesOnlyPreparedArtifacts(t *testing.T) {
 		},
 		Scope: Scope{Complete: true, TotalRepositories: 1, AnalyzedRepositories: 1},
 	}
+	snapshot.ID = snapshotSignature([]catalog.Repository{repository})
 	content, err := json.Marshal(snapshot)
 	if err != nil {
 		t.Fatal(err)
@@ -144,6 +147,129 @@ func TestReadRouteSnapshotUsesOnlyPreparedArtifacts(t *testing.T) {
 		progress.State != "ready" || progress.PendingRepositories != 0 ||
 		ready.Nodes[0].Evidence[0].URL == "" {
 		t.Fatalf("prepared route evidence = %#v, progress = %#v", ready, progress)
+	}
+}
+
+func TestSpringRoutesAcceptRelativeAndMultipleClassMappings(t *testing.T) {
+	routes := springRoutes([]byte(`
+@RestController
+@RequestMapping({"/api", "internal"})
+class OrdersController {
+  @GetMapping(path = "orders/{id}", produces = "application/json")
+  String order() { return ""; }
+}
+`))
+	labels := make([]string, 0, len(routes))
+	for _, route := range routes {
+		labels = append(labels, route.label)
+	}
+	for _, expected := range []string{"GET /api/orders/{id}", "GET /internal/orders/{id}"} {
+		if !slices.Contains(labels, expected) {
+			t.Fatalf("routes = %v, missing %q", labels, expected)
+		}
+	}
+}
+
+func TestGoRoutePatternRecognizesFrameworkMethods(t *testing.T) {
+	content := []byte(`router.GET("/health", health); app.Route("/admin", admin)`)
+	matches := goRoutePattern.FindAllSubmatch(content, -1)
+	if len(matches) != 2 || string(matches[0][1]) != "/health" ||
+		string(matches[1][1]) != "/admin" {
+		t.Fatalf("Go framework routes = %q", matches)
+	}
+}
+
+func TestCachedSnapshotRejectsMismatchedIdentity(t *testing.T) {
+	directory := t.TempDir()
+	service, err := New(graphStore{}, directory, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := json.Marshal(Snapshot{Version: snapshotVersion, ID: "wrong"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(directory, "repository-1-expected.json")
+	if err := os.WriteFile(target, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := service.readCachedSnapshot(target, "expected"); ok {
+		t.Fatal("cached snapshot with mismatched identity was accepted")
+	}
+}
+
+func TestGraphSnapshotPublishAndReadAreLockSafe(t *testing.T) {
+	directory := t.TempDir()
+	repository := catalog.Repository{ID: 5, Name: "service", IndexedCommit: strings.Repeat("a", 40)}
+	service, err := New(graphStore{repository: repository}, directory, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	signature := snapshotSignature([]catalog.Repository{repository})
+	fileName := fmt.Sprintf("repository-%d-%s.json", repository.ID, signature)
+	target := filepath.Join(directory, fileName)
+	write := func(generation int) {
+		t.Helper()
+		content, marshalErr := json.Marshal(Snapshot{
+			Version: snapshotVersion, ID: signature, FileCount: generation,
+		})
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		temporary, createErr := os.CreateTemp(directory, "publish-*.tmp")
+		if createErr != nil {
+			t.Fatal(createErr)
+		}
+		if _, writeErr := temporary.Write(content); writeErr != nil {
+			t.Fatal(writeErr)
+		}
+		if closeErr := temporary.Close(); closeErr != nil {
+			t.Fatal(closeErr)
+		}
+		lock := service.snapshotLock(fileName)
+		lock.Lock()
+		publishErr := publishGraphFile(temporary.Name(), target)
+		lock.Unlock()
+		if publishErr != nil {
+			t.Fatal(publishErr)
+		}
+	}
+	write(1)
+	var wait sync.WaitGroup
+	for reader := 0; reader < 8; reader++ {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			for range 50 {
+				if snapshot, ok := service.cachedRepositorySnapshot(repository); !ok ||
+					snapshot.ID != signature {
+					t.Errorf("concurrent cached read = %+v, %t", snapshot, ok)
+					return
+				}
+			}
+		}()
+	}
+	for generation := 2; generation <= 20; generation++ {
+		write(generation)
+	}
+	wait.Wait()
+
+	staleSnapshot := fmt.Sprintf("repository-%d-stale.json", repository.ID)
+	staleStructure := fmt.Sprintf("structure-repository-%d-stale.json", repository.ID)
+	for _, name := range []string{staleSnapshot, staleStructure} {
+		if err := os.WriteFile(filepath.Join(directory, name), []byte("{}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_ = service.snapshotLock(name)
+	}
+	service.removeSupersededSnapshots(repository.ID, fileName)
+	for _, name := range []string{staleSnapshot, staleStructure} {
+		if _, err := os.Stat(filepath.Join(directory, name)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("superseded artifact %s still exists: %v", name, err)
+		}
+		if service.snapshotLocks[name] != nil {
+			t.Fatalf("superseded lock %s was retained", name)
+		}
 	}
 }
 
@@ -192,7 +318,7 @@ BILLING_SERVICE_URL: http://billing-service.production.svc.cluster.local
 		map[string][]byte{"README.md": []byte("# Billing")},
 	)
 	for index, builder := range builders {
-		snapshot := builder.snapshot("repository-artifact")
+		snapshot := builder.snapshot(snapshotSignature([]catalog.Repository{repositories[index]}))
 		snapshot.Scope = Scope{
 			Kind: "repository", Complete: true,
 			TotalRepositories: 1, AnalyzedRepositories: 1,

@@ -405,16 +405,11 @@ func (s *Service) Snapshot(ctx context.Context, repositoryID int64, refresh bool
 		fileName = fmt.Sprintf("repository-%d-%s.json", repositoryID, signature)
 	}
 	snapshotPath := filepath.Join(s.directory, fileName)
-	if !refresh {
-		if cached, ok := s.readCachedSnapshot(snapshotPath); ok {
-			return cached, nil
-		}
-	}
 	snapshotLock := s.snapshotLock(fileName)
 	snapshotLock.Lock()
 	defer snapshotLock.Unlock()
 	if !refresh {
-		if cached, ok := s.readCachedSnapshot(snapshotPath); ok {
+		if cached, ok := s.readCachedSnapshot(snapshotPath, signature); ok {
 			return cached, nil
 		}
 	}
@@ -465,7 +460,7 @@ func (s *Service) Snapshot(ctx context.Context, repositoryID int64, refresh bool
 	if err := temporary.Close(); err != nil {
 		return Snapshot{}, fmt.Errorf("close graph snapshot: %w", err)
 	}
-	if err := os.Rename(temporaryName, snapshotPath); err != nil {
+	if err := publishGraphFile(temporaryName, snapshotPath); err != nil {
 		return Snapshot{}, fmt.Errorf("publish graph snapshot: %w", err)
 	}
 	if repositoryID > 0 {
@@ -473,20 +468,86 @@ func (s *Service) Snapshot(ctx context.Context, repositoryID int64, refresh bool
 			return Snapshot{}, err
 		}
 	}
+	s.removeSupersededSnapshots(repositoryID, fileName)
 	return snapshot, nil
 }
 
-func (s *Service) readCachedSnapshot(snapshotPath string) (Snapshot, bool) {
+func (s *Service) readCachedSnapshot(snapshotPath, expectedSignature string) (Snapshot, bool) {
 	content, err := os.ReadFile(snapshotPath)
 	if err != nil {
 		return Snapshot{}, false
 	}
 	var cached Snapshot
-	if json.Unmarshal(content, &cached) != nil || cached.Version != snapshotVersion {
+	if json.Unmarshal(content, &cached) != nil || cached.Version != snapshotVersion ||
+		cached.ID != expectedSignature {
 		return Snapshot{}, false
 	}
 	rebaseSnapshotEvidence(&cached, s.currentBaseURL())
 	return cached, true
+}
+
+func (s *Service) cachedRepositorySnapshot(repository catalog.Repository) (Snapshot, bool) {
+	signature := snapshotSignature([]catalog.Repository{repository})
+	fileName := fmt.Sprintf("repository-%d-%s.json", repository.ID, signature)
+	lock := s.snapshotLock(fileName)
+	lock.Lock()
+	defer lock.Unlock()
+	return s.readCachedSnapshot(filepath.Join(s.directory, fileName), signature)
+}
+
+func publishGraphFile(temporaryName, target string) error {
+	if err := os.Rename(temporaryName, target); err == nil {
+		return nil
+	}
+	if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return os.Rename(temporaryName, target)
+}
+
+func (s *Service) removeSupersededSnapshots(repositoryID int64, keepFile string) {
+	prefix := "all-"
+	structuralPrefix := ""
+	keepStructural := ""
+	if repositoryID > 0 {
+		prefix = fmt.Sprintf("repository-%d-", repositoryID)
+		structuralPrefix = fmt.Sprintf("structure-repository-%d-", repositoryID)
+		signature := strings.TrimSuffix(strings.TrimPrefix(keepFile, prefix), ".json")
+		keepStructural = structuralPrefix + signature + ".json"
+	}
+	entries, err := os.ReadDir(s.directory)
+	if err != nil {
+		return
+	}
+	type removedLock struct {
+		name string
+		lock *sync.Mutex
+	}
+	removedLocks := make([]removedLock, 0)
+	for _, entry := range entries {
+		name := entry.Name()
+		if name == keepFile || name == keepStructural ||
+			entry.IsDir() || !strings.HasSuffix(name, ".json") {
+			continue
+		}
+		if strings.HasPrefix(name, prefix) ||
+			(structuralPrefix != "" && strings.HasPrefix(name, structuralPrefix)) {
+			lock := s.snapshotLock(name)
+			lock.Lock()
+			removed := os.Remove(filepath.Join(s.directory, name)) == nil
+			lock.Unlock()
+			if removed {
+				removedLocks = append(removedLocks, removedLock{name: name, lock: lock})
+			}
+		}
+	}
+	s.snapshotMu.Lock()
+	for _, removed := range removedLocks {
+		if s.snapshotLocks[removed.name] == removed.lock {
+			delete(s.snapshotLocks, removed.name)
+		}
+	}
+	s.snapshotMu.Unlock()
 }
 
 func (s *Service) repositorySnapshotPath(repository catalog.Repository) string {
@@ -522,7 +583,7 @@ func (s *Service) ReadDependencySnapshot(
 			case <-ctx.Done():
 				return
 			}
-			snapshot, ok := s.readCachedSnapshot(s.repositorySnapshotPath(repository))
+			snapshot, ok := s.cachedRepositorySnapshot(repository)
 			results[index] = result{snapshot: snapshot, ok: ok}
 		}()
 	}
@@ -602,7 +663,7 @@ func (s *Service) ReadTopologySnapshot(
 			case <-ctx.Done():
 				return
 			}
-			snapshot, ok := s.readCachedSnapshot(s.repositorySnapshotPath(repository))
+			snapshot, ok := s.cachedRepositorySnapshot(repository)
 			results[index] = result{repository: repository, snapshot: snapshot, ok: ok}
 		}()
 	}
@@ -723,7 +784,7 @@ func (s *Service) ReadRouteSnapshot(
 			case <-ctx.Done():
 				return
 			}
-			snapshot, ok := s.readCachedSnapshot(s.repositorySnapshotPath(repository))
+			snapshot, ok := s.cachedRepositorySnapshot(repository)
 			results[index] = result{snapshot: snapshot, ok: ok}
 		}()
 	}
@@ -914,7 +975,11 @@ func structuralIndexFromSnapshot(snapshot Snapshot) StructuralIndex {
 }
 
 func (s *Service) readStructuralIndex(repositoryID int64, signature string) (StructuralIndex, bool) {
-	content, err := os.ReadFile(s.structuralIndexPath(repositoryID, signature))
+	fileName := filepath.Base(s.structuralIndexPath(repositoryID, signature))
+	lock := s.snapshotLock(fileName)
+	lock.Lock()
+	defer lock.Unlock()
+	content, err := os.ReadFile(filepath.Join(s.directory, fileName))
 	if err != nil {
 		return StructuralIndex{}, false
 	}
@@ -936,6 +1001,9 @@ func (s *Service) writeStructuralIndex(index StructuralIndex) error {
 		return fmt.Errorf("encode structural index: %w", err)
 	}
 	fileName := filepath.Base(s.structuralIndexPath(index.Scope.RequestedRepositoryID, index.ID))
+	lock := s.snapshotLock(fileName)
+	lock.Lock()
+	defer lock.Unlock()
 	temporary, err := os.CreateTemp(s.directory, fileName+".*.tmp")
 	if err != nil {
 		return fmt.Errorf("create structural index: %w", err)
@@ -949,7 +1017,7 @@ func (s *Service) writeStructuralIndex(index StructuralIndex) error {
 	if err := temporary.Close(); err != nil {
 		return fmt.Errorf("close structural index: %w", err)
 	}
-	if err := os.Rename(temporaryName, filepath.Join(s.directory, fileName)); err != nil {
+	if err := publishGraphFile(temporaryName, filepath.Join(s.directory, fileName)); err != nil {
 		return fmt.Errorf("publish structural index: %w", err)
 	}
 	return nil
@@ -1754,7 +1822,6 @@ func (b *builder) addGoImportsAndRoutes(
 	packageIDs map[string]string,
 	contents map[string][]byte,
 ) {
-	routePattern := regexp.MustCompile(`(?:Handle|HandleFunc)\(\s*["` + "`" + `]([^"` + "`" + `]+)`)
 	for filePath, content := range contents {
 		if path.Ext(filePath) != ".go" {
 			continue
@@ -1792,7 +1859,7 @@ func (b *builder) addGoImportsAndRoutes(
 				})
 			}
 		}
-		for _, match := range routePattern.FindAllSubmatchIndex(content, -1) {
+		for _, match := range goRoutePattern.FindAllSubmatchIndex(content, -1) {
 			route := string(content[match[2]:match[3]])
 			line := lineAtOffset(content, match[0])
 			evidence := b.evidence(repository, revision, filePath, line, route)
@@ -1893,6 +1960,9 @@ var (
 	springMappingPattern = regexp.MustCompile(
 		`(?s)@(?:[A-Za-z0-9_$.]+\.)?(GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping|RequestMapping)\s*(?:\((.*?)\))?`,
 	)
+	nonPathMappingAttribute = regexp.MustCompile(
+		`(?i)(?:produces|consumes|headers|params|name)\s*=\s*(?:\{[^{}]*)?$`,
+	)
 	// A type annotated with @FeignClient or @HttpExchange declares endpoints it
 	// calls, not endpoints it serves, so its mappings never become routes.
 	declarativeClientType = regexp.MustCompile(`@(?:FeignClient|HttpExchange)\b`)
@@ -1900,8 +1970,14 @@ var (
 	springFunctionalRoute = regexp.MustCompile(
 		`(?m)\b(?:RequestPredicates\.)?(GET|POST|PUT|DELETE|PATCH)\s*\(\s*["']([^"']+)["']`,
 	)
-	feignClientPattern = regexp.MustCompile(`(?s)@FeignClient\s*\((.*?)\)`)
-	feignNamedTarget   = regexp.MustCompile(
+	goRoutePattern = regexp.MustCompile(
+		`(?:Handle|HandleFunc|GET|POST|PUT|DELETE|PATCH|Any|Route|Mount)\(\s*["` + "`" + `]([^"` + "`" + `]+)`,
+	)
+	cargoOptionalPattern = regexp.MustCompile(`(?i)\boptional\s*=\s*true\b`)
+	pythonQuotedPattern  = regexp.MustCompile(`["']([^"']+)["']`)
+	normalizeIDPattern   = regexp.MustCompile(`[^a-z0-9]+`)
+	feignClientPattern   = regexp.MustCompile(`(?s)@FeignClient\s*\((.*?)\)`)
+	feignNamedTarget     = regexp.MustCompile(
 		`(?i)(?:name|value|serviceId)\s*=\s*["']([^"']+)["']`,
 	)
 	// springClientIndicator gates URL harvesting so RepoKarta only reads hosts
@@ -2690,7 +2766,7 @@ func springRoutes(content []byte) []springRoute {
 	if match := javaClassPattern.FindIndex(content); match != nil {
 		classOffset = match[0]
 	}
-	classPrefix := ""
+	classPrefixes := []string{""}
 	mappings := springMappingPattern.FindAllSubmatchIndex(content, -1)
 	for _, match := range mappings {
 		if match[0] >= classOffset || string(content[match[2]:match[3]]) != "RequestMapping" {
@@ -2698,7 +2774,7 @@ func springRoutes(content []byte) []springRoute {
 		}
 		paths := annotationPaths(mappingArguments(content, match))
 		if len(paths) > 0 {
-			classPrefix = paths[0]
+			classPrefixes = paths
 			break
 		}
 	}
@@ -2717,9 +2793,11 @@ func springRoutes(content []byte) []springRoute {
 		if annotation == "RequestMapping" {
 			method = requestMappingMethod(arguments)
 		}
-		for _, routePath := range paths {
-			label := strings.TrimSpace(method + " " + joinRoutePath(classPrefix, routePath))
-			byLabel[label] = springRoute{label: label, line: lineAtOffset(content, match[0])}
+		for _, classPrefix := range classPrefixes {
+			for _, routePath := range paths {
+				label := strings.TrimSpace(method + " " + joinRoutePath(classPrefix, routePath))
+				byLabel[label] = springRoute{label: label, line: lineAtOffset(content, match[0])}
+			}
 		}
 	}
 	for _, match := range springFunctionalRoute.FindAllSubmatchIndex(content, -1) {
@@ -2746,14 +2824,18 @@ func mappingArguments(content []byte, match []int) string {
 }
 
 func annotationPaths(arguments string) []string {
-	matches := quotedJavaString.FindAllStringSubmatch(arguments, -1)
+	matches := quotedJavaString.FindAllStringSubmatchIndex(arguments, -1)
 	paths := make([]string, 0, len(matches))
 	for _, match := range matches {
-		if len(match) != 2 {
+		if len(match) < 4 {
 			continue
 		}
-		value := strings.TrimSpace(match[1])
-		if strings.HasPrefix(value, "/") || value == "" {
+		prefixStart := max(0, match[0]-80)
+		if nonPathMappingAttribute.MatchString(arguments[prefixStart:match[0]]) {
+			continue
+		}
+		value := strings.TrimSpace(arguments[match[2]:match[3]])
+		if value == "" || !strings.Contains(value, "=") {
 			paths = append(paths, value)
 		}
 	}
@@ -3413,7 +3495,7 @@ func parseCargoDeclarations(
 			} else if fields["path"] != "" {
 				declared = "file:" + fields["path"]
 			}
-			if regexp.MustCompile(`(?i)\boptional\s*=\s*true\b`).MatchString(value) {
+			if cargoOptionalPattern.MatchString(value) {
 				relationship = "optional"
 			}
 		case strings.HasPrefix(value, `"`), strings.HasPrefix(value, `'`):
@@ -3640,8 +3722,7 @@ func appendPythonArrayRequirements(
 	lockVersions map[string][]string,
 	lockPath string,
 ) []DependencyDeclaration {
-	quoted := regexp.MustCompile(`["']([^"']+)["']`)
-	for _, match := range quoted.FindAllStringSubmatch(line, -1) {
+	for _, match := range pythonQuotedPattern.FindAllStringSubmatch(line, -1) {
 		name, declared, ok := parsePythonRequirement(match[1])
 		if ok {
 			declarations = appendPythonDeclaration(
@@ -4392,7 +4473,7 @@ func uniqueSorted(values []string) []string {
 
 func normalizeID(value string) string {
 	value = strings.ToLower(strings.TrimSpace(value))
-	value = regexp.MustCompile(`[^a-z0-9]+`).ReplaceAllString(value, "-")
+	value = normalizeIDPattern.ReplaceAllString(value, "-")
 	return strings.Trim(value, "-")
 }
 

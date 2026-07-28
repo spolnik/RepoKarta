@@ -152,6 +152,18 @@ func TestKnowledgePresetRequiresCuratedModelAndHighEffort(t *testing.T) {
 	}
 }
 
+func TestTargetedStalePageRegeneratesSurveyBeforeProviderPageTurn(t *testing.T) {
+	site := Site{SurveyReady: true, SurveyStale: true}
+	request := GenerateRequest{RepositoryID: 7, Page: "dependencies"}
+	if !shouldGenerateSurvey(request, site, false) {
+		t.Fatal("targeted stale page did not schedule its stale survey first")
+	}
+	site.SurveyStale = false
+	if shouldGenerateSurvey(request, site, false) {
+		t.Fatal("current targeted survey was regenerated unnecessarily")
+	}
+}
+
 func TestProviderGroundedKnowledgePlanAndPage(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

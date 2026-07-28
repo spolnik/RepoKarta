@@ -38,7 +38,10 @@ const (
 	maximumSnapshotBody      = 512 << 20
 )
 
-var exactVersionPrefix = regexp.MustCompile(`^(?:==|=)\s*`)
+var (
+	exactVersionPrefix        = regexp.MustCompile(`^(?:==|=)\s*`)
+	normalizedPyPIPunctuation = regexp.MustCompile(`[-_.]+`)
+)
 
 // AdvisoryOptions bounds and filters one deterministic findings page.
 type AdvisoryOptions struct {
@@ -61,6 +64,8 @@ type AdvisorySnapshot struct {
 	RetrievedAt   time.Time         `json:"retrieved_at"`
 	Version       string            `json:"version"`
 	QueryDigest   string            `json:"query_digest"`
+	Partial       bool              `json:"partial,omitempty"`
+	FailedCount   int               `json:"failed_count,omitempty"`
 	Packages      []AdvisoryPackage `json:"packages"`
 	Advisories    []OSVAdvisory     `json:"advisories"`
 }
@@ -358,7 +363,6 @@ func buildFindings(
 	if snapshot == nil {
 		return response
 	}
-
 	currentPackages := advisoryPackages(declarations)
 	currentDigest := advisoryQueryDigest(currentPackages)
 	age := now.Sub(snapshot.RetrievedAt)
@@ -379,6 +383,13 @@ func buildFindings(
 		response.CheckState = "stale"
 		response.Snapshot.State = "stale"
 		response.CheckMessage = "Findings were checked against a stale local OSV snapshot."
+	}
+	if snapshot.Partial {
+		response.CheckState = "partial"
+		response.Snapshot.State = "partial"
+		response.CheckMessage = fmt.Sprintf(
+			"OSV snapshot is partial; %d advisory fetches failed", snapshot.FailedCount,
+		)
 	}
 
 	covered := make(map[string]struct{}, len(snapshot.Packages))
@@ -592,11 +603,42 @@ func affectedVersion(ecosystem, version string, affected OSVAffected) (bool, str
 			rangeSystem = semver.DefaultSystem
 			rangeVersion = strings.TrimPrefix(version, "v")
 		}
-		if matched, fixed := eventsContain(rangeSystem, rangeVersion, osvRange.Events); matched {
+		events := sortedOSVEvents(rangeSystem, osvRange.Events)
+		if matched, fixed := eventsContain(rangeSystem, rangeVersion, events); matched {
 			return true, formatAffectedRange(osvRange), fixed
 		}
 	}
 	return false, "", ""
+}
+
+func sortedOSVEvents(system semver.System, events []OSVEvent) []OSVEvent {
+	output := append([]OSVEvent(nil), events...)
+	eventVersion := func(event OSVEvent) string {
+		return firstNonEmpty(event.Introduced, event.Fixed, event.LastAffected, event.Limit)
+	}
+	slices.SortStableFunc(output, func(left, right OSVEvent) int {
+		leftVersion, rightVersion := eventVersion(left), eventVersion(right)
+		if leftVersion == rightVersion {
+			if left.Introduced != "" && right.Introduced == "" {
+				return -1
+			}
+			if right.Introduced != "" && left.Introduced == "" {
+				return 1
+			}
+			return 0
+		}
+		if leftVersion == "0" || rightVersion == "*" {
+			return -1
+		}
+		if rightVersion == "0" || leftVersion == "*" {
+			return 1
+		}
+		if compared := system.Compare(leftVersion, rightVersion); compared != 0 {
+			return compared
+		}
+		return 0
+	})
+	return output
 }
 
 func eventsContain(system semver.System, version string, events []OSVEvent) (bool, string) {
@@ -672,6 +714,18 @@ func advisorySeverity(advisory OSVAdvisory, affected OSVAffected) (string, []OSV
 	}
 	best := 0.0
 	for _, score := range cvss {
+		for _, label := range []string{score.Type, score.Score} {
+			switch strings.ToLower(strings.TrimSpace(label)) {
+			case "critical", "high", "medium", "moderate", "low":
+				if strings.EqualFold(label, "moderate") {
+					return "medium", cvss
+				}
+				return strings.ToLower(strings.TrimSpace(label)), cvss
+			}
+		}
+		if severity, ok := cvss4VectorSeverity(score); ok {
+			return severity, cvss
+		}
 		value, ok := numericCVSS(score.Score)
 		if ok && value > best {
 			best = value
@@ -688,6 +742,44 @@ func advisorySeverity(advisory OSVAdvisory, affected OSVAffected) (string, []OSV
 		return "low", cvss
 	default:
 		return "unknown", cvss
+	}
+}
+
+func cvss4VectorSeverity(score OSVSeverity) (string, bool) {
+	vector := strings.TrimSpace(score.Score)
+	if !strings.HasPrefix(vector, "CVSS:4.0/") &&
+		!strings.Contains(strings.ToUpper(score.Type), "CVSS_V4") {
+		return "", false
+	}
+	metrics := map[string]string{}
+	for _, component := range strings.Split(vector, "/")[1:] {
+		key, value, ok := strings.Cut(component, ":")
+		if ok {
+			metrics[key] = value
+		}
+	}
+	impact := 0
+	for _, key := range []string{"VC", "VI", "VA", "SC", "SI", "SA"} {
+		switch metrics[key] {
+		case "H":
+			impact += 2
+		case "L":
+			impact++
+		}
+	}
+	exploitable := metrics["AV"] == "N" && metrics["AC"] == "L" &&
+		metrics["AT"] == "N" && metrics["PR"] == "N" && metrics["UI"] == "N"
+	switch {
+	case exploitable && impact >= 6:
+		return "critical", true
+	case impact >= 4:
+		return "high", true
+	case impact >= 2:
+		return "medium", true
+	case impact > 0:
+		return "low", true
+	default:
+		return "unknown", true
 	}
 }
 
@@ -1083,7 +1175,7 @@ func normalizePackage(ecosystem, name string) string {
 		name = strings.ToLower(name)
 	}
 	if strings.EqualFold(ecosystem, "pypi") {
-		name = regexp.MustCompile(`[-_.]+`).ReplaceAllString(name, "-")
+		name = normalizedPyPIPunctuation.ReplaceAllString(name, "-")
 	}
 	return name
 }
@@ -1259,15 +1351,12 @@ func (s *Service) runAdvisoryRefresh(
 		progress.Total = progress.PackageTotal + len(advisoryIDs)
 		progress.Completed = progress.PackageCompleted
 	})
-	advisories, err := s.fetchAdvisories(advisoryIDs)
-	if err != nil {
-		s.finishAdvisoryRefresh(started, err)
-		return
-	}
+	advisories, failed, fetchErr := s.fetchAdvisories(advisoryIDs)
 	retrievedAt := s.now().UTC()
 	snapshot := AdvisorySnapshot{
 		SchemaVersion: AdvisorySnapshotSchema, Source: "OSV.dev",
 		SourceURL: PublicOSVAPI, RetrievedAt: retrievedAt, QueryDigest: digest,
+		Partial: failed > 0, FailedCount: failed,
 		Packages: packages, Advisories: advisories,
 	}
 	snapshot.Version = snapshotVersion(snapshot)
@@ -1278,10 +1367,23 @@ func (s *Service) runAdvisoryRefresh(
 	s.updateAdvisoryProgress(func(progress *AdvisoryRefreshProgress) {
 		progress.State = "complete"
 		progress.Stage = "complete"
+		if snapshot.Partial {
+			progress.State = "partial"
+			progress.Stage = "partial"
+			progress.Failed = failed
+			if fetchErr != nil {
+				progress.Error = fetchErr.Error()
+			}
+			progress.Skipped = max(
+				0, progress.AdvisoryTotal-progress.AdvisoryCompleted-failed,
+			)
+			progress.Completed = progress.PackageCompleted + progress.AdvisoryCompleted
+		} else {
+			progress.Completed = progress.Total
+		}
 		progress.FinishedAt = s.now().UTC().Format(time.RFC3339)
 		progress.SnapshotVersion = snapshot.Version
 		progress.SnapshotTimestamp = snapshot.RetrievedAt.Format(time.RFC3339)
-		progress.Completed = progress.Total
 	})
 }
 
@@ -1397,9 +1499,9 @@ func (s *Service) queryAdvisoryBatch(queries []osvBatchQuery) (osvBatchResponse,
 	return output, nil
 }
 
-func (s *Service) fetchAdvisories(ids []string) ([]OSVAdvisory, error) {
+func (s *Service) fetchAdvisories(ids []string) ([]OSVAdvisory, int, error) {
 	if len(ids) == 0 {
-		return []OSVAdvisory{}, nil
+		return []OSVAdvisory{}, 0, nil
 	}
 	type result struct {
 		advisory OSVAdvisory
@@ -1407,6 +1509,8 @@ func (s *Service) fetchAdvisories(ids []string) ([]OSVAdvisory, error) {
 	}
 	jobs := make(chan string)
 	results := make(chan result, len(ids))
+	fatalSignal := make(chan struct{})
+	var fatalOnce sync.Once
 	workerCount := min(4, len(ids))
 	var workers sync.WaitGroup
 	pace := time.NewTicker(100 * time.Millisecond)
@@ -1418,18 +1522,32 @@ func (s *Service) fetchAdvisories(ids []string) ([]OSVAdvisory, error) {
 			for id := range jobs {
 				select {
 				case <-s.ctx.Done():
+					fatalOnce.Do(func() { close(fatalSignal) })
 					results <- result{err: s.ctx.Err()}
 					return
 				case <-pace.C:
 				}
 				advisory, err := s.fetchAdvisory(id)
+				if isFatalAdvisoryError(err) {
+					fatalOnce.Do(func() { close(fatalSignal) })
+					results <- result{advisory: advisory, err: err}
+					return
+				}
 				results <- result{advisory: advisory, err: err}
 			}
 		}()
 	}
 	go func() {
+	dispatch:
 		for _, id := range ids {
-			jobs <- id
+			select {
+			case jobs <- id:
+			case <-fatalSignal:
+				break
+			}
+			if isClosed(fatalSignal) {
+				break dispatch
+			}
 		}
 		close(jobs)
 		workers.Wait()
@@ -1437,8 +1555,10 @@ func (s *Service) fetchAdvisories(ids []string) ([]OSVAdvisory, error) {
 	}()
 	output := make([]OSVAdvisory, 0, len(ids))
 	var firstError error
+	failed := 0
 	for fetched := range results {
 		if fetched.err != nil {
+			failed++
 			if firstError == nil {
 				firstError = fetched.err
 			}
@@ -1454,9 +1574,26 @@ func (s *Service) fetchAdvisories(ids []string) ([]OSVAdvisory, error) {
 		return strings.Compare(left.ID, right.ID)
 	})
 	if firstError != nil {
-		return nil, firstError
+		return output, failed, firstError
 	}
-	return output, nil
+	return output, 0, nil
+}
+
+func isClosed(channel <-chan struct{}) bool {
+	select {
+	case <-channel:
+		return true
+	default:
+		return false
+	}
+}
+
+type fatalAdvisoryError struct{ error }
+
+func isFatalAdvisoryError(err error) bool {
+	var fatal fatalAdvisoryError
+	return errors.As(err, &fatal) || errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded)
 }
 
 func (s *Service) fetchAdvisory(id string) (OSVAdvisory, error) {
@@ -1471,10 +1608,20 @@ func (s *Service) fetchAdvisory(id string) (OSVAdvisory, error) {
 	request.Header.Set("User-Agent", "RepoKarta dependency advisories")
 	response, err := s.client.Do(request)
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return OSVAdvisory{}, fatalAdvisoryError{err}
+		}
 		return OSVAdvisory{}, fmt.Errorf("fetch OSV advisory %s: %w", id, err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
+		if response.StatusCode == http.StatusUnauthorized ||
+			response.StatusCode == http.StatusForbidden ||
+			response.StatusCode == http.StatusTooManyRequests {
+			return OSVAdvisory{}, fatalAdvisoryError{fmt.Errorf(
+				"fetch OSV advisory %s: HTTP %d", id, response.StatusCode,
+			)}
+		}
 		return OSVAdvisory{}, fmt.Errorf("fetch OSV advisory %s: HTTP %d", id, response.StatusCode)
 	}
 	var advisory OSVAdvisory
@@ -1482,7 +1629,9 @@ func (s *Service) fetchAdvisory(id string) (OSVAdvisory, error) {
 		return OSVAdvisory{}, fmt.Errorf("decode OSV advisory %s: %w", id, err)
 	}
 	if advisory.ID != id {
-		return OSVAdvisory{}, fmt.Errorf("OSV advisory identity mismatch: requested %s, received %s", id, advisory.ID)
+		return OSVAdvisory{}, fatalAdvisoryError{fmt.Errorf(
+			"OSV advisory identity mismatch: requested %s, received %s", id, advisory.ID,
+		)}
 	}
 	return advisory, nil
 }
@@ -1498,7 +1647,12 @@ func snapshotVersion(snapshot AdvisorySnapshot) string {
 	content, _ := json.Marshal(struct {
 		Packages   []AdvisoryPackage `json:"packages"`
 		Advisories []OSVAdvisory     `json:"advisories"`
-	}{Packages: snapshot.Packages, Advisories: snapshot.Advisories})
+		Partial    bool              `json:"partial,omitempty"`
+		Failed     int               `json:"failed,omitempty"`
+	}{
+		Packages: snapshot.Packages, Advisories: snapshot.Advisories,
+		Partial: snapshot.Partial, Failed: snapshot.FailedCount,
+	})
 	digest := sha256.Sum256(content)
 	return "sha256:" + hex.EncodeToString(digest[:])
 }

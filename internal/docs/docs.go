@@ -535,8 +535,7 @@ func (s *Service) Generate(ctx context.Context, request GenerateRequest) (Site, 
 		}
 		profileChanged := request.Page == "" && site.SurveyReady && site.Survey.Profile == "fast"
 		surveyGenerated := false
-		if !site.SurveyReady || request.Page == "" && request.Refresh &&
-			(site.SurveyStale || request.SurveyOnly) || profileChanged {
+		if shouldGenerateSurvey(request, site, profileChanged) {
 			site, err = s.generateKnowledgeSurvey(ctx, request, site, snapshot)
 			if err != nil {
 				return Site{}, err
@@ -643,6 +642,13 @@ func (s *Service) Generate(ctx context.Context, request GenerateRequest) (Site, 
 	summary.Profile = profile.ID
 	summary.ProfilePages = fmt.Sprintf("%d-%d pages", profile.MinimumPages, profile.MaximumPages)
 	return summary, nil
+}
+
+func shouldGenerateSurvey(request GenerateRequest, site Site, profileChanged bool) bool {
+	return !site.SurveyReady ||
+		site.SurveyStale && (request.Refresh || request.Page != "") ||
+		request.Page == "" && request.Refresh && request.SurveyOnly ||
+		profileChanged
 }
 
 // Page returns current metadata and generated Markdown for one page.
@@ -2530,14 +2536,20 @@ func runGit(ctx context.Context, repositoryPath string, arguments ...string) ([]
 	defer cancel()
 	commandArguments := append([]string{"-C", repositoryPath}, arguments...)
 	command := exec.CommandContext(bounded, "git", commandArguments...)
-	output, err := command.CombinedOutput()
+	var stdout, stderr bytes.Buffer
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	err := command.Run()
 	if bounded.Err() != nil {
 		return nil, fmt.Errorf("git command timed out")
 	}
 	if err != nil {
-		return nil, fmt.Errorf("git %s: %w: %s", strings.Join(arguments, " "), err, strings.TrimSpace(string(output)))
+		return nil, fmt.Errorf(
+			"git %s: %w: %s",
+			strings.Join(arguments, " "), err, strings.TrimSpace(stderr.String()),
+		)
 	}
-	return output, nil
+	return stdout.Bytes(), nil
 }
 
 func repositoryNodes(nodes []graph.Node, repositoryID int64) []graph.Node {
