@@ -41,6 +41,7 @@ fi
 )
 chmod 0755 "$stage_directory/repokarta"
 cp "$repository_root/README.md" "$stage_directory/README.md"
+cp "$repository_root/LICENSE" "$stage_directory/LICENSE"
 cp "$repository_root/docs/shared-deployment.md" \
     "$stage_directory/docs/shared-deployment.md"
 cp "$repository_root/docs/enterprise-administration.md" \
@@ -119,6 +120,7 @@ test -f "$verify_directory/$package_name/licenses/deps.dev-semver-Apache-2.0.txt
 test -f "$verify_directory/$package_name/licenses/scip-Apache-2.0.txt"
 test -f "$verify_directory/$package_name/licenses/sourcegraph-beaut-Apache-2.0.txt"
 test -f "$verify_directory/$package_name/licenses/pgx-MIT.txt"
+test -f "$verify_directory/$package_name/LICENSE"
 test -f "$verify_directory/$package_name/docs/shared-deployment.md"
 test -f "$verify_directory/$package_name/docs/enterprise-administration.md"
 test -f "$verify_directory/$package_name/docs/postgresql.md"

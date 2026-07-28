@@ -15,6 +15,7 @@ cd "$repository_root"
 go test -tags "$grammar_tags" ./...
 mkdir -p "$license_directory"
 go build -tags "$grammar_tags" -trimpath -o "$output_directory/repokarta" ./cmd/repokarta
+cp "$repository_root/LICENSE" "$output_directory/LICENSE"
 cp "$repository_root/third_party/zoekt/LICENSE" \
     "$license_directory/zoekt-Apache-2.0.txt"
 cp "$repository_root/third_party/zoekt/LICENSE" \
@@ -34,4 +35,4 @@ cp "$repository_root/third_party/licenses/crewjam-saml-BSD-2-Clause.txt" \
 cp "$repository_root/third_party/licenses/pgx-MIT.txt" \
     "$license_directory/pgx-MIT.txt"
 
-printf 'Built %s with third-party licenses\n' "$output_directory/repokarta"
+printf 'Built %s with project and third-party licenses\n' "$output_directory/repokarta"

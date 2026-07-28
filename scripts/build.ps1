@@ -62,6 +62,10 @@ try {
     }
 
     Copy-Item `
+        -LiteralPath (Join-Path $repositoryRoot "LICENSE") `
+        -Destination (Join-Path $outputDirectory "LICENSE") `
+        -Force
+    Copy-Item `
         -LiteralPath (Join-Path $repositoryRoot "third_party\zoekt\LICENSE") `
         -Destination (Join-Path $licenseDirectory "zoekt-Apache-2.0.txt") `
         -Force
@@ -102,4 +106,4 @@ finally {
     Pop-Location
 }
 
-Write-Host "Built $outputDirectory\repokarta.exe with third-party licenses"
+Write-Host "Built $outputDirectory\repokarta.exe with project and third-party licenses"

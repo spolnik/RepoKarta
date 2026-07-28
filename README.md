@@ -386,3 +386,9 @@ $version = go run ./cmd/repokarta version
 RepoKarta vendors a pinned Zoekt revision under `third_party/zoekt`. Native
 builds and release packages include the full Zoekt Apache License 2.0 text and
 all other required third-party notices in their `licenses/` directory.
+
+## License
+
+RepoKarta is licensed under the [Apache License 2.0](./LICENSE). Release
+packages include the project license at their root and dependency notices in
+their `licenses/` directory.

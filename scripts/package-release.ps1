@@ -111,6 +111,7 @@ try {
     }
 
     Copy-Item -LiteralPath (Join-Path $repositoryRoot "README.md") -Destination (Join-Path $stageDirectory "README.md") -Force
+    Copy-Item -LiteralPath (Join-Path $repositoryRoot "LICENSE") -Destination (Join-Path $stageDirectory "LICENSE") -Force
     New-Item -ItemType Directory -Force -Path (Join-Path $stageDirectory "docs") | Out-Null
     New-Item -ItemType Directory -Force -Path (Join-Path $stageDirectory "deploy") | Out-Null
     Copy-Item -LiteralPath (Join-Path $repositoryRoot "docs\shared-deployment.md") -Destination (Join-Path $stageDirectory "docs\shared-deployment.md") -Force
@@ -140,6 +141,9 @@ try {
     }
     if (-not (Test-Path -LiteralPath (Join-Path $stageDirectory "licenses\pgx-MIT.txt"))) {
         throw "packaged executable is missing the pgx MIT license"
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $stageDirectory "LICENSE"))) {
+        throw "package is missing the RepoKarta Apache-2.0 license"
     }
     if (-not (Test-Path -LiteralPath (Join-Path $stageDirectory "docs\shared-deployment.md"))) {
         throw "package is missing the shared-deployment runbook"
