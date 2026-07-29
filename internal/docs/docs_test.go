@@ -26,6 +26,28 @@ type memoryStorage struct {
 	repository catalog.Repository
 }
 
+func TestSavePlanRemovesMarkdownSupersededByReplacementPlan(t *testing.T) {
+	service := &Service{directory: t.TempDir()}
+	const repositoryID = int64(7)
+	if err := service.savePlan(repositoryID, []Page{{
+		RepositoryID: repositoryID, Slug: "old-page", Title: "Old page",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	oldMarkdown := service.markdownPath(repositoryID, "old-page")
+	if err := os.WriteFile(oldMarkdown, []byte("# Old page\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.savePlan(repositoryID, []Page{{
+		RepositoryID: repositoryID, Slug: "replacement", Title: "Replacement",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(oldMarkdown); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("superseded Wiki markdown was retained: %v", err)
+	}
+}
+
 func (s *memoryStorage) RepositoryByID(_ context.Context, id int64) (catalog.Repository, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

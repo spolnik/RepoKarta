@@ -222,6 +222,9 @@ func New(config Config, store RepositoryStore, artifacts importer) (*Service, er
 	if err := os.MkdirAll(filepath.Join(config.DataDirectory, "worktrees"), 0o700); err != nil {
 		return nil, fmt.Errorf("create Java SCIP worktree directory: %w", err)
 	}
+	if cleanupErr := cleanupAbandonedWorktrees(config.DataDirectory); cleanupErr != nil {
+		slog.Warn("clean abandoned Java SCIP worktrees", "error", cleanupErr)
+	}
 	executor := config.executor
 	if executor == nil {
 		executor = osCommandExecutor{}
@@ -648,7 +651,11 @@ func (s *Service) indexRepository(ctx context.Context, repositoryID int64) (resu
 		current.Revision == revision &&
 		current.Configuration == s.provider.Configuration {
 		if _, ok, readErr := s.artifacts.Read(ctx, repository.ID, revision); readErr != nil {
-			return readErr
+			slog.Warn(
+				"rebuild unusable Java SCIP artifact",
+				"repository_id", repository.ID,
+				"error", readErr,
+			)
 		} else if ok {
 			return nil
 		}
@@ -812,6 +819,77 @@ func (s *Service) prepareGitShadow(
 		return "", fmt.Errorf("fetch exact revision: %w: %s", err, output)
 	}
 	return shadowPath, nil
+}
+
+func cleanupAbandonedWorktrees(dataDirectory string) error {
+	worktreeRoot := filepath.Join(dataDirectory, "worktrees")
+	entries, err := os.ReadDir(worktreeRoot)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	var cleanupErr error
+	for _, entry := range entries {
+		if !ownedWorktreeDirectory(entry.Name()) {
+			continue
+		}
+		target := filepath.Join(worktreeRoot, entry.Name())
+		info, err := os.Lstat(target)
+		if err != nil {
+			cleanupErr = errors.Join(cleanupErr, err)
+			continue
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			err = os.Remove(target)
+		} else if info.IsDir() {
+			err = os.RemoveAll(target)
+		}
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("remove %s: %w", entry.Name(), err))
+		}
+	}
+
+	shadowRoot := filepath.Join(dataDirectory, "git-shadow")
+	shadows, err := os.ReadDir(shadowRoot)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return errors.Join(cleanupErr, err)
+	}
+	for _, entry := range shadows {
+		if !entry.IsDir() || !ownedShadowDirectory(entry.Name()) {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		output, err := runGit(
+			ctx,
+			filepath.Join(shadowRoot, entry.Name()),
+			"worktree", "prune", "--expire", "now",
+		)
+		cancel()
+		if err != nil {
+			cleanupErr = errors.Join(
+				cleanupErr,
+				fmt.Errorf("prune %s worktree registrations: %w: %s", entry.Name(), err, output),
+			)
+		}
+	}
+	return cleanupErr
+}
+
+func ownedWorktreeDirectory(name string) bool {
+	separator := strings.IndexByte(name, '-')
+	if separator <= 0 || separator == len(name)-1 {
+		return false
+	}
+	repositoryID, err := strconv.ParseInt(name[:separator], 10, 64)
+	return err == nil && repositoryID > 0
+}
+
+func ownedShadowDirectory(name string) bool {
+	if !strings.HasPrefix(name, "repository-") || !strings.HasSuffix(name, ".git") {
+		return false
+	}
+	id := strings.TrimSuffix(strings.TrimPrefix(name, "repository-"), ".git")
+	repositoryID, err := strconv.ParseInt(id, 10, 64)
+	return err == nil && repositoryID > 0
 }
 
 func classifyFailure(cause error) (string, string) {

@@ -2452,6 +2452,7 @@ func (s *Service) savePlan(repositoryID int64, pages []Page) error {
 	if err != nil {
 		return err
 	}
+	previousPages := slices.Clone(manifest.Pages)
 	manifest.Version = documentVersion
 	manifest.Pages = slices.Clone(pages)
 	for index := range manifest.Pages {
@@ -2475,7 +2476,34 @@ func (s *Service) savePlan(repositoryID int64, pages []Page) error {
 	); err != nil {
 		return fmt.Errorf("publish Wiki manifest: %w", err)
 	}
+	s.removeSupersededPageMarkdown(repositoryID, previousPages, manifest.Pages)
 	return nil
+}
+
+func (s *Service) removeSupersededPageMarkdown(
+	repositoryID int64,
+	previous, current []Page,
+) {
+	retained := make(map[string]struct{}, len(current))
+	for _, page := range current {
+		retained[page.Slug] = struct{}{}
+	}
+	for _, page := range previous {
+		if _, keep := retained[page.Slug]; keep ||
+			page.Slug == "survey" ||
+			!knowledgeSlug.MatchString(page.Slug) {
+			continue
+		}
+		target := s.markdownPath(repositoryID, page.Slug)
+		if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
+			slog.Warn(
+				"remove superseded Wiki page",
+				"repository_id", repositoryID,
+				"page", page.Slug,
+				"error", err,
+			)
+		}
+	}
 }
 
 func (s *Service) saveSurvey(repositoryID int64, survey Checkpoint) error {

@@ -1376,7 +1376,8 @@ func (s *Service) FindReferences(ctx context.Context, request ReferenceRequest) 
 	resolution := "syntax-target-name"
 	provider := "tree-sitter"
 	var semanticDetail *scipindex.Resolution
-	if semanticIndex, semanticResolution, detail, ok, semanticErr := s.scipReferenceIndex(
+	var semanticWarnings []search.Warning
+	if semanticIndex, semanticResolution, detail, warnings, ok, semanticErr := s.scipReferenceIndex(
 		ctx,
 		repositoryID,
 		symbol,
@@ -1390,11 +1391,14 @@ func (s *Service) FindReferences(ctx context.Context, request ReferenceRequest) 
 		semanticDetail = detail
 		resolution = "scip-" + semanticIndex.ID
 		provider = "scip"
+	} else {
+		semanticWarnings = warnings
 	}
 	result, err := s.referenceResult(ctx, referenceIndex, resolvedSymbol, request)
 	if err != nil {
 		return ReferenceResponse{}, err
 	}
+	result.Warnings = append(result.Warnings, semanticWarnings...)
 	result = filterSearchResultToStructuredScopes(result, structuredScopes, false)
 	result.Duration = time.Since(started)
 	output, err := s.searchResponse(ctx, result, normalizeLimit(request.Limit, DefaultSearchLimit, MaximumSearchLimit))
@@ -1428,16 +1432,16 @@ func (s *Service) scipReferenceIndex(
 	symbol string,
 	syntaxIndex graph.StructuralIndex,
 	relationKinds []string,
-) (graph.StructuralIndex, string, *scipindex.Resolution, bool, error) {
+) (graph.StructuralIndex, string, *scipindex.Resolution, []search.Warning, bool, error) {
 	if s.scip == nil {
-		return graph.StructuralIndex{}, "", nil, false, nil
+		return graph.StructuralIndex{}, "", nil, nil, false, nil
 	}
 	repositories, err := s.store.ListRepositories(ctx)
 	if err != nil {
-		return graph.StructuralIndex{}, "", nil, false, err
+		return graph.StructuralIndex{}, "", nil, nil, false, err
 	}
 	if repositoryID == 0 && !syntaxIndex.Scope.Complete {
-		return graph.StructuralIndex{}, "", nil, false, nil
+		return graph.StructuralIndex{}, "", nil, nil, false, nil
 	}
 	javaRepositories := make(map[int64]struct{})
 	for _, document := range syntaxIndex.Structure {
@@ -1454,17 +1458,22 @@ func (s *Service) scipReferenceIndex(
 		revision := strings.TrimSpace(repository.IndexedCommit)
 		if revision == "" {
 			if repositoryID > 0 {
-				return graph.StructuralIndex{}, "", nil, false, nil
+				return graph.StructuralIndex{}, "", nil, nil, false, nil
 			}
 			continue
 		}
 		artifact, ok, readErr := s.scip.Read(ctx, repository.ID, revision)
 		if readErr != nil {
-			return graph.StructuralIndex{}, "", nil, false, fmt.Errorf(
-				"load SCIP artifact for %s: %w",
-				repository.Name,
-				readErr,
-			)
+			if ctx.Err() != nil {
+				return graph.StructuralIndex{}, "", nil, nil, false, ctx.Err()
+			}
+			return graph.StructuralIndex{}, "", nil, []search.Warning{{
+				Code: "scip_artifact_unusable",
+				Message: fmt.Sprintf(
+					"SCIP precision for %s is unavailable because its exact-revision artifact could not be validated; Tree-sitter references were used while the artifact is rebuilt or cleaned.",
+					repository.Name,
+				),
+			}}, false, nil
 		}
 		required := repositoryID > 0
 		if repositoryID == 0 {
@@ -1473,11 +1482,21 @@ func (s *Service) scipReferenceIndex(
 				(repository.SCIPJava != nil && repository.SCIPJava.Applicable)
 			if repository.SCIPJava != nil && repository.SCIPJava.Applicable &&
 				repository.SCIPJava.State != "ready" {
-				return graph.StructuralIndex{}, "", nil, false, nil
+				return graph.StructuralIndex{}, "", nil, nil, false, nil
 			}
 		}
 		if !ok && required {
-			return graph.StructuralIndex{}, "", nil, false, nil
+			var warnings []search.Warning
+			if repository.SCIPJava != nil && repository.SCIPJava.State == "ready" {
+				warnings = []search.Warning{{
+					Code: "scip_artifact_missing",
+					Message: fmt.Sprintf(
+						"SCIP precision for %s is marked ready but its exact-revision artifact is missing; Tree-sitter references were used while the artifact is rebuilt.",
+						repository.Name,
+					),
+				}}
+			}
+			return graph.StructuralIndex{}, "", nil, warnings, false, nil
 		}
 		if !ok {
 			continue
@@ -1486,11 +1505,11 @@ func (s *Service) scipReferenceIndex(
 		artifacts = append(artifacts, artifact)
 	}
 	if len(selected) == 0 {
-		return graph.StructuralIndex{}, "", nil, false, nil
+		return graph.StructuralIndex{}, "", nil, nil, false, nil
 	}
 	resolved := scipindex.ResolveReferences(artifacts, symbol)
 	if resolved.State != "exact" && resolved.State != "unique-name" {
-		return graph.StructuralIndex{}, "", nil, false, nil
+		return graph.StructuralIndex{}, "", nil, nil, false, nil
 	}
 	repositoryNames := make(map[int64]string, len(selected))
 	for _, repository := range selected {
@@ -1555,7 +1574,7 @@ func (s *Service) scipReferenceIndex(
 			AnalyzedRepositories:  len(selected),
 			RequestedRepositoryID: repositoryID,
 		},
-	}, resolved.Symbol, &resolved, true, nil
+	}, resolved.Symbol, &resolved, nil, true, nil
 }
 
 // SymbolDetails reports qualified identity and confidence without presenting

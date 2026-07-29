@@ -634,6 +634,7 @@ func (s referenceTestStructure) ReadStructure(context.Context, int64) (graph.Str
 
 type referenceTestSCIP struct {
 	artifact scipindex.Artifact
+	err      error
 }
 
 func (s referenceTestSCIP) Read(
@@ -641,6 +642,9 @@ func (s referenceTestSCIP) Read(
 	repositoryID int64,
 	revision string,
 ) (scipindex.Artifact, bool, error) {
+	if s.err != nil {
+		return scipindex.Artifact{}, false, s.err
+	}
 	if s.artifact.RepositoryID != repositoryID || s.artifact.Revision != revision {
 		return scipindex.Artifact{}, false, nil
 	}
@@ -908,10 +912,10 @@ func TestFleetSCIPCoverageIgnoresExplicitlyNonJavaRepositories(t *testing.T) {
 			{RepositoryID: 8, Language: "typescript"},
 		},
 	}
-	index, resolution, semantic, ok, err := service.scipReferenceIndex(
+	index, resolution, semantic, warnings, ok, err := service.scipReferenceIndex(
 		context.Background(), 0, "save", syntax, nil,
 	)
-	if err != nil || !ok || semantic == nil || resolution != semanticSave ||
+	if err != nil || len(warnings) != 0 || !ok || semantic == nil || resolution != semanticSave ||
 		index.Scope.TotalRepositories != 1 ||
 		index.Scope.AnalyzedRepositories != 1 {
 		t.Fatalf("Java-aware SCIP index = %#v, %q, %v, %v", index, resolution, ok, err)
@@ -922,8 +926,56 @@ func TestFleetSCIPCoverageIgnoresExplicitlyNonJavaRepositories(t *testing.T) {
 	repositories[0].SCIPJava = &failed
 	service = New(referenceFleetStore{repositories: repositories}, fixedResultSearcher{}, "").
 		UseSCIP(referenceFleetSCIP{artifacts: map[int64]scipindex.Artifact{7: artifact}})
-	if _, _, _, ok, err := service.scipReferenceIndex(context.Background(), 0, "save", syntax, nil); err != nil || ok {
+	if _, _, _, _, ok, err := service.scipReferenceIndex(context.Background(), 0, "save", syntax, nil); err != nil || ok {
 		t.Fatalf("incomplete Java SCIP coverage = %v, %v", ok, err)
+	}
+}
+
+func TestReferenceSearchFallsBackWithWarningWhenSCIPArtifactIsUnusable(t *testing.T) {
+	revision := strings.Repeat("d", 40)
+	repository := catalog.Repository{
+		ID: 7, Name: "payments", IndexedCommit: revision, IndexState: "ready",
+		SCIPJava: &catalog.SCIPIndexStatus{
+			Provider: "scip-java", State: "ready", Applicable: true, Revision: revision,
+		},
+	}
+	service := New(referenceTestStore{repository: repository}, &capturingSearcher{}, "").
+		UseStructure(referenceTestStructure{index: graph.StructuralIndex{
+			Scope: graph.Scope{
+				Kind: "repository", Complete: true,
+				TotalRepositories: 1, AnalyzedRepositories: 1,
+				RequestedRepositoryID: repository.ID,
+			},
+			Structure: []graph.StructuralDocument{{
+				RepositoryID: repository.ID, Repository: repository.Name,
+				Revision: revision, Path: "PaymentService.java", Language: "java",
+				ParseComplete: true,
+				Relations: []analysis.Relation{{
+					Kind: "call", Target: "save", Confidence: "syntax",
+					Range: analysis.Range{StartLine: 4, EndLine: 4},
+				}},
+			}},
+		}}).
+		UseSCIP(referenceTestSCIP{
+			err: errors.New("SCIP artifact identity does not match its requested repository revision"),
+		})
+
+	result, err := service.FindReferences(t.Context(), ReferenceRequest{
+		Symbol: "save", RepositoryID: repository.ID, Compact: true,
+	})
+	if err != nil {
+		t.Fatalf("stale SCIP fallback returned an error: %v", err)
+	}
+	if result.ReferenceResolution != "syntax-target-name" ||
+		result.ReferenceIndex == nil ||
+		result.ReferenceIndex.Provider != "tree-sitter" ||
+		result.MatchCount != 1 {
+		t.Fatalf("stale SCIP fallback = %#v", result)
+	}
+	if len(result.Warnings) != 1 ||
+		result.Warnings[0].Code != "scip_artifact_unusable" ||
+		!strings.Contains(result.Warnings[0].Message, "Tree-sitter") {
+		t.Fatalf("stale SCIP warnings = %#v", result.Warnings)
 	}
 }
 

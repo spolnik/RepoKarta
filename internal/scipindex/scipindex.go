@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path"
 	"path/filepath"
@@ -21,6 +22,7 @@ import (
 	"time"
 
 	"github.com/scip-code/scip/bindings/go/scip"
+	"github.com/spolnik/RepoKarta/internal/catalog"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -37,10 +39,11 @@ const (
 
 // Store owns RepoKarta's derived SCIP artifacts.
 type Store struct {
-	directory string
-	cacheMu   sync.Mutex
-	cache     map[string]cachedArtifact
-	loads     map[string]*artifactLoad
+	directory  string
+	artifactMu sync.RWMutex
+	cacheMu    sync.Mutex
+	cache      map[string]cachedArtifact
+	loads      map[string]*artifactLoad
 }
 
 type cachedArtifact struct {
@@ -224,6 +227,8 @@ func (s *Store) Import(
 	if err != nil {
 		return ImportSummary{}, fmt.Errorf("encode SCIP artifact: %w", err)
 	}
+	s.artifactMu.Lock()
+	defer s.artifactMu.Unlock()
 	fileName := filepath.Base(s.artifactPath(repositoryID, revision))
 	temporary, err := os.CreateTemp(s.directory, fileName+".*.tmp")
 	if err != nil {
@@ -254,8 +259,20 @@ func (s *Store) Import(
 		}
 	}
 	s.cacheMu.Lock()
-	delete(s.cache, artifactCacheKey(repositoryID, revision))
+	cachePrefix := strconv.FormatInt(repositoryID, 10) + "\x00"
+	for key := range s.cache {
+		if strings.HasPrefix(key, cachePrefix) {
+			delete(s.cache, key)
+		}
+	}
 	s.cacheMu.Unlock()
+	if err := s.removeSupersededArtifacts(repositoryID, artifactPath); err != nil {
+		slog.Warn(
+			"remove superseded SCIP artifacts",
+			"repository_id", repositoryID,
+			"error", err,
+		)
+	}
 	return summary, nil
 }
 
@@ -265,6 +282,8 @@ func (s *Store) Read(
 	repositoryID int64,
 	revision string,
 ) (Artifact, bool, error) {
+	s.artifactMu.RLock()
+	defer s.artifactMu.RUnlock()
 	if err := ctx.Err(); err != nil {
 		return Artifact{}, false, err
 	}
@@ -334,6 +353,89 @@ func (s *Store) readArtifact(
 		return Artifact{}, false, errors.New("SCIP artifact identity does not match its requested repository revision")
 	}
 	return artifact, true, nil
+}
+
+func (s *Store) removeSupersededArtifacts(repositoryID int64, keepPath string) error {
+	entries, err := os.ReadDir(s.directory)
+	if err != nil {
+		return err
+	}
+	prefix := fmt.Sprintf("repository-%d-", repositoryID)
+	keepName := filepath.Base(keepPath)
+	for _, entry := range entries {
+		if entry.IsDir() || entry.Name() == keepName ||
+			!strings.HasPrefix(entry.Name(), prefix) ||
+			!strings.HasSuffix(strings.ToLower(entry.Name()), ".json") {
+			continue
+		}
+		if err := os.Remove(filepath.Join(s.directory, entry.Name())); err != nil &&
+			!errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove %s: %w", entry.Name(), err)
+		}
+	}
+	return nil
+}
+
+// Prune removes SCIP artifacts that cannot be selected by the synchronized
+// catalogue because their repository disappeared or their exact revision was
+// replaced. Current artifacts and interrupted temporary files are preserved.
+func (s *Store) Prune(ctx context.Context, repositories []catalog.Repository) error {
+	s.artifactMu.Lock()
+	defer s.artifactMu.Unlock()
+	keep := make(map[string]struct{}, len(repositories))
+	for _, repository := range repositories {
+		revision := strings.TrimSpace(repository.IndexedCommit)
+		if repository.ID <= 0 || revision == "" {
+			continue
+		}
+		keep[filepath.Base(s.artifactPath(repository.ID, revision))] = struct{}{}
+	}
+	entries, err := os.ReadDir(s.directory)
+	if err != nil {
+		return err
+	}
+	removed := false
+	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if entry.IsDir() || !scipArtifactFile(entry.Name()) {
+			continue
+		}
+		if _, current := keep[entry.Name()]; current {
+			continue
+		}
+		if err := os.Remove(filepath.Join(s.directory, entry.Name())); err != nil &&
+			!errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove stale SCIP artifact %s: %w", entry.Name(), err)
+		}
+		removed = true
+	}
+	if removed {
+		s.cacheMu.Lock()
+		clear(s.cache)
+		s.cacheMu.Unlock()
+	}
+	return nil
+}
+
+func scipArtifactFile(name string) bool {
+	if !strings.HasPrefix(name, "repository-") ||
+		!strings.HasSuffix(strings.ToLower(name), ".json") {
+		return false
+	}
+	identity := strings.TrimSuffix(strings.TrimPrefix(name, "repository-"), ".json")
+	separator := strings.IndexByte(identity, '-')
+	if separator <= 0 || separator == len(identity)-1 {
+		return false
+	}
+	repositoryID, err := strconv.ParseInt(identity[:separator], 10, 64)
+	digest := identity[separator+1:]
+	if err != nil || repositoryID <= 0 || len(digest) != 24 {
+		return false
+	}
+	_, err = hex.DecodeString(digest)
+	return err == nil
 }
 
 func (s *Store) evictArtifactsLocked() {

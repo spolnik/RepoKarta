@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/scip-code/scip/bindings/go/scip"
+	"github.com/spolnik/RepoKarta/internal/catalog"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -81,6 +82,27 @@ func TestImportReadAndResolveReferences(t *testing.T) {
 	exact := ResolveReferences([]Artifact{artifact}, testSymbol)
 	if exact.State != "exact" || len(exact.References) != 1 {
 		t.Fatalf("exact resolution = %#v", exact)
+	}
+	if _, err := store.Import(context.Background(), 7, "def456", "backend", bytes.NewReader(content)); err != nil {
+		t.Fatalf("import replacement revision: %v", err)
+	}
+	if previous, found, err := store.Read(context.Background(), 7, "abc123"); err != nil || found {
+		t.Fatalf("superseded artifact = %#v, %v, %v", previous, found, err)
+	}
+	if current, found, err := store.Read(context.Background(), 7, "def456"); err != nil || !found ||
+		current.Revision != "def456" {
+		t.Fatalf("current artifact = %#v, %v, %v", current, found, err)
+	}
+	if _, err := store.Import(context.Background(), 8, "orphaned", ".", bytes.NewReader(content)); err != nil {
+		t.Fatalf("import orphan candidate: %v", err)
+	}
+	if err := store.Prune(context.Background(), []catalog.Repository{{
+		ID: 7, IndexedCommit: "def456",
+	}}); err != nil {
+		t.Fatalf("prune artifacts: %v", err)
+	}
+	if orphan, found, err := store.Read(context.Background(), 8, "orphaned"); err != nil || found {
+		t.Fatalf("orphan artifact = %#v, %v, %v", orphan, found, err)
 	}
 }
 

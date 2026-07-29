@@ -11,7 +11,8 @@ Every source page locks embedded searches to the repository being viewed:
 - **Find usages** calls the shared reference search with
   `mode=references`. A Java SCIP artifact is preferred when an exact compatible
   index is ready; otherwise RepoKarta uses persisted syntax-backed AST
-  relations.
+  relations and reports a machine-readable warning when a ready SCIP artifact
+  is missing, stale, or unreadable.
 - **Code search** calls the shared Zoekt search with the repository selector
   already set.
 - Selecting a single identifier in the source viewer prepares **Find usages**.

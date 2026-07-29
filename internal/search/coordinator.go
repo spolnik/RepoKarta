@@ -37,12 +37,25 @@ type Coordinator struct {
 	indexedPending     []int64
 	indexedQueued      map[int64]struct{}
 	repositoryProvider func(context.Context) ([]catalog.Repository, error)
+	artifactCollectors []func(context.Context, []catalog.Repository) error
 }
 
 // UseRepositoryProvider merges verified administrator-approved repositories
 // into every authoritative catalogue refresh.
 func (c *Coordinator) UseRepositoryProvider(provider func(context.Context) ([]catalog.Repository, error)) *Coordinator {
 	c.repositoryProvider = provider
+	return c
+}
+
+// UseArtifactGarbageCollector runs a bounded RepoKarta-owned artifact sweep
+// after the durable catalogue has been synchronized and before replacement
+// indexing begins.
+func (c *Coordinator) UseArtifactGarbageCollector(
+	collector func(context.Context, []catalog.Repository) error,
+) *Coordinator {
+	if collector != nil {
+		c.artifactCollectors = append(c.artifactCollectors, collector)
+	}
 	return c
 }
 
@@ -116,17 +129,24 @@ func (c *Coordinator) Refresh(ctx context.Context) (resultErr error) {
 	if err := c.store.SyncRepositories(ctx, repositories); err != nil {
 		return fmt.Errorf("store repositories: %w", err)
 	}
-	if collector, ok := c.engine.(ArtifactGarbageCollector); ok {
+	if collector, ok := c.engine.(ArtifactGarbageCollector); ok || len(c.artifactCollectors) > 0 {
 		liveRepositories, err := c.store.ListRepositories(ctx)
 		if err != nil {
 			return fmt.Errorf("load repositories for artifact cleanup: %w", err)
 		}
-		live := make(map[int64]struct{}, len(liveRepositories))
-		for _, repository := range liveRepositories {
-			live[repository.ID] = struct{}{}
+		if ok {
+			live := make(map[int64]struct{}, len(liveRepositories))
+			for _, repository := range liveRepositories {
+				live[repository.ID] = struct{}{}
+			}
+			if err := collector.PruneRepositories(ctx, live); err != nil {
+				return fmt.Errorf("clean derived search artifacts: %w", err)
+			}
 		}
-		if err := collector.PruneRepositories(ctx, live); err != nil {
-			return fmt.Errorf("clean derived search artifacts: %w", err)
+		for _, collect := range c.artifactCollectors {
+			if err := collect(ctx, liveRepositories); err != nil {
+				return fmt.Errorf("clean derived repository artifacts: %w", err)
+			}
 		}
 	}
 	c.queueIndexing()

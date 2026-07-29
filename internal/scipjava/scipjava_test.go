@@ -3,11 +3,13 @@ package scipjava
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -52,7 +54,34 @@ func (store *memoryRepositoryStore) status() *catalog.SCIPIndexStatus {
 
 type fixtureExecutor struct {
 	version string
-	runs    int
+	runs    atomic.Int32
+}
+
+type failNextReadArtifacts struct {
+	store *scipindex.Store
+	err   error
+}
+
+func (artifacts *failNextReadArtifacts) Import(
+	ctx context.Context,
+	repositoryID int64,
+	revision, sourceRoot string,
+	reader io.Reader,
+) (scipindex.ImportSummary, error) {
+	return artifacts.store.Import(ctx, repositoryID, revision, sourceRoot, reader)
+}
+
+func (artifacts *failNextReadArtifacts) Read(
+	ctx context.Context,
+	repositoryID int64,
+	revision string,
+) (scipindex.Artifact, bool, error) {
+	if artifacts.err != nil {
+		err := artifacts.err
+		artifacts.err = nil
+		return scipindex.Artifact{}, false, err
+	}
+	return artifacts.store.Read(ctx, repositoryID, revision)
 }
 
 func (executor *fixtureExecutor) Verify(context.Context, string) (string, error) {
@@ -60,7 +89,7 @@ func (executor *fixtureExecutor) Verify(context.Context, string) (string, error)
 }
 
 func (executor *fixtureExecutor) Run(_ context.Context, _ string, directory string, _ []string) ([]byte, error) {
-	executor.runs++
+	executor.runs.Add(1)
 	symbol := "scip-java maven com.acme:payments 1.0.0 com/acme/PaymentService#run()."
 	occurrence := &scip.Occurrence{Symbol: symbol, SymbolRoles: int32(scip.SymbolRole_ReadAccess)}
 	occurrence.SetSourceRange(scip.Range{
@@ -137,6 +166,7 @@ func TestServiceGeneratesAndImportsExactCommit(t *testing.T) {
 	service.Queue(7)
 
 	deadline := time.Now().Add(10 * time.Second)
+	var firstFinishedAt time.Time
 	for {
 		status := repositories.status()
 		if status != nil && status.State == "ready" {
@@ -145,6 +175,7 @@ func TestServiceGeneratesAndImportsExactCommit(t *testing.T) {
 				status.Configuration == "" {
 				t.Fatalf("ready status = %#v", status)
 			}
+			firstFinishedAt = status.FinishedAt
 			break
 		}
 		if status != nil && status.State == "failed" {
@@ -160,16 +191,80 @@ func TestServiceGeneratesAndImportsExactCommit(t *testing.T) {
 		artifact.Documents[0].Path != "src/main/java/com/acme/PaymentService.java" {
 		t.Fatalf("artifact = %#v, %v, %v", artifact, ok, err)
 	}
-	if executor.runs != 1 {
-		t.Fatalf("indexer runs = %d, want 1", executor.runs)
+	if executor.runs.Load() != 1 {
+		t.Fatalf("indexer runs = %d, want 1", executor.runs.Load())
 	}
 	if _, err := os.Stat(filepath.Join(repositoryPath, "index.scip")); !os.IsNotExist(err) {
 		t.Fatalf("source worktree was modified: %v", err)
 	}
 	service.Queue(7)
 	time.Sleep(100 * time.Millisecond)
-	if executor.runs != 1 {
-		t.Fatalf("unchanged exact commit was regenerated %d times", executor.runs)
+	if executor.runs.Load() != 1 {
+		t.Fatalf("unchanged exact commit was regenerated %d times", executor.runs.Load())
+	}
+
+	service.artifacts = &failNextReadArtifacts{
+		store: artifacts,
+		err:   errors.New("SCIP artifact identity does not match its requested repository revision"),
+	}
+	service.Queue(7)
+	deadline = time.Now().Add(10 * time.Second)
+	for {
+		status := repositories.status()
+		if executor.runs.Load() == 2 && status != nil && status.State == "ready" &&
+			status.FinishedAt.After(firstFinishedAt) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf(
+				"stale ready artifact was not regenerated; indexer runs = %d, status = %#v",
+				executor.runs.Load(),
+				status,
+			)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func TestNewRemovesAbandonedSCIPWorktreeDirectories(t *testing.T) {
+	dataDirectory := t.TempDir()
+	source := t.TempDir()
+	runGitTest(t, source, "init", "-q")
+	runGitTest(t, source, "config", "user.name", "RepoKarta Test")
+	runGitTest(t, source, "config", "user.email", "test@repokarta.local")
+	if err := os.WriteFile(filepath.Join(source, "build.gradle"), []byte("plugins { id 'java' }\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, source, "add", ".")
+	runGitTest(t, source, "commit", "-qm", "fixture")
+	shadow := filepath.Join(dataDirectory, "git-shadow", "repository-7.git")
+	if err := os.MkdirAll(shadow, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, shadow, "init", "--bare", "-q")
+	runGitTest(t, shadow, "fetch", "--force", source, "HEAD:refs/heads/main")
+	orphan := filepath.Join(dataDirectory, "worktrees", "7-abandoned", "checkout")
+	runGitTest(t, shadow, "worktree", "add", "--detach", orphan, "refs/heads/main")
+	if err := os.WriteFile(filepath.Join(orphan, "index.scip"), []byte("partial"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	artifacts, err := scipindex.New(filepath.Join(t.TempDir(), "artifacts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New(
+		Config{Mode: ModeOff, DataDirectory: dataDirectory},
+		&memoryRepositoryStore{},
+		artifacts,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Dir(orphan)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("abandoned worktree directory was retained: %v", err)
+	}
+	if listed := runGitTest(t, shadow, "worktree", "list", "--porcelain"); strings.Contains(listed, filepath.ToSlash(orphan)) ||
+		strings.Contains(listed, orphan) {
+		t.Fatalf("abandoned worktree registration was retained: %s", listed)
 	}
 }
 

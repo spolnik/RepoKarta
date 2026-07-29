@@ -270,6 +270,7 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	coordinator := search.NewCoordinator(cfg.RepositoryRoot, cfg.Excludes, database, engine).
 		UseRepositoryProvider(acquisitions.CatalogueRepositories).
+		UseArtifactGarbageCollector(semanticIndexes.Prune).
 		UseIndexedObserver(func(observerContext context.Context, repositoryID int64) error {
 			mapErr := maps.PrepareStructure(observerContext, repositoryID)
 			javaSCIP.Queue(repositoryID)

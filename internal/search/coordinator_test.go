@@ -177,3 +177,27 @@ func TestRefreshMergesAdministratorManagedRepositories(t *testing.T) {
 		t.Fatalf("refreshed repositories = %#v", store.repositories)
 	}
 }
+
+func TestRefreshRunsArtifactGarbageCollectionBeforeIndexing(t *testing.T) {
+	store := &providerStore{}
+	managed := catalog.Repository{
+		ID: 9, Name: "managed", Path: "C:/repokarta-owned/managed",
+		HeadCommit: "cccccccccccccccccccccccccccccccccccccccc",
+		ScanState:  "ready", IndexState: "pending",
+	}
+	var collected []catalog.Repository
+	coordinator := NewCoordinator(t.TempDir(), nil, store, observerEngine{}).
+		UseRepositoryProvider(func(context.Context) ([]catalog.Repository, error) {
+			return []catalog.Repository{managed}, nil
+		}).
+		UseArtifactGarbageCollector(func(_ context.Context, repositories []catalog.Repository) error {
+			collected = append([]catalog.Repository(nil), repositories...)
+			return nil
+		})
+	if err := coordinator.Refresh(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if len(collected) != 1 || collected[0].ID != managed.ID {
+		t.Fatalf("garbage collector repositories = %#v", collected)
+	}
+}

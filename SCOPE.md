@@ -993,6 +993,11 @@ repositories.
   repository IDs against Zoekt shards, git-shadow clones, SCIP artifacts, and
   graph snapshots; delete or reclassify orphans as cleanable in maintenance
   instead of protected.
+- [x] Collect superseded exact-revision SCIP artifacts after catalogue sync and
+  successful replacement imports, abandoned `scip-java` worktrees at startup,
+  and Wiki Markdown pages removed by a replacement plan. A stale or unreadable
+  ready SCIP artifact now degrades reference search to Tree-sitter with an
+  explicit warning and is rebuilt by automatic Java indexing.
 - [x] Stop emitting search matches whose repository cannot be resolved; they
   currently leak the absolute local path as the repository name for
   unrestricted viewers.
@@ -1287,7 +1292,7 @@ completion criteria include:
 
 ## Current implementation version
 
-`0.96.1-dev`. M0 through M19 are complete. M7 now includes qualified symbol
+`0.97.0-dev`. M0 through M19 are complete. M7 now includes qualified symbol
 search, precise optional SCIP data, commit-pinned CODEOWNERS, bounded evidence
 graph queries, saved searches and deterministic monitors, and permission-safe
 Deep Search with visible trace, budgets, retry, and revocable sharing. M9 now
@@ -1375,7 +1380,9 @@ fallback whenever precise Java coverage is missing, stale, or failed. Its
 status distinguishes environment or Docker failures, JDK-incompatible
 wrappers, and compilation errors. Exact-commit Gradle wrapper and Java
 toolchain metadata drive a compatible configured launcher JDK instead of
-blindly inheriting the server JVM.
+blindly inheriting the server JVM. Unusable ready artifacts now downgrade with
+a machine-readable warning while the scheduler rebuilds them; superseded SCIP
+revisions, abandoned build worktrees, and replaced Wiki pages are collected.
 OpenTelemetry metrics, structured logs, and traces are available through
 standard OTLP gRPC or HTTP/protobuf exporters with a disabled-by-default,
 failure-isolated lifecycle. Stable service identity, correlated redacted logs,

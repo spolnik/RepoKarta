@@ -83,7 +83,9 @@ user's checkout. RepoKarta invokes `scip-java index` from the detected build
 root, imports the resulting bounded `index.scip`, records its indexer version
 and configuration fingerprint, and removes the temporary worktree. A matching
 ready artifact is not rebuilt until the indexed revision, indexer version, or
-configuration changes.
+configuration changes. On startup, RepoKarta removes abandoned worktree
+directories left by an interrupted build and prunes their registrations from
+the RepoKarta-owned Git shadows.
 
 The work is handled by a dedicated, deduplicated background queue. A failed,
 unavailable, or inapplicable Java index never fails normal source indexing.
@@ -130,8 +132,10 @@ at most 256 MiB, 200,000 documents, and 2,000,000 symbol occurrences.
 `-root` defaults to the repository root (`.`); set it to the repository-relative
 project directory when the indexer ran in a monorepo subdirectory.
 
-Re-import after RepoKarta indexes a new commit. Artifacts for older revisions
-are never silently applied to newer source.
+Re-import after RepoKarta indexes a new commit. Publishing the replacement
+collects older artifacts for that repository, and catalogue refresh also
+collects artifacts whose repository or exact indexed revision is no longer
+live. Artifacts for older revisions are never silently applied to newer source.
 
 ## Reference resolution and fallback
 
@@ -150,8 +154,11 @@ Repositories explicitly classified as non-Java do not prevent compiler-precise
 Java resolution; manually imported artifacts for other languages remain part
 of coverage when present. If any applicable artifact is missing or stale, or a
 bare name is ambiguous, RepoKarta retains the existing syntax-backed
-Tree-sitter behavior. A corrupt artifact is reported explicitly instead of
-being silently ignored. Fallback results report `syntax-target-name`, the
+Tree-sitter behavior. A missing artifact that is marked ready, an identity
+mismatch, or another unreadable artifact adds a machine-readable
+`scip_artifact_missing` or `scip_artifact_unusable` warning instead of failing
+the reference request. Automatic Java indexing rebuilds an unusable ready
+artifact in the background. Fallback results report `syntax-target-name`, the
 `tree-sitter` provider, and do not present the fallback as compiler-precise.
 
 This first slice imports symbol identities and reference occurrences. SCIP
