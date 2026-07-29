@@ -7329,6 +7329,199 @@ function enableDependencyTopology(debug?: DebugLogger): void {
   void loadTopology(apiURL);
 }
 
+function enableAdminWikiBatch(): void {
+  const form = document.querySelector<HTMLFormElement>("[data-admin-wiki-batch]");
+  if (!form) {
+    return;
+  }
+  const repositories = Array.from(
+    form.querySelectorAll<HTMLInputElement>("[data-admin-wiki-repository]")
+  );
+  const provider = form.querySelector<HTMLSelectElement>("[data-admin-wiki-provider]");
+  const model = form.querySelector<HTMLSelectElement>("[data-admin-wiki-model]");
+  const effort = form.querySelector<HTMLSelectElement>("[data-admin-wiki-effort]");
+  const timeout = form.querySelector<HTMLSelectElement>("[data-admin-wiki-timeout]");
+  const tokenBudget = form.querySelector<HTMLSelectElement>("[data-admin-wiki-token-budget]");
+  const tokenBudgetField = tokenBudget?.closest<HTMLElement>(".filter-field");
+  const refresh = form.querySelector<HTMLInputElement>("[data-admin-wiki-refresh]");
+  const csrf = form.querySelector<HTMLInputElement>('input[name="csrf"]');
+  const start = form.querySelector<HTMLButtonElement>("[data-admin-wiki-start]");
+  const summary = form.querySelector<HTMLElement>("[data-admin-wiki-summary]");
+  const results = form.querySelector<HTMLOListElement>("[data-admin-wiki-results]");
+  const selectAll = form.querySelector<HTMLButtonElement>("[data-admin-wiki-select-all]");
+  const clear = form.querySelector<HTMLButtonElement>("[data-admin-wiki-clear]");
+  if (!provider || !model || !effort || !timeout || !tokenBudget || !refresh ||
+      !tokenBudgetField || !csrf || !start || !summary || !results || !selectAll || !clear) {
+    return;
+  }
+
+  const availableModels = Array.from(model.options)
+    .map((option) => ({
+      value: option.value,
+      label: option.textContent ?? option.value,
+      provider: option.dataset.provider ?? "",
+      efforts: (option.dataset.efforts ?? "").split(",").filter(Boolean)
+    }))
+    .filter((candidate) =>
+      candidate.provider !== "codex" ||
+      candidate.value === "gpt-5.6-sol" ||
+      candidate.value === "gpt-5.6-terra"
+    );
+  const effortOptions = Array.from(effort.options);
+  let running = false;
+
+  const selectedRepositories = (): HTMLInputElement[] =>
+    repositories.filter((repository) => repository.checked && !repository.disabled);
+
+  const syncEffort = (): void => {
+    const selectedModel = availableModels.find((candidate) =>
+      candidate.provider === provider.value && candidate.value === model.value
+    );
+    const declaredEfforts = selectedModel?.efforts ?? [];
+    const supported = provider.value === "codex"
+      ? declaredEfforts.filter((level) => ["high", "xhigh", "max", "ultra"].includes(level))
+      : declaredEfforts;
+    for (const option of effortOptions) {
+      option.hidden = supported.length > 0 && !supported.includes(option.value);
+      option.disabled = option.hidden;
+    }
+    if (supported.length === 0) {
+      effort.value = "";
+    } else if (!supported.includes(effort.value)) {
+      effort.value = supported.includes("high") ? "high" : supported[0] ?? "";
+    }
+  };
+
+  const syncModel = (): void => {
+    const matching = availableModels.filter((candidate) => candidate.provider === provider.value);
+    model.replaceChildren(...matching.map((candidate) => {
+      const option = new Option(candidate.label, candidate.value);
+      option.dataset.provider = candidate.provider;
+      option.dataset.efforts = candidate.efforts.join(",");
+      return option;
+    }));
+    const preferred = matching.find((candidate) => candidate.value === "gpt-5.6-sol")
+      ?? matching[0];
+    model.value = preferred?.value ?? "";
+    const supportsTokenBudget = provider.selectedOptions[0]?.dataset.tokenBudget === "true";
+    tokenBudgetField.hidden = !supportsTokenBudget;
+    tokenBudget.disabled = !supportsTokenBudget;
+    syncEffort();
+  };
+
+  const syncAction = (): void => {
+    const selected = selectedRepositories().length;
+    const settingsReady = Boolean(provider.value && model.value);
+    start.disabled = running || selected === 0 || !settingsReady;
+    if (!running) {
+      summary.textContent = selected === 0
+        ? "Select one or more repositories."
+        : `${selected} ${selected === 1 ? "repository" : "repositories"} selected.`;
+    }
+  };
+
+  const appendResult = (repository: HTMLInputElement): HTMLElement => {
+    const row = document.createElement("li");
+    row.className = "flex items-start justify-between gap-4 rounded-lg border border-white/[0.08] bg-black/15 px-4 py-3 text-sm";
+    const name = document.createElement("span");
+    name.className = "font-semibold text-white";
+    name.textContent = repository.dataset.adminWikiName ?? `Repository ${repository.value}`;
+    const state = document.createElement("span");
+    state.className = "text-amber-200";
+    state.textContent = "Queued";
+    state.dataset.adminWikiResultState = repository.value;
+    row.append(name, state);
+    results.append(row);
+    return state;
+  };
+
+  selectAll.addEventListener("click", () => {
+    for (const repository of repositories) {
+      if (!repository.disabled) {
+        repository.checked = true;
+      }
+    }
+    syncAction();
+  });
+  clear.addEventListener("click", () => {
+    for (const repository of repositories) {
+      repository.checked = false;
+    }
+    syncAction();
+  });
+  repositories.forEach((repository) => repository.addEventListener("change", syncAction));
+  provider.addEventListener("change", () => {
+    syncModel();
+    syncAction();
+  });
+  model.addEventListener("change", () => {
+    syncEffort();
+    syncAction();
+  });
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const selected = selectedRepositories();
+    if (running || selected.length === 0 || !provider.value || !model.value) {
+      return;
+    }
+    running = true;
+    syncAction();
+    results.replaceChildren();
+    const states = new Map(selected.map((repository) => [
+      repository.value,
+      appendResult(repository)
+    ]));
+    let succeeded = 0;
+    let failed = 0;
+    for (const [index, repository] of selected.entries()) {
+      summary.textContent = `Generating ${index + 1} of ${selected.length}: ${repository.dataset.adminWikiName ?? repository.value}`;
+      const state = states.get(repository.value)!;
+      state.textContent = "Generating";
+      state.className = "text-amber-200";
+      try {
+        const response = await fetch("/admin/wiki/generate", {
+          method: "POST",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            csrf: csrf.value,
+            repository_id: Number.parseInt(repository.value, 10),
+            refresh: refresh.checked,
+            provider: provider.value,
+            model: model.value,
+            effort: effort.value,
+            timeout_seconds: Number.parseInt(timeout.value, 10),
+            token_budget: tokenBudget.disabled ? 0 : Number.parseInt(tokenBudget.value, 10)
+          })
+        });
+        if (!response.ok) {
+          throw new Error(await responseErrorMessage(response, `Generation failed (${response.status})`));
+        }
+        const site = await response.json() as WikiSite;
+        state.textContent = `${site.ready} ready${site.failed ? ` · ${site.failed} failed` : ""}`;
+        state.className = site.failed ? "text-amber-200" : "text-emerald-300";
+        succeeded++;
+      } catch (generationError: unknown) {
+        state.textContent = generationError instanceof Error ? generationError.message : String(generationError);
+        state.className = "max-w-xl text-right text-red-200";
+        failed++;
+      }
+    }
+    running = false;
+    summary.textContent = `Batch complete: ${succeeded} succeeded${failed ? `, ${failed} failed` : ""}.`;
+    syncAction();
+  });
+
+  const preferredProvider = Array.from(provider.options).find((option) => option.value === "codex")
+    ?? provider.options[0];
+  provider.value = preferredProvider?.value ?? "";
+  syncModel();
+  syncAction();
+}
+
 connectIndexEvents();
 enableContextualChatLauncher();
 enableArtifactProgress();
@@ -7354,6 +7547,7 @@ enableConversations(debugLogger);
 enableRepositoryMaps(debugLogger);
 enableDependencyTopology(debugLogger);
 enableRepositoryWiki(debugLogger);
+enableAdminWikiBatch();
 
 document.body.addEventListener("htmx:afterSwap", (event) => {
   const target = (event as CustomEvent<{ target?: ParentNode }>).detail?.target;

@@ -518,6 +518,9 @@ rendering an unreadable file-level hairball.
   and generation quality gates that reject wall-of-text prose.
 - [x] Full-screen Mermaid zoom and SVG download.
 - [x] Commit-aware staleness and selective regeneration.
+- [x] Administrator-selected batch generation with shared quality controls,
+  durable per-repository checkpoints, continued processing after individual
+  failures, and visible repository outcomes.
 - [x] `.repokarta.yml` steering.
 - [x] Markdown export.
 - [x] Hardcoded per-harness model catalogs with human-readable labels and
@@ -1292,7 +1295,9 @@ completion criteria include:
 
 ## Current implementation version
 
-`0.97.0-dev`. M0 through M19 are complete. M7 now includes qualified symbol
+`0.98.0-dev`. M0 through M19 are complete. M4 now includes administrator-
+selected batch Deep Wiki generation with per-repository outcomes and resumable
+checkpoints. M7 now includes qualified symbol
 search, precise optional SCIP data, commit-pinned CODEOWNERS, bounded evidence
 graph queries, saved searches and deterministic monitors, and permission-safe
 Deep Search with visible trace, budgets, retry, and revocable sharing. M9 now

@@ -83,6 +83,16 @@ stable authenticated principal ID and provider from the request context.
 Conversation authorization failures are attributed the same way, without
 exposing transcript content in audit metadata.
 
+The bootstrap administrator console includes a **Deep Wiki** workspace when
+Wiki generation is configured. Choose any registered, non-empty repositories,
+select one authenticated provider/model/effort profile, and start the batch.
+Repositories run sequentially so one provider is not flooded with parallel
+page turns. A failed repository remains visible and does not stop later
+selections; persisted survey, plan, and page checkpoints support a later
+resume. Select **Rebuild already-current Wikis too** only when intentionally
+refreshing completed output. Every repository attempt records a
+`generation.wiki.batch` audit outcome.
+
 Audit events contain actor, action, target, outcome, authentication provider,
 request correlation ID, timestamp, and a small metadata object. Metadata keys
 that can contain credentials, tokens, cookies, assertions, prompts, or

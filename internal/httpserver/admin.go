@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -13,6 +14,8 @@ import (
 	"github.com/spolnik/RepoKarta/internal/acquisition"
 	"github.com/spolnik/RepoKarta/internal/agent"
 	"github.com/spolnik/RepoKarta/internal/audit"
+	"github.com/spolnik/RepoKarta/internal/catalog"
+	"github.com/spolnik/RepoKarta/internal/docs"
 	"github.com/spolnik/RepoKarta/internal/identity"
 	"github.com/spolnik/RepoKarta/internal/maintenance"
 	"github.com/spolnik/RepoKarta/internal/security"
@@ -61,6 +64,11 @@ type adminPageData struct {
 	DiscoverTopics        string
 	DiscoverAllow         string
 	DiscoverDeny          string
+	WikiAvailable         bool
+	WikiRepositories      []catalog.Repository
+	WikiRepositoryError   string
+	WikiProviders         []agent.Status
+	WikiProviderReady     bool
 }
 
 func (s *Server) discoverRepositories(response http.ResponseWriter, request *http.Request) {
@@ -530,6 +538,24 @@ func (s *Server) adminData(ctx context.Context, csrf string) adminPageData {
 		EntityID:         settings.SAMLEntityID,
 		DiscoverProvider: "local",
 		IncludePrivate:   true,
+		WikiAvailable:    s.docs != nil,
+	}
+	if s.docs != nil {
+		repositories, err := s.intelligence.CatalogRepositories(ctx)
+		if err != nil {
+			data.WikiRepositoryError = err.Error()
+		} else {
+			data.WikiRepositories = repositories
+		}
+		if s.agents != nil {
+			data.WikiProviders = s.agents.Statuses(ctx)
+			for _, provider := range data.WikiProviders {
+				if provider.Authenticated && len(provider.Models) > 0 {
+					data.WikiProviderReady = true
+					break
+				}
+			}
+		}
 	}
 	if s.maintenance != nil {
 		data.MaintenanceAvailable = true
@@ -631,9 +657,88 @@ func (s *Server) renderAdmin(response http.ResponseWriter, data adminPageData) {
 
 func normalizeAdminSection(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "security", "identity", "repositories", "access", "storage":
+	case "security", "identity", "repositories", "access", "wiki", "storage":
 		return strings.ToLower(strings.TrimSpace(value))
 	default:
 		return "security"
 	}
+}
+
+func (s *Server) adminGenerateWiki(response http.ResponseWriter, request *http.Request) {
+	request.Body = http.MaxBytesReader(response, request.Body, 16<<10)
+	if _, ok := s.security.AdminSession(request); !ok {
+		writeAPIError(response, http.StatusUnauthorized, errors.New("administrator session required"))
+		return
+	}
+	var input struct {
+		CSRF         string `json:"csrf"`
+		RepositoryID int64  `json:"repository_id"`
+		Refresh      bool   `json:"refresh"`
+		Provider     string `json:"provider"`
+		Model        string `json:"model"`
+		Effort       string `json:"effort"`
+		Timeout      int    `json:"timeout_seconds"`
+		TokenBudget  int64  `json:"token_budget"`
+	}
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
+		writeAPIError(response, http.StatusBadRequest, errors.New("invalid administrator Wiki generation request"))
+		return
+	}
+	if !s.security.ValidAdminCSRF(request, strings.TrimSpace(input.CSRF)) {
+		writeAPIError(response, http.StatusForbidden, errors.New("invalid administrator CSRF token"))
+		return
+	}
+	if input.RepositoryID <= 0 {
+		writeAPIError(response, http.StatusBadRequest, errors.New("repository_id must be a positive integer"))
+		return
+	}
+	repository, err := s.intelligence.RepositoryByID(request.Context(), input.RepositoryID)
+	if err != nil {
+		s.recordAdminEvent(
+			request,
+			"generation.wiki.batch",
+			"repository-wiki",
+			strconv.FormatInt(input.RepositoryID, 10),
+			"failure",
+			map[string]string{"reason": "repository unavailable"},
+		)
+		writeDocumentationError(response, err)
+		return
+	}
+	site, err := s.docs.Generate(request.Context(), docs.GenerateRequest{
+		RepositoryID: input.RepositoryID,
+		Refresh:      input.Refresh,
+		Preset:       "quality",
+		Provider:     strings.TrimSpace(input.Provider),
+		Model:        strings.TrimSpace(input.Model),
+		Effort:       strings.TrimSpace(input.Effort),
+		Timeout:      input.Timeout,
+		TokenBudget:  input.TokenBudget,
+	})
+	if err != nil {
+		s.recordAdminEvent(
+			request,
+			"generation.wiki.batch",
+			"repository-wiki",
+			strconv.FormatInt(input.RepositoryID, 10),
+			"failure",
+			map[string]string{"repository": repository.Name},
+		)
+		writeDocumentationError(response, err)
+		return
+	}
+	s.recordAdminEvent(
+		request,
+		"generation.wiki.batch",
+		"repository-wiki",
+		strconv.FormatInt(input.RepositoryID, 10),
+		"success",
+		map[string]string{
+			"repository": repository.Name,
+			"refresh":    strconv.FormatBool(input.Refresh),
+		},
+	)
+	writeJSON(response, http.StatusOK, site)
 }

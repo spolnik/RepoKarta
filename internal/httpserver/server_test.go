@@ -1164,9 +1164,10 @@ func (s *testMapService) StructureProgress(context.Context, int64) (graph.Artifa
 }
 
 type testDocumentationService struct {
-	site      docs.Site
-	page      docs.Page
-	generated docs.GenerateRequest
+	site              docs.Site
+	page              docs.Page
+	generated         docs.GenerateRequest
+	generatedRequests []docs.GenerateRequest
 }
 
 func (s *testDocumentationService) Plan(_ context.Context, repositoryID int64) (docs.Site, error) {
@@ -1176,6 +1177,7 @@ func (s *testDocumentationService) Plan(_ context.Context, repositoryID int64) (
 
 func (s *testDocumentationService) Generate(_ context.Context, request docs.GenerateRequest) (docs.Site, error) {
 	s.generated = request
+	s.generatedRequests = append(s.generatedRequests, request)
 	return s.site, nil
 }
 
@@ -1353,6 +1355,115 @@ func TestDocumentationPageAPIGenerationAndExport(t *testing.T) {
 	}
 	if got := response.Header().Get("Content-Disposition"); got != `attachment; filename="repokarta-wiki-fixture.zip"` {
 		t.Fatalf("content disposition = %q", got)
+	}
+}
+
+func TestAdministratorCanGenerateChosenDeepWikis(t *testing.T) {
+	settingsStore := &testSettingsStore{values: make(map[string]string)}
+	securityManager, err := security.New(context.Background(), settingsStore, security.Config{
+		Address:       "127.0.0.1:7331",
+		DataDirectory: t.TempDir(),
+		Initial:       security.Settings{Mode: security.ModeLocal},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repositories := []catalog.Repository{
+		{ID: 11, Name: "Payments", Path: `C:\code\payments`, IndexState: "ready"},
+		{ID: 12, Name: "Shipping", Path: `C:\code\shipping`, IndexState: "ready"},
+	}
+	documents := &testDocumentationService{
+		site: docs.Site{RepositoryID: repositories[0].ID, Repository: repositories[0].Name},
+	}
+	providers := &testConversations{}
+	server, err := New(
+		Config{
+			Address:       "127.0.0.1:7331",
+			Version:       "test",
+			Security:      securityManager,
+			Docs:          documents,
+			Conversations: providers,
+		},
+		codeintel.New(
+			testStore{repositories: repositories},
+			testSearcher{},
+			"http://127.0.0.1:7331",
+		),
+		testRefresher{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pageRequest := httptest.NewRequest(
+		http.MethodGet,
+		"http://127.0.0.1:7331/admin?section=wiki",
+		nil,
+	)
+	pageResponse := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(pageResponse, pageRequest)
+	if pageResponse.Code != http.StatusOK || len(pageResponse.Result().Cookies()) == 0 {
+		t.Fatalf("admin Wiki page = %d: %s", pageResponse.Code, pageResponse.Body.String())
+	}
+	for _, expected := range []string{
+		`aria-current="page">Deep Wiki`,
+		`data-admin-wiki-batch`,
+		`data-admin-wiki-repository="11"`,
+		`data-admin-wiki-repository="12"`,
+		`Payments`,
+		`Shipping`,
+	} {
+		if !strings.Contains(pageResponse.Body.String(), expected) {
+			t.Fatalf("admin Wiki page does not contain %q", expected)
+		}
+	}
+	adminCookie := pageResponse.Result().Cookies()[0]
+	match := regexp.MustCompile(`name="csrf" value="([^"]+)"`).FindStringSubmatch(pageResponse.Body.String())
+	if len(match) != 2 {
+		t.Fatalf("admin CSRF token missing: %s", pageResponse.Body.String())
+	}
+
+	body := fmt.Sprintf(
+		`{"csrf":%q,"repository_id":11,"refresh":true,"provider":"codex","model":"gpt-5.6-sol","effort":"high","timeout_seconds":1800,"token_budget":32000}`,
+		match[1],
+	)
+	generateRequest := httptest.NewRequest(
+		http.MethodPost,
+		"http://127.0.0.1:7331/admin/wiki/generate",
+		strings.NewReader(body),
+	)
+	generateRequest.Header.Set("Content-Type", "application/json")
+	generateRequest.AddCookie(adminCookie)
+	generateResponse := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(generateResponse, generateRequest)
+	if generateResponse.Code != http.StatusOK {
+		t.Fatalf("admin Wiki generation = %d: %s", generateResponse.Code, generateResponse.Body.String())
+	}
+	if len(documents.generatedRequests) != 1 {
+		t.Fatalf("generation requests = %#v", documents.generatedRequests)
+	}
+	generated := documents.generatedRequests[0]
+	if generated.RepositoryID != 11 || generated.Page != "" || !generated.Refresh ||
+		generated.Preset != "quality" || generated.Provider != "codex" ||
+		generated.Model != "gpt-5.6-sol" || generated.Effort != "high" ||
+		generated.Timeout != 1800 || generated.TokenBudget != 32000 {
+		t.Fatalf("generated request = %+v", generated)
+	}
+
+	deniedRequest := httptest.NewRequest(
+		http.MethodPost,
+		"http://127.0.0.1:7331/admin/wiki/generate",
+		strings.NewReader(`{"csrf":"wrong","repository_id":12}`),
+	)
+	deniedRequest.Header.Set("Content-Type", "application/json")
+	deniedRequest.AddCookie(adminCookie)
+	deniedResponse := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(deniedResponse, deniedRequest)
+	if deniedResponse.Code != http.StatusForbidden {
+		t.Fatalf("invalid CSRF status = %d: %s", deniedResponse.Code, deniedResponse.Body.String())
+	}
+	if len(documents.generatedRequests) != 1 {
+		t.Fatalf("invalid CSRF reached generation: %#v", documents.generatedRequests)
 	}
 }
 

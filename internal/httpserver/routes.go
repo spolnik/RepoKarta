@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/spolnik/RepoKarta/internal/codeintel"
@@ -52,6 +53,7 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 			}
 			return strconv.FormatFloat(*value, 'f', 2, 64)
 		},
+		"joinStrings": strings.Join,
 	}
 	templates, err := template.New("repokarta").Funcs(functions).ParseFS(web.Files, "templates/*.html")
 	if err != nil {
@@ -143,6 +145,9 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 		mux.HandleFunc("POST /admin/login", server.adminLogin)
 		mux.HandleFunc("GET /admin", server.adminPage)
 		mux.HandleFunc("POST /admin/security", server.updateSecurity)
+		if server.docs != nil {
+			mux.HandleFunc("POST /admin/wiki/generate", server.adminGenerateWiki)
+		}
 		if server.repositoryAccess != nil {
 			mux.HandleFunc("POST /admin/repositories/access", server.updateRepositoryAccess)
 		}

@@ -313,6 +313,11 @@ team deployment, RepoKarta also supports:
 Conversation transcripts are owner-only on shared instances, including for
 administrators. Wiki generation and administrative mutations retain the
 authenticated principal in redacted audit evidence.
+The administrator console also has a **Deep Wiki** workspace for selecting
+multiple repositories and running the standard quality pipeline sequentially.
+Each repository reports success or failure independently, failures do not stop
+the remaining selection, and durable survey, plan, and page checkpoints make
+an interrupted repository run resumable.
 
 A shared deployment needs a trusted HTTPS reverse proxy, protected secret
 files, explicit repository grants, backups, and post-deploy authorization
