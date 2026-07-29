@@ -613,7 +613,7 @@ func (b *builder) resolvedEnvironmentTarget(
 	candidate := !strings.Contains(host, ".")
 	targetID := b.externalSystemComponentWithCandidate(
 		"service", name, strings.ToUpper(transport),
-		[]string{name, host, normalizeServiceName(host)}, candidate,
+		[]string{name, host, NormalizeServiceName(host)}, candidate,
 	)
 	return resolvedEnvironmentTarget{
 		target: targetID, transport: transport, assignment: assignment,
@@ -653,7 +653,7 @@ func environmentTargetHost(value string) (string, string, bool) {
 }
 
 func (b *builder) knownServiceTarget(value, source string) (string, bool) {
-	normalized := normalizeServiceName(value)
+	normalized := NormalizeServiceName(value)
 	if normalized == "" {
 		return "", false
 	}

@@ -14,6 +14,7 @@ func TestRoadmapKeepsM7ScopeAndCompletedMilestones(t *testing.T) {
 	m7 := scopeSection(t, scope, "### M7:", "### M8:")
 	m9 := scopeSection(t, scope, "### M9:", "### M10:")
 	m17 := scopeSection(t, scope, "### M17:", "### M18:")
+	m18 := scopeSection(t, scope, "### M18:", "### M19:")
 	m19 := scopeSection(t, scope, "### M19:", "## Definition of quality")
 
 	for _, completed := range []string{
@@ -59,6 +60,9 @@ func TestRoadmapKeepsM7ScopeAndCompletedMilestones(t *testing.T) {
 	if strings.Contains(m17, "- [ ]") {
 		t.Error("M17 still contains unchecked scope")
 	}
+	if strings.Contains(m18, "- [ ]") {
+		t.Error("M18 still contains unchecked scope")
+	}
 	if strings.Contains(m19, "- [ ]") {
 		t.Error("M19 still contains unchecked scope")
 	}
@@ -70,17 +74,58 @@ func TestRoadmapKeepsM7ScopeAndCompletedMilestones(t *testing.T) {
 		"## Recommended next session",
 	)
 	for _, required := range []string{
-		"M0 through M17 are complete",
+		"M0 through M19 are complete",
 		"M7 now includes qualified symbol search",
 		"M9 now includes explicit comparison and distance states",
 		"Linked-worktree discovery deduplication",
 		"M10 enterprise identity and administration are complete",
-		"M19 is also complete",
 		"M17 makes frontend builds reproducible",
+		"M18 consolidates Git execution and atomic publication",
 		"OpenTelemetry metrics, structured logs, and traces are available",
 	} {
 		if !strings.Contains(status, required) {
 			t.Errorf("implementation status is missing %q", required)
+		}
+	}
+}
+
+func TestM18ConsolidationBoundaries(t *testing.T) {
+	root := repositoryRoot(t)
+	for relative, maximumBytes := range map[string]int{
+		"internal/httpserver/server.go": 30_000,
+		"internal/graph/graph.go":       60_000,
+	} {
+		if size := len(readFile(t, root, relative)); size > maximumBytes {
+			t.Errorf("%s grew to %d bytes, want at most %d", relative, size, maximumBytes)
+		}
+	}
+
+	for _, relative := range []string{
+		"internal/atomicfile/atomicfile.go",
+		"internal/gitexec/gitexec.go",
+		"internal/sourceintelligence/sourceintelligence.go",
+		"internal/httpserver/conversations.go",
+		"internal/httpserver/dependencies.go",
+		"internal/httpserver/middleware.go",
+		"internal/httpserver/render.go",
+		"internal/httpserver/routes.go",
+		"internal/httpserver/search.go",
+		"internal/httpserver/source.go",
+		"internal/graph/artifact_io.go",
+		"internal/graph/git_plumbing.go",
+		"internal/graph/manifest_dotnet.go",
+		"internal/graph/manifest_go.go",
+		"internal/graph/manifest_jvm.go",
+		"internal/graph/manifest_node.go",
+		"internal/graph/manifest_python.go",
+		"internal/graph/manifest_rust.go",
+		"internal/graph/service_artifacts.go",
+		"internal/graph/spring.go",
+		"web/src/repository-picker.mjs",
+		"web/src/repository-picker.test.mjs",
+	} {
+		if len(readFile(t, root, relative)) == 0 {
+			t.Errorf("%s is empty", relative)
 		}
 	}
 }

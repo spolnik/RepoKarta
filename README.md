@@ -398,6 +398,7 @@ $version = go run ./cmd/repokarta version
 - [Structural AST query syntax and completeness](./docs/ast-search.md)
 - [OpenTelemetry metrics, logs, traces, and Datadog routing](./docs/opentelemetry.md)
 - [Frontend API contracts, streaming recovery, and reproducible assets](./docs/frontend-contracts.md)
+- [Codebase consolidation boundaries](./docs/codebase-consolidation.md)
 - [Pinned Zoekt revision and Windows portability](./docs/zoekt-windows-portability.md)
 
 RepoKarta vendors a pinned Zoekt revision under `third_party/zoekt`. Native

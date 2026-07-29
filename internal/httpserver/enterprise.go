@@ -586,21 +586,3 @@ func (s *Server) updateAuditRetention(response http.ResponseWriter, request *htt
 	data.Notice = "Audit retention saved; removed " + strconv.FormatInt(removed, 10) + " expired events."
 	s.renderAdmin(response, data)
 }
-
-func (s *Server) parseAdminForm(response http.ResponseWriter, request *http.Request, limit int64) (string, bool) {
-	request.Body = http.MaxBytesReader(response, request.Body, limit)
-	if err := request.ParseForm(); err != nil {
-		http.Error(response, "Invalid administrator request", http.StatusBadRequest)
-		return "", false
-	}
-	csrf, ok := s.security.AdminSession(request)
-	if !ok {
-		http.Redirect(response, request, "/admin/login", http.StatusSeeOther)
-		return "", false
-	}
-	if !s.security.ValidAdminCSRF(request, request.FormValue("csrf")) {
-		http.Error(response, "Invalid administrator CSRF token", http.StatusForbidden)
-		return "", false
-	}
-	return csrf, true
-}

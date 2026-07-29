@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/spolnik/RepoKarta/internal/analysis"
+	"github.com/spolnik/RepoKarta/internal/atomicfile"
 	"github.com/spolnik/RepoKarta/internal/catalog"
 )
 
@@ -216,19 +217,13 @@ func TestGraphSnapshotPublishAndReadAreLockSafe(t *testing.T) {
 		if marshalErr != nil {
 			t.Fatal(marshalErr)
 		}
-		temporary, createErr := os.CreateTemp(directory, "publish-*.tmp")
-		if createErr != nil {
-			t.Fatal(createErr)
-		}
-		if _, writeErr := temporary.Write(content); writeErr != nil {
-			t.Fatal(writeErr)
-		}
-		if closeErr := temporary.Close(); closeErr != nil {
-			t.Fatal(closeErr)
-		}
 		lock := service.snapshotLock(fileName)
 		lock.Lock()
-		publishErr := publishGraphFile(temporary.Name(), target)
+		publishErr := atomicfile.Write(
+			target,
+			content,
+			atomicfile.Options{Pattern: "publish-*.tmp"},
+		)
 		lock.Unlock()
 		if publishErr != nil {
 			t.Fatal(publishErr)

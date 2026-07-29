@@ -27,7 +27,9 @@ import (
 	"unicode"
 
 	"github.com/spolnik/RepoKarta/internal/agent"
+	"github.com/spolnik/RepoKarta/internal/atomicfile"
 	"github.com/spolnik/RepoKarta/internal/catalog"
+	"github.com/spolnik/RepoKarta/internal/gitexec"
 	"github.com/spolnik/RepoKarta/internal/graph"
 	"github.com/spolnik/RepoKarta/internal/telemetry"
 	"go.yaml.in/yaml/v4"
@@ -2429,7 +2431,11 @@ func (s *Service) savePage(page Page) error {
 		return fmt.Errorf("encode Wiki manifest: %w", err)
 	}
 	encoded = append(encoded, '\n')
-	if err := publishFile(directory, s.manifestPath(page.RepositoryID), "manifest.*.tmp", encoded); err != nil {
+	if err := atomicfile.Write(
+		s.manifestPath(page.RepositoryID),
+		encoded,
+		atomicfile.Options{Pattern: "manifest.*.tmp"},
+	); err != nil {
 		return fmt.Errorf("publish Wiki manifest: %w", err)
 	}
 	return nil
@@ -2462,7 +2468,11 @@ func (s *Service) savePlan(repositoryID int64, pages []Page) error {
 		return fmt.Errorf("encode Wiki manifest: %w", err)
 	}
 	encoded = append(encoded, '\n')
-	if err := publishFile(directory, s.manifestPath(repositoryID), "manifest.*.tmp", encoded); err != nil {
+	if err := atomicfile.Write(
+		s.manifestPath(repositoryID),
+		encoded,
+		atomicfile.Options{Pattern: "manifest.*.tmp"},
+	); err != nil {
 		return fmt.Errorf("publish Wiki manifest: %w", err)
 	}
 	return nil
@@ -2486,7 +2496,11 @@ func (s *Service) saveSurvey(repositoryID int64, survey Checkpoint) error {
 		return fmt.Errorf("encode Wiki manifest: %w", err)
 	}
 	encoded = append(encoded, '\n')
-	if err := publishFile(directory, s.manifestPath(repositoryID), "manifest.*.tmp", encoded); err != nil {
+	if err := atomicfile.Write(
+		s.manifestPath(repositoryID),
+		encoded,
+		atomicfile.Options{Pattern: "manifest.*.tmp"},
+	); err != nil {
 		return fmt.Errorf("publish Wiki manifest: %w", err)
 	}
 	return nil
@@ -2499,11 +2513,10 @@ func (s *Service) writeSurveyMarkdown(repositoryID int64, markdown string) error
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := publishFile(
-		directory,
+	if err := atomicfile.Write(
 		s.surveyPath(repositoryID),
-		"survey.*.tmp",
 		[]byte(markdown),
+		atomicfile.Options{Pattern: "survey.*.tmp"},
 	); err != nil {
 		return fmt.Errorf("publish repository survey: %w", err)
 	}
@@ -2528,35 +2541,14 @@ func (s *Service) writeMarkdown(page Page) error {
 	target := s.markdownPath(page.RepositoryID, page.Slug)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := publishFile(directory, target, page.Slug+".*.tmp", []byte(page.Markdown)); err != nil {
+	if err := atomicfile.Write(
+		target,
+		[]byte(page.Markdown),
+		atomicfile.Options{Pattern: page.Slug + ".*.tmp"},
+	); err != nil {
 		return fmt.Errorf("publish generated page: %w", err)
 	}
 	return nil
-}
-
-func publishFile(directory, target, pattern string, content []byte) error {
-	temporary, err := os.CreateTemp(directory, pattern)
-	if err != nil {
-		return err
-	}
-	temporaryName := temporary.Name()
-	defer os.Remove(temporaryName)
-	if _, err := temporary.Write(content); err != nil {
-		temporary.Close()
-		return err
-	}
-	if err := temporary.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(temporaryName, target); err == nil {
-		return nil
-	}
-	// Windows does not replace an existing file through os.Rename. Retry after
-	// removing the old target; readers are serialized by the service mutex.
-	if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	return os.Rename(temporaryName, target)
 }
 
 func (s *Service) repositoryDirectory(repositoryID int64) string {
@@ -2627,24 +2619,14 @@ func readGitFile(ctx context.Context, repositoryPath, revision, filePath string,
 }
 
 func runGit(ctx context.Context, repositoryPath string, arguments ...string) ([]byte, error) {
-	bounded, cancel := context.WithTimeout(ctx, gitCommandTimeout)
-	defer cancel()
-	commandArguments := append([]string{"-C", repositoryPath}, arguments...)
-	command := exec.CommandContext(bounded, "git", commandArguments...)
-	var stdout, stderr bytes.Buffer
-	command.Stdout = &stdout
-	command.Stderr = &stderr
-	err := command.Run()
-	if bounded.Err() != nil {
-		return nil, fmt.Errorf("git command timed out")
-	}
+	result, err := gitexec.Run(ctx, gitexec.Options{
+		Repository: gitexec.Repository{Directory: repositoryPath},
+		Timeout:    gitCommandTimeout,
+	}, arguments...)
 	if err != nil {
-		return nil, fmt.Errorf(
-			"git %s: %w: %s",
-			strings.Join(arguments, " "), err, strings.TrimSpace(stderr.String()),
-		)
+		return nil, err
 	}
-	return stdout.Bytes(), nil
+	return result.Stdout, nil
 }
 
 func repositoryNodes(nodes []graph.Node, repositoryID int64) []graph.Node {

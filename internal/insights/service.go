@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -17,6 +16,7 @@ import (
 	"time"
 
 	"github.com/spolnik/RepoKarta/internal/catalog"
+	"github.com/spolnik/RepoKarta/internal/gitexec"
 )
 
 const (
@@ -476,14 +476,14 @@ func (s *Service) sourceURL(repositoryID int64, revision, file string, line int)
 }
 
 func committedPaths(ctx context.Context, repository catalog.Repository, revision string) (map[string]string, error) {
-	commandContext, cancel := context.WithTimeout(ctx, 20*time.Second)
-	defer cancel()
-	command := exec.CommandContext(commandContext, "git", "-C", repository.Path, "ls-tree", "-r", "-z", "--name-only", revision)
-	output, err := command.Output()
+	commandResult, err := gitexec.Run(ctx, gitexec.Options{
+		Repository: gitexec.Repository{Directory: repository.Path},
+		Timeout:    20 * time.Second,
+	}, "ls-tree", "-r", "-z", "--name-only", revision)
 	if err != nil {
 		return nil, fmt.Errorf("list committed paths: %w", err)
 	}
-	paths := strings.Split(string(output), "\x00")
+	paths := strings.Split(string(commandResult.Stdout), "\x00")
 	result := make(map[string]string, len(paths)*2)
 	for _, file := range paths {
 		file = strings.Trim(strings.ReplaceAll(file, "\\", "/"), "/")

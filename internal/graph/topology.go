@@ -303,7 +303,7 @@ func (b *builder) addDetectedConnections(
 				}
 				target = b.externalSystemComponent(
 					"service", targetName, "HTTP",
-					[]string{targetName, host, normalizeServiceName(host)},
+					[]string{targetName, host, NormalizeServiceName(host)},
 				)
 			}
 			b.addSystemConnection(SystemConnection{
@@ -341,7 +341,7 @@ func topologyRepositoryIsDeploymentOnly(contents map[string][]byte) bool {
 }
 
 func topologyMapServiceCandidate(value string) string {
-	candidate := normalizeServiceName(value)
+	candidate := NormalizeServiceName(value)
 	if candidate == "" {
 		return ""
 	}
@@ -517,7 +517,7 @@ func topologyPeerName(value string) string {
 	if err == nil {
 		value = host
 	}
-	return normalizeServiceName(value)
+	return NormalizeServiceName(value)
 }
 
 func topologyExternalPeerName(host string) string {
@@ -526,7 +526,7 @@ func topologyExternalPeerName(host string) string {
 		return ""
 	}
 	if net.ParseIP(host) != nil || !strings.Contains(host, ".") {
-		return normalizeServiceName(host)
+		return NormalizeServiceName(host)
 	}
 	if _, icann := publicsuffix.PublicSuffix(host); icann {
 		if name, err := publicsuffix.EffectiveTLDPlusOne(host); err == nil && name != "" {
@@ -656,7 +656,7 @@ func (b *builder) systemComponentRejectionReason(component SystemComponent) stri
 		topologyExternalTokenPattern.MatchString(name) {
 		return componentRejectionInvalidName
 	}
-	normalized := normalizeServiceName(name)
+	normalized := NormalizeServiceName(name)
 	if normalized == "" {
 		return componentRejectionInvalidName
 	}
@@ -684,7 +684,7 @@ func normalizedAliases(name string, values ...string) []string {
 			continue
 		}
 		output = append(output, value)
-		if normalized := normalizeServiceName(value); normalized != value {
+		if normalized := NormalizeServiceName(value); normalized != value {
 			output = append(output, normalized)
 		}
 	}
@@ -727,33 +727,36 @@ func (b *builder) addSystemConnection(connection SystemConnection) {
 	connection.Evidence = connection.Evidence[:min(len(connection.Evidence), topologyEvidenceLimit)]
 	connection.ID = systemConnectionID(connection)
 	if existing, ok := b.connections[connection.ID]; ok {
-		existing.Evidence = appendUniqueEvidence(existing.Evidence, connection.Evidence...)
-		existing.Evidence = existing.Evidence[:min(len(existing.Evidence), topologyEvidenceLimit)]
-		if connection.EnvironmentVariable != "" &&
-			existing.EnvironmentVariable == "" {
-			existing.Confidence = connection.Confidence
-		} else if confidenceRank(connection.Confidence) > confidenceRank(existing.Confidence) {
-			existing.Confidence = connection.Confidence
-		}
-		existing.TargetResolved = existing.TargetResolved || connection.TargetResolved
-		if existing.ResolutionTier == "" {
-			existing.ResolutionTier = connection.ResolutionTier
-		}
-		if existing.EnvironmentVariable == "" {
-			existing.EnvironmentVariable = connection.EnvironmentVariable
-		}
-		if existing.Environment == "" {
-			existing.Environment = connection.Environment
-		}
-		existing.ResolutionDivergent =
-			existing.ResolutionDivergent || connection.ResolutionDivergent
-		if existing.UnresolvedReason == "" {
-			existing.UnresolvedReason = connection.UnresolvedReason
-		}
-		b.connections[connection.ID] = existing
+		b.connections[connection.ID] = mergeSystemConnection(existing, connection)
 		return
 	}
 	b.connections[connection.ID] = connection
+}
+
+func mergeSystemConnection(existing, candidate SystemConnection) SystemConnection {
+	existing.Evidence = appendUniqueEvidence(existing.Evidence, candidate.Evidence...)
+	existing.Evidence = existing.Evidence[:min(len(existing.Evidence), topologyEvidenceLimit)]
+	if candidate.EnvironmentVariable != "" && existing.EnvironmentVariable == "" {
+		existing.Confidence = candidate.Confidence
+	} else if confidenceRank(candidate.Confidence) > confidenceRank(existing.Confidence) {
+		existing.Confidence = candidate.Confidence
+	}
+	existing.TargetResolved = existing.TargetResolved || candidate.TargetResolved
+	if existing.ResolutionTier == "" {
+		existing.ResolutionTier = candidate.ResolutionTier
+	}
+	if existing.EnvironmentVariable == "" {
+		existing.EnvironmentVariable = candidate.EnvironmentVariable
+	}
+	if existing.Environment == "" {
+		existing.Environment = candidate.Environment
+	}
+	existing.ResolutionDivergent =
+		existing.ResolutionDivergent || candidate.ResolutionDivergent
+	if existing.UnresolvedReason == "" {
+		existing.UnresolvedReason = candidate.UnresolvedReason
+	}
+	return existing
 }
 
 func systemConnectionID(connection SystemConnection) string {
@@ -847,7 +850,7 @@ func (b *builder) resolveSystemConnections() {
 				for _, componentID := range aliases[alias] {
 					candidate := b.components[componentID]
 					if componentID != connection.Source &&
-						topologyKindsCanResolve(target, candidate) {
+						ComponentKindCanResolve(target.Kind, candidate) {
 						candidates[componentID] = true
 					}
 				}
@@ -863,26 +866,7 @@ func (b *builder) resolveSystemConnections() {
 		}
 		connection.ID = systemConnectionID(connection)
 		if existing, ok := resolved[connection.ID]; ok {
-			existing.Evidence = appendUniqueEvidence(existing.Evidence, connection.Evidence...)
-			existing.TargetResolved = existing.TargetResolved || connection.TargetResolved
-			if existing.ResolutionTier == "" {
-				existing.ResolutionTier = connection.ResolutionTier
-			}
-			if existing.EnvironmentVariable == "" {
-				existing.EnvironmentVariable = connection.EnvironmentVariable
-			}
-			if existing.Environment == "" {
-				existing.Environment = connection.Environment
-			}
-			existing.ResolutionDivergent =
-				existing.ResolutionDivergent || connection.ResolutionDivergent
-			if existing.UnresolvedReason == "" {
-				existing.UnresolvedReason = connection.UnresolvedReason
-			}
-			if confidenceRank(connection.Confidence) > confidenceRank(existing.Confidence) {
-				existing.Confidence = connection.Confidence
-			}
-			resolved[connection.ID] = existing
+			resolved[connection.ID] = mergeSystemConnection(existing, connection)
 		} else {
 			resolved[connection.ID] = connection
 		}
@@ -899,14 +883,18 @@ func (b *builder) resolveSystemConnections() {
 	}
 }
 
-func topologyKindsCanResolve(external, internal SystemComponent) bool {
-	switch external.Kind {
+// ComponentKindCanResolve reports whether an observed or external component
+// kind can be attributed to a known static component.
+func ComponentKindCanResolve(observedKind string, candidate SystemComponent) bool {
+	observedKind = strings.ToLower(strings.TrimSpace(observedKind))
+	switch observedKind {
 	case "service", "external_service":
-		return internal.Kind == "service"
+		return candidate.Kind == "service"
 	case "mcp_server":
-		return internal.Kind == "mcp_server" || slices.Contains(internal.Capabilities, "mcp_server")
+		return candidate.Kind == "mcp_server" ||
+			slices.Contains(candidate.Capabilities, "mcp_server")
 	default:
-		return internal.Kind == external.Kind
+		return candidate.Kind == observedKind
 	}
 }
 
@@ -1160,7 +1148,7 @@ func backstageReferenceName(reference string) string {
 	if _, name, ok := strings.Cut(reference, "/"); ok {
 		reference = name
 	}
-	return normalizeServiceName(reference)
+	return NormalizeServiceName(reference)
 }
 
 func (b *builder) addComposeTopology(

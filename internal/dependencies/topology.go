@@ -322,17 +322,17 @@ func buildTopology(
 		node := TopologyComponent{SystemComponent: component, Origins: []string{"static"}}
 		nodes[component.ID] = node
 		for _, alias := range append(component.Aliases, component.Name) {
-			normalized := topologyName(alias)
+			normalized := graph.NormalizeServiceName(alias)
 			if normalized != "" && !slices.Contains(aliasTargets[normalized], component.ID) {
 				aliasTargets[normalized] = append(aliasTargets[normalized], component.ID)
 			}
 		}
 	}
 	resolve := func(name, kind, origin string) string {
-		normalized := topologyName(name)
+		normalized := graph.NormalizeServiceName(name)
 		targets := make([]string, 0)
 		for _, candidateID := range aliasTargets[normalized] {
-			if runtimeKindCanResolve(kind, nodes[candidateID].SystemComponent) {
+			if graph.ComponentKindCanResolve(kind, nodes[candidateID].SystemComponent) {
 				targets = append(targets, candidateID)
 			}
 		}
@@ -592,7 +592,7 @@ func scopeTopologyNeighborhood(
 		}
 		selected[component.ID] = true
 		for _, alias := range append(component.Aliases, component.Name) {
-			if normalized := topologyName(alias); normalized != "" {
+			if normalized := graph.NormalizeServiceName(alias); normalized != "" {
 				selectedAliases[normalized] = true
 			}
 		}
@@ -708,7 +708,7 @@ func scopeTopologyNeighborhood(
 		if direction != "both" && direction != "inbound" {
 			continue
 		}
-		if candidate := topologyName(unresolved.Candidate); candidate != "" &&
+		if candidate := graph.NormalizeServiceName(unresolved.Candidate); candidate != "" &&
 			selectedAliases[candidate] {
 			unresolved.NeighborhoodDirection = "possible_inbound"
 			neighborhood.PossibleInboundUnresolved = append(
@@ -977,19 +977,6 @@ func missingComponentWarningMessage(count int) string {
 	)
 }
 
-func runtimeKindCanResolve(observedKind string, candidate graph.SystemComponent) bool {
-	observedKind = normalizedTopologyKind(observedKind, "service")
-	switch observedKind {
-	case "service", "external_service":
-		return candidate.Kind == "service"
-	case "mcp_server":
-		return candidate.Kind == "mcp_server" ||
-			slices.Contains(candidate.Capabilities, "mcp_server")
-	default:
-		return candidate.Kind == observedKind
-	}
-}
-
 func topologyConnectionMatches(
 	connection TopologyConnection,
 	nodes map[string]TopologyComponent,
@@ -1038,17 +1025,6 @@ func topologyConnectionKey(connection TopologyConnection) string {
 		strings.ToLower(connection.Interaction), strings.ToLower(connection.Transport),
 		strings.ToLower(connection.Environment),
 	}, "|")
-}
-
-func topologyName(value string) string {
-	value = strings.ToLower(strings.TrimSpace(value))
-	value = strings.TrimPrefix(value, "http://")
-	value = strings.TrimPrefix(value, "https://")
-	value = strings.SplitN(value, "/", 2)[0]
-	value = strings.SplitN(value, ":", 2)[0]
-	value = strings.SplitN(value, ".", 2)[0]
-	value = strings.NewReplacer("_", "-", " ", "-").Replace(value)
-	return strings.Trim(value, "-")
 }
 
 func earliestTime(left, right time.Time) time.Time {

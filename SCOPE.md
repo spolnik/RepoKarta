@@ -1136,21 +1136,21 @@ event costs one event, not the rest of the answer.
 Reduce duplication and file size along seams the codebase has already proven,
 with zero behavior change verified by the existing suites.
 
-- [ ] Extract a shared `internal/gitexec` runner (context timeout,
+- [x] Extract a shared `internal/gitexec` runner (context timeout,
   `GIT_OPTIONAL_LOCKS=0`, environment hygiene, separated stderr) and adopt it
   in graph, docs, and insights.
-- [ ] Extract a shared `internal/atomicfile` publish helper with the Windows
+- [x] Extract a shared `internal/atomicfile` publish helper with the Windows
   replace fallback and adopt it in graph, docs, and advisories.
-- [ ] Decompose the HTTP server along the established `admin.go`/
+- [x] Decompose the HTTP server along the established `admin.go`/
   `enterprise.go` seams: routes, conversations, search, dependencies, source,
   and render/middleware files; move source-intelligence domain joining out of
   the HTTP layer.
-- [ ] Decompose the graph package into per-ecosystem manifest parsers, Spring
+- [x] Decompose the graph package into per-ecosystem manifest parsers, Spring
   heuristics, git plumbing, and artifact IO files; collapse the four snapshot
   fan-out readers into one generic helper.
-- [ ] Continue the frontend extraction cadence established by the existing
+- [x] Continue the frontend extraction cadence established by the existing
   tested modules, prioritizing the largest untested closures.
-- [ ] Unify duplicated helpers: service-name normalization, kind-resolution,
+- [x] Unify duplicated helpers: service-name normalization, kind-resolution,
   admin form parsing, and topology connection merging each get one owner.
 
 Exit condition: each cross-cutting concern has exactly one implementation; the
@@ -1287,7 +1287,7 @@ completion criteria include:
 
 ## Current implementation version
 
-`0.95.0-dev`. M0 through M17 are complete; M19 is also complete. M7 now includes qualified symbol
+`0.96.0-dev`. M0 through M19 are complete. M7 now includes qualified symbol
 search, precise optional SCIP data, commit-pinned CODEOWNERS, bounded evidence
 graph queries, saved searches and deterministic monitors, and permission-safe
 Deep Search with visible trace, budgets, retry, and revocable sharing. M9 now
@@ -1387,12 +1387,16 @@ Go response structs, checks extracted JavaScript, isolates Chat and Wiki state
 reducers, recovers from malformed stream events and transient polling failures,
 guards server-provided links, refreshes completed regions without discarding
 page state, validates npm overrides, and boots packaged binaries in CI.
+M18 consolidates Git execution and atomic publication behind shared packages,
+splits HTTP and graph responsibilities into focused files, moves source
+intelligence joining out of HTTP, replaces four graph fan-out readers with one
+generic implementation, extracts the duplicated repository picker into a tested
+frontend module, and gives duplicated normalization, resolution, form parsing,
+and topology merging helpers one owner each.
 
 ## Recommended next session
 
-Begin M18 consolidation with the shared Git runner and atomic-file publisher,
-then split the established HTTP, graph, and frontend seams without behavior
-changes. Continue structural framework reachability using explicit, revision-pinned
+Continue structural framework reachability using explicit, revision-pinned
 roots and completeness metadata before making any dead-code classification.
 Preserve the completed permission, revision, ambiguity, registry-routing,
 evidence, privacy, cardinality, and completeness boundaries.

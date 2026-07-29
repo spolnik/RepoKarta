@@ -5,13 +5,13 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/spolnik/RepoKarta/internal/catalog"
+	"github.com/spolnik/RepoKarta/internal/gitexec"
 )
 
 const (
@@ -128,17 +128,17 @@ type derivedFile struct {
 }
 
 func listDerivedFiles(ctx context.Context, repository catalog.Repository, revision string) ([]derivedFile, bool, error) {
-	commandContext, cancel := context.WithTimeout(ctx, 20*time.Second)
-	defer cancel()
-	command := exec.CommandContext(commandContext, "git", "-C", repository.Path, "ls-tree", "-r", "-l", revision)
-	output, err := command.Output()
+	result, err := gitexec.Run(ctx, gitexec.Options{
+		Repository: gitexec.Repository{Directory: repository.Path},
+		Timeout:    20 * time.Second,
+	}, "ls-tree", "-r", "-l", revision)
 	if err != nil {
 		return nil, false, fmt.Errorf("list committed files for derived insights: %w", err)
 	}
 	var files []derivedFile
 	var total int64
 	truncated := false
-	scanner := bufio.NewScanner(bytes.NewReader(output))
+	scanner := bufio.NewScanner(bytes.NewReader(result.Stdout))
 	scanner.Buffer(make([]byte, 64<<10), 2<<20)
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -173,10 +173,14 @@ func listDerivedFiles(ctx context.Context, repository catalog.Repository, revisi
 }
 
 func committedFile(ctx context.Context, repository catalog.Repository, revision, file string) ([]byte, error) {
-	commandContext, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	command := exec.CommandContext(commandContext, "git", "-C", repository.Path, "show", revision+":"+file)
-	return command.Output()
+	result, err := gitexec.Run(ctx, gitexec.Options{
+		Repository: gitexec.Repository{Directory: repository.Path},
+		Timeout:    5 * time.Second,
+	}, "show", revision+":"+file)
+	if err != nil {
+		return nil, err
+	}
+	return result.Stdout, nil
 }
 
 func deterministicCounts(content []byte, language string) (lines, nonblank, branches int) {

@@ -64,7 +64,7 @@ type adminPageData struct {
 }
 
 func (s *Server) discoverRepositories(response http.ResponseWriter, request *http.Request) {
-	csrf, ok := s.validAdminForm(response, request, 64<<10)
+	csrf, ok := s.parseAdminForm(response, request, 64<<10)
 	if !ok {
 		return
 	}
@@ -105,7 +105,7 @@ func (s *Server) discoverRepositories(response http.ResponseWriter, request *htt
 }
 
 func (s *Server) acquireRepository(response http.ResponseWriter, request *http.Request) {
-	csrf, ok := s.validAdminForm(response, request, 64<<10)
+	csrf, ok := s.parseAdminForm(response, request, 64<<10)
 	if !ok {
 		return
 	}
@@ -142,7 +142,7 @@ func (s *Server) acquireRepository(response http.ResponseWriter, request *http.R
 }
 
 func (s *Server) syncAcquiredRepository(response http.ResponseWriter, request *http.Request) {
-	csrf, ok := s.validAdminForm(response, request, 32<<10)
+	csrf, ok := s.parseAdminForm(response, request, 32<<10)
 	if !ok {
 		return
 	}
@@ -165,7 +165,7 @@ func (s *Server) syncAcquiredRepository(response http.ResponseWriter, request *h
 }
 
 func (s *Server) removeAcquiredRepository(response http.ResponseWriter, request *http.Request) {
-	csrf, ok := s.validAdminForm(response, request, 32<<10)
+	csrf, ok := s.parseAdminForm(response, request, 32<<10)
 	if !ok {
 		return
 	}
@@ -195,7 +195,7 @@ func (s *Server) removeAcquiredRepository(response http.ResponseWriter, request 
 	s.renderAdmin(response, data)
 }
 
-func (s *Server) validAdminForm(response http.ResponseWriter, request *http.Request, maximumBytes int64) (string, bool) {
+func (s *Server) parseAdminForm(response http.ResponseWriter, request *http.Request, maximumBytes int64) (string, bool) {
 	request.Body = http.MaxBytesReader(response, request.Body, maximumBytes)
 	if err := request.ParseForm(); err != nil {
 		http.Error(response, "Invalid administrator request", http.StatusBadRequest)

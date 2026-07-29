@@ -41,6 +41,7 @@ import {
 import { collectRequiredElements } from "./initialization-contract.mjs";
 import { boundedPollRetry } from "./polling.mjs";
 import { replaceRenderedRegions } from "./region-refresh.mjs";
+import { createRepositoryPicker } from "./repository-picker.mjs";
 import { safeHTTPURL, setSafeHTTPLink } from "./safe-link.mjs";
 import type {
   ConversationEvent as GeneratedConversationEvent,
@@ -4737,63 +4738,27 @@ function enableRepositoryMaps(debug?: DebugLogger): void {
 
   const selectedRepositoryQuery = (): string => repository.value ? `repository=${encodeURIComponent(repository.value)}` : "";
 
-  const visibleRepositoryOptions = (): HTMLButtonElement[] =>
-    repositoryOptions.filter((option) => !option.hidden);
-
-  const syncRepositoryPicker = (): void => {
-    const selectedOption = repositoryOptions.find((option) => option.dataset.value === repository.value)
-      ?? repositoryOptions[0];
-    repositoryCurrent.textContent = selectedOption.dataset.label || selectedOption.textContent?.trim() || "Repository";
-    repositoryMeta.textContent = selectedOption.dataset.meta || "Single repository";
-    for (const option of repositoryOptions) {
-      option.setAttribute("aria-selected", String(option === selectedOption));
-    }
-  };
-
-  const filterRepositoryOptions = (): void => {
-    const query = repositorySearch.value.trim().toLocaleLowerCase();
-    for (const option of repositoryOptions) {
-      const label = option.dataset.label?.toLocaleLowerCase() || "";
-      const isFleet = option.dataset.value === "";
-      option.hidden = query !== "" && (isFleet || !label.includes(query));
-    }
-  };
-
-  const closeRepositoryPicker = (restoreFocus = false): void => {
-    repositoryPopover.hidden = true;
-    repositoryPicker.dataset.open = "false";
-    repositoryTrigger.setAttribute("aria-expanded", "false");
-    repositorySearch.value = "";
-    filterRepositoryOptions();
-    if (restoreFocus) {
-      repositoryTrigger.focus();
-    }
-  };
-
-  const openRepositoryPicker = (focusSelected = false): void => {
-    repositoryPopover.hidden = false;
-    repositoryPicker.dataset.open = "true";
-    repositoryTrigger.setAttribute("aria-expanded", "true");
-    if (focusSelected) {
-      (repositoryOptions.find((option) => option.getAttribute("aria-selected") === "true")
-        ?? visibleRepositoryOptions()[0])?.focus();
-      return;
-    }
-    repositorySearch.focus();
-  };
-
-  const focusRepositoryOption = (current: HTMLButtonElement, offset: number): void => {
-    const options = visibleRepositoryOptions();
-    const currentIndex = options.indexOf(current);
-    options[(currentIndex + offset + options.length) % options.length]?.focus();
-  };
-
-  const chooseRepository = (option: HTMLButtonElement): void => {
-    repository.value = option.dataset.value || "";
-    syncRepositoryPicker();
-    repository.dispatchEvent(new Event("change", { bubbles: true }));
-    closeRepositoryPicker(true);
-  };
+  const repositoryPickerController = createRepositoryPicker({
+    select: repository,
+    picker: repositoryPicker,
+    trigger: repositoryTrigger,
+    current: repositoryCurrent,
+    meta: repositoryMeta,
+    backdrop: repositoryBackdrop,
+    popover: repositoryPopover,
+    search: repositorySearch,
+    options: repositoryOptions,
+    fallbackToFirst: true,
+    describe: (selectedOption) => ({
+      label: selectedOption?.dataset.label
+        || selectedOption?.textContent?.trim()
+        || "Repository",
+      meta: selectedOption?.dataset.meta || "Single repository"
+    }),
+    matches: (option, query) =>
+      option.dataset.value !== ""
+      && (option.dataset.label?.toLocaleLowerCase() || "").includes(query)
+  });
 
   const updateExportLink = (): void => {
     const query = selectedRepositoryQuery();
@@ -5460,68 +5425,8 @@ function enableRepositoryMaps(debug?: DebugLogger): void {
     }
   };
 
-  repositoryTrigger.addEventListener("click", () => {
-    if (repositoryPopover.hidden) {
-      openRepositoryPicker();
-    } else {
-      closeRepositoryPicker();
-    }
-  });
-  repositoryTrigger.addEventListener("keydown", (event) => {
-    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-      event.preventDefault();
-      openRepositoryPicker(true);
-    }
-  });
-  repositoryBackdrop.addEventListener("click", () => closeRepositoryPicker(true));
-  repositorySearch.addEventListener("input", filterRepositoryOptions);
-  repositorySearch.addEventListener("keydown", (event) => {
-    if (event.key === "ArrowDown") {
-      event.preventDefault();
-      visibleRepositoryOptions()[0]?.focus();
-    } else if (event.key === "Enter") {
-      const options = visibleRepositoryOptions();
-      if (options.length === 1) {
-        event.preventDefault();
-        chooseRepository(options[0]);
-      }
-    } else if (event.key === "Escape") {
-      event.preventDefault();
-      closeRepositoryPicker(true);
-    }
-  });
-  for (const option of repositoryOptions) {
-    option.addEventListener("click", () => chooseRepository(option));
-    option.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault();
-        chooseRepository(option);
-      } else if (event.key === "ArrowDown") {
-        event.preventDefault();
-        focusRepositoryOption(option, 1);
-      } else if (event.key === "ArrowUp") {
-        event.preventDefault();
-        focusRepositoryOption(option, -1);
-      } else if (event.key === "Home") {
-        event.preventDefault();
-        visibleRepositoryOptions()[0]?.focus();
-      } else if (event.key === "End") {
-        event.preventDefault();
-        visibleRepositoryOptions().at(-1)?.focus();
-      } else if (event.key === "Escape") {
-        event.preventDefault();
-        closeRepositoryPicker(true);
-      }
-    });
-  }
-  document.addEventListener("pointerdown", (event) => {
-    if (!repositoryPopover.hidden && !repositoryPicker.contains(event.target as Node)) {
-      closeRepositoryPicker();
-    }
-  });
-
   repository.addEventListener("change", () => {
-    syncRepositoryPicker();
+    repositoryPickerController.sync();
     setMapURL(repository.value, activeView);
     void loadMap(false);
   });
@@ -5547,7 +5452,7 @@ function enableRepositoryMaps(debug?: DebugLogger): void {
     selectView(state.view || "all");
     if (state.repository !== repository.value) {
       repository.value = state.repository;
-      syncRepositoryPicker();
+      repositoryPickerController.sync();
       void loadMap(false);
     } else {
       applyFilters();
@@ -5591,7 +5496,7 @@ function enableRepositoryMaps(debug?: DebugLogger): void {
   if (initialRepository && Array.from(repository.options).some((option) => option.value === initialRepository)) {
     repository.value = initialRepository;
   }
-  syncRepositoryPicker();
+  repositoryPickerController.sync();
   const initialView = initialParameters.get("view");
   if (initialView && viewButtons.some((button) => button.dataset.mapView === initialView)) {
     selectView(initialView);
@@ -5706,71 +5611,24 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
   let generationRepository = "";
   let repositoryLoadFailed = false;
 
-  const visibleRepositoryOptions = (): HTMLButtonElement[] =>
-    repositoryOptions.filter((option) => !option.hidden);
-
-  const syncRepositoryPicker = (): void => {
-    const selectedOption = repositoryOptions.find((option) => option.dataset.value === repository.value);
-    const nativeOption = repository.selectedOptions[0];
-    repositoryCurrent.textContent = selectedOption?.dataset.label
-      || nativeOption?.textContent?.trim()
-      || "Choose a repository";
-    repositoryMeta.textContent = selectedOption ? "Deep Wiki workspace" : "Select indexed code";
-    repositoryTrigger.disabled = repository.disabled;
-    for (const option of repositoryOptions) {
-      option.setAttribute("aria-selected", String(option === selectedOption));
-    }
-  };
-
-  const filterRepositoryOptions = (): void => {
-    const query = repositorySearch.value.trim().toLocaleLowerCase();
-    for (const option of repositoryOptions) {
-      const label = option.dataset.label?.toLocaleLowerCase() || "";
-      option.hidden = query !== "" && !label.includes(query);
-    }
-  };
-
-  const closeRepositoryPicker = (restoreFocus = false): void => {
-    repositoryPopover.hidden = true;
-    repositoryPicker.dataset.open = "false";
-    repositoryTrigger.setAttribute("aria-expanded", "false");
-    repositorySearch.value = "";
-    filterRepositoryOptions();
-    if (restoreFocus) {
-      repositoryTrigger.focus();
-    }
-  };
-
-  const openRepositoryPicker = (focusSelected = false): void => {
-    if (repositoryTrigger.disabled) {
-      return;
-    }
-    repositoryPopover.hidden = false;
-    repositoryPicker.dataset.open = "true";
-    repositoryTrigger.setAttribute("aria-expanded", "true");
-    if (focusSelected) {
-      (repositoryOptions.find((option) => option.getAttribute("aria-selected") === "true")
-        ?? visibleRepositoryOptions()[0])?.focus();
-      return;
-    }
-    repositorySearch.focus();
-  };
-
-  const focusRepositoryOption = (current: HTMLButtonElement, offset: number): void => {
-    const options = visibleRepositoryOptions();
-    if (options.length === 0) {
-      return;
-    }
-    const currentIndex = options.indexOf(current);
-    options[(currentIndex + offset + options.length) % options.length]?.focus();
-  };
-
-  const chooseRepository = (option: HTMLButtonElement): void => {
-    repository.value = option.dataset.value || "";
-    syncRepositoryPicker();
-    repository.dispatchEvent(new Event("change", { bubbles: true }));
-    closeRepositoryPicker(true);
-  };
+  const repositoryPickerController = createRepositoryPicker({
+    select: repository,
+    picker: repositoryPicker,
+    trigger: repositoryTrigger,
+    current: repositoryCurrent,
+    meta: repositoryMeta,
+    backdrop: repositoryBackdrop,
+    popover: repositoryPopover,
+    search: repositorySearch,
+    options: repositoryOptions,
+    syncDisabled: true,
+    describe: (selectedOption, nativeOption) => ({
+      label: selectedOption?.dataset.label
+        || nativeOption?.textContent?.trim()
+        || "Choose a repository",
+      meta: selectedOption ? "Deep Wiki workspace" : "Select indexed code"
+    })
+  });
 
   const selectedProvider = (): ProviderStatus | undefined =>
     providerStatuses.find((status) => status.id === provider.value);
@@ -6332,7 +6190,7 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
     generationRepository = repository.value;
     generationAbort = new AbortController();
     repository.disabled = true;
-    syncRepositoryPicker();
+    repositoryPickerController.sync();
     generateAll.disabled = true;
     refreshPage.disabled = true;
     // Engine choices are locked in for the life of a run so resumed
@@ -6513,7 +6371,7 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
       generating = false;
       generationRepository = "";
       repository.disabled = false;
-      syncRepositoryPicker();
+      repositoryPickerController.sync();
       endGenerationProgress();
       configureProvider();
       if (cancelled) {
@@ -6685,7 +6543,7 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
     if (generating) {
       if (generationRepository) {
         repository.value = generationRepository;
-        syncRepositoryPicker();
+        repositoryPickerController.sync();
       }
       showGenerationProgress();
       return;
@@ -6729,68 +6587,8 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
   applyStoredValue(timeout, storedRunSettings.timeout);
   applyStoredValue(tokenBudget, storedRunSettings.token_budget);
 
-  repositoryTrigger.addEventListener("click", () => {
-    if (repositoryPopover.hidden) {
-      openRepositoryPicker();
-    } else {
-      closeRepositoryPicker();
-    }
-  });
-  repositoryTrigger.addEventListener("keydown", (event) => {
-    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-      event.preventDefault();
-      openRepositoryPicker(true);
-    }
-  });
-  repositoryBackdrop.addEventListener("click", () => closeRepositoryPicker(true));
-  repositorySearch.addEventListener("input", filterRepositoryOptions);
-  repositorySearch.addEventListener("keydown", (event) => {
-    if (event.key === "ArrowDown") {
-      event.preventDefault();
-      visibleRepositoryOptions()[0]?.focus();
-    } else if (event.key === "Enter") {
-      const options = visibleRepositoryOptions();
-      if (options.length === 1) {
-        event.preventDefault();
-        chooseRepository(options[0]);
-      }
-    } else if (event.key === "Escape") {
-      event.preventDefault();
-      closeRepositoryPicker(true);
-    }
-  });
-  for (const option of repositoryOptions) {
-    option.addEventListener("click", () => chooseRepository(option));
-    option.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault();
-        chooseRepository(option);
-      } else if (event.key === "ArrowDown") {
-        event.preventDefault();
-        focusRepositoryOption(option, 1);
-      } else if (event.key === "ArrowUp") {
-        event.preventDefault();
-        focusRepositoryOption(option, -1);
-      } else if (event.key === "Home") {
-        event.preventDefault();
-        visibleRepositoryOptions()[0]?.focus();
-      } else if (event.key === "End") {
-        event.preventDefault();
-        visibleRepositoryOptions().at(-1)?.focus();
-      } else if (event.key === "Escape") {
-        event.preventDefault();
-        closeRepositoryPicker(true);
-      }
-    });
-  }
-  document.addEventListener("pointerdown", (event) => {
-    if (!repositoryPopover.hidden && !repositoryPicker.contains(event.target as Node)) {
-      closeRepositoryPicker();
-    }
-  });
-
   repository.addEventListener("change", () => {
-    syncRepositoryPicker();
+    repositoryPickerController.sync();
     void loadSite();
   });
   provider.addEventListener("change", () => {
@@ -6863,7 +6661,7 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
     }
     if (state.repository !== repository.value) {
       repository.value = state.repository;
-      syncRepositoryPicker();
+      repositoryPickerController.sync();
       void loadSite().then(() => loadPage(state.page));
       return;
     }
@@ -6880,7 +6678,7 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
     } else {
       repository.selectedIndex = 1;
     }
-    syncRepositoryPicker();
+    repositoryPickerController.sync();
     void loadSite();
   }
 }

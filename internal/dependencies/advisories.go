@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"deps.dev/util/semver"
+	"github.com/spolnik/RepoKarta/internal/atomicfile"
 	"github.com/spolnik/RepoKarta/internal/graph"
 	"github.com/spolnik/RepoKarta/internal/telemetry"
 )
@@ -1720,33 +1721,11 @@ func (s *Service) writeAdvisorySnapshot(snapshot AdvisorySnapshot) error {
 	content = append(content, '\n')
 	s.advisoryFileMu.Lock()
 	defer s.advisoryFileMu.Unlock()
-	temporary, err := os.CreateTemp(s.advisoryDirectory, "osv-snapshot-*.tmp")
-	if err != nil {
-		return fmt.Errorf("create OSV advisory snapshot: %w", err)
-	}
-	temporaryName := temporary.Name()
-	defer os.Remove(temporaryName)
-	if _, err := temporary.Write(content); err != nil {
-		temporary.Close()
-		return fmt.Errorf("write OSV advisory snapshot: %w", err)
-	}
-	if err := temporary.Sync(); err != nil {
-		temporary.Close()
-		return fmt.Errorf("sync OSV advisory snapshot: %w", err)
-	}
-	if err := temporary.Close(); err != nil {
-		return fmt.Errorf("close OSV advisory snapshot: %w", err)
-	}
-	target := s.advisorySnapshotPath()
-	if err := os.Rename(temporaryName, target); err == nil {
-		return nil
-	}
-	// Windows does not replace an existing file through os.Rename. Readers are
-	// serialized by advisoryFileMu while the verified replacement is published.
-	if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("replace OSV advisory snapshot: %w", err)
-	}
-	if err := os.Rename(temporaryName, target); err != nil {
+	if err := atomicfile.Write(
+		s.advisorySnapshotPath(),
+		content,
+		atomicfile.Options{Pattern: "osv-snapshot-*.tmp", Sync: true},
+	); err != nil {
 		return fmt.Errorf("publish OSV advisory snapshot: %w", err)
 	}
 	return nil
