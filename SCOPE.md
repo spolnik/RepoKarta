@@ -1351,7 +1351,7 @@ silently expanding the roadmap.
 
 ## Current implementation version
 
-`0.100.0-dev`. M0 through M21 are complete. M21 adds the separately authorized
+`0.101.0-dev`. M0 through M21 are complete. M21 adds the separately authorized
 Code tab, exact-commit shadow worktrees, durable coding transcripts/actions/
 approvals, provider-specific write profiles, bounded Git review, and isolated
 finish/discard lifecycles without mutating registered repositories. M4 now includes administrator-

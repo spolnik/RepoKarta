@@ -1,6 +1,6 @@
 # RepoKarta Code workspace scope
 
-Status: implemented for `0.100.0-dev`.
+Status: implemented for `0.101.0-dev`.
 
 ## Goal
 
@@ -103,9 +103,10 @@ RepoKarta uses the current Codex app-server protocol.
 
 - process working directory: the owned checkout;
 - approval policy: `on-request`;
-- sandbox: `workspaceWrite`;
-- writable roots: exactly the owned checkout;
-- network access: disabled;
+- permission profile: `repokarta-code-workspace`;
+- filesystem access: minimal runtime reads plus write access only to the
+  session's explicit runtime workspace root;
+- network access: disabled by the profile;
 - command and file-change approval requests: surfaced in the Code tab;
 - supported decisions in RepoKarta: approve once or decline.
 

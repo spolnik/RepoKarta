@@ -34,6 +34,8 @@ Every material code claim must cite the source_url returned by a RepoKarta tool.
 Never use shell commands, direct filesystem access beyond supplied image attachments, network search, or code mutation.
 If the indexed evidence is insufficient, say so plainly.`
 
+const codingPermissionProfile = "repokarta-code-workspace"
+
 const codingInstructions = `You are RepoKarta's coding agent.
 Work only inside the isolated Code worktree supplied as your current directory.
 Use RepoKarta's read-only MCP tools for commit-pinned fleet evidence and the worktree filesystem for the change being implemented.
@@ -245,7 +247,8 @@ func startSession(ctx context.Context, command string, config agent.SessionConfi
 	if config.Coding {
 		params["cwd"] = config.RepositoryRoot
 		params["approvalPolicy"] = "on-request"
-		params["sandbox"] = "workspaceWrite"
+		params["permissions"] = codingPermissionProfile
+		params["runtimeWorkspaceRoots"] = []string{config.RepositoryRoot}
 		params["developerInstructions"] = codingInstructions
 	}
 	if config.Model != "" {
@@ -299,10 +302,13 @@ func codexCommandArguments(config agent.SessionConfig, attachmentDirectory strin
 	if config.Coding {
 		return append(arguments,
 			"-c", `approval_policy="on-request"`,
-			"-c", `sandbox_mode="workspace-write"`,
-			"-c", `sandbox_workspace_write.network_access=false`,
-			"-c", `sandbox_workspace_write.exclude_slash_tmp=true`,
-			"-c", `sandbox_workspace_write.exclude_tmpdir_env_var=true`,
+			"-c", `default_permissions="`+codingPermissionProfile+`"`,
+			"-c", `permissions.`+codingPermissionProfile+`.extends=":workspace"`,
+			"-c", `permissions.`+codingPermissionProfile+`.filesystem.:root="deny"`,
+			"-c", `permissions.`+codingPermissionProfile+`.filesystem.:minimal="read"`,
+			"-c", `permissions.`+codingPermissionProfile+`.filesystem.:tmpdir="deny"`,
+			"-c", `permissions.`+codingPermissionProfile+`.filesystem.:slash_tmp="deny"`,
+			"-c", `permissions.`+codingPermissionProfile+`.network.enabled=false`,
 		)
 	}
 	return append(arguments,
@@ -592,12 +598,7 @@ func (s *session) turnStartParams(turn agent.Turn, imagePaths []string) map[stri
 	if s.coding {
 		params["cwd"] = s.workspaceRoot
 		params["approvalPolicy"] = "on-request"
-		params["sandboxPolicy"] = map[string]any{
-			"type":           "workspaceWrite",
-			"writableRoots":  []string{s.workspaceRoot},
-			"networkAccess":  false,
-			"readOnlyAccess": map[string]any{"type": "restricted", "includePlatformDefaults": true},
-		}
+		params["permissions"] = codingPermissionProfile
 	}
 	return params
 }

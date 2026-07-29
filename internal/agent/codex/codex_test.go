@@ -33,6 +33,7 @@ func runCodexTestHelper() {
 		var request struct {
 			ID     json.RawMessage `json:"id"`
 			Method string          `json:"method"`
+			Params map[string]any  `json:"params"`
 		}
 		if json.Unmarshal(scanner.Bytes(), &request) != nil {
 			continue
@@ -56,12 +57,38 @@ func runCodexTestHelper() {
 			}
 			respond(map[string]any{"thread": map[string]string{"id": "restored-thread"}})
 		case "thread/start":
+			runtimeRoots, _ := request.Params["runtimeWorkspaceRoots"].([]any)
+			if mode == "require-coding-permissions" &&
+				(request.Params["permissions"] != codingPermissionProfile ||
+					request.Params["sandbox"] != nil ||
+					len(runtimeRoots) != 1 ||
+					runtimeRoots[0] != request.Params["cwd"]) {
+				_ = encoder.Encode(map[string]any{
+					"id": request.ID,
+					"error": map[string]any{
+						"code":    -32600,
+						"message": "coding permission profile required",
+					},
+				})
+				continue
+			}
 			threadID := "fresh-thread"
 			if mode == "empty-thread" {
 				threadID = ""
 			}
 			respond(map[string]any{"thread": map[string]string{"id": threadID}})
 		case "turn/start":
+			if mode == "require-coding-permissions" &&
+				(request.Params["permissions"] != codingPermissionProfile || request.Params["sandboxPolicy"] != nil) {
+				_ = encoder.Encode(map[string]any{
+					"id": request.ID,
+					"error": map[string]any{
+						"code":    -32600,
+						"message": "coding permission profile required",
+					},
+				})
+				continue
+			}
 			respond(map[string]any{"turn": map[string]string{"id": "turn-1"}})
 			if mode == "hang" {
 				continue
@@ -196,7 +223,7 @@ func TestCommandArgumentsDenyFilesystemOutsideAttachments(t *testing.T) {
 	}
 }
 
-func TestCodingModeUsesWorkspaceWriteWithoutNetwork(t *testing.T) {
+func TestCodingModeUsesRestrictedWorkspacePermissionProfile(t *testing.T) {
 	workspace := t.TempDir()
 	arguments := codexCommandArguments(agent.SessionConfig{
 		Coding:         true,
@@ -207,12 +234,20 @@ func TestCodingModeUsesWorkspaceWriteWithoutNetwork(t *testing.T) {
 	joined := strings.Join(arguments, "\n")
 	for _, expected := range []string{
 		`approval_policy="on-request"`,
-		`sandbox_mode="workspace-write"`,
-		`sandbox_workspace_write.network_access=false`,
+		`default_permissions="repokarta-code-workspace"`,
+		`permissions.repokarta-code-workspace.extends=":workspace"`,
+		`permissions.repokarta-code-workspace.filesystem.:root="deny"`,
+		`permissions.repokarta-code-workspace.filesystem.:minimal="read"`,
+		`permissions.repokarta-code-workspace.filesystem.:tmpdir="deny"`,
+		`permissions.repokarta-code-workspace.filesystem.:slash_tmp="deny"`,
+		`permissions.repokarta-code-workspace.network.enabled=false`,
 	} {
 		if !strings.Contains(joined, expected) {
 			t.Fatalf("coding arguments omit %q:\n%s", expected, joined)
 		}
+	}
+	if strings.Contains(joined, "sandbox_mode") || strings.Contains(joined, "sandbox_workspace_write") {
+		t.Fatalf("coding arguments mix legacy sandbox settings with permission profiles:\n%s", joined)
 	}
 	params := (&session{
 		threadID: "thread-1", effort: "high", coding: true, workspaceRoot: workspace,
@@ -220,16 +255,26 @@ func TestCodingModeUsesWorkspaceWriteWithoutNetwork(t *testing.T) {
 	if params["cwd"] != workspace || params["approvalPolicy"] != "on-request" {
 		t.Fatalf("unexpected coding turn params: %#v", params)
 	}
-	policy, ok := params["sandboxPolicy"].(map[string]any)
-	if !ok || policy["type"] != "workspaceWrite" || policy["networkAccess"] != false {
-		t.Fatalf("unexpected coding sandbox policy: %#v", params["sandboxPolicy"])
-	}
-	roots, ok := policy["writableRoots"].([]string)
-	if !ok || len(roots) != 1 || roots[0] != workspace {
-		t.Fatalf("coding writable roots = %#v, want only %q", policy["writableRoots"], workspace)
+	if params["permissions"] != codingPermissionProfile || params["sandboxPolicy"] != nil {
+		t.Fatalf("unexpected coding permission params: %#v", params)
 	}
 	if strings.Contains(joined, "must-not-appear") {
 		t.Fatalf("MCP token leaked into Codex coding argv:\n%s", joined)
+	}
+}
+
+func TestCodingModeUsesPermissionProfileAcrossThreadAndTurn(t *testing.T) {
+	started, err := testCodexAdapter(t, "require-coding-permissions").Start(context.Background(), agent.SessionConfig{
+		Coding:         true,
+		RepositoryRoot: t.TempDir(),
+		MCPURL:         "http://127.0.0.1:7331/mcp",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer started.Close()
+	if err := started.Send(context.Background(), agent.Turn{Message: "verify"}, func(agent.Event) error { return nil }); err != nil {
+		t.Fatal(err)
 	}
 }
 
