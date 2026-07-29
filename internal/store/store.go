@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	currentSchemaVersion = 23
+	currentSchemaVersion = 24
 
 	schemaV1 = `
 CREATE TABLE IF NOT EXISTS repositories (
@@ -624,6 +624,19 @@ CREATE TABLE IF NOT EXISTS conversation_shares (
 );
 CREATE INDEX IF NOT EXISTS conversation_shares_conversation_index
 ON conversation_shares(conversation_id, created_at DESC);`
+
+	// Version 24 separates the checked-out HEAD from the immutable commit
+	// selected for indexing. Existing catalogues retain their current behavior
+	// until the next discovery resolves a configured remote default branch.
+	schemaV24 = `
+ALTER TABLE repositories ADD COLUMN index_revision TEXT NOT NULL DEFAULT '';
+ALTER TABLE repositories ADD COLUMN index_commit TEXT NOT NULL DEFAULT '';
+UPDATE repositories
+SET index_revision = CASE
+        WHEN default_revision <> '' THEN default_revision
+        ELSE 'HEAD'
+    END,
+    index_commit = head_commit;`
 )
 
 // SchemaVersion is the current durable metadata format for every supported
@@ -760,6 +773,12 @@ func (s *Store) SyncRepositories(ctx context.Context, repositories []catalog.Rep
 
 	current := make(map[string]catalog.Repository, len(repositories))
 	for _, repository := range repositories {
+		if strings.TrimSpace(repository.IndexRevision) == "" {
+			repository.IndexRevision = repository.DefaultRevision
+		}
+		if strings.TrimSpace(repository.IndexCommit) == "" {
+			repository.IndexCommit = repository.HeadCommit
+		}
 		discoveredAt := formatTime(repository.DiscoveredAt)
 		scannedAt := formatTime(repository.ScannedAt)
 		indexState := repository.IndexState
@@ -785,14 +804,16 @@ func (s *Store) SyncRepositories(ctx context.Context, repositories []catalog.Rep
 		}
 		if _, err := tx.ExecContext(ctx, `
 INSERT INTO repositories (
-    name, path, origin_url, default_revision, head_commit, bare,
+    name, path, origin_url, default_revision, head_commit, index_revision, index_commit, bare,
     scan_state, scan_error, index_state, index_error, discovered_at, scanned_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(path) DO UPDATE SET
     name = excluded.name,
     origin_url = excluded.origin_url,
     default_revision = excluded.default_revision,
     head_commit = excluded.head_commit,
+    index_revision = excluded.index_revision,
+    index_commit = excluded.index_commit,
     bare = excluded.bare,
     scan_state = excluded.scan_state,
     scan_error = excluded.scan_error,
@@ -801,14 +822,14 @@ ON CONFLICT(path) DO UPDATE SET
     index_state = CASE
         WHEN excluded.index_state IN ('empty', 'error')
         THEN excluded.index_state
-        WHEN repositories.indexed_commit = excluded.head_commit AND repositories.index_state = 'ready'
+        WHEN repositories.indexed_commit = excluded.index_commit AND repositories.index_state = 'ready'
         THEN repositories.index_state
         ELSE 'pending'
     END,
     index_error = CASE
         WHEN excluded.index_state IN ('empty', 'error')
         THEN excluded.index_error
-        WHEN repositories.indexed_commit = excluded.head_commit AND repositories.index_state = 'ready'
+        WHEN repositories.indexed_commit = excluded.index_commit AND repositories.index_state = 'ready'
         THEN repositories.index_error
         ELSE ''
     END`,
@@ -817,6 +838,8 @@ ON CONFLICT(path) DO UPDATE SET
 			repository.OriginURL,
 			repository.DefaultRevision,
 			repository.HeadCommit,
+			repository.IndexRevision,
+			repository.IndexCommit,
 			repository.Bare,
 			repository.ScanState,
 			repository.ScanError,
@@ -935,7 +958,8 @@ func (s *Store) ReplaceRepositories(ctx context.Context, repositories []catalog.
 func (s *Store) ListRepositories(ctx context.Context) ([]catalog.Repository, error) {
 	query := `
 SELECT
-    r.id, r.name, r.path, r.origin_url, r.default_revision, r.head_commit, r.bare,
+    r.id, r.name, r.path, r.origin_url, r.default_revision, r.head_commit,
+    r.index_revision, r.index_commit, r.bare,
     r.scan_state, r.scan_error, r.index_state, r.index_error, r.indexed_commit,
     r.discovered_at, r.scanned_at, r.indexed_at, r.acquisition_id,
     si.provider, si.state, si.applicable, si.revision, si.configuration,
@@ -986,7 +1010,8 @@ WHERE a.visibility = 'shared' OR a.owner_id = ? OR EXISTS (
 func (s *Store) RepositoryByID(ctx context.Context, id int64) (catalog.Repository, error) {
 	query := `
 SELECT
-    r.id, r.name, r.path, r.origin_url, r.default_revision, r.head_commit, r.bare,
+    r.id, r.name, r.path, r.origin_url, r.default_revision, r.head_commit,
+    r.index_revision, r.index_commit, r.bare,
     r.scan_state, r.scan_error, r.index_state, r.index_error, r.indexed_commit,
     r.discovered_at, r.scanned_at, r.indexed_at, r.acquisition_id,
     si.provider, si.state, si.applicable, si.revision, si.configuration,
@@ -1275,6 +1300,8 @@ func scanRepository(row rowScanner) (catalog.Repository, error) {
 		&repository.OriginURL,
 		&repository.DefaultRevision,
 		&repository.HeadCommit,
+		&repository.IndexRevision,
+		&repository.IndexCommit,
 		&repository.Bare,
 		&repository.ScanState,
 		&repository.ScanError,

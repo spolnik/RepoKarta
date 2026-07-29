@@ -113,7 +113,7 @@ func (a *Adapter) Close() error {
 	return nil
 }
 
-// Index incrementally indexes the repository's current HEAD.
+// Index incrementally indexes the repository's configured target revision.
 func (a *Adapter) Index(ctx context.Context, repository catalog.Repository) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
@@ -649,6 +649,13 @@ func (a *Adapter) prepareGitShadow(ctx context.Context, repository catalog.Repos
 		return "", fmt.Errorf("inspect fallback repository: %w", err)
 	}
 	ref := "refs/heads/repokarta-index"
+	target := strings.TrimSpace(repository.IndexCommit)
+	if target == "" {
+		target = strings.TrimSpace(repository.HeadCommit)
+	}
+	if target == "" {
+		return "", errors.New("repository index commit is empty")
+	}
 	if err := runGitCommand(
 		ctx,
 		shadowPath,
@@ -657,7 +664,7 @@ func (a *Adapter) prepareGitShadow(ctx context.Context, repository catalog.Repos
 		"--no-tags",
 		"--prune",
 		repository.Path,
-		"+HEAD:"+ref,
+		"+"+target+":"+ref,
 	); err != nil {
 		return "", err
 	}

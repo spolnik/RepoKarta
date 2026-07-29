@@ -983,6 +983,10 @@ func (s testStore) RepositoryByID(_ context.Context, id int64) (catalog.Reposito
 
 type testSearcher struct{}
 
+type streamingTestSearcher struct {
+	count int
+}
+
 type testSettingsStore struct {
 	values map[string]string
 }
@@ -1019,6 +1023,32 @@ func (testSearcher) Search(context.Context, search.Query) (search.Result, error)
 				Fragments: []search.Fragment{{Start: 9, End: 15}},
 			}},
 		}},
+	}, nil
+}
+
+func (s streamingTestSearcher) Search(context.Context, search.Query) (search.Result, error) {
+	matches := make([]search.FileMatch, 0, s.count)
+	for index := 0; index < s.count; index++ {
+		matches = append(matches, search.FileMatch{
+			RepositoryID: 1,
+			Repository:   "repo",
+			Revision:     strings.Repeat("a", 40),
+			Path:         fmt.Sprintf("internal/result-%03d.go", index),
+			Language:     "Go",
+			Lines: []search.LineMatch{{
+				Number: 1,
+				Text:   "var needle = true",
+			}},
+		})
+	}
+	return search.Result{
+		MatchCount:      s.count,
+		FileCount:       s.count,
+		EstimatedFiles:  s.count,
+		ReturnedFiles:   s.count,
+		Limit:           100,
+		TotalFilesExact: true,
+		Matches:         matches,
 	}, nil
 }
 
@@ -1110,6 +1140,24 @@ func (s *testMapService) Snapshot(_ context.Context, repositoryID int64, refresh
 	s.repositoryID = repositoryID
 	s.refresh = refresh
 	return s.snapshot, nil
+}
+
+func (s *testMapService) Reachability(
+	_ context.Context,
+	repositoryID int64,
+) (graph.ReachabilityReport, error) {
+	s.repositoryID = repositoryID
+	return graph.ReachabilityReport{
+		ID:    "reachability-test",
+		Scope: graph.Scope{Kind: "repository", Complete: true},
+		Summary: graph.ReachabilitySummary{
+			Reachable:           2,
+			ProbablyUnreachable: 1,
+			Unknown:             3,
+			Roots:               1,
+			Edges:               1,
+		},
+	}, nil
 }
 
 func (s *testMapService) ReadDependencySnapshot(
@@ -1231,6 +1279,7 @@ func TestMCPSetupPageProvidesCopyableReadOnlyConfiguration(t *testing.T) {
 		`Bearer ` + token,
 		`C:\\Tools\\RepoKarta\\repokarta.exe`,
 		`read_repository_map`,
+		`read_code_reachability`,
 		`list_named_contexts`,
 		`resolve_effective_contexts`,
 		`find_references`,
@@ -1239,7 +1288,7 @@ func TestMCPSetupPageProvidesCopyableReadOnlyConfiguration(t *testing.T) {
 		`read_dependency_findings`,
 		`list_deep_wiki_pages`,
 		`read_generated_document`,
-		`19 tools · no writes`,
+		`20 tools · no writes`,
 	} {
 		if !strings.Contains(response.Body.String(), expected) {
 			t.Fatalf("MCP setup page does not contain %q", expected)
@@ -1581,6 +1630,8 @@ func TestRepositoryMapPageAPIAndExport(t *testing.T) {
 		`data-map-export`,
 		`data-map-repository-picker`,
 		`data-map-repository-backdrop`,
+		`data-map-reachability`,
+		`data-reachability-completeness`,
 		`role="listbox"`,
 		`data-label="Fleet view"`,
 	} {
@@ -1604,6 +1655,34 @@ func TestRepositoryMapPageAPIAndExport(t *testing.T) {
 	} {
 		if !strings.Contains(apiResponse.Body.String(), expected) {
 			t.Fatalf("map API body does not contain %q: %s", expected, apiResponse.Body.String())
+		}
+	}
+
+	reachabilityRequest := httptest.NewRequest(
+		http.MethodGet,
+		"http://127.0.0.1:7331/api/reachability?repository=4",
+		nil,
+	)
+	reachabilityResponse := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(reachabilityResponse, reachabilityRequest)
+	if reachabilityResponse.Code != http.StatusOK || maps.repositoryID != 4 {
+		t.Fatalf(
+			"reachability API status = %d, repository = %d",
+			reachabilityResponse.Code,
+			maps.repositoryID,
+		)
+	}
+	for _, expected := range []string{
+		`"id":"reachability-test"`,
+		`"probably_unreachable":1`,
+		`"unknown":3`,
+	} {
+		if !strings.Contains(reachabilityResponse.Body.String(), expected) {
+			t.Fatalf(
+				"reachability API body does not contain %q: %s",
+				expected,
+				reachabilityResponse.Body.String(),
+			)
 		}
 	}
 
@@ -2887,6 +2966,66 @@ func TestSearchRendersSafeHighlightedCommitPinnedResult(t *testing.T) {
 	}
 }
 
+func TestSearchStreamReturnsProgressiveServerRenderedBatches(t *testing.T) {
+	repository := catalog.Repository{
+		ID:            1,
+		Name:          "repo",
+		HeadCommit:    strings.Repeat("a", 40),
+		IndexedCommit: strings.Repeat("a", 40),
+		IndexState:    "ready",
+	}
+	server, err := New(
+		Config{Address: "127.0.0.1:7331"},
+		codeintel.New(
+			testStore{repositories: []catalog.Repository{repository}},
+			streamingTestSearcher{count: 45},
+			"http://127.0.0.1:7331",
+		),
+		testRefresher{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"http://127.0.0.1:7331/api/search/stream?q=needle&limit=100",
+		nil,
+	)
+	response := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("stream status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if contentType := response.Header().Get("Content-Type"); !strings.Contains(contentType, "application/x-ndjson") {
+		t.Fatalf("stream content type = %q", contentType)
+	}
+	decoder := json.NewDecoder(response.Body)
+	events := make([]searchStreamEvent, 0)
+	for decoder.More() {
+		var event searchStreamEvent
+		if err := decoder.Decode(&event); err != nil {
+			t.Fatal(err)
+		}
+		events = append(events, event)
+	}
+	if len(events) != 4 || events[0].Type != "started" {
+		t.Fatalf("events = %#v, want started plus three result batches", events)
+	}
+	for index, event := range events[1:] {
+		if event.Type != "results" || event.HTML == "" {
+			t.Fatalf("result event %d = %#v", index, event)
+		}
+		if event.Complete != (index == 2) {
+			t.Fatalf("result event %d complete = %v", index, event.Complete)
+		}
+	}
+	if !strings.Contains(events[len(events)-1].HTML, "45 files shown") ||
+		!strings.Contains(events[len(events)-1].HTML, "result-044.go") {
+		t.Fatalf("final streamed HTML is incomplete: %s", events[len(events)-1].HTML)
+	}
+}
+
 func TestDependencyOptionsAndURLsPreserveUsageFilters(t *testing.T) {
 	request := httptest.NewRequest(
 		http.MethodGet,
@@ -3394,7 +3533,7 @@ func TestHTTPBoundaryAndFormattingHelpers(t *testing.T) {
 	if dependencyURL("/dependencies", 7, options, 30) == "" {
 		t.Fatal("dependency URL is empty")
 	}
-	if data := buildMCPPageData("http://localhost/mcp", "secret-token-value", "repokarta", "http://localhost"); len(data.Tools) != 19 {
+	if data := buildMCPPageData("http://localhost/mcp", "secret-token-value", "repokarta", "http://localhost"); len(data.Tools) != 20 {
 		t.Fatalf("MCP page tools = %d", len(data.Tools))
 	}
 

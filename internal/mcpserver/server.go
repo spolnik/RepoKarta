@@ -80,6 +80,7 @@ type Intelligence interface {
 // ArtifactReader exposes the higher-level, evidence-backed M3/M4 artifacts.
 type ArtifactReader interface {
 	RepositoryMap(context.Context, int64) (graph.Snapshot, error)
+	CodeReachability(context.Context, int64) (graph.ReachabilityReport, error)
 	DependencySnapshot(context.Context, int64) (graph.Snapshot, error)
 	TopologySnapshot(context.Context, int64) (graph.Snapshot, graph.ArtifactProgress, error)
 	GeneratedDocuments(context.Context, int64) (docs.Site, error)
@@ -89,6 +90,7 @@ type ArtifactReader interface {
 // MapReader supplies commit-pinned structural maps.
 type MapReader interface {
 	Snapshot(context.Context, int64, bool) (graph.Snapshot, error)
+	Reachability(context.Context, int64) (graph.ReachabilityReport, error)
 	ReadDependencySnapshot(context.Context, int64) (graph.Snapshot, graph.ArtifactProgress, error)
 	ReadTopologySnapshot(context.Context, int64) (graph.Snapshot, graph.ArtifactProgress, error)
 }
@@ -108,6 +110,14 @@ type Artifacts struct {
 // RepositoryMap reads one cached or deterministically generated repository map.
 func (a Artifacts) RepositoryMap(ctx context.Context, repositoryID int64) (graph.Snapshot, error) {
 	return a.Maps.Snapshot(ctx, repositoryID, false)
+}
+
+// CodeReachability reads conservative, revision-pinned static reachability.
+func (a Artifacts) CodeReachability(
+	ctx context.Context,
+	repositoryID int64,
+) (graph.ReachabilityReport, error) {
+	return a.Maps.Reachability(ctx, repositoryID)
 }
 
 // DependencySnapshot reads the cache-first dependency artifact path. A cold
@@ -692,6 +702,28 @@ func newServer(config Config, intelligence Intelligence, tracker *CitationTracke
 		})
 
 		mcp.AddTool(server, &mcp.Tool{
+			Name:        "read_code_reachability",
+			Title:       "Read code reachability",
+			Description: "Read revision-pinned static reachability from persisted syntax artifacts. Framework and executable roots, syntax-backed witness paths, ambiguity, truncation, and runtime completeness boundaries are explicit. Results are reachable, probably_unreachable, or unknown; this tool never labels code dead.",
+			Annotations: readOnly,
+		}, func(ctx context.Context, _ *mcp.CallToolRequest, input readCodeReachabilityInput) (*mcp.CallToolResult, graph.ReachabilityReport, error) {
+			repositoryID, err := resolveRepositorySelector(
+				ctx, intelligence, input.RepositoryID, input.Repository, false,
+			)
+			if err != nil {
+				return nil, graph.ReachabilityReport{}, err
+			}
+			report, err := config.Artifacts.CodeReachability(ctx, repositoryID)
+			if err != nil {
+				return nil, graph.ReachabilityReport{}, err
+			}
+			for _, symbol := range report.Symbols {
+				recordEvidence(tracker, conversationID, symbol.Evidence)
+			}
+			return nil, report, nil
+		})
+
+		mcp.AddTool(server, &mcp.Tool{
 			Name:        "query_evidence_graph",
 			Title:       "Query evidence graph",
 			Description: "Traverse bounded upstream/downstream impact or find the shortest evidenced path between repositories, files, symbols, packages, routes, and other map nodes. Relation kinds and depth are explicit; partial source artifacts remain visible. No AI or repository code is invoked.",
@@ -1081,6 +1113,8 @@ type readRepositoryMapInput struct {
 }
 
 type readRepositoryMapOutput = graph.Snapshot
+
+type readCodeReachabilityInput = readRepositoryMapInput
 
 type queryEvidenceGraphInput struct {
 	RepositoryID int64  `json:"repository_id,omitempty" jsonschema:"Optional repository ID. Omit for the accessible fleet."`

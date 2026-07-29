@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -34,6 +35,48 @@ func TestDiscoverFindsWorktreeRepositories(t *testing.T) {
 	expectedPath := mustCanonicalDirectory(t, repositoryPath)
 	if repositories[0].Path != expectedPath {
 		t.Fatalf("expected repository path %q, got %q", expectedPath, repositories[0].Path)
+	}
+}
+
+func TestInspectSelectsConfiguredRemoteDefaultWithoutChangingCheckout(t *testing.T) {
+	repositoryPath := t.TempDir()
+	runGit(t, repositoryPath, "init", "-b", "main")
+	runGit(t, repositoryPath, "config", "user.email", "repokarta@example.test")
+	runGit(t, repositoryPath, "config", "user.name", "RepoKarta tests")
+	if err := os.WriteFile(filepath.Join(repositoryPath, "default.txt"), []byte("main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repositoryPath, "add", "default.txt")
+	runGit(t, repositoryPath, "commit", "-m", "Default branch")
+	remoteCommit := gitOutputForTest(t, repositoryPath, "rev-parse", "HEAD")
+	if err := os.WriteFile(filepath.Join(repositoryPath, "local.txt"), []byte("local main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repositoryPath, "add", "local.txt")
+	runGit(t, repositoryPath, "commit", "-m", "Local default branch advance")
+	mainCommit := gitOutputForTest(t, repositoryPath, "rev-parse", "HEAD")
+	runGit(t, repositoryPath, "checkout", "-b", "feature")
+	if err := os.WriteFile(filepath.Join(repositoryPath, "feature.txt"), []byte("feature\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repositoryPath, "add", "feature.txt")
+	runGit(t, repositoryPath, "commit", "-m", "Feature checkout")
+	featureCommit := gitOutputForTest(t, repositoryPath, "rev-parse", "HEAD")
+	runGit(t, repositoryPath, "update-ref", "refs/remotes/origin/main", remoteCommit)
+	runGit(t, repositoryPath, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+
+	repository, err := Inspect(repositoryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repository.HeadCommit != featureCommit ||
+		repository.DefaultRevision != "main" ||
+		repository.IndexRevision != "main" ||
+		repository.IndexCommit != mainCommit {
+		t.Fatalf("configured default selection = %#v", repository)
+	}
+	if branch := gitOutputForTest(t, repositoryPath, "branch", "--show-current"); branch != "feature" {
+		t.Fatalf("inspection mutated checkout to %q", branch)
 	}
 }
 
@@ -250,6 +293,16 @@ func runGit(t *testing.T, directory string, arguments ...string) {
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("git %v: %v\n%s", arguments, err, output)
 	}
+}
+
+func gitOutputForTest(t *testing.T, directory string, arguments ...string) string {
+	t.Helper()
+	command := exec.Command("git", append([]string{"-C", directory}, arguments...)...)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v\n%s", arguments, err, output)
+	}
+	return strings.TrimSpace(string(output))
 }
 
 func TestDisplayNamesDisambiguateDuplicateRepositoryNames(t *testing.T) {

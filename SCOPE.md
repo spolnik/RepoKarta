@@ -20,7 +20,8 @@ stores indexes, metadata, generated documents, and settings outside source
 repositories.
 
 The intended users are individual developers and engineering teams working with
-private repositories on managed Windows and Apple Silicon macOS systems.
+private repositories on managed Windows, Linux, and Apple Silicon macOS
+systems.
 
 ## Product principles
 
@@ -36,8 +37,8 @@ private repositories on managed Windows and Apple Silicon macOS systems.
   user-owned source repositories or execute repository code.
 - **Incremental work:** unchanged repositories, files, and documentation pages
   should not be recomputed.
-- **Native and portable:** Windows amd64 and macOS arm64 are first-class release
-  targets.
+- **Native and portable:** Windows amd64, macOS arm64, and Linux amd64/arm64
+  are first-class release targets.
 - **Replaceable integrations:** Zoekt and AI providers are hidden behind
   RepoKarta-owned interfaces.
 
@@ -46,8 +47,9 @@ private repositories on managed Windows and Apple Silicon macOS systems.
 1. The user downloads or builds the RepoKarta executable.
 2. The user runs `repokarta serve <repository-root>`.
 3. RepoKarta discovers all Git repositories below that root.
-4. RepoKarta incrementally indexes the current checked-out revision of each
-   repository.
+4. RepoKarta incrementally indexes the locally configured default revision of
+   each repository, falling back to the current checkout when no remote default
+   is available.
 5. The browser opens a local dashboard showing indexing state.
 6. The user searches all repositories or limits a query by repository,
    language, path, or file.
@@ -80,7 +82,8 @@ private repositories on managed Windows and Apple Silicon macOS systems.
 - Never fetch, pull, checkout, reset, clean, or otherwise modify user-owned
   repositories. Remote synchronization is limited to RepoKarta-owned
   acquisition checkouts.
-- Detect updates manually. Filesystem watching remains planned.
+- Detect committed updates through a bounded filesystem watcher over Git
+  metadata, with manual refresh retained as an explicit recovery control.
 
 ### Code search
 
@@ -91,12 +94,13 @@ private repositories on managed Windows and Apple Silicon macOS systems.
   pinned upstream Zoekt revision. Keep the exact upstream commit, modification
   notices, Apache-2.0 license, and packaged attribution synchronized.
 - Store Zoekt shards outside source repositories.
-- Incrementally index current checked-out revisions. Resolving and indexing a
-  configured default branch when it differs from the checkout remains planned.
+- Incrementally index the immutable commit resolved from a configured
+  `origin/HEAD` even when it differs from the checkout, without switching or
+  mutating the worktree; fall back to current `HEAD` when unavailable.
 - Support substring, regular-expression, boolean, repository, language, path,
   file, and symbol queries exposed by Zoekt.
-- Return bounded result sets with explicit completeness metadata. Incremental
-  streaming of large search responses to the browser remains planned.
+- Return bounded result sets with explicit completeness metadata and stream
+  large server-rendered result prefixes incrementally to the browser.
 - Accept an explicit bounded result limit and report returned files, matching
   files, skipped candidates/shards, truncation, and whether totals are exact.
 - Never turn an unavailable search capability into a silent empty result.
@@ -149,6 +153,7 @@ private repositories on managed Windows and Apple Silicon macOS systems.
   - `git_log`
   - `git_diff`
   - `read_repository_map`
+  - `read_code_reachability`
   - `read_dependency_inventory`
   - `read_system_topology`
   - `list_deep_wiki_pages`
@@ -208,6 +213,13 @@ private repositories on managed Windows and Apple Silicon macOS systems.
   conservative candidate pruning, preserve named captures and structural/text
   predicates, bind opaque cursors to the artifact and query, and report
   pagination separately from artifact and matcher completeness.
+- Derive revision-pinned static reachability from persisted structure using
+  executable and framework entry roots, call/type/injection/implementation
+  edges, and evidence-backed witness paths. Report reachable,
+  probably-unreachable, and unknown states only after exposing artifact,
+  document, ambiguity, and runtime completeness; never claim a dead-code proof
+  across reflection, profiles, qualifiers, generated code, callbacks, or
+  external registration.
 - Feed a curated subset of parsed types, functions, and build facts into the
   Deep Wiki survey starting point. Keep the full syntax inventory separate from
   visual graph nodes so generic call sites do not create a graph hairball.
@@ -455,7 +467,7 @@ local storage.
 - [x] Health endpoint and graceful shutdown.
 - [x] Windows build script.
 - [x] macOS/Linux build script.
-- [x] Continuous integration on Windows and macOS.
+- [x] Continuous integration on Windows, macOS, and Linux.
 
 Exit condition: a fresh checkout can build a native executable, point it at a
 directory, and display the discovered repositories.
@@ -550,6 +562,7 @@ changes.
   source/prompt/database/log omission.
 - [x] Windows amd64 packaging with version and bundled-license smoke checks.
 - [x] macOS arm64 packaging with optional Developer ID signing and notarization.
+- [x] Linux amd64 and arm64 packaging with native-runner boot smoke tests.
 - [x] Source-build Homebrew formula with CI installation and license checks.
 - [x] Upgrade and database/artifact migration tests, including idempotent retry
   and unsupported-future-format rejection.
@@ -1233,7 +1246,7 @@ without adding a vendor SDK to RepoKarta.
   resource identity, representative metrics, structured log correlation,
   trace parenting, redaction, and bounded attributes. Cover disabled mode,
   unreachable collectors, queue overflow, cancellation, shutdown flush, and
-  Windows/macOS packaging without requiring network access or Datadog
+  Windows/macOS/Linux packaging without requiring network access or Datadog
   credentials.
 
 Exit condition: an operator can point an unmodified RepoKarta binary at a
@@ -1241,6 +1254,28 @@ standard OTLP receiver and observe correlated, redacted metrics, logs, and
 traces for HTTP traffic and core background jobs; the supplied Collector and
 Datadog Agent examples make the same signals usable in Datadog, while a missing
 or failing telemetry backend cannot make RepoKarta unavailable.
+
+### M20: remaining local-product scope
+
+- [x] Derive revision-pinned framework and executable reachability roots,
+  dependency-injection and implementation edges, witness paths, and explicit
+  static/runtime completeness. Classify declarations as reachable,
+  probably-unreachable, or unknown without asserting dead code.
+- [x] Watch bounded Git metadata for committed local-repository changes and
+  debounce the normal read-only catalogue/index refresh.
+- [x] Stream large bounded search result prefixes to the browser over a
+  cancellable NDJSON contract while preserving the final exact completeness
+  summary.
+- [x] Resolve a locally configured `origin/HEAD` and index its immutable commit
+  without changing the current checkout, with an explicit current-HEAD
+  fallback.
+- [x] Build and boot-smoke Linux amd64 and arm64 release tarballs alongside the
+  existing Windows amd64 and macOS arm64 packages, preserving every required
+  license.
+
+Exit condition: the five previously planned local-product gaps have
+evidence-backed API/UI/MCP or operational surfaces, repeatable tests, and
+release validation without weakening read-only or completeness boundaries.
 
 ## Definition of quality
 
@@ -1250,7 +1285,7 @@ completion criteria include:
 - repeatable tests;
 - cancellation and timeouts;
 - clear empty, loading, error, stale, and partial states;
-- Windows and macOS path handling;
+- Windows, macOS, and Linux path handling;
 - no repository mutation;
 - no secret leakage;
 - bounded memory, disk, result size, and AI cost;
@@ -1281,17 +1316,9 @@ completion criteria include:
 
 ## Remaining planned scope
 
-- Add revision-pinned framework entry roots, dependency-injection edges, and
-  explicit completeness metadata before offering any reachability or dead-code
-  classification.
-- Add filesystem-backed update detection for user-owned local repositories
-  without mutating them.
-- Stream large bounded search responses incrementally to the browser while
-  preserving cancellation, limits, and completeness metadata.
-- Decide and implement configured-default-branch indexing when it differs from
-  the current checkout.
-- Add Linux amd64 and arm64 release packages when the support and validation
-  cost is justified.
+No committed implementation items remain in this scope. Further work should
+start from measured product use or one of the open questions below rather than
+silently expanding the roadmap.
 
 ## Open questions
 
@@ -1302,7 +1329,7 @@ completion criteria include:
 
 ## Current implementation version
 
-`0.98.0-dev`. M0 through M19 are complete. M4 now includes administrator-
+`0.99.0-dev`. M0 through M20 are complete. M4 now includes administrator-
 selected batch Deep Wiki generation with per-repository outcomes and resumable
 checkpoints. M7 now includes qualified symbol
 search, precise optional SCIP data, commit-pinned CODEOWNERS, bounded evidence
@@ -1379,9 +1406,11 @@ stay on persisted structural artifacts and omit snippet bodies until selected
 files are opened explicitly. Java and Go now also expose bounded Tree-sitter
 query search with named captures, text and ancestor/parent predicates,
 persisted node-kind candidate pruning, artifact-bound pagination, and explicit
-coverage/truncation metadata through JSON and MCP. This is structural search
-infrastructure; framework reachability roots and dead-code classification
-remain deliberately unclaimed. Language filters now canonicalize
+coverage/truncation metadata through JSON and MCP. M20 now derives conservative
+static reachability from those persisted artifacts, with
+framework/executable roots, syntax-backed witness paths, and explicit
+static/runtime completeness; it deliberately reports probably-unreachable or
+unknown instead of claiming dead code. Language filters now canonicalize
 case-insensitive names and aliases at the Zoekt boundary, while unknown values
 produce an explicit machine-readable warning instead of a silent empty result.
 Optional Java SCIP generation now discovers an installed or configured
@@ -1415,10 +1444,14 @@ and topology merging helpers one owner each.
 Dependency workspace arrows and evidence separators are encoded as native UTF-8
 characters, so the rendered topology and inventory views no longer expose
 mojibake.
+M20 also debounces committed local-repository changes from Git metadata,
+indexes a locally configured remote default commit without switching the
+checkout, streams bounded browser search results over NDJSON, and builds
+license-complete Linux amd64/arm64 packages with native-runner boot smoke tests.
 
 ## Recommended next session
 
-Continue structural framework reachability using explicit, revision-pinned
-roots and completeness metadata before making any dead-code classification.
-Preserve the completed permission, revision, ambiguity, registry-routing,
-evidence, privacy, cardinality, and completeness boundaries.
+Use measured product feedback to choose the next milestone, or resolve one of
+the two open questions above. Preserve the completed permission, revision,
+ambiguity, registry-routing, evidence, privacy, cardinality, read-only, and
+completeness boundaries.

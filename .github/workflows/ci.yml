@@ -60,7 +60,7 @@ jobs:
   package-smoke:
     name: package-${{ matrix.name }}
     env:
-      PACKAGE_VERSION: 0.96.1-dev
+      PACKAGE_VERSION: 0.99.0-dev
     strategy:
       fail-fast: false
       matrix:
@@ -69,6 +69,10 @@ jobs:
             os: windows-latest
           - name: macos-arm64
             os: macos-14
+          - name: linux-amd64
+            os: ubuntu-24.04
+          - name: linux-arm64
+            os: ubuntu-24.04-arm
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -95,6 +99,13 @@ jobs:
         env:
           REPOKARTA_SKIP_VALIDATION: "1"
         run: ./scripts/package-release.sh "$PACKAGE_VERSION" dist/ci-release
+      - name: Package Linux
+        if: startsWith(matrix.name, 'linux-')
+        shell: bash
+        env:
+          REPOKARTA_SKIP_VALIDATION: "1"
+          REPOKARTA_PACKAGE_PLATFORM: ${{ matrix.name }}
+        run: ./scripts/package-release.sh "$PACKAGE_VERSION" dist/ci-release
       - name: Boot packaged Windows server
         if: matrix.name == 'windows-amd64'
         shell: pwsh
@@ -102,6 +113,12 @@ jobs:
       - name: Boot packaged macOS server
         if: matrix.name == 'macos-arm64'
         shell: bash
+        run: sh ./scripts/smoke-package.sh "$PACKAGE_VERSION" dist/ci-release
+      - name: Boot packaged Linux server
+        if: startsWith(matrix.name, 'linux-')
+        shell: bash
+        env:
+          REPOKARTA_PACKAGE_PLATFORM: ${{ matrix.name }}
         run: sh ./scripts/smoke-package.sh "$PACKAGE_VERSION" dist/ci-release
 
   homebrew:

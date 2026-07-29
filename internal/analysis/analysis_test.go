@@ -130,6 +130,37 @@ public class PaymentService extends BaseService implements Chargeable {
 	}
 }
 
+func TestAnalyzePreservesDeclarationAnnotationsAndModifiers(t *testing.T) {
+	document, supported := Analyze(
+		"src/main/java/com/acme/Payments.java",
+		[]byte(`package com.acme;
+@org.springframework.stereotype.Service
+public final class Payments {
+    @org.springframework.scheduling.annotation.Scheduled(fixedRate = 1000)
+    private void reconcile() {}
+}`),
+	)
+	if !supported || !document.ParseComplete {
+		t.Fatalf("analysis = supported %v, document %#v", supported, document)
+	}
+	for _, expected := range []struct {
+		name       string
+		annotation string
+		modifier   string
+	}{
+		{name: "Payments", annotation: "Service", modifier: "public"},
+		{name: "reconcile", annotation: "Scheduled", modifier: "private"},
+	} {
+		if !slices.ContainsFunc(document.Symbols, func(symbol Symbol) bool {
+			return symbol.Name == expected.name &&
+				slices.Contains(symbol.Annotations, expected.annotation) &&
+				slices.Contains(symbol.Modifiers, expected.modifier)
+		}) {
+			t.Fatalf("symbol %s metadata missing from %#v", expected.name, document.Symbols)
+		}
+	}
+}
+
 func TestAnalyzeExtractsJavaEnumAndQualifiedMemberReferences(t *testing.T) {
 	document, supported := Analyze(
 		"src/main/java/com/acme/PaymentState.java",

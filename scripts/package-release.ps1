@@ -124,6 +124,7 @@ try {
     Copy-Item -LiteralPath (Join-Path $repositoryRoot "docs\dependency-management.md") -Destination (Join-Path $stageDirectory "docs\dependency-management.md") -Force
     Copy-Item -LiteralPath (Join-Path $repositoryRoot "docs\opentelemetry.md") -Destination (Join-Path $stageDirectory "docs\opentelemetry.md") -Force
     Copy-Item -LiteralPath (Join-Path $repositoryRoot "docs\frontend-contracts.md") -Destination (Join-Path $stageDirectory "docs\frontend-contracts.md") -Force
+    Copy-Item -LiteralPath (Join-Path $repositoryRoot "docs\reachability.md") -Destination (Join-Path $stageDirectory "docs\reachability.md") -Force
     Copy-Item -Path (Join-Path $repositoryRoot "deploy\*") -Destination (Join-Path $stageDirectory "deploy") -Recurse -Force
     Copy-ThirdPartyLicenses -Destination (Join-Path $stageDirectory "licenses")
 
@@ -178,6 +179,9 @@ try {
     }
     if (-not (Test-Path -LiteralPath (Join-Path $stageDirectory "docs\frontend-contracts.md"))) {
         throw "package is missing the frontend contracts guide"
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $stageDirectory "docs\reachability.md"))) {
+        throw "package is missing the reachability guide"
     }
     if (-not (Test-Path -LiteralPath (Join-Path $stageDirectory "deploy\otel\collector-debug.yaml"))) {
         throw "package is missing the OpenTelemetry Collector debug configuration"

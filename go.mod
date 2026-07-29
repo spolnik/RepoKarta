@@ -8,6 +8,7 @@ require (
 	deps.dev/util/semver v0.0.0-20260727054525-2946ae4a6141
 	github.com/anthropics/anthropic-sdk-go v1.61.0
 	github.com/crewjam/saml v0.5.1
+	github.com/fsnotify/fsnotify v1.8.0
 	github.com/grafana/regexp v0.0.0-20240607082908-2cb410fa05da
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/modelcontextprotocol/go-sdk v1.6.1
@@ -60,7 +61,6 @@ require (
 	github.com/emirpasic/gods v1.18.1 // indirect
 	github.com/fatih/color v1.19.0 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
-	github.com/fsnotify/fsnotify v1.8.0 // indirect
 	github.com/getsentry/sentry-go v0.31.1 // indirect
 	github.com/go-enry/go-enry/v2 v2.9.6 // indirect
 	github.com/go-enry/go-oniguruma v1.2.1 // indirect

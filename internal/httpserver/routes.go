@@ -99,6 +99,7 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 	mux.HandleFunc("GET /projects/{repositoryID}", server.project)
 	mux.HandleFunc("GET /source/{repositoryID}", server.source)
 	mux.HandleFunc("GET /api/search", server.apiSearch)
+	mux.HandleFunc("GET /api/search/stream", server.apiSearchStream)
 	mux.HandleFunc("POST /api/search", server.apiSearchJSON)
 	mux.HandleFunc("GET /api/search/query-completions", server.apiQueryCompletions)
 	mux.HandleFunc("GET /api/searches", server.apiSearchWorkspace)
@@ -218,6 +219,7 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 	if server.maps != nil {
 		mux.HandleFunc("GET /maps", server.mapPage)
 		mux.HandleFunc("GET /api/maps", server.apiMap)
+		mux.HandleFunc("GET /api/reachability", server.apiReachability)
 		mux.HandleFunc("POST /api/graph/query", server.apiGraphQuery)
 		mux.HandleFunc("GET /api/artifacts/progress", server.apiArtifactProgress)
 		mux.HandleFunc("GET /api/maps/export", server.controlled(

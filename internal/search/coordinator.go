@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -20,7 +21,8 @@ type CatalogueStore interface {
 	UpdateIndexState(context.Context, int64, string, string, string) error
 }
 
-// Coordinator discovers repositories and incrementally indexes changed HEADs.
+// Coordinator discovers repositories and incrementally indexes changed
+// configured revisions.
 type Coordinator struct {
 	root     string
 	excludes []string
@@ -28,6 +30,9 @@ type Coordinator struct {
 	engine   Engine
 
 	startOnce          sync.Once
+	refreshMu          sync.Mutex
+	watcherMu          sync.RWMutex
+	watcher            *repositoryWatcher
 	baseCtxMu          sync.RWMutex
 	baseCtx            context.Context
 	indexing           atomic.Bool
@@ -94,7 +99,31 @@ func (c *Coordinator) Start(ctx context.Context) error {
 			go c.observeIndexed(ctx)
 		}
 		startError = c.Refresh(ctx)
-		if startError != nil || c.indexedObserver == nil {
+		if startError != nil {
+			return
+		}
+		if watcher, err := newRepositoryWatcher(); err != nil {
+			slog.Warn("initialize repository filesystem watcher", "error", err)
+		} else {
+			repositories, loadErr := c.store.ListRepositories(ctx)
+			if loadErr != nil {
+				_ = watcher.Close()
+				startError = fmt.Errorf("load repositories for filesystem watcher: %w", loadErr)
+				return
+			}
+			if updateErr := watcher.Update(repositories); updateErr != nil {
+				slog.Warn("configure repository filesystem watcher", "error", updateErr)
+			}
+			c.watcherMu.Lock()
+			c.watcher = watcher
+			c.watcherMu.Unlock()
+			go watcher.Run(ctx, func() {
+				if err := c.Refresh(ctx); err != nil && ctx.Err() == nil {
+					slog.Warn("refresh catalogue after repository filesystem event", "error", err)
+				}
+			})
+		}
+		if c.indexedObserver == nil {
 			return
 		}
 		repositories, err := c.store.ListRepositories(ctx)
@@ -113,6 +142,8 @@ func (c *Coordinator) Start(ctx context.Context) error {
 
 // Refresh manually rescans the configured root and queues changed repositories.
 func (c *Coordinator) Refresh(ctx context.Context) (resultErr error) {
+	c.refreshMu.Lock()
+	defer c.refreshMu.Unlock()
 	ctx, finish := telemetry.StartOperation(ctx, telemetry.OperationCatalogueRefresh, telemetry.Labels{})
 	defer func() { finish(resultErr) }()
 	repositories, err := catalog.DiscoverWithOptions(c.root, catalog.DiscoverOptions{Exclude: c.excludes})
@@ -128,6 +159,18 @@ func (c *Coordinator) Refresh(ctx context.Context) (resultErr error) {
 	}
 	if err := c.store.SyncRepositories(ctx, repositories); err != nil {
 		return fmt.Errorf("store repositories: %w", err)
+	}
+	c.watcherMu.RLock()
+	watcher := c.watcher
+	c.watcherMu.RUnlock()
+	if watcher != nil {
+		liveRepositories, err := c.store.ListRepositories(ctx)
+		if err != nil {
+			return fmt.Errorf("load repositories for filesystem watcher: %w", err)
+		}
+		if err := watcher.Update(liveRepositories); err != nil {
+			slog.Warn("refresh repository filesystem watches", "error", err)
+		}
 	}
 	if collector, ok := c.engine.(ArtifactGarbageCollector); ok || len(c.artifactCollectors) > 0 {
 		liveRepositories, err := c.store.ListRepositories(ctx)
@@ -194,7 +237,7 @@ func (c *Coordinator) indexPending(ctx context.Context) {
 				return
 			}
 			if repository.ScanState != "ready" ||
-				repository.HeadCommit == "" ||
+				indexCommit(repository) == "" ||
 				repository.IndexState != "pending" {
 				continue
 			}
@@ -216,19 +259,27 @@ func (c *Coordinator) indexRepository(ctx context.Context, repository catalog.Re
 		Kind: repository.ScanState,
 	})
 	defer func() { finish(resultErr) }()
-	if err := c.store.UpdateIndexState(ctx, repository.ID, "indexing", repository.IndexedCommit, ""); err != nil {
+	targetCommit := indexCommit(repository)
+	if err := c.store.UpdateIndexState(ctx, repository.ID, "indexing", targetCommit, ""); err != nil {
 		return fmt.Errorf("record indexing start: %w", err)
 	}
 	_, err := c.engine.Index(ctx, repository)
 	if err != nil {
-		_ = c.store.UpdateIndexState(ctx, repository.ID, "error", repository.IndexedCommit, err.Error())
+		_ = c.store.UpdateIndexState(ctx, repository.ID, "error", targetCommit, err.Error())
 		return err
 	}
-	if err := c.store.UpdateIndexState(ctx, repository.ID, "ready", repository.HeadCommit, ""); err != nil {
+	if err := c.store.UpdateIndexState(ctx, repository.ID, "ready", targetCommit, ""); err != nil {
 		return fmt.Errorf("record indexing completion: %w", err)
 	}
 	c.queueIndexed(ctx, repository.ID)
 	return nil
+}
+
+func indexCommit(repository catalog.Repository) string {
+	if commit := strings.TrimSpace(repository.IndexCommit); commit != "" {
+		return commit
+	}
+	return strings.TrimSpace(repository.HeadCommit)
 }
 
 func (c *Coordinator) queueIndexed(ctx context.Context, repositoryID int64) {

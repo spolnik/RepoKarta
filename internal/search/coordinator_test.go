@@ -47,11 +47,12 @@ func (observerEngine) Close() error { return nil }
 
 func TestIndexCompletionQueuesDerivedStructuralIndex(t *testing.T) {
 	store := &observerStore{repository: catalog.Repository{
-		ID:         7,
-		Name:       "payments",
-		HeadCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		ScanState:  "ready",
-		IndexState: "pending",
+		ID:          7,
+		Name:        "payments",
+		HeadCommit:  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		IndexCommit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		ScanState:   "ready",
+		IndexState:  "pending",
 	}}
 	observed := make(chan int64, 1)
 	coordinator := NewCoordinator("", nil, store, observerEngine{}).
@@ -79,7 +80,7 @@ func TestIndexCompletionQueuesDerivedStructuralIndex(t *testing.T) {
 		t.Fatal(err)
 	}
 	if repositories[0].IndexState != "ready" ||
-		repositories[0].IndexedCommit != repositories[0].HeadCommit {
+		repositories[0].IndexedCommit != repositories[0].IndexCommit {
 		t.Fatalf("indexed repository = %#v", repositories[0])
 	}
 }

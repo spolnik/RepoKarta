@@ -450,6 +450,10 @@ function enableSearchFeedback(): void {
   const setBusy = (busy: boolean): void => {
     results.setAttribute("aria-busy", String(busy));
   };
+  if (typeof ReadableStream !== "undefined" && typeof TextDecoder !== "undefined") {
+    enableStreamingSearch(form, results, setBusy);
+    return;
+  }
   document.body.addEventListener("htmx:beforeRequest", (event) => {
     if ((event as CustomEvent<{ elt: HTMLElement }>).detail?.elt === form) {
       setBusy(true);
@@ -503,6 +507,116 @@ function enableSearchFeedback(): void {
     }
     limit.value = button.dataset.searchMore ?? limit.value;
     form.requestSubmit();
+  });
+}
+
+type SearchStreamEvent = {
+  type: "started" | "results" | "error";
+  html?: string;
+  complete?: boolean;
+  error?: string;
+};
+
+/**
+ * Uses the NDJSON search transport when streaming primitives are available.
+ * Every payload is complete server-rendered HTML for a bounded prefix, so a
+ * network chunk can never split a tag or expose unescaped repository content.
+ */
+function enableStreamingSearch(
+  form: HTMLFormElement,
+  results: HTMLElement,
+  setBusy: (busy: boolean) => void
+): void {
+  form.removeAttribute("hx-get");
+  form.removeAttribute("hx-target");
+  form.removeAttribute("hx-push-url");
+  form.removeAttribute("hx-indicator");
+  let active: AbortController | undefined;
+
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    active?.abort();
+    const controller = new AbortController();
+    active = controller;
+    const parameters = new URLSearchParams();
+    for (const [name, value] of new FormData(form)) {
+      if (typeof value === "string") {
+        parameters.append(name, value);
+      }
+    }
+    const browserURL = `/search?${parameters.toString()}`;
+    const streamURL = `/api/search/stream?${parameters.toString()}`;
+    setBusy(true);
+    results.innerHTML =
+      '<div class="result-state"><p role="status" class="text-ink-soft">Searching indexed evidence…</p></div>';
+
+    void (async () => {
+      try {
+        const response = await fetch(streamURL, {
+          headers: { Accept: "application/x-ndjson" },
+          signal: controller.signal
+        });
+        if (!response.ok || !response.body) {
+          throw new Error(await responseErrorMessage(response, "Search stream could not be opened."));
+        }
+        window.history.pushState({}, "", browserURL);
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let pending = "";
+        const consume = (line: string): void => {
+          if (!line.trim()) {
+            return;
+          }
+          const payload = JSON.parse(line) as SearchStreamEvent;
+          if (payload.type === "results" && payload.html !== undefined) {
+            const documentFragment = new DOMParser().parseFromString(payload.html, "text/html");
+            const streamed = documentFragment.querySelector<HTMLElement>("[data-search-results]");
+            if (!streamed) {
+              throw new Error("Search stream returned an invalid result fragment.");
+            }
+            results.replaceChildren(...Array.from(streamed.childNodes));
+            highlightSearchResults(results);
+          } else if (payload.type === "error") {
+            throw new Error(payload.error || "Search stream failed.");
+          }
+        };
+        while (true) {
+          const { done, value } = await reader.read();
+          pending += decoder.decode(value, { stream: !done });
+          const lines = pending.split("\n");
+          pending = lines.pop() ?? "";
+          for (const line of lines) {
+            consume(line);
+          }
+          if (done) {
+            if (pending.trim()) {
+              consume(pending);
+            }
+            break;
+          }
+        }
+      } catch (error) {
+        if (!(error instanceof DOMException && error.name === "AbortError")) {
+          const message = error instanceof Error ? error.message : "Search stream failed.";
+          results.innerHTML = "";
+          const state = document.createElement("div");
+          state.className = "result-state border-rose-400/20 bg-rose-400/[0.04]";
+          const heading = document.createElement("p");
+          heading.className = "font-medium text-rose-200";
+          heading.textContent = "Search could not be completed";
+          const detail = document.createElement("p");
+          detail.className = "mt-2 font-mono text-xs text-rose-200/60";
+          detail.textContent = message;
+          state.append(heading, detail);
+          results.append(state);
+        }
+      } finally {
+        if (active === controller) {
+          active = undefined;
+          setBusy(false);
+        }
+      }
+    })();
   });
 }
 
@@ -4657,6 +4771,24 @@ type MapSnapshot = {
   };
 };
 
+type ReachabilityReport = {
+  completeness: {
+    static_analysis_complete: boolean;
+    runtime_complete: boolean;
+    truncated_documents: number;
+    incomplete_documents: number;
+    ambiguous_relations: number;
+    unresolved_relations: number;
+  };
+  summary: {
+    reachable: number;
+    probably_unreachable: number;
+    unknown: number;
+    roots: number;
+    edges: number;
+  };
+};
+
 function enableRepositoryMaps(debug?: DebugLogger): void {
   const workspace = document.querySelector<HTMLElement>("[data-map-workspace]");
   const canvas = document.querySelector<HTMLElement>("[data-map-canvas]");
@@ -4685,6 +4817,13 @@ function enableRepositoryMaps(debug?: DebugLogger): void {
   const nodeCount = document.querySelector<HTMLElement>("[data-map-nodes]");
   const edgeCount = document.querySelector<HTMLElement>("[data-map-edges]");
   const languages = document.querySelector<HTMLElement>("[data-map-languages]");
+  const reachabilityHeading = document.querySelector<HTMLElement>("#reachability-summary-heading");
+  const reachabilityReachable = document.querySelector<HTMLElement>("[data-reachability-reachable]");
+  const reachabilityProbably = document.querySelector<HTMLElement>("[data-reachability-probably]");
+  const reachabilityUnknown = document.querySelector<HTMLElement>("[data-reachability-unknown]");
+  const reachabilityRoots = document.querySelector<HTMLElement>("[data-reachability-roots]");
+  const reachabilityCompleteness = document.querySelector<HTMLElement>("[data-reachability-completeness]");
+  const reachabilityJSON = document.querySelector<HTMLAnchorElement>("[data-reachability-json]");
   const focus = document.querySelector<HTMLButtonElement>("[data-map-focus]");
   const reset = document.querySelector<HTMLButtonElement>("[data-map-reset]");
   const inspector = document.querySelector<HTMLElement>(".map-inspector");
@@ -4763,6 +4902,51 @@ function enableRepositoryMaps(debug?: DebugLogger): void {
   const updateExportLink = (): void => {
     const query = selectedRepositoryQuery();
     exportLink.href = `/api/maps/export${query ? `?${query}` : ""}`;
+    if (reachabilityJSON) {
+      reachabilityJSON.href = `/api/reachability${query ? `?${query}` : ""}`;
+    }
+  };
+
+  const loadReachability = async (
+    parameters: URLSearchParams,
+    revision: number
+  ): Promise<void> => {
+    if (
+      !reachabilityHeading || !reachabilityReachable || !reachabilityProbably ||
+      !reachabilityUnknown || !reachabilityRoots || !reachabilityCompleteness
+    ) {
+      return;
+    }
+    reachabilityHeading.textContent = "Loading classification…";
+    try {
+      const response = await fetch(`/api/reachability?${parameters.toString()}`, {
+        cache: "no-store",
+        headers: { Accept: "application/json" }
+      });
+      if (!response.ok) {
+        throw new Error(`Reachability request failed (${response.status})`);
+      }
+      const report = await response.json() as ReachabilityReport;
+      if (revision !== loadRevision) {
+        return;
+      }
+      reachabilityHeading.textContent = "Conservative code paths";
+      reachabilityReachable.textContent = String(report.summary.reachable);
+      reachabilityProbably.textContent = String(report.summary.probably_unreachable);
+      reachabilityUnknown.textContent = String(report.summary.unknown);
+      reachabilityRoots.textContent = String(report.summary.roots);
+      reachabilityCompleteness.textContent = report.completeness.static_analysis_complete
+        ? "Static artifacts are complete. Runtime completeness remains unknown; no declaration is labelled dead."
+        : `Classification is partial: ${report.completeness.incomplete_documents} incomplete and `
+          + `${report.completeness.truncated_documents} truncated documents. Uncertain declarations stay unknown.`;
+    } catch (error: unknown) {
+      if (revision !== loadRevision) {
+        return;
+      }
+      reachabilityHeading.textContent = "Classification unavailable";
+      reachabilityCompleteness.textContent = error instanceof Error ? error.message : String(error);
+      debug?.add("error", "reachability.load.failed", describeError(error));
+    }
   };
 
   const clearInspector = (): void => {
@@ -5368,6 +5552,9 @@ function enableRepositoryMaps(debug?: DebugLogger): void {
       }
       renderSummary(result);
       await renderGraph(result);
+      const reachabilityParameters = new URLSearchParams(parameters);
+      reachabilityParameters.delete("refresh");
+      void loadReachability(reachabilityParameters, revision);
       status.textContent = result.truncated
         ? "Bounded map ready · source limits reached"
         : `${result.nodes.length} facts · ${result.edges.length} relationships · commit-pinned`;

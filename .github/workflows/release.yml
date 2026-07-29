@@ -19,6 +19,10 @@ jobs:
             os: windows-latest
           - name: macos-arm64
             os: macos-14
+          - name: linux-amd64
+            os: ubuntu-24.04
+          - name: linux-arm64
+            os: ubuntu-24.04-arm
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -66,6 +70,12 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: ./scripts/package-release.sh "$RELEASE_VERSION" dist/release
+      - name: Package Linux
+        if: startsWith(matrix.name, 'linux-')
+        shell: bash
+        env:
+          REPOKARTA_PACKAGE_PLATFORM: ${{ matrix.name }}
         run: ./scripts/package-release.sh "$RELEASE_VERSION" dist/release
       - uses: actions/upload-artifact@v7
         with:

@@ -6,6 +6,7 @@ package analysis
 import (
 	"fmt"
 	"path"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -32,12 +33,19 @@ type Range struct {
 
 // Symbol is one named declaration recognized by the language grammar.
 type Symbol struct {
-	Kind       string `json:"kind"`
-	Name       string `json:"name"`
-	NodeType   string `json:"node_type"`
-	Confidence string `json:"confidence"`
-	Range      Range  `json:"range"`
+	Kind        string   `json:"kind"`
+	Name        string   `json:"name"`
+	NodeType    string   `json:"node_type"`
+	Confidence  string   `json:"confidence"`
+	Annotations []string `json:"annotations,omitempty"`
+	Modifiers   []string `json:"modifiers,omitempty"`
+	Range       Range    `json:"range"`
 }
+
+var (
+	declarationAnnotationPattern = regexp.MustCompile(`@(?:[A-Za-z_$][\w$]*\.)*([A-Za-z_$][\w$]*)`)
+	declarationModifierPattern   = regexp.MustCompile(`\b(public|protected|private|internal|abstract|final|static|open|override|export|async)\b`)
+)
 
 // Relation is one syntax-backed reference. Resolution to a specific symbol is
 // intentionally a later stage, so Target is the source-level referenced name.
@@ -239,12 +247,15 @@ func extractSymbols(tree *gotreesitter.Tree, source []byte, lines []int) []Symbo
 			return
 		}
 		seen[key] = struct{}{}
+		annotations, modifiers := declarationMetadata(source, int(start), int(end))
 		symbols = append(symbols, Symbol{
-			Kind:       kind,
-			Name:       name,
-			NodeType:   nodeType,
-			Confidence: "syntax",
-			Range:      sourceRange(lines, int(start), int(end)),
+			Kind:        kind,
+			Name:        name,
+			NodeType:    nodeType,
+			Confidence:  "syntax",
+			Annotations: annotations,
+			Modifiers:   modifiers,
+			Range:       sourceRange(lines, int(start), int(end)),
 		})
 	}
 	for _, span := range gotreesitter.ExtractDefinitionSpans(tree) {
@@ -270,6 +281,41 @@ func extractSymbols(tree *gotreesitter.Tree, source []byte, lines []int) []Symbo
 		return symbols[i].Name < symbols[j].Name
 	})
 	return symbols
+}
+
+func declarationMetadata(source []byte, start, end int) ([]string, []string) {
+	if start < 0 || start >= len(source) || end <= start {
+		return nil, nil
+	}
+	end = min(end, len(source))
+	header := string(source[start:end])
+	if brace := strings.IndexByte(header, '{'); brace >= 0 {
+		header = header[:brace]
+	}
+	annotations := uniquePatternMatches(declarationAnnotationPattern, header, 1)
+	modifiers := uniquePatternMatches(declarationModifierPattern, header, 1)
+	return annotations, modifiers
+}
+
+func uniquePatternMatches(pattern *regexp.Regexp, value string, group int) []string {
+	seen := make(map[string]struct{})
+	result := make([]string, 0)
+	for _, match := range pattern.FindAllStringSubmatch(value, -1) {
+		if group >= len(match) {
+			continue
+		}
+		item := strings.TrimSpace(match[group])
+		if item == "" {
+			continue
+		}
+		if _, exists := seen[item]; exists {
+			continue
+		}
+		seen[item] = struct{}{}
+		result = append(result, item)
+	}
+	sort.Strings(result)
+	return result
 }
 
 func customSymbolKind(languageName, nodeType, text string) string {

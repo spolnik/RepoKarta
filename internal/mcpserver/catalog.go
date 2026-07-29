@@ -22,6 +22,7 @@ func ToolCatalog() []ToolSummary {
 		{Name: "git_log", Description: "Newest-first commit history with truncation metadata."},
 		{Name: "git_diff", Description: "Resolved revisions and bounded unified patches."},
 		{Name: "read_repository_map", Description: "Complete static snapshot: structure, routes, entry points, dependencies, and edges."},
+		{Name: "read_code_reachability", Description: "Revision-pinned framework reachability with completeness and conservative classifications."},
 		{Name: "read_dependency_inventory", Description: "Focused manifests, versioned coordinates, and outbound HTTP calls."},
 		{Name: "read_system_topology", Description: "Directed component-level HTTP, gRPC, Kafka, database, MCP, and runtime-observed relationships."},
 		{Name: "read_dependency_findings", Description: "Compact scope-aware OSV findings with manifest and advisory-snapshot evidence."},

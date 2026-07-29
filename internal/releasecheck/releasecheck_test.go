@@ -42,6 +42,9 @@ func TestWorkflowsAreValidYAMLAndUseCurrentNode24Actions(t *testing.T) {
 		"gh release create",
 		"MACOS_CERTIFICATE_P12",
 		"APPLE_APP_PASSWORD",
+		"linux-amd64",
+		"linux-arm64",
+		"ubuntu-24.04-arm",
 	} {
 		if !strings.Contains(release, expected) {
 			t.Fatalf("release workflow is missing %q", expected)
@@ -110,6 +113,7 @@ func TestEveryPackagePathCarriesRequiredLicensesAndVerification(t *testing.T) {
 			"dependency-management.md",
 			"opentelemetry.md",
 			"frontend-contracts.md",
+			"reachability.md",
 			"repokarta.env.example",
 			"collector-debug.yaml",
 			"collector-datadog.yaml",
@@ -193,6 +197,9 @@ func TestM17BuildAndPackageSmokeContracts(t *testing.T) {
 		"smoke-package.sh",
 		"Boot packaged Windows server",
 		"Boot packaged macOS server",
+		"Boot packaged Linux server",
+		"REPOKARTA_PACKAGE_PLATFORM",
+		"ubuntu-24.04-arm",
 		"git diff --exit-code -- web/src/generated/api-contract.ts",
 	} {
 		if !strings.Contains(workflow, expected) {

@@ -9,7 +9,15 @@ fi
 
 repository_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 output_directory=${2:-"$repository_root/dist/release"}
-package_name="repokarta-$version-macos-arm64"
+package_platform=${REPOKARTA_PACKAGE_PLATFORM:-macos-arm64}
+case "$package_platform" in
+    macos-arm64|linux-amd64|linux-arm64) ;;
+    *)
+        printf 'unsupported package platform: %s\n' "$package_platform" >&2
+        exit 2
+        ;;
+esac
+package_name="repokarta-$version-$package_platform"
 archive_path="$output_directory/$package_name.tar.gz"
 if [ ! -f "$archive_path" ]; then
     printf 'package archive does not exist: %s\n' "$archive_path" >&2

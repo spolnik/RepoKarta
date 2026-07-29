@@ -68,6 +68,7 @@ type ConversationHistoryService interface {
 // MapService supplies deterministic, commit-pinned repository maps.
 type MapService interface {
 	Snapshot(context.Context, int64, bool) (graph.Snapshot, error)
+	Reachability(context.Context, int64) (graph.ReachabilityReport, error)
 	ReadDependencySnapshot(context.Context, int64) (graph.Snapshot, graph.ArtifactProgress, error)
 	ReadTopologySnapshot(context.Context, int64) (graph.Snapshot, graph.ArtifactProgress, error)
 	ReadRouteSnapshot(context.Context, int64) (graph.Snapshot, graph.ArtifactProgress, error)

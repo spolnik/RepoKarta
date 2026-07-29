@@ -68,6 +68,15 @@ func (r *RemoteServices) RepositoryMap(ctx context.Context, repositoryID int64) 
 	return result, err
 }
 
+func (r *RemoteServices) CodeReachability(
+	ctx context.Context,
+	repositoryID int64,
+) (graph.ReachabilityReport, error) {
+	var result graph.ReachabilityReport
+	err := r.get(ctx, "/api/reachability", repositoryQuery(repositoryID), &result)
+	return result, err
+}
+
 func (r *RemoteServices) DependencySnapshot(ctx context.Context, repositoryID int64) (graph.Snapshot, error) {
 	return r.RepositoryMap(ctx, repositoryID)
 }

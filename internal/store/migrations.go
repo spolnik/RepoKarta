@@ -62,6 +62,8 @@ func migration(version int, backend Backend) (string, error) {
 		statement = schemaV22
 	case 23:
 		statement = schemaV23
+	case 24:
+		statement = schemaV24
 	default:
 		return "", fmt.Errorf("missing migration for schema version %d", version)
 	}
@@ -116,6 +118,17 @@ WHERE type = 'table' AND name = 'conversations'`).Scan(&conversationTableCount);
 			if conversationTableCount == 0 {
 				// Preserve support for sparse historical test/development
 				// databases that recorded a later version without chat tables.
+				statement = "SELECT 1;"
+			}
+		}
+		if next == 24 {
+			var repositoryTableCount int
+			if err := db.QueryRow(`
+SELECT COUNT(*) FROM sqlite_master
+WHERE type = 'table' AND name = 'repositories'`).Scan(&repositoryTableCount); err != nil {
+				return fmt.Errorf("inspect repository table before migration 24: %w", err)
+			}
+			if repositoryTableCount == 0 {
 				statement = "SELECT 1;"
 			}
 		}

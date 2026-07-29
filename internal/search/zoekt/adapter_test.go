@@ -410,10 +410,79 @@ func TestIndexUsesGitShadowForWorktreeConfigRepositories(t *testing.T) {
 	}
 }
 
+func TestIndexUsesConfiguredCommitWithoutChangingCheckout(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	root := t.TempDir()
+	repositoryPath := filepath.Join(root, "configured-default")
+	runGit(t, root, "init", repositoryPath)
+	runGit(t, repositoryPath, "config", "user.email", "repokarta@example.test")
+	runGit(t, repositoryPath, "config", "user.name", "RepoKarta tests")
+	if err := os.WriteFile(
+		filepath.Join(repositoryPath, "branch.txt"),
+		[]byte("default branch needle\n"),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repositoryPath, "add", "branch.txt")
+	runGit(t, repositoryPath, "commit", "-m", "Default branch")
+	defaultCommit := runGitOutput(t, repositoryPath, "rev-parse", "HEAD")
+	defaultBranch := runGitOutput(t, repositoryPath, "branch", "--show-current")
+	runGit(t, repositoryPath, "checkout", "-b", "feature")
+	if err := os.WriteFile(
+		filepath.Join(repositoryPath, "branch.txt"),
+		[]byte("feature branch needle\n"),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repositoryPath, "add", "branch.txt")
+	runGit(t, repositoryPath, "commit", "-m", "Feature branch")
+
+	repository, err := catalog.Inspect(repositoryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository.ID = 46
+	repository.IndexRevision = defaultBranch
+	repository.IndexCommit = defaultCommit
+	adapter, err := New(filepath.Join(t.TempDir(), "indexes"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter.symbolsEnabled = false
+	defer adapter.Close()
+	if _, err := adapter.Index(context.Background(), repository); err != nil {
+		t.Fatal(err)
+	}
+	result, err := adapter.Search(context.Background(), search.Query{Text: "default branch needle"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Matches) != 1 || result.Matches[0].Revision != defaultCommit {
+		t.Fatalf("configured-commit result = %#v", result)
+	}
+	if branch := runGitOutput(t, repositoryPath, "branch", "--show-current"); branch != "feature" {
+		t.Fatalf("checkout changed to %q while indexing configured commit", branch)
+	}
+}
+
 func runGit(t *testing.T, directory string, arguments ...string) {
 	t.Helper()
 	command := exec.Command("git", append([]string{"-C", directory}, arguments...)...)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("git %v: %v\n%s", arguments, err, output)
 	}
+}
+
+func runGitOutput(t *testing.T, directory string, arguments ...string) string {
+	t.Helper()
+	command := exec.Command("git", append([]string{"-C", directory}, arguments...)...)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v\n%s", arguments, err, output)
+	}
+	return strings.TrimSpace(string(output))
 }

@@ -9,7 +9,26 @@ fi
 
 repository_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 output_directory=${2:-"$repository_root/dist/release"}
-package_name="repokarta-$version-macos-arm64"
+package_platform=${REPOKARTA_PACKAGE_PLATFORM:-macos-arm64}
+case "$package_platform" in
+    macos-arm64)
+        target_os=darwin
+        target_arch=arm64
+        ;;
+    linux-amd64)
+        target_os=linux
+        target_arch=amd64
+        ;;
+    linux-arm64)
+        target_os=linux
+        target_arch=arm64
+        ;;
+    *)
+        printf 'unsupported package platform: %s\n' "$package_platform" >&2
+        exit 2
+        ;;
+esac
+package_name="repokarta-$version-$package_platform"
 archive_path="$output_directory/$package_name.tar.gz"
 checksum_path="$archive_path.sha256"
 grammar_tags="grammar_subset,grammar_subset_bash,grammar_subset_go,grammar_subset_groovy,grammar_subset_java,grammar_subset_javascript,grammar_subset_kotlin,grammar_subset_python,grammar_subset_sql,grammar_subset_tsx,grammar_subset_typescript"
@@ -34,7 +53,7 @@ fi
 
 (
     cd "$repository_root"
-    GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 \
+    GOOS="$target_os" GOARCH="$target_arch" CGO_ENABLED=0 \
     go build -buildvcs=false -tags "$grammar_tags" -trimpath \
         -ldflags "-s -w -X main.version=$version" \
         -o "$stage_directory/repokarta" ./cmd/repokarta
@@ -62,6 +81,8 @@ cp "$repository_root/docs/opentelemetry.md" \
     "$stage_directory/docs/opentelemetry.md"
 cp "$repository_root/docs/frontend-contracts.md" \
     "$stage_directory/docs/frontend-contracts.md"
+cp "$repository_root/docs/reachability.md" \
+    "$stage_directory/docs/reachability.md"
 cp -R "$repository_root/deploy/." "$stage_directory/deploy/"
 cp "$repository_root/third_party/zoekt/LICENSE" \
     "$stage_directory/licenses/zoekt-Apache-2.0.txt"
@@ -82,7 +103,7 @@ cp "$repository_root/third_party/licenses/crewjam-saml-BSD-2-Clause.txt" \
 cp "$repository_root/third_party/licenses/pgx-MIT.txt" \
     "$stage_directory/licenses/pgx-MIT.txt"
 
-if [ -n "${REPOKARTA_CODESIGN_IDENTITY:-}" ]; then
+if [ "$target_os" = "darwin" ] && [ -n "${REPOKARTA_CODESIGN_IDENTITY:-}" ]; then
     codesign --force --options runtime --timestamp \
         --sign "$REPOKARTA_CODESIGN_IDENTITY" "$stage_directory/repokarta"
     codesign --verify --strict --verbose=2 "$stage_directory/repokarta"
@@ -98,11 +119,11 @@ do
         notary_values=$((notary_values + 1))
     fi
 done
-if [ "$notary_values" -ne 0 ] && [ "$notary_values" -ne 3 ]; then
+if [ "$target_os" = "darwin" ] && [ "$notary_values" -ne 0 ] && [ "$notary_values" -ne 3 ]; then
     printf 'APPLE_ID, APPLE_TEAM_ID, and APPLE_APP_PASSWORD must be configured together\n' >&2
     exit 1
 fi
-if [ "$notary_values" -eq 3 ]; then
+if [ "$target_os" = "darwin" ] && [ "$notary_values" -eq 3 ]; then
     if [ -z "${REPOKARTA_CODESIGN_IDENTITY:-}" ]; then
         printf 'notarization requires REPOKARTA_CODESIGN_IDENTITY\n' >&2
         exit 1
@@ -146,11 +167,13 @@ test -f "$verify_directory/$package_name/docs/advanced-search.md"
 test -f "$verify_directory/$package_name/docs/dependency-management.md"
 test -f "$verify_directory/$package_name/docs/opentelemetry.md"
 test -f "$verify_directory/$package_name/docs/frontend-contracts.md"
+test -f "$verify_directory/$package_name/docs/reachability.md"
 test -f "$verify_directory/$package_name/deploy/repokarta.env.example"
 test -f "$verify_directory/$package_name/deploy/otel/collector-debug.yaml"
 test -f "$verify_directory/$package_name/deploy/otel/collector-datadog.yaml"
 test -f "$verify_directory/$package_name/deploy/otel/datadog-agent.yaml"
-if [ "$(uname -s)" = "Darwin" ]; then
+if { [ "$target_os" = "darwin" ] && [ "$(uname -s)" = "Darwin" ]; } ||
+    { [ "$target_os" = "linux" ] && [ "$(uname -s)" = "Linux" ]; }; then
     reported_version=$("$verify_directory/$package_name/repokarta" version)
     test "$reported_version" = "$version"
 fi

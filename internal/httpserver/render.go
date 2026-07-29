@@ -304,6 +304,28 @@ func (s *Server) apiMap(response http.ResponseWriter, request *http.Request) {
 	writeJSON(response, http.StatusOK, snapshot)
 }
 
+func (s *Server) apiReachability(response http.ResponseWriter, request *http.Request) {
+	repositoryID, err := optionalRepositoryID(request.URL.Query().Get("repository"))
+	if err != nil {
+		writeAPIError(response, http.StatusBadRequest, err)
+		return
+	}
+	if _, allowed := s.requirePermission(
+		response,
+		request,
+		identity.PermissionReadRepositories,
+	); !allowed {
+		return
+	}
+	report, err := s.maps.Reachability(request.Context(), repositoryID)
+	if err != nil {
+		slog.Error("read code reachability", "repository_id", repositoryID, "error", err)
+		writeAPIError(response, http.StatusInternalServerError, errors.New("reachability report could not be loaded"))
+		return
+	}
+	writeJSON(response, http.StatusOK, report)
+}
+
 func (s *Server) apiGraphQuery(response http.ResponseWriter, request *http.Request) {
 	request.Body = http.MaxBytesReader(response, request.Body, 64<<10)
 	var input struct {

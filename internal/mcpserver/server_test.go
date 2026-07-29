@@ -102,13 +102,21 @@ func (s *fakeSearcher) Search(_ context.Context, query search.Query) (search.Res
 }
 
 type fakeArtifacts struct {
-	snapshot graph.Snapshot
-	site     docs.Site
-	page     docs.Page
+	snapshot     graph.Snapshot
+	reachability graph.ReachabilityReport
+	site         docs.Site
+	page         docs.Page
 }
 
 func (f fakeArtifacts) RepositoryMap(context.Context, int64) (graph.Snapshot, error) {
 	return f.snapshot, nil
+}
+
+func (f fakeArtifacts) CodeReachability(
+	context.Context,
+	int64,
+) (graph.ReachabilityReport, error) {
+	return f.reachability, nil
 }
 
 func (f fakeArtifacts) DependencySnapshot(context.Context, int64) (graph.Snapshot, error) {
@@ -291,6 +299,34 @@ func TestMCPSearchReturnsPinnedCitation(t *testing.T) {
 				RequestedRepositoryID: 7,
 			},
 		},
+		reachability: graph.ReachabilityReport{
+			ID: "reachability-1",
+			Completeness: graph.ReachabilityCompleteness{
+				StructuralArtifactsComplete: true,
+				DocumentsComplete:           true,
+				StaticAnalysisComplete:      true,
+			},
+			Summary: graph.ReachabilitySummary{
+				Reachable: 2,
+				Unknown:   1,
+				Roots:     1,
+				Edges:     1,
+			},
+			Symbols: []graph.ReachabilitySymbol{{
+				ID:    "symbol:7:main",
+				Name:  "main",
+				Kind:  "function",
+				State: graph.ReachabilityStateReachable,
+				Evidence: graph.Evidence{
+					RepositoryID: 7,
+					Repository:   "RepoKarta",
+					Revision:     revision,
+					Path:         "cmd/repokarta/main.go",
+					Line:         10,
+					URL:          "http://ui/source/7?rev=" + revision + "&path=cmd/repokarta/main.go",
+				},
+			}},
+		},
 		site: docs.Site{
 			Version:      2,
 			RepositoryID: 7,
@@ -390,8 +426,8 @@ func TestMCPSearchReturnsPinnedCitation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tools.Tools) != 20 {
-		t.Fatalf("got %d tools, want 20", len(tools.Tools))
+	if len(tools.Tools) != 21 {
+		t.Fatalf("got %d tools, want 21", len(tools.Tools))
 	}
 	toolNames := make(map[string]bool, len(tools.Tools))
 	for _, tool := range tools.Tools {
@@ -428,6 +464,7 @@ func TestMCPSearchReturnsPinnedCitation(t *testing.T) {
 		"git_log",
 		"git_diff",
 		"read_repository_map",
+		"read_code_reachability",
 		"read_dependency_inventory",
 		"read_system_topology",
 		"query_evidence_graph",
@@ -526,6 +563,27 @@ func TestMCPSearchReturnsPinnedCitation(t *testing.T) {
 	}
 	if mapOutput.ID != "map-1" {
 		t.Fatalf("map output = %+v", mapOutput)
+	}
+
+	result, err = session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "read_code_reachability",
+		Arguments: map[string]any{"repository": "RepoKarta"},
+	})
+	if err != nil || result.IsError {
+		t.Fatalf("reachability tool error: %v %#v", err, result.Content)
+	}
+	encoded, err = json.Marshal(result.StructuredContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reachabilityOutput graph.ReachabilityReport
+	if err := json.Unmarshal(encoded, &reachabilityOutput); err != nil {
+		t.Fatal(err)
+	}
+	if reachabilityOutput.ID != "reachability-1" ||
+		!reachabilityOutput.Completeness.StaticAnalysisComplete ||
+		reachabilityOutput.Summary.Reachable != 2 {
+		t.Fatalf("reachability output = %+v", reachabilityOutput)
 	}
 
 	result, err = session.CallTool(context.Background(), &mcp.CallToolParams{
@@ -678,6 +736,7 @@ func TestMCPToolsAcceptRepositoryIDsOrExactNames(t *testing.T) {
 		"git_log":                   true,
 		"git_diff":                  true,
 		"read_repository_map":       true,
+		"read_code_reachability":    true,
 		"read_dependency_inventory": true,
 		"list_deep_wiki_pages":      true,
 		"read_generated_document":   true,

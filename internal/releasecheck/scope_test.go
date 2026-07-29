@@ -15,7 +15,8 @@ func TestRoadmapKeepsM7ScopeAndCompletedMilestones(t *testing.T) {
 	m9 := scopeSection(t, scope, "### M9:", "### M10:")
 	m17 := scopeSection(t, scope, "### M17:", "### M18:")
 	m18 := scopeSection(t, scope, "### M18:", "### M19:")
-	m19 := scopeSection(t, scope, "### M19:", "## Definition of quality")
+	m19 := scopeSection(t, scope, "### M19:", "### M20:")
+	m20 := scopeSection(t, scope, "### M20:", "## Definition of quality")
 
 	for _, completed := range []string{
 		"- [x] Add permission-aware Chat autocomplete for `@repository` and `@file`",
@@ -66,6 +67,20 @@ func TestRoadmapKeepsM7ScopeAndCompletedMilestones(t *testing.T) {
 	if strings.Contains(m19, "- [ ]") {
 		t.Error("M19 still contains unchecked scope")
 	}
+	if strings.Contains(m20, "- [ ]") {
+		t.Error("M20 still contains unchecked scope")
+	}
+	for _, completed := range []string{
+		"- [x] Derive revision-pinned framework and executable reachability roots",
+		"- [x] Watch bounded Git metadata",
+		"- [x] Stream large bounded search result prefixes",
+		"- [x] Resolve a locally configured `origin/HEAD`",
+		"- [x] Build and boot-smoke Linux amd64 and arm64",
+	} {
+		if !strings.Contains(m20, completed) {
+			t.Errorf("M20 completed scope is missing %q", completed)
+		}
+	}
 
 	status := scopeSection(
 		t,
@@ -74,7 +89,7 @@ func TestRoadmapKeepsM7ScopeAndCompletedMilestones(t *testing.T) {
 		"## Recommended next session",
 	)
 	for _, required := range []string{
-		"M0 through M19 are complete",
+		"M0 through M20 are complete",
 		"M7 now includes qualified symbol search",
 		"M9 now includes explicit comparison and distance states",
 		"Linked-worktree discovery deduplication",
@@ -82,6 +97,7 @@ func TestRoadmapKeepsM7ScopeAndCompletedMilestones(t *testing.T) {
 		"M17 makes frontend builds reproducible",
 		"M18 consolidates Git execution and atomic publication",
 		"OpenTelemetry metrics, structured logs, and traces are available",
+		"M20 also debounces committed local-repository changes",
 	} {
 		if !strings.Contains(status, required) {
 			t.Errorf("implementation status is missing %q", required)

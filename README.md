@@ -34,6 +34,10 @@ provider, an API key, Docker, or a cloud account.
 - **See how a system fits together.** Follow component-to-component HTTP,
   gRPC, Kafka, database, and MCP communication with visible direction,
   commit-pinned source evidence, and separately timestamped runtime signals.
+- **Inspect conservative code reachability.** Start from executable and
+  framework roots, follow syntax-backed witness paths, and keep incomplete or
+  dynamically dispatched declarations explicitly unknown rather than calling
+  them dead.
 - **Ask questions with citations.** Use Codex, Claude Code, or the Anthropic
   API to answer questions against RepoKarta's read-only code tools.
 - **Create living documentation.** Generate beautifully structured,
@@ -390,6 +394,13 @@ $version = go run ./cmd/repokarta version
 ./scripts/package-release.sh "$(go run ./cmd/repokarta version)"
 ```
 
+Linux packages use the same release script with an explicit target:
+
+```sh
+REPOKARTA_PACKAGE_PLATFORM=linux-amd64 \
+  ./scripts/package-release.sh "$(go run ./cmd/repokarta version)"
+```
+
 ## Further reading
 
 - [Visual RepoKarta Field Guide](./handbook/)
@@ -402,6 +413,7 @@ $version = go run ./cmd/repokarta version
 - [Source editor search, usages, routes, and caller evidence](./docs/source-intelligence.md)
 - [Compiler-precise SCIP index imports](./docs/scip-indexes.md)
 - [Structural AST query syntax and completeness](./docs/ast-search.md)
+- [Static code reachability and indexing behavior](./docs/reachability.md)
 - [OpenTelemetry metrics, logs, traces, and Datadog routing](./docs/opentelemetry.md)
 - [Frontend API contracts, streaming recovery, and reproducible assets](./docs/frontend-contracts.md)
 - [Codebase consolidation boundaries](./docs/codebase-consolidation.md)

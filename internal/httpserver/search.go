@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +20,15 @@ import (
 	"github.com/spolnik/RepoKarta/internal/security"
 	"github.com/spolnik/RepoKarta/internal/source"
 )
+
+const searchStreamBatchSize = 20
+
+type searchStreamEvent struct {
+	Type     string `json:"type"`
+	HTML     string `json:"html,omitempty"`
+	Complete bool   `json:"complete,omitempty"`
+	Error    string `json:"error,omitempty"`
+}
 
 func (s *Server) apiSearch(response http.ResponseWriter, request *http.Request) {
 	limit, err := apiSearchLimit(request.URL.Query().Get("limit"))
@@ -76,6 +86,73 @@ func (s *Server) apiSearchJSON(response http.ResponseWriter, request *http.Reque
 		slog.Warn("record recent structured search", "error", err)
 	}
 	writeSearchJSON(response, result)
+}
+
+// apiSearchStream delivers bounded, server-rendered result prefixes as NDJSON.
+// The deterministic search still owns one final completeness contract; the
+// transport makes large responses visible incrementally and remains cancellable
+// through the request context.
+func (s *Server) apiSearchStream(response http.ResponseWriter, request *http.Request) {
+	flusher, ok := response.(http.Flusher)
+	if !ok {
+		writeAPIError(response, http.StatusInternalServerError, errors.New("streaming is not supported"))
+		return
+	}
+	response.Header().Set("Content-Type", "application/x-ndjson; charset=utf-8")
+	response.Header().Set("Cache-Control", "no-store")
+	response.Header().Set("X-Content-Type-Options", "nosniff")
+	encoder := json.NewEncoder(response)
+	writeEvent := func(event searchStreamEvent) bool {
+		if request.Context().Err() != nil || encoder.Encode(event) != nil {
+			return false
+		}
+		flusher.Flush()
+		return true
+	}
+	if !writeEvent(searchStreamEvent{Type: "started"}) {
+		return
+	}
+	data, err := s.searchPageData(request)
+	if err != nil {
+		writeEvent(searchStreamEvent{Type: "error", Error: err.Error(), Complete: true})
+		return
+	}
+	total := max(len(data.Search.Matches), len(data.Search.Items))
+	if total == 0 {
+		html, renderErr := s.renderSearchResults(data)
+		if renderErr != nil {
+			writeEvent(searchStreamEvent{Type: "error", Error: renderErr.Error(), Complete: true})
+			return
+		}
+		writeEvent(searchStreamEvent{Type: "results", HTML: html, Complete: true})
+		return
+	}
+	for count := min(searchStreamBatchSize, total); ; count = min(count+searchStreamBatchSize, total) {
+		partial := data
+		partial.Search.Matches = append([]searchMatchView(nil), data.Search.Matches[:min(count, len(data.Search.Matches))]...)
+		partial.Search.Items = append([]codeintel.SearchItem(nil), data.Search.Items[:min(count, len(data.Search.Items))]...)
+		complete := count == total
+		if !complete {
+			partial.Search.ReturnedFiles = len(partial.Search.Matches)
+			partial.Search.ReturnedItems = len(partial.Search.Items)
+		}
+		html, renderErr := s.renderSearchResults(partial)
+		if renderErr != nil {
+			writeEvent(searchStreamEvent{Type: "error", Error: renderErr.Error(), Complete: true})
+			return
+		}
+		if !writeEvent(searchStreamEvent{Type: "results", HTML: html, Complete: complete}) || complete {
+			return
+		}
+	}
+}
+
+func (s *Server) renderSearchResults(data pageData) (string, error) {
+	var output bytes.Buffer
+	if err := s.templates.ExecuteTemplate(&output, "search-results", data); err != nil {
+		return "", fmt.Errorf("render streamed search results: %w", err)
+	}
+	return output.String(), nil
 }
 
 func (s *Server) apiSearchWorkspace(response http.ResponseWriter, request *http.Request) {
@@ -530,10 +607,22 @@ func (s *Server) apiGitDiff(response http.ResponseWriter, request *http.Request)
 }
 
 func (s *Server) search(response http.ResponseWriter, request *http.Request) {
-	data, err := s.pageData(request.Context())
+	data, err := s.searchPageData(request)
 	if err != nil {
 		http.Error(response, "Could not load repositories", http.StatusInternalServerError)
 		return
+	}
+	if request.Header.Get("HX-Request") == "true" {
+		s.render(response, "search-results", data)
+		return
+	}
+	s.render(response, "index", data)
+}
+
+func (s *Server) searchPageData(request *http.Request) (pageData, error) {
+	data, err := s.pageData(request.Context())
+	if err != nil {
+		return pageData{}, err
 	}
 
 	repositoryID, repositoryName := repositorySelector(request.URL.Query().Get("repo"))
@@ -597,11 +686,7 @@ func (s *Server) search(response http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	if request.Header.Get("HX-Request") == "true" {
-		s.render(response, "search-results", data)
-		return
-	}
-	s.render(response, "index", data)
+	return data, nil
 }
 
 func resolveSearchViews(matches []codeintel.SearchMatch, repositories []catalog.Repository) []searchMatchView {

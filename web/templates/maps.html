@@ -199,6 +199,27 @@
           <div class="map-language-list" data-map-languages></div>
         </section>
 
+        <section class="map-summary" aria-labelledby="reachability-summary-heading" data-map-reachability>
+          <div class="map-section-heading">
+            <div>
+              <p>Static reachability</p>
+              <h2 id="reachability-summary-heading">Loading classification…</h2>
+            </div>
+          </div>
+          <dl class="map-metrics">
+            <div><dt>Reachable</dt><dd data-reachability-reachable>—</dd></div>
+            <div><dt>Probably unreachable</dt><dd data-reachability-probably>—</dd></div>
+            <div><dt>Unknown</dt><dd data-reachability-unknown>—</dd></div>
+            <div><dt>Roots</dt><dd data-reachability-roots>—</dd></div>
+          </dl>
+          <p class="map-scope-note" data-reachability-completeness>
+            Waiting for commit-pinned structural evidence.
+          </p>
+          <a class="map-secondary-action" href="/api/reachability" data-reachability-json>
+            Open evidence JSON
+          </a>
+        </section>
+
         <div class="map-sidebar-actions">
           <button type="button" class="map-secondary-action" data-map-refresh>
             <svg viewBox="0 0 20 20" aria-hidden="true">

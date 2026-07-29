@@ -32,6 +32,8 @@ type Repository struct {
 	OriginURL       string
 	DefaultRevision string
 	HeadCommit      string
+	IndexRevision   string
+	IndexCommit     string
 	Bare            bool
 	ScanState       string
 	ScanError       string
@@ -322,17 +324,79 @@ func inspectRepository(path string, bare bool) Repository {
 		}
 	}
 
-	if revision, err := gitOutput(ctx, path, bare, "symbolic-ref", "--quiet", "--short", "HEAD"); err == nil {
-		repository.DefaultRevision = revision
-	} else {
-		repository.DefaultRevision = "HEAD"
-	}
+	repository.DefaultRevision, repository.IndexCommit = configuredDefaultRevision(
+		ctx,
+		path,
+		bare,
+		repository.HeadCommit,
+	)
+	repository.IndexRevision = repository.DefaultRevision
 
 	if origin, err := gitOutput(ctx, path, bare, "config", "--get", "remote.origin.url"); err == nil {
 		repository.OriginURL = origin
 	}
 
 	return repository
+}
+
+// configuredDefaultRevision resolves the configured default branch without
+// checking it out or otherwise mutating the repository. A configured
+// origin/HEAD wins over the current worktree branch; repositories without a
+// remote default safely fall back to their current HEAD.
+func configuredDefaultRevision(
+	ctx context.Context,
+	repositoryPath string,
+	bare bool,
+	headCommit string,
+) (string, string) {
+	currentRevision, _ := gitOutput(
+		ctx,
+		repositoryPath,
+		bare,
+		"symbolic-ref",
+		"--quiet",
+		"--short",
+		"HEAD",
+	)
+	if target, err := gitOutput(
+		ctx,
+		repositoryPath,
+		bare,
+		"symbolic-ref",
+		"--quiet",
+		"refs/remotes/origin/HEAD",
+	); err == nil {
+		target = strings.TrimSpace(target)
+		name := strings.TrimPrefix(target, "refs/remotes/origin/")
+		if name != "" {
+			if commit, commitErr := gitOutput(
+				ctx,
+				repositoryPath,
+				bare,
+				"rev-parse",
+				"--verify",
+				"refs/heads/"+name+"^{commit}",
+			); commitErr == nil {
+				return name, commit
+			}
+		}
+		if commit, commitErr := gitOutput(
+			ctx,
+			repositoryPath,
+			bare,
+			"rev-parse",
+			"--verify",
+			target+"^{commit}",
+		); commitErr == nil {
+			if name != "" {
+				return name, commit
+			}
+		}
+	}
+	if currentRevision = strings.TrimSpace(currentRevision); currentRevision != "" {
+		return currentRevision, headCommit
+	}
+	return "HEAD", headCommit
 }
 
 func gitOutput(ctx context.Context, path string, bare bool, arguments ...string) (string, error) {
