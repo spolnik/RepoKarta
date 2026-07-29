@@ -49,6 +49,20 @@ func TestWorkflowsAreValidYAMLAndUseCurrentNode24Actions(t *testing.T) {
 	}
 }
 
+func TestTemplatesDoNotContainCommonUTF8Mojibake(t *testing.T) {
+	root := repositoryRoot(t)
+	for _, relative := range []string{
+		filepath.Join("web", "templates", "dependencies.html"),
+	} {
+		content := string(readFile(t, root, relative))
+		for _, corrupted := range []string{"â†’", "Â·"} {
+			if strings.Contains(content, corrupted) {
+				t.Errorf("%s contains mojibake %q", relative, corrupted)
+			}
+		}
+	}
+}
+
 func TestEveryPackagePathCarriesRequiredLicensesAndVerification(t *testing.T) {
 	root := repositoryRoot(t)
 	required := []string{

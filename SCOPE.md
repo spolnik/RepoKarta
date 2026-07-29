@@ -1287,7 +1287,7 @@ completion criteria include:
 
 ## Current implementation version
 
-`0.96.0-dev`. M0 through M19 are complete. M7 now includes qualified symbol
+`0.96.1-dev`. M0 through M19 are complete. M7 now includes qualified symbol
 search, precise optional SCIP data, commit-pinned CODEOWNERS, bounded evidence
 graph queries, saved searches and deterministic monitors, and permission-safe
 Deep Search with visible trace, budgets, retry, and revocable sharing. M9 now
@@ -1393,6 +1393,9 @@ intelligence joining out of HTTP, replaces four graph fan-out readers with one
 generic implementation, extracts the duplicated repository picker into a tested
 frontend module, and gives duplicated normalization, resolution, form parsing,
 and topology merging helpers one owner each.
+Dependency workspace arrows and evidence separators are encoded as native UTF-8
+characters, so the rendered topology and inventory views no longer expose
+mojibake.
 
 ## Recommended next session
 

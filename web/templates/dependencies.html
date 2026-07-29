@@ -109,7 +109,7 @@
         <details class="mt-6 rounded-xl border border-sky-300/20 bg-sky-400/[0.05] p-5" open>
           <summary class="cursor-pointer font-semibold text-sky-100">Remote repositories and Maven Central: exact workflow</summary>
           <div class="mt-4 grid gap-4 text-sm leading-6 text-ink-soft lg:grid-cols-4">
-            <div><strong class="block text-ink-strong">1. Acquire or sync</strong>Open <a class="text-emerald-300 hover:text-emerald-200" href="/admin#admin-repositories">Admin â†’ Repositories</a>. Approve a GitHub/GitLab repository, then use <strong>Sync</strong> whenever its remote HEAD changes.</div>
+            <div><strong class="block text-ink-strong">1. Acquire or sync</strong>Open <a class="text-emerald-300 hover:text-emerald-200" href="/admin#admin-repositories">Admin → Repositories</a>. Approve a GitHub/GitLab repository, then use <strong>Sync</strong> whenever its remote HEAD changes.</div>
             <div><strong class="block text-ink-strong">2. Wait for the pinned scan</strong>A successful clone/fetch queues normal indexing. This workspace reads the verified commit only; it never queries a remote worktree directly.</div>
             <div><strong class="block text-ink-strong">3. Scope Maven declarations</strong>Select the repository and <strong>Maven</strong>. RepoKarta extracts <code>group:artifact</code> coordinates from committed Maven and Gradle files.</div>
             <div><strong class="block text-ink-strong">4. Check Maven Central</strong>Choose <strong>Refresh stale package versions</strong>. Matching public coordinates go to <code>search.maven.org</code>; cached results then show the source registry and observation time per row.</div>
@@ -300,9 +300,9 @@
       <p class="text-xs uppercase tracking-[0.16em] text-ink-faint">Depth {{.Depth}} neighborhood</p>
       <p class="mt-1 text-sm text-ink-soft">
         <strong class="text-sky-200">{{.InboundConnectionCount}} inbound</strong>
-        <span class="mx-2 text-ink-faint">â†’</span>
+        <span class="mx-2 text-ink-faint">→</span>
         selected component
-        <span class="mx-2 text-ink-faint">â†’</span>
+        <span class="mx-2 text-ink-faint">→</span>
         <strong class="text-emerald-200">{{.OutboundConnectionCount}} outbound</strong>
       </p>
     </div>
@@ -347,11 +347,11 @@
       {{range .PossibleInboundUnresolved}}
       <li>
         <strong class="text-ink-strong">{{.SourceName}}</strong>
-        <span class="mx-2 text-fuchsia-200">possibly calls â†’</span>
+        <span class="mx-2 text-fuchsia-200">possibly calls →</span>
         <strong class="text-ink-strong">{{.Candidate}}</strong>
         <span class="ml-2 rounded-full border border-amber-300/20 px-2 py-1 text-xs text-amber-100">{{.Reason}}</span>
-        <span class="mt-1 block text-xs text-ink-faint">Variable {{.Variable}} Â· not counted as a confirmed edge</span>
-        {{range .Evidence}}<a class="mr-3 text-xs text-fuchsia-200 hover:text-fuchsia-100" href="{{.URL}}">{{.Repository}} Â· {{.Path}}:{{.Line}}</a>{{end}}
+        <span class="mt-1 block text-xs text-ink-faint">Variable {{.Variable}} · not counted as a confirmed edge</span>
+        {{range .Evidence}}<a class="mr-3 text-xs text-fuchsia-200 hover:text-fuchsia-100" href="{{.URL}}">{{.Repository}} · {{.Path}}:{{.Line}}</a>{{end}}
       </li>
       {{end}}
     </ul>
@@ -391,7 +391,7 @@
         <div>
           <p class="text-xs uppercase tracking-[0.16em] text-ink-faint">Directed component graph</p>
           <h2 id="topology-graph-heading" class="mt-1 font-semibold text-white">
-            {{if .Topology.Neighborhood}}Inbound callers â†’ selected component â†’ outbound dependencies{{else}}Who talks to what, and how{{end}}
+            {{if .Topology.Neighborhood}}Inbound callers → selected component → outbound dependencies{{else}}Who talks to what, and how{{end}}
           </h2>
         </div>
         <div class="flex flex-wrap gap-2">
