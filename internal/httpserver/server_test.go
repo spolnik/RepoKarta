@@ -333,6 +333,7 @@ func TestAdministratorCanPreviewCleanupAndExportDiagnostics(t *testing.T) {
 		"repository_id": {"7"},
 		"owner_id":      {"saml:owner"},
 		"visibility":    {"private"},
+		"code_enabled":  {"enabled"},
 		"users":         {"saml:alice"},
 		"groups":        {"engineering"},
 	}
@@ -343,6 +344,7 @@ func TestAdministratorCanPreviewCleanupAndExportDiagnostics(t *testing.T) {
 	server.server.Handler.ServeHTTP(response, request)
 	if response.Code != http.StatusOK ||
 		accessStore.policies[0].OwnerID != "saml:owner" ||
+		!accessStore.policies[0].CodeEnabled ||
 		len(accessStore.policies[0].Groups) != 1 {
 		t.Fatalf("repository access response = %d, policy = %#v", response.Code, accessStore.policies)
 	}
@@ -610,8 +612,8 @@ func TestEnterpriseAdministrationAPILifecycle(t *testing.T) {
 		!strings.Contains(response.Body.String(), "Developers") {
 		t.Fatalf("identities = %d: %s", response.Code, response.Body.String())
 	}
-	response = request(http.MethodPatch, "/api/admin/identities/"+user.ID+"/role", `{"role":"knowledge-maintainer"}`)
-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "knowledge-maintainer") {
+	response = request(http.MethodPatch, "/api/admin/identities/"+user.ID+"/role", `{"role":"developer"}`)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "developer") {
 		t.Fatalf("user role = %d: %s", response.Code, response.Body.String())
 	}
 	response = request(http.MethodPatch, "/api/admin/groups/"+group.ID+"/role", `{"role":"administrator"}`)
@@ -739,7 +741,7 @@ func TestBootstrapAdministratorFormLifecycle(t *testing.T) {
 		values   url.Values
 		contains string
 	}{
-		{"/admin/identities/role", url.Values{"user_id": {user.ID}, "role": {"knowledge-maintainer"}}, "User role saved"},
+		{"/admin/identities/role", url.Values{"user_id": {user.ID}, "role": {"developer"}}, "User role saved"},
 		{"/admin/groups/role", url.Values{"group_id": {group.ID}, "role": {"administrator"}}, "SCIM group role saved"},
 		{"/admin/role-mappings", url.Values{"provider": {"saml"}, "group": {"operators"}, "role": {"administrator"}}, "group mapping saved"},
 		{"/admin/audit/retention", url.Values{"days": {"14"}, "max_events": {"5000"}}, "Audit retention saved"},

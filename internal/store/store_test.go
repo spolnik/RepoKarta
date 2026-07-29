@@ -14,6 +14,7 @@ import (
 	"github.com/spolnik/RepoKarta/internal/access"
 	"github.com/spolnik/RepoKarta/internal/agent"
 	"github.com/spolnik/RepoKarta/internal/catalog"
+	"github.com/spolnik/RepoKarta/internal/codework"
 	"github.com/spolnik/RepoKarta/internal/contextscope"
 	_ "modernc.org/sqlite"
 )
@@ -33,6 +34,7 @@ func TestConversationTranscriptPersistsAcrossDatabaseReopen(t *testing.T) {
 		Provider: "anthropic-api",
 		Model:    "claude-sonnet-5",
 		Mode:     "deep_search",
+		Code:     true,
 		Author: agent.ConversationAuthor{
 			ID:       "saml:alice",
 			Name:     "Alice Example",
@@ -114,7 +116,7 @@ func TestConversationTranscriptPersistsAcrossDatabaseReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Title != conversation.Title || got.Mode != "deep_search" ||
+	if got.Title != conversation.Title || got.Mode != "deep_search" || !got.Code ||
 		got.ResumeCursor != "opaque-provider-cursor" ||
 		!reflect.DeepEqual(got.Author, conversation.Author) {
 		t.Fatalf("conversation metadata = %#v", got)
@@ -332,6 +334,7 @@ func TestRepositoryAccessDefaultsPrivateAndSupportsUserGroupAndSharedScopes(t *t
 		RepositoryID: repositoryID,
 		OwnerID:      "saml:owner",
 		Visibility:   access.VisibilityPrivate,
+		CodeEnabled:  true,
 		Users:        []string{"saml:alice"},
 		Groups:       []string{"engineering"},
 	}); err != nil {
@@ -339,6 +342,9 @@ func TestRepositoryAccessDefaultsPrivateAndSupportsUserGroupAndSharedScopes(t *t
 	}
 	if repositories, err := storage.ListRepositories(alice); err != nil || len(repositories) != 1 {
 		t.Fatalf("user grant visibility = %#v, error = %v", repositories, err)
+	}
+	if enabled, err := storage.RepositoryCodingEnabled(alice, repositoryID); err != nil || !enabled {
+		t.Fatalf("repository coding policy = %v, error = %v", enabled, err)
 	}
 	bob := access.WithViewer(ctx, access.Viewer{ID: "saml:bob", Groups: []string{"engineering"}})
 	if repositories, err := storage.ListRepositories(bob); err != nil || len(repositories) != 1 {
@@ -361,6 +367,79 @@ func TestRepositoryAccessDefaultsPrivateAndSupportsUserGroupAndSharedScopes(t *t
 	admin := access.WithViewer(ctx, access.Viewer{ID: "local:admin", Admin: true})
 	if repositories, err := storage.ListRepositories(admin); err != nil || len(repositories) != 1 {
 		t.Fatalf("administrator visibility = %#v, error = %v", repositories, err)
+	}
+}
+
+func TestCodeWorkspaceMetadataAndApprovalsAreDurable(t *testing.T) {
+	storage, err := Open(filepath.Join(t.TempDir(), "repokarta.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer storage.Close()
+	ctx := context.Background()
+	if err := storage.SyncRepositories(ctx, []catalog.Repository{{
+		Name: "code-repo", Path: filepath.Join(t.TempDir(), "code-repo"),
+		ScanState: "ready", DiscoveredAt: time.Now(),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	repositories, err := storage.ListRepositories(ctx)
+	if err != nil || len(repositories) != 1 {
+		t.Fatalf("repositories = %#v, error = %v", repositories, err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	session := codework.Session{
+		ID: "code-0123456789abcdef", RepositoryID: repositories[0].ID,
+		Repository: "code-repo", AuthorID: "saml:developer", Provider: "codex",
+		Model: "gpt-5.6-sol", Baseline: strings.Repeat("a", 40),
+		Branch: "repokarta/code/code-0123456789abcdef", State: codework.StateReady,
+		Version: 1, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := storage.CreateCodeSession(ctx, session); err != nil {
+		t.Fatal(err)
+	}
+	action, err := storage.AppendCodeAction(ctx, codework.Action{
+		SessionID: session.ID, Kind: "fileChange", Status: "completed",
+		Summary: "one file changed", CreatedAt: now,
+	})
+	if err != nil || action.ID <= 0 {
+		t.Fatalf("action = %#v, error = %v", action, err)
+	}
+	approval := codework.Approval{
+		ID: "approval-1", SessionID: session.ID, Kind: "command",
+		Reason: "run focused tests", Command: "go test ./internal/codework",
+		Directory: "internal/codework", Status: "pending", RequestedAt: now,
+	}
+	if err := storage.CreateCodeApproval(ctx, approval); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := storage.CodeSession(ctx, session.ID)
+	if err != nil || loaded.Baseline != session.Baseline || loaded.AuthorID != session.AuthorID {
+		t.Fatalf("session = %#v, error = %v", loaded, err)
+	}
+	approvals, err := storage.CodeApprovals(ctx, session.ID)
+	if err != nil || len(approvals) != 1 || approvals[0].Directory != approval.Directory {
+		t.Fatalf("approvals = %#v, error = %v", approvals, err)
+	}
+	if err := storage.ResolveCodeApproval(ctx, approval.ID, "resolved", "accept", now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := storage.CodeApproval(ctx, approval.ID)
+	if err != nil || resolved.Status != "resolved" || resolved.Decision != "accept" {
+		t.Fatalf("resolved approval = %#v, error = %v", resolved, err)
+	}
+	loaded.State = codework.StateRunning
+	loaded.Version++
+	if err := storage.UpdateCodeSession(ctx, loaded); err != nil {
+		t.Fatal(err)
+	}
+	if recovered, err := storage.RecoverActiveCodeSessions(ctx, now.Add(2*time.Second)); err != nil || recovered != 1 {
+		t.Fatalf("recovered sessions = %d, error = %v", recovered, err)
+	}
+	loaded, err = storage.CodeSession(ctx, session.ID)
+	if err != nil || loaded.State != codework.StateInterrupted ||
+		!strings.Contains(loaded.Error, "restarted") {
+		t.Fatalf("recovered session = %#v, error = %v", loaded, err)
 	}
 }
 

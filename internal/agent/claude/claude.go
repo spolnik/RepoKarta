@@ -33,6 +33,14 @@ Every material code claim must cite the source_url returned by a RepoKarta tool.
 Never use shell commands, direct filesystem access beyond exact supplied image attachment paths, network search, or code mutation.
 If the indexed evidence is insufficient, say so plainly.`
 
+const codingInstructions = `You are RepoKarta's coding agent.
+Work only inside the isolated Code worktree supplied as your current directory.
+Use RepoKarta's read-only MCP tools for commit-pinned fleet evidence and the worktree filesystem for the requested change.
+Make the smallest complete change, preserve unrelated work, and leave a reviewable Git diff.
+Do not access paths outside the worktree. Do not fetch, pull, push, publish, open pull requests, or change remotes.
+Shell and network tools are disabled in this profile; report validation commands the user should approve separately.
+Explain what changed and any remaining validation gap.`
+
 const (
 	defaultModel  = "claude-opus-5"
 	defaultEffort = "medium"
@@ -76,6 +84,7 @@ func (a *Adapter) probeStatus(ctx context.Context) agent.Status {
 		ImageOutput:  false,
 		Interrupt:    true,
 		ContextUsage: true,
+		Code:         true,
 	}
 	command, err := localcommand.Resolve(a.Command, "claude")
 	if err != nil {
@@ -139,9 +148,12 @@ func (a *Adapter) Start(ctx context.Context, config agent.SessionConfig) (agent.
 		_ = attachments.Close()
 		return nil, fmt.Errorf("write Claude MCP configuration: %w", err)
 	}
-	arguments := commandArguments(config, mcpConfigPath, attachments.Directory())
+	arguments := commandArgumentsForMode(config, mcpConfigPath, attachments.Directory())
 
 	process := newCommand(context.WithoutCancel(ctx), command, arguments, attachments.Directory())
+	if config.Coding {
+		process.Dir = config.RepositoryRoot
+	}
 	processgroup.Configure(process)
 	// Run from the attachment sandbox rather than a repository or user project
 	// directory. Only user settings are loaded, so operational env, hooks, and
@@ -184,12 +196,17 @@ func (a *Adapter) Start(ctx context.Context, config agent.SessionConfig) (agent.
 		pending:      make(map[string]chan controlResponse),
 		sessionID:    strings.TrimSpace(config.ResumeCursor),
 		restored:     strings.TrimSpace(config.ResumeCursor) != "",
+		coding:       config.Coding,
 	}
 	go s.read(stdout)
 	return s, nil
 }
 
 func commandArguments(config agent.SessionConfig, mcpConfigPath, attachmentDirectory string) []string {
+	return commandArgumentsForMode(config, mcpConfigPath, attachmentDirectory)
+}
+
+func commandArgumentsForMode(config agent.SessionConfig, mcpConfigPath, attachmentDirectory string) []string {
 	arguments := []string{
 		"-p",
 		"--input-format", "stream-json",
@@ -204,6 +221,24 @@ func commandArguments(config agent.SessionConfig, mcpConfigPath, attachmentDirec
 		"--permission-mode", "plan",
 		"--disallowed-tools", "Bash", "Edit", "Write", "NotebookEdit", "Glob", "Grep", "Task", "Agent", "WebFetch", "WebSearch",
 		"--system-prompt", providerInstructions,
+	}
+	if config.Coding {
+		arguments = []string{
+			"-p",
+			"--input-format", "stream-json",
+			"--output-format", "stream-json",
+			"--include-partial-messages",
+			"--verbose",
+			"--strict-mcp-config",
+			"--mcp-config", mcpConfigPath,
+			"--setting-sources", "user",
+			"--settings", "{}",
+			"--exclude-dynamic-system-prompt-sections",
+			"--permission-mode", "acceptEdits",
+			"--disallowed-tools", "Bash", "NotebookEdit", "Task", "Agent", "WebFetch", "WebSearch",
+			"--allowed-tools", "Read", "Edit", "Write", "Glob", "Grep", "mcp__repokarta__*",
+			"--system-prompt", codingInstructions,
+		}
 	}
 	if attachmentDirectory != "" {
 		arguments = append(arguments, "--add-dir", attachmentDirectory)
@@ -265,6 +300,7 @@ type session struct {
 	cursorMu     sync.RWMutex
 	sessionID    string
 	restored     bool
+	coding       bool
 	closeOnce    sync.Once
 }
 
@@ -303,6 +339,7 @@ func (s *session) Send(ctx context.Context, turn agent.Turn, emit func(agent.Eve
 
 	emittedText := false
 	textSegments := make(map[int]string)
+	toolSegments := make(map[int]agent.CodeAction)
 	segmentSequence := 0
 	nextTextSegment := func(index int) string {
 		segmentSequence++
@@ -349,7 +386,10 @@ func (s *session) Send(ctx context.Context, turn agent.Turn, emit func(agent.Eve
 					Type         string `json:"type"`
 					Index        int    `json:"index"`
 					ContentBlock struct {
-						Type string `json:"type"`
+						Type  string          `json:"type"`
+						ID    string          `json:"id"`
+						Name  string          `json:"name"`
+						Input json.RawMessage `json:"input"`
 					} `json:"content_block"`
 					Delta struct {
 						Type string `json:"type"`
@@ -361,6 +401,18 @@ func (s *session) Send(ctx context.Context, turn agent.Turn, emit func(agent.Eve
 				}
 				if event.Type == "content_block_start" && event.ContentBlock.Type == "text" {
 					nextTextSegment(event.Index)
+				} else if event.Type == "content_block_start" &&
+					event.ContentBlock.Type == "tool_use" && s.coding {
+					action := agent.CodeAction{
+						ID: event.ContentBlock.ID, Kind: event.ContentBlock.Name,
+						Status: "running", Summary: boundedToolInput(event.ContentBlock.Input),
+					}
+					toolSegments[event.Index] = action
+					if err := emit(agent.Event{
+						Type: agent.EventCodeAction, CodeAction: &action,
+					}); err != nil {
+						return err
+					}
 				} else if event.Type == "content_block_delta" &&
 					event.Delta.Type == "text_delta" && event.Delta.Text != "" {
 					emittedText = true
@@ -376,6 +428,15 @@ func (s *session) Send(ctx context.Context, turn agent.Turn, emit func(agent.Eve
 						return err
 					}
 				} else if event.Type == "content_block_stop" {
+					if action, ok := toolSegments[event.Index]; ok {
+						delete(toolSegments, event.Index)
+						action.Status = "completed"
+						if err := emit(agent.Event{
+							Type: agent.EventCodeAction, CodeAction: &action,
+						}); err != nil {
+							return err
+						}
+					}
 					if segmentID := textSegments[event.Index]; segmentID != "" {
 						delete(textSegments, event.Index)
 						if err := emit(agent.Event{
@@ -431,6 +492,15 @@ func (s *session) Send(ctx context.Context, turn agent.Turn, emit func(agent.Eve
 			}
 		}
 	}
+}
+
+func boundedToolInput(raw json.RawMessage) string {
+	value := strings.TrimSpace(string(raw))
+	const maximum = 2048
+	if len(value) > maximum {
+		return value[:maximum]
+	}
+	return value
 }
 
 func (s *session) ResumeCursor() string {

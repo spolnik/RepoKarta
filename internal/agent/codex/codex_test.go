@@ -196,6 +196,43 @@ func TestCommandArgumentsDenyFilesystemOutsideAttachments(t *testing.T) {
 	}
 }
 
+func TestCodingModeUsesWorkspaceWriteWithoutNetwork(t *testing.T) {
+	workspace := t.TempDir()
+	arguments := codexCommandArguments(agent.SessionConfig{
+		Coding:         true,
+		RepositoryRoot: workspace,
+		MCPURL:         "http://127.0.0.1:7331/mcp",
+		MCPToken:       "must-not-appear",
+	}, t.TempDir())
+	joined := strings.Join(arguments, "\n")
+	for _, expected := range []string{
+		`approval_policy="on-request"`,
+		`sandbox_mode="workspace-write"`,
+		`sandbox_workspace_write.network_access=false`,
+	} {
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("coding arguments omit %q:\n%s", expected, joined)
+		}
+	}
+	params := (&session{
+		threadID: "thread-1", effort: "high", coding: true, workspaceRoot: workspace,
+	}).turnStartParams(agent.Turn{Message: "change it"}, nil)
+	if params["cwd"] != workspace || params["approvalPolicy"] != "on-request" {
+		t.Fatalf("unexpected coding turn params: %#v", params)
+	}
+	policy, ok := params["sandboxPolicy"].(map[string]any)
+	if !ok || policy["type"] != "workspaceWrite" || policy["networkAccess"] != false {
+		t.Fatalf("unexpected coding sandbox policy: %#v", params["sandboxPolicy"])
+	}
+	roots, ok := policy["writableRoots"].([]string)
+	if !ok || len(roots) != 1 || roots[0] != workspace {
+		t.Fatalf("coding writable roots = %#v, want only %q", policy["writableRoots"], workspace)
+	}
+	if strings.Contains(joined, "must-not-appear") {
+		t.Fatalf("MCP token leaked into Codex coding argv:\n%s", joined)
+	}
+}
+
 func TestAdapterFallsBackFromExpiredResumeCursor(t *testing.T) {
 	adapter := testCodexAdapter(t, "resume-fallback")
 	started, err := adapter.Start(context.Background(), agent.SessionConfig{

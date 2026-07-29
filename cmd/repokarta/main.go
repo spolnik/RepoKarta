@@ -21,7 +21,7 @@ import (
 	"github.com/spolnik/RepoKarta/internal/telemetry"
 )
 
-var version = "0.99.0-dev"
+var version = "0.100.0-dev"
 
 type stringList []string
 

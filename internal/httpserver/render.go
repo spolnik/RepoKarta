@@ -421,6 +421,8 @@ func (s *Server) pageData(ctx context.Context) (pageData, error) {
 		DependenciesEnabled: s.maps != nil,
 		MCPEnabled:          s.config.MCPHandler != nil,
 		InsightsEnabled:     s.insights != nil,
+		CodeEnabled:         s.code != nil && s.agents != nil,
+		CanCode:             s.code != nil && s.agents != nil,
 		CanManageArtifacts:  s.security == nil,
 		Search: searchData{
 			Query: search.Query{Limit: codeintel.DefaultSearchLimit},
@@ -436,6 +438,8 @@ func (s *Server) pageData(ctx context.Context) (pageData, error) {
 		if principal, ok := security.PrincipalFromContext(ctx); ok {
 			data.CanAdminister = principal.Admin
 			data.CanManageArtifacts = identity.Allows(principal.Role, identity.PermissionManageArtifacts)
+			data.CanCode = identity.Allows(principal.Role, identity.PermissionWriteRepositories)
+			data.CodeEnabled = data.CodeEnabled && data.CanCode
 			data.UserLabel = principal.Name
 			if data.UserLabel == "" {
 				data.UserLabel = principal.Email

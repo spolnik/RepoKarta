@@ -4,6 +4,7 @@ package apicontract
 
 import (
 	"github.com/spolnik/RepoKarta/internal/agent"
+	"github.com/spolnik/RepoKarta/internal/codework"
 	"github.com/spolnik/RepoKarta/internal/dependencies"
 	"github.com/spolnik/RepoKarta/internal/docs"
 	"github.com/spolnik/RepoKarta/internal/graph"
@@ -29,6 +30,24 @@ type ProviderStatusesResponse struct {
 }
 
 type ConversationEvent = agent.Event
+type CodeSession = codework.Session
+type CodeAction = codework.Action
+type CodeApproval = codework.Approval
+type CodeDiff = codework.Diff
+type CodeFile = codework.File
+
+type CodeSessionsResponse struct {
+	Sessions []codework.Session `json:"sessions"`
+}
+
+type CodeSessionDetailResponse struct {
+	Session      codework.Session    `json:"session"`
+	Conversation *agent.Conversation `json:"conversation,omitempty"`
+	Actions      []codework.Action   `json:"actions"`
+	Approvals    []codework.Approval `json:"approvals"`
+	Diff         *codework.Diff      `json:"diff,omitempty"`
+}
+
 type ArtifactProgress = graph.ArtifactProgress
 type DependencyRefreshProgress = dependencies.RefreshProgress
 type WikiSite = docs.Site

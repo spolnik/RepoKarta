@@ -63,6 +63,26 @@ func TestCommandArgumentsUseOpusMediumByDefault(t *testing.T) {
 	}
 }
 
+func TestCodingArgumentsAllowEditsButDenyShellAndWeb(t *testing.T) {
+	arguments := commandArguments(agent.SessionConfig{
+		Coding: true, Model: "claude-opus-5", Effort: "high",
+	}, `/tmp/mcp.json`, "")
+	joined := strings.Join(arguments, " ")
+	if !containsPair(arguments, "--permission-mode", "acceptEdits") {
+		t.Fatalf("coding mode does not accept file edits: %#v", arguments)
+	}
+	for _, expected := range []string{"Read", "Edit", "Write", "Glob", "Grep", "mcp__repokarta__*"} {
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("coding allowed tools omit %q: %#v", expected, arguments)
+		}
+	}
+	for _, blocked := range []string{"Bash", "NotebookEdit", "WebFetch", "WebSearch"} {
+		if !strings.Contains(joined, blocked) {
+			t.Fatalf("coding disallowed tools omit %q: %#v", blocked, arguments)
+		}
+	}
+}
+
 func TestCommandInheritsParentEnvironmentFromNeutralDirectory(t *testing.T) {
 	directory := t.TempDir()
 	command := newCommand(t.Context(), "claude", []string{"--version"}, directory)

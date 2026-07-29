@@ -309,7 +309,7 @@ team deployment, RepoKarta also supports:
 
 - Cloudflare Access JWT or native SAML authentication;
 - deny-by-default repository access for users and identity-provider groups;
-- reader, knowledge-maintainer, and administrator roles;
+- reader, knowledge-maintainer, developer, and administrator roles;
 - SCIM 2.0 provisioning and deprovisioning;
 - redacted audit evidence and bounded exports; and
 - administrator-approved GitHub, GitLab, and local repository acquisition.
@@ -317,6 +317,14 @@ team deployment, RepoKarta also supports:
 Conversation transcripts are owner-only on shared instances, including for
 administrators. Wiki generation and administrative mutations retain the
 authenticated principal in redacted audit evidence.
+The developer role can use the **Code** tab only for repositories where an
+administrator explicitly enables isolated Code worktrees. Codex or Claude Code
+then works in a RepoKarta-owned exact-commit shadow worktree; the registered
+checkout remains unchanged. The browser provides the agent conversation,
+visible actions and approvals, Git-derived diffs, file previews, per-file
+discard, and finish/discard controls, not a text editor or terminal. See
+[`CODE_SCOPE.md`](./CODE_SCOPE.md) for the complete security and lifecycle
+boundary.
 The administrator console also has a **Deep Wiki** workspace for selecting
 multiple repositories and running the standard quality pipeline sequentially.
 Each repository reports success or failure independently, failures do not stop

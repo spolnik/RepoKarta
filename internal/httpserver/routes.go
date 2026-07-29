@@ -83,6 +83,7 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 		dependencies:          config.Dependencies,
 		scipJava:              config.SCIPJava,
 		telemetry:             config.Telemetry,
+		code:                  config.Code,
 	}
 	server.history, _ = config.Conversations.(ConversationHistoryService)
 
@@ -94,6 +95,44 @@ func New(config Config, intelligence *codeintel.Service, refresher CatalogueRefr
 		identity.PermissionAcquireRepositories, "repository.refresh", "repository-catalogue", server.refreshRepositories,
 	))
 	mux.HandleFunc("GET /search", server.search)
+	if server.code != nil && server.agents != nil {
+		mux.HandleFunc("GET /code", server.controlled(
+			identity.PermissionWriteRepositories, "code.page.read", "code-session", server.codePage,
+		))
+		mux.HandleFunc("GET /api/code/sessions", server.controlled(
+			identity.PermissionWriteRepositories, "code.session.list", "code-session", server.codeSessions,
+		))
+		mux.HandleFunc("POST /api/code/sessions", server.controlled(
+			identity.PermissionWriteRepositories, "code.session.create", "code-session", server.createCodeSession,
+		))
+		mux.HandleFunc("GET /api/code/sessions/{sessionID}", server.controlled(
+			identity.PermissionWriteRepositories, "code.session.read", "code-session", server.codeSession,
+		))
+		mux.HandleFunc("DELETE /api/code/sessions/{sessionID}", server.controlled(
+			identity.PermissionWriteRepositories, "code.session.discard", "code-session", server.discardCodeSession,
+		))
+		mux.HandleFunc("POST /api/code/sessions/{sessionID}/turns", server.controlled(
+			identity.PermissionWriteRepositories, "code.turn", "code-session", server.codeTurn,
+		))
+		mux.HandleFunc("POST /api/code/sessions/{sessionID}/interrupt", server.controlled(
+			identity.PermissionWriteRepositories, "code.interrupt", "code-session", server.interruptCodeTurn,
+		))
+		mux.HandleFunc("GET /api/code/sessions/{sessionID}/diff", server.controlled(
+			identity.PermissionWriteRepositories, "code.diff.read", "code-session", server.codeDiff,
+		))
+		mux.HandleFunc("GET /api/code/sessions/{sessionID}/file", server.controlled(
+			identity.PermissionWriteRepositories, "code.file.read", "code-session", server.codeFile,
+		))
+		mux.HandleFunc("POST /api/code/sessions/{sessionID}/files/discard", server.controlled(
+			identity.PermissionWriteRepositories, "code.file.discard", "code-session", server.discardCodeFile,
+		))
+		mux.HandleFunc("POST /api/code/sessions/{sessionID}/approvals/{approvalID}", server.controlled(
+			identity.PermissionWriteRepositories, "code.approval.resolve", "code-session", server.resolveCodeApproval,
+		))
+		mux.HandleFunc("POST /api/code/sessions/{sessionID}/finish", server.controlled(
+			identity.PermissionWriteRepositories, "code.finish", "code-session", server.finishCodeSession,
+		))
+	}
 	mux.HandleFunc("GET /contexts", server.contextPage)
 	mux.HandleFunc("GET /contexts/{contextID}", server.namedContextPage)
 	mux.HandleFunc("GET /projects/{repositoryID}", server.project)

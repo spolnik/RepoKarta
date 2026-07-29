@@ -19,6 +19,7 @@ import (
 	"github.com/spolnik/RepoKarta/internal/agent/claude"
 	"github.com/spolnik/RepoKarta/internal/agent/codex"
 	"github.com/spolnik/RepoKarta/internal/codeintel"
+	"github.com/spolnik/RepoKarta/internal/codework"
 	"github.com/spolnik/RepoKarta/internal/dependencies"
 	"github.com/spolnik/RepoKarta/internal/docs"
 	"github.com/spolnik/RepoKarta/internal/evidencesearch"
@@ -194,6 +195,21 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 	defer database.Close()
+	codeWorktrees, err := codework.NewManager(codework.Config{
+		DataDirectory: cfg.DataDirectory,
+	}, database)
+	if err != nil {
+		return fmt.Errorf("initialize Code worktrees: %w", err)
+	}
+	codeSessions, err := codework.NewService(codeWorktrees, database)
+	if err != nil {
+		return fmt.Errorf("initialize Code sessions: %w", err)
+	}
+	if recovered, err := codeSessions.RecoverActive(ctx); err != nil {
+		return fmt.Errorf("recover interrupted Code sessions: %w", err)
+	} else if recovered > 0 {
+		slog.Info("recovered interrupted Code sessions", "sessions", recovered)
+	}
 
 	securityManager, err := security.New(ctx, database, security.Config{
 		Address:       cfg.ListenAddress,
@@ -445,6 +461,7 @@ func Run(ctx context.Context, cfg Config) error {
 		Dependencies: dependencyRegistry,
 		SCIPJava:     javaSCIP,
 		Telemetry:    observability,
+		Code:         codeSessions,
 	}, intelligence, coordinator)
 	if err != nil {
 		return err

@@ -171,7 +171,10 @@
       {{end}}
       {{if .ChatEnabled}}
       <a href="/chat" class="app-nav-link{{if eq .ActivePage "chat"}} app-nav-link-active{{end}}" {{if eq .ActivePage "chat"}}aria-current="page"{{end}}>Chat</a>
-      {{if ne .ActivePage "chat"}}<button class="app-nav-link contextual-chat-trigger" type="button" data-contextual-chat-open data-contextual-chat-mode="{{.ActivePage}}">Ask this view</button>{{end}}
+      {{if and (ne .ActivePage "chat") (ne .ActivePage "code")}}<button class="app-nav-link contextual-chat-trigger" type="button" data-contextual-chat-open data-contextual-chat-mode="{{.ActivePage}}">Ask this view</button>{{end}}
+      {{end}}
+      {{if and .CodeEnabled .CanCode}}
+      <a href="/code" class="app-nav-link{{if eq .ActivePage "code"}} app-nav-link-active{{end}}" {{if eq .ActivePage "code"}}aria-current="page"{{end}}>Code</a>
       {{end}}
       {{if .MCPEnabled}}
       <a href="/mcp/setup" class="app-nav-link{{if eq .ActivePage "mcp"}} app-nav-link-active{{end}}" {{if eq .ActivePage "mcp"}}aria-current="page"{{end}}>MCP</a>
@@ -189,7 +192,7 @@
     </div>
   </div>
 </header>
-{{if and .ChatEnabled (ne .ActivePage "chat")}}{{template "contextual-chat-dialog" .}}{{end}}
+{{if and .ChatEnabled (ne .ActivePage "chat") (ne .ActivePage "code")}}{{template "contextual-chat-dialog" .}}{{end}}
 {{end}}
 
 {{define "contextual-chat-dialog"}}

@@ -45,6 +45,9 @@ import { createRepositoryPicker } from "./repository-picker.mjs";
 import { safeHTTPURL, setSafeHTTPLink } from "./safe-link.mjs";
 import type {
   ConversationEvent as GeneratedConversationEvent,
+  CodeDiffResponse,
+  CodeSessionDetailResponse,
+  CodeSessionResponse,
   ProviderStatusesResponse,
   WikiPageResponse,
   WikiSiteResponse
@@ -7709,6 +7712,513 @@ function enableAdminWikiBatch(): void {
   syncAction();
 }
 
+type CodeSessionView = CodeSessionResponse;
+type CodeActionView = {
+  id?: number | string;
+  session_id?: string;
+  kind: string;
+  status: string;
+  summary?: string;
+  command?: string;
+  output?: string;
+};
+
+type CodeApprovalView = {
+  id: string;
+  session_id?: string;
+  kind: string;
+  reason?: string;
+  command?: string;
+  directory?: string;
+  status: string;
+  decision?: string;
+};
+
+type CodeDiffView = CodeDiffResponse;
+
+type CodeConversationView = {
+  messages?: Array<{ role: string; text?: string; status?: string; error?: string }>;
+};
+
+type CodeSessionDetailView = CodeSessionDetailResponse;
+
+type CodeStreamEvent = {
+  type: string;
+  text?: string;
+  activity?: string;
+  code_action?: CodeActionView;
+  approval?: CodeApprovalView;
+};
+
+function enableCodeWorkspace(): void {
+  const root = document.querySelector<HTMLElement>("[data-code-workspace]");
+  if (!root) {
+    return;
+  }
+  const createForm = root.querySelector<HTMLFormElement>("[data-code-create]");
+  const newPanel = root.querySelector<HTMLElement>("[data-code-new-panel]")!;
+  const sessionPanel = root.querySelector<HTMLElement>("[data-code-session-panel]")!;
+  const sessionList = root.querySelector<HTMLOListElement>("[data-code-sessions]")!;
+  const sessionsEmpty = root.querySelector<HTMLElement>("[data-code-sessions-empty]")!;
+  const title = root.querySelector<HTMLElement>("[data-code-title]")!;
+  const status = root.querySelector<HTMLElement>("[data-code-status]")!;
+  const feedback = root.querySelector<HTMLElement>("[data-code-feedback]")!;
+  const messages = root.querySelector<HTMLElement>("[data-code-messages]")!;
+  const actions = root.querySelector<HTMLOListElement>("[data-code-actions]")!;
+  const actionCount = root.querySelector<HTMLElement>("[data-code-action-count]")!;
+  const approvals = root.querySelector<HTMLElement>("[data-code-approvals]")!;
+  const files = root.querySelector<HTMLElement>("[data-code-files]")!;
+  const patch = root.querySelector<HTMLElement>("[data-code-patch]")!;
+  const diffSummary = root.querySelector<HTMLElement>("[data-code-diff-summary]")!;
+  const fileToolbar = root.querySelector<HTMLElement>("[data-code-file-toolbar]")!;
+  const fileTitle = root.querySelector<HTMLElement>("[data-code-file-title]")!;
+  const discardFile = root.querySelector<HTMLButtonElement>("[data-code-discard-file]")!;
+  const newButton = root.querySelector<HTMLButtonElement>("[data-code-new]")!;
+  const refreshButton = root.querySelector<HTMLButtonElement>("[data-code-refresh]")!;
+  const interruptButton = root.querySelector<HTMLButtonElement>("[data-code-interrupt]")!;
+  const finishButton = root.querySelector<HTMLButtonElement>("[data-code-finish]")!;
+  const discardButton = root.querySelector<HTMLButtonElement>("[data-code-discard]")!;
+  const turnForm = root.querySelector<HTMLFormElement>("[data-code-turn]")!;
+  const turnInput = root.querySelector<HTMLTextAreaElement>("#code-message")!;
+  const turnSubmit = turnForm.querySelector<HTMLButtonElement>("button[type=submit]")!;
+
+  let activeSession: CodeSessionView | undefined;
+  let activeDiff: CodeDiffView | undefined;
+  let selectedFile = "";
+  let running = false;
+
+  const setFeedback = (message: string, error = false): void => {
+    feedback.textContent = message;
+    feedback.classList.toggle("text-red-200", error);
+  };
+
+  const terminalState = (state: string): boolean =>
+    ["finished", "discarded", "discarding", "finishing"].includes(state);
+
+  const renderControls = (): void => {
+    const editable = Boolean(activeSession && !terminalState(activeSession.state));
+    refreshButton.disabled = !activeSession || activeSession.state === "discarded";
+    interruptButton.disabled = !activeSession || activeSession.state !== "running";
+    finishButton.disabled = !editable || running;
+    discardButton.disabled = !editable || running;
+    turnInput.disabled = !editable || running;
+    turnSubmit.disabled = !editable || running;
+  };
+
+  const messageElement = (role: string, text: string): HTMLElement => {
+    const element = document.createElement("article");
+    element.className = "code-message";
+    element.dataset.role = role;
+    element.textContent = text;
+    return element;
+  };
+
+  const renderMessages = (conversation?: CodeConversationView): void => {
+    messages.replaceChildren();
+    for (const message of conversation?.messages ?? []) {
+      const text = message.text || message.error || message.status || "";
+      if (text) {
+        messages.append(messageElement(message.role, text));
+      }
+    }
+    if (!messages.childElementCount) {
+      messages.append(messageElement(
+        "assistant",
+        "Describe the outcome you want. The agent can inspect, edit, and verify only inside this isolated worktree."
+      ));
+    }
+    messages.scrollTop = messages.scrollHeight;
+  };
+
+  const renderActions = (items: CodeActionView[]): void => {
+    actions.replaceChildren();
+    for (const item of items) {
+      const row = document.createElement("li");
+      const detail = item.command || item.summary || item.output || item.kind;
+      row.textContent = `${item.status} · ${item.kind}${detail ? ` · ${detail}` : ""}`;
+      actions.append(row);
+    }
+    actionCount.textContent = String(items.length);
+  };
+
+  const resolveApproval = async (approval: CodeApprovalView, decision: string): Promise<void> => {
+    if (!activeSession) {
+      return;
+    }
+    const response = await fetch(
+      `/api/code/sessions/${encodeURIComponent(activeSession.id)}/approvals/${encodeURIComponent(approval.id)}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ decision })
+      }
+    );
+    if (!response.ok) {
+      throw new Error(await responseErrorMessage(response, "Approval could not be resolved."));
+    }
+  };
+
+  const renderApprovals = (items: CodeApprovalView[]): void => {
+    approvals.replaceChildren();
+    for (const approval of items.filter((candidate) => candidate.status === "pending")) {
+      const card = document.createElement("section");
+      card.className = "code-approval";
+      const description = document.createElement("p");
+      description.textContent = approval.reason || approval.command || `${approval.kind} approval requested`;
+      const controls = document.createElement("div");
+      for (const decision of ["accept", "decline"]) {
+        const button = document.createElement("button");
+        button.className = decision === "accept" ? "primary-button" : "secondary-button";
+        button.type = "button";
+        button.textContent = decision === "accept" ? "Approve once" : "Decline";
+        button.addEventListener("click", async () => {
+          button.disabled = true;
+          try {
+            await resolveApproval(approval, decision);
+            card.remove();
+            setFeedback(decision === "accept" ? "Approved once. The agent is continuing." : "Approval declined.");
+          } catch (approvalError: unknown) {
+            setFeedback(approvalError instanceof Error ? approvalError.message : String(approvalError), true);
+            button.disabled = false;
+          }
+        });
+        controls.append(button);
+      }
+      card.append(description, controls);
+      approvals.append(card);
+    }
+  };
+
+  const renderDiff = (value?: CodeDiffView): void => {
+    activeDiff = value;
+    selectedFile = "";
+    fileToolbar.hidden = true;
+    files.replaceChildren();
+    const changed = value?.files_changed ?? 0;
+    diffSummary.textContent = value
+      ? `${changed} file${changed === 1 ? "" : "s"} · +${value.insertions} −${value.deletions}`
+      : "No changes";
+    patch.textContent = value?.patch || "No workspace changes yet.";
+    if (value?.truncated) {
+      patch.textContent += "\n\n[Diff truncated at the configured response limit.]";
+    }
+    for (const file of value?.files ?? []) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = `${file.status} ${file.path}`;
+      button.addEventListener("click", async () => {
+        if (!activeSession) {
+          return;
+        }
+        files.querySelectorAll("button").forEach((candidate) => candidate.removeAttribute("aria-current"));
+        button.setAttribute("aria-current", "true");
+        selectedFile = file.path;
+        fileTitle.textContent = file.path;
+        fileToolbar.hidden = false;
+        try {
+          const response = await fetch(
+            `/api/code/sessions/${encodeURIComponent(activeSession.id)}/file?path=${encodeURIComponent(file.path)}`
+          );
+          if (!response.ok) {
+            throw new Error(await responseErrorMessage(response, "File preview could not be loaded."));
+          }
+          const preview = await response.json() as { content?: string; binary: boolean; truncated: boolean };
+          patch.textContent = preview.binary
+            ? "Binary file preview is unavailable."
+            : `${preview.content ?? ""}${preview.truncated ? "\n\n[Preview truncated.]" : ""}`;
+        } catch (previewError: unknown) {
+          setFeedback(previewError instanceof Error ? previewError.message : String(previewError), true);
+        }
+      });
+      files.append(button);
+    }
+  };
+
+  const markActiveSession = (id?: string): void => {
+    sessionList.querySelectorAll<HTMLButtonElement>("[data-code-session]").forEach((button) => {
+      button.setAttribute("aria-current", String(button.dataset.codeSession === id));
+    });
+  };
+
+  const loadSession = async (id: string): Promise<void> => {
+    setFeedback("Loading Code session…");
+    const response = await fetch(`/api/code/sessions/${encodeURIComponent(id)}`);
+    if (!response.ok) {
+      throw new Error(await responseErrorMessage(response, "Code session could not be loaded."));
+    }
+    const detail = await response.json() as CodeSessionDetailView;
+    activeSession = detail.session;
+    newPanel.hidden = true;
+    sessionPanel.hidden = false;
+    title.textContent = detail.session.repository;
+    status.textContent = `${detail.session.state} · ${detail.session.branch} · ${detail.session.baseline.slice(0, 12)}`;
+    if (detail.session.error) {
+      status.textContent += ` · ${detail.session.error}`;
+    }
+    renderMessages(detail.conversation ?? undefined);
+    renderActions(detail.actions ?? []);
+    renderApprovals(detail.approvals ?? []);
+    renderDiff(detail.diff ?? undefined);
+    markActiveSession(id);
+    renderControls();
+    setFeedback("");
+  };
+
+  const bindSessionButton = (button: HTMLButtonElement): void => {
+    button.addEventListener("click", () => {
+      const id = button.dataset.codeSession;
+      if (id) {
+        void loadSession(id).catch((loadError: unknown) =>
+          setFeedback(loadError instanceof Error ? loadError.message : String(loadError), true)
+        );
+      }
+    });
+  };
+  sessionList.querySelectorAll<HTMLButtonElement>("[data-code-session]").forEach(bindSessionButton);
+
+  const addSessionButton = (session: CodeSessionView): void => {
+    const row = document.createElement("li");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.dataset.codeSession = session.id;
+    button.dataset.codeState = session.state;
+    const name = document.createElement("strong");
+    name.textContent = session.repository;
+    const detail = document.createElement("span");
+    detail.textContent = `${session.state} · ${session.baseline.slice(0, 12)}`;
+    button.append(name, detail);
+    bindSessionButton(button);
+    row.append(button);
+    sessionList.prepend(row);
+    sessionsEmpty.hidden = true;
+  };
+
+  const showNew = (): void => {
+    activeSession = undefined;
+    activeDiff = undefined;
+    selectedFile = "";
+    newPanel.hidden = false;
+    sessionPanel.hidden = true;
+    title.textContent = "Start an isolated coding session";
+    status.textContent = "Choose a repository and provider. The baseline is pinned to its indexed commit.";
+    markActiveSession();
+    renderControls();
+    setFeedback("");
+  };
+  newButton.addEventListener("click", showNew);
+
+  if (createForm) {
+    const provider = createForm.elements.namedItem("provider") as HTMLSelectElement;
+    const model = createForm.elements.namedItem("model") as HTMLSelectElement;
+    const effort = createForm.elements.namedItem("effort") as HTMLSelectElement;
+    const modelOptions = Array.from(model.options);
+    const syncEfforts = (): void => {
+      effort.replaceChildren(new Option("Provider default", ""));
+      for (const candidate of (model.selectedOptions[0]?.dataset.efforts ?? "").split(",").filter(Boolean)) {
+        effort.add(new Option(candidate, candidate));
+      }
+    };
+    const syncModels = (): void => {
+      const matching = modelOptions.filter((option) => option.dataset.provider === provider.value);
+      model.replaceChildren(...matching);
+      model.value = matching[0]?.value ?? "";
+      syncEfforts();
+    };
+    provider.addEventListener("change", syncModels);
+    model.addEventListener("change", syncEfforts);
+    provider.value = Array.from(provider.options).find((option) => option.value === "codex")?.value
+      ?? provider.options[0]?.value
+      ?? "";
+    syncModels();
+    createForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const submit = createForm.querySelector<HTMLButtonElement>("button[type=submit]")!;
+      submit.disabled = true;
+      setFeedback("Creating isolated Git worktree…");
+      const form = new FormData(createForm);
+      try {
+        const response = await fetch("/api/code/sessions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            repository_id: Number.parseInt(String(form.get("repository_id")), 10),
+            provider: form.get("provider"),
+            model: form.get("model"),
+            effort: form.get("effort"),
+            baseline: form.get("baseline")
+          })
+        });
+        if (!response.ok) {
+          throw new Error(await responseErrorMessage(response, "Code session could not be created."));
+        }
+        const session = await response.json() as CodeSessionView;
+        addSessionButton(session);
+        await loadSession(session.id);
+      } catch (createError: unknown) {
+        setFeedback(createError instanceof Error ? createError.message : String(createError), true);
+      } finally {
+        submit.disabled = false;
+      }
+    });
+  }
+
+  refreshButton.addEventListener("click", () => {
+    if (activeSession) {
+      void loadSession(activeSession.id).catch((refreshError: unknown) =>
+        setFeedback(refreshError instanceof Error ? refreshError.message : String(refreshError), true)
+      );
+    }
+  });
+
+  turnForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const request = turnInput.value.trim();
+    if (!activeSession || !request || running) {
+      return;
+    }
+    running = true;
+    renderControls();
+    messages.append(messageElement("user", request));
+    const answer = messageElement("assistant", "");
+    messages.append(answer);
+    turnInput.value = "";
+    setFeedback("Agent is working in the isolated worktree…");
+    try {
+      const response = await fetch(`/api/code/sessions/${encodeURIComponent(activeSession.id)}/turns`, {
+        method: "POST",
+        headers: {
+          Accept: "application/x-ndjson",
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ message: request })
+      });
+      if (!response.ok) {
+        throw new Error(await responseErrorMessage(response, "Code turn failed."));
+      }
+      if (!response.body) {
+        throw new Error("Code turn returned an empty stream.");
+      }
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let pending = "";
+      for (;;) {
+        const { value, done } = await reader.read();
+        pending += decoder.decode(value, { stream: !done });
+        const lines = pending.split("\n");
+        pending = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.trim()) {
+            continue;
+          }
+          const message = JSON.parse(line) as CodeStreamEvent;
+          if (message.type === "delta" && message.text) {
+            answer.textContent += message.text;
+          } else if (message.type === "activity" && message.activity) {
+            setFeedback(message.activity);
+          } else if (message.type === "code_action" && message.code_action) {
+            renderActions([
+              ...Array.from(actions.children).map((row) => ({
+                kind: "event", status: "visible", summary: row.textContent ?? ""
+              })),
+              message.code_action
+            ]);
+          } else if (message.type === "approval" && message.approval) {
+            renderApprovals([message.approval]);
+          } else if (message.type === "error" && message.text) {
+            setFeedback(message.text, true);
+          }
+        }
+        if (done) {
+          break;
+        }
+      }
+    } catch (turnError: unknown) {
+      const text = turnError instanceof Error ? turnError.message : String(turnError);
+      answer.textContent = answer.textContent || text;
+      setFeedback(text, true);
+    } finally {
+      running = false;
+      if (activeSession) {
+        await loadSession(activeSession.id).catch((loadError: unknown) =>
+          setFeedback(loadError instanceof Error ? loadError.message : String(loadError), true)
+        );
+      }
+      renderControls();
+    }
+  });
+
+  interruptButton.addEventListener("click", async () => {
+    if (!activeSession) {
+      return;
+    }
+    const response = await fetch(`/api/code/sessions/${encodeURIComponent(activeSession.id)}/interrupt`, {
+      method: "POST"
+    });
+    if (!response.ok) {
+      setFeedback(await responseErrorMessage(response, "Code turn could not be interrupted."), true);
+      return;
+    }
+    setFeedback("Interrupt requested.");
+  });
+
+  discardFile.addEventListener("click", async () => {
+    if (!activeSession || !activeDiff || !selectedFile ||
+      !window.confirm(`Discard all workspace changes to ${selectedFile}?`)) {
+      return;
+    }
+    const response = await fetch(`/api/code/sessions/${encodeURIComponent(activeSession.id)}/files/discard`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: selectedFile, diff_version: activeDiff.version })
+    });
+    if (!response.ok) {
+      setFeedback(await responseErrorMessage(response, "File changes could not be discarded."), true);
+      return;
+    }
+    renderDiff(await response.json() as CodeDiffView);
+    setFeedback("File changes discarded.");
+  });
+
+  finishButton.addEventListener("click", async () => {
+    if (!activeSession || !activeDiff) {
+      return;
+    }
+    const commitMessage = window.prompt("Commit message for the isolated worktree:", "RepoKarta Code session changes");
+    if (commitMessage === null) {
+      return;
+    }
+    const response = await fetch(`/api/code/sessions/${encodeURIComponent(activeSession.id)}/finish`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: commitMessage, diff_version: activeDiff.version })
+    });
+    if (!response.ok) {
+      setFeedback(await responseErrorMessage(response, "Code session could not be finished."), true);
+      return;
+    }
+    await loadSession(activeSession.id);
+    setFeedback("Finished as an isolated local commit. The registered source checkout is unchanged.");
+  });
+
+  discardButton.addEventListener("click", async () => {
+    if (!activeSession || !window.confirm("Discard this entire Code session and its owned worktree?")) {
+      return;
+    }
+    const id = activeSession.id;
+    const response = await fetch(`/api/code/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
+    if (!response.ok) {
+      setFeedback(await responseErrorMessage(response, "Code session could not be discarded."), true);
+      return;
+    }
+    sessionList.querySelector(`[data-code-session="${CSS.escape(id)}"]`)?.closest("li")?.remove();
+    sessionsEmpty.hidden = Boolean(sessionList.children.length);
+    showNew();
+    setFeedback("Code worktree and session metadata discarded.");
+  });
+
+  renderControls();
+}
+
 connectIndexEvents();
 enableContextualChatLauncher();
 enableArtifactProgress();
@@ -7735,6 +8245,7 @@ enableRepositoryMaps(debugLogger);
 enableDependencyTopology(debugLogger);
 enableRepositoryWiki(debugLogger);
 enableAdminWikiBatch();
+enableCodeWorkspace();
 
 document.body.addEventListener("htmx:afterSwap", (event) => {
   const target = (event as CustomEvent<{ target?: ParentNode }>).detail?.target;

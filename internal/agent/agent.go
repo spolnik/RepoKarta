@@ -35,6 +35,8 @@ const (
 	EventInterrupted EventType = "interrupted"
 	EventUsage       EventType = "usage"
 	EventTrace       EventType = "trace"
+	EventCodeAction  EventType = "code_action"
+	EventApproval    EventType = "approval"
 )
 
 const (
@@ -103,6 +105,29 @@ type Event struct {
 	Context        *ContextUsage `json:"context,omitempty"`
 	Usage          *Usage        `json:"usage,omitempty"`
 	Trace          *TraceEvent   `json:"trace,omitempty"`
+	CodeAction     *CodeAction   `json:"code_action,omitempty"`
+	Approval       *Approval     `json:"approval,omitempty"`
+}
+
+// CodeAction is one normalized provider-side edit or command milestone.
+type CodeAction struct {
+	ID       string `json:"id"`
+	Kind     string `json:"kind"`
+	Status   string `json:"status"`
+	Summary  string `json:"summary,omitempty"`
+	Command  string `json:"command,omitempty"`
+	Output   string `json:"output,omitempty"`
+	ExitCode *int   `json:"exit_code,omitempty"`
+}
+
+// Approval is a provider request that the Code tab may resolve once.
+type Approval struct {
+	ID                 string   `json:"id"`
+	Kind               string   `json:"kind"`
+	Reason             string   `json:"reason,omitempty"`
+	Command            string   `json:"command,omitempty"`
+	Directory          string   `json:"directory,omitempty"`
+	AvailableDecisions []string `json:"available_decisions,omitempty"`
 }
 
 // TraceEvent records a visible operational milestone, never hidden reasoning.
@@ -136,6 +161,7 @@ type Status struct {
 	ContextUsage  bool          `json:"context_usage"`
 	TokenUsage    bool          `json:"token_usage"`
 	TokenBudget   bool          `json:"token_budget"`
+	Code          bool          `json:"code"`
 }
 
 // SessionConfig is shared by all provider adapters.
@@ -147,6 +173,7 @@ type SessionConfig struct {
 	MCPURL         string
 	MCPToken       string
 	ResumeCursor   string
+	Coding         bool
 }
 
 // Session is one provider-owned conversation.
@@ -154,6 +181,11 @@ type Session interface {
 	Send(context.Context, Turn, func(Event) error) error
 	Interrupt(context.Context) error
 	Close() error
+}
+
+// ApprovableSession resolves one provider-native Code approval request.
+type ApprovableSession interface {
+	ResolveApproval(context.Context, string, string) error
 }
 
 // ResumableSession exposes a provider-owned opaque cursor after startup or a
@@ -193,6 +225,8 @@ type TurnRequest struct {
 	ResumeCursor       string                  `json:"-"`
 	Author             ConversationAuthor      `json:"-"`
 	Contexts           []contextscope.Context  `json:"-"`
+	Coding             bool                    `json:"-"`
+	WorkspaceRoot      string                  `json:"-"`
 }
 
 // RetryRequest replays the last durable user turn. Broader mode expands
@@ -236,6 +270,7 @@ type managedConversation struct {
 	effort     string
 	mode       string
 	imageInput bool
+	coding     bool
 	sessionMu  sync.RWMutex
 	session    Session
 	mu         sync.Mutex
@@ -948,6 +983,25 @@ func (m *Manager) Interrupt(ctx context.Context, conversationID string) error {
 	return conversation.currentSession().Interrupt(ctx)
 }
 
+// ResolveApproval answers one pending provider-native Code request without
+// taking the conversation turn mutex held by Send.
+func (m *Manager) ResolveApproval(
+	ctx context.Context,
+	conversationID, approvalID, decision string,
+) error {
+	m.mu.RLock()
+	conversation := m.conversations[conversationID]
+	m.mu.RUnlock()
+	if conversation == nil {
+		return ErrConversationNotFound
+	}
+	approvable, ok := conversation.currentSession().(ApprovableSession)
+	if !ok || !conversation.coding {
+		return errors.New("conversation does not support code approvals")
+	}
+	return approvable.ResolveApproval(ctx, approvalID, decision)
+}
+
 func (m *Manager) conversation(ctx context.Context, request TurnRequest) (*managedConversation, string, error) {
 	request.Author = normalizeConversationAuthor(request.Author)
 	if request.ConversationID != "" {
@@ -965,6 +1019,9 @@ func (m *Manager) conversation(ctx context.Context, request TurnRequest) (*manag
 			stored.Author = normalizeConversationAuthor(stored.Author)
 			if stored.Author.ID != request.Author.ID {
 				return nil, "", ErrConversationForbidden
+			}
+			if request.Coding != stored.Code {
+				return nil, "", fmt.Errorf("%w: a conversation cannot switch coding mode", ErrInvalidInput)
 			}
 			request.Provider = stored.Provider
 			request.Model = stored.Model
@@ -1010,6 +1067,9 @@ func (m *Manager) conversation(ctx context.Context, request TurnRequest) (*manag
 		if request.Mode != "" && request.Mode != conversation.mode {
 			return nil, "", fmt.Errorf("%w: a conversation cannot switch modes", ErrInvalidInput)
 		}
+		if request.Coding != conversation.coding {
+			return nil, "", fmt.Errorf("%w: a conversation cannot switch coding mode", ErrInvalidInput)
+		}
 		if len(request.Images) > 0 && !conversation.imageInput {
 			return nil, "", fmt.Errorf("%w: this provider does not support image input", ErrInvalidInput)
 		}
@@ -1050,6 +1110,7 @@ func (m *Manager) conversation(ctx context.Context, request TurnRequest) (*manag
 			Model:     conversation.model,
 			Effort:    conversation.effort,
 			Mode:      conversation.mode,
+			Code:      conversation.coding,
 			Author:    conversation.author,
 			CreatedAt: now,
 			UpdatedAt: now,
@@ -1128,6 +1189,12 @@ func (m *Manager) startConversation(ctx context.Context, request TurnRequest, co
 	if !status.Authenticated {
 		return nil, fmt.Errorf("%s is not authenticated in RepoKarta's launch context: %s", status.Name, status.Detail)
 	}
+	if request.Coding && !status.Code {
+		return nil, fmt.Errorf("%s does not support Code worktrees", status.Name)
+	}
+	if request.Coding && strings.TrimSpace(request.WorkspaceRoot) == "" {
+		return nil, errors.New("Code worktree root is required")
+	}
 	if len(request.Images) > 0 && !status.ImageInput {
 		return nil, fmt.Errorf("%s does not support image input", status.Name)
 	}
@@ -1162,14 +1229,19 @@ func (m *Manager) startConversation(ctx context.Context, request TurnRequest, co
 		}
 		mcpToken = issuedToken
 	}
+	repositoryRoot := m.repositoryRoot
+	if request.Coding {
+		repositoryRoot = request.WorkspaceRoot
+	}
 	session, err := adapter.Start(ctx, SessionConfig{
 		ConversationID: conversationID,
 		Model:          request.Model,
 		Effort:         request.Effort,
-		RepositoryRoot: m.repositoryRoot,
+		RepositoryRoot: repositoryRoot,
 		MCPURL:         conversationMCPURL(m.mcpURL, conversationID),
 		MCPToken:       mcpToken,
 		ResumeCursor:   request.ResumeCursor,
+		Coding:         request.Coding,
 	})
 	if err != nil {
 		if m.mcpTokenIssuer != nil {
@@ -1193,6 +1265,7 @@ func (m *Manager) startConversation(ctx context.Context, request TurnRequest, co
 		effort:     request.Effort,
 		mode:       request.Mode,
 		imageInput: status.ImageInput,
+		coding:     request.Coding,
 		session:    session,
 	}
 	conversation.lastUsed.Store(time.Now().UTC().UnixNano())
