@@ -342,7 +342,8 @@ npm --userconfig .npmrc --prefix web install <package>
 ```
 
 The `check:dependencies` script rejects unbounded direct specifications and
-unapproved major-line changes. In particular, the browser test runtime stays
+unapproved major-line changes, including entries under `overrides`. In
+particular, the browser test runtime stays
 on `jsdom ^29.1.1` until its policy entry is deliberately reviewed. Run the
 policy check directly with:
 
@@ -396,6 +397,7 @@ $version = go run ./cmd/repokarta version
 - [Compiler-precise SCIP index imports](./docs/scip-indexes.md)
 - [Structural AST query syntax and completeness](./docs/ast-search.md)
 - [OpenTelemetry metrics, logs, traces, and Datadog routing](./docs/opentelemetry.md)
+- [Frontend API contracts, streaming recovery, and reproducible assets](./docs/frontend-contracts.md)
 - [Pinned Zoekt revision and Windows portability](./docs/zoekt-windows-portability.md)
 
 RepoKarta vendors a pinned Zoekt revision under `third_party/zoekt`. Native

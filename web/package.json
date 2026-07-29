@@ -5,9 +5,13 @@
   "scripts": {
     "build": "vite build",
     "check:dependencies": "node scripts/check-dependency-policy.mjs",
+    "clean:assets": "node scripts/clean-assets.mjs",
     "dev": "vite build --watch",
-    "prebuild": "npm run check:dependencies",
+    "generate:api": "go generate ../internal/apicontract",
+    "prebuild": "npm run check:dependencies && npm run generate:api && npm run clean:assets",
+    "predev": "npm run check:dependencies && npm run generate:api && npm run clean:assets",
     "pretest": "npm run check:dependencies",
+    "pretypecheck": "npm run generate:api",
     "test": "node --test src/*.test.mjs",
     "typecheck": "tsc --noEmit"
   },

@@ -95,6 +95,7 @@ func TestEveryPackagePathCarriesRequiredLicensesAndVerification(t *testing.T) {
 			"advanced-search.md",
 			"dependency-management.md",
 			"opentelemetry.md",
+			"frontend-contracts.md",
 			"repokarta.env.example",
 			"collector-debug.yaml",
 			"collector-datadog.yaml",
@@ -146,6 +147,54 @@ func TestHomebrewCIUsesRegisteredTap(t *testing.T) {
 	}
 	if strings.Contains(workflow, "brew install --HEAD --build-from-source ./Formula/") {
 		t.Fatal("Homebrew CI attempts to install a formula outside a registered tap")
+	}
+}
+
+func TestM17BuildAndPackageSmokeContracts(t *testing.T) {
+	root := repositoryRoot(t)
+	manifest := string(readFile(t, root, filepath.Join("web", "package.json")))
+	for _, expected := range []string{
+		`"clean:assets": "node scripts/clean-assets.mjs"`,
+		`"prebuild": "npm run check:dependencies && npm run generate:api && npm run clean:assets"`,
+		`"predev": "npm run check:dependencies && npm run generate:api && npm run clean:assets"`,
+	} {
+		if !strings.Contains(manifest, expected) {
+			t.Errorf("frontend build contract is missing %q", expected)
+		}
+	}
+
+	formula := string(readFile(t, root, filepath.Join("Formula", "repokarta.rb")))
+	for _, expected := range []string{
+		`npm_config = buildpath/".npmrc"`,
+		`"--userconfig", npm_config`,
+	} {
+		if !strings.Contains(formula, expected) {
+			t.Errorf("Homebrew formula is missing project npm configuration %q", expected)
+		}
+	}
+
+	workflow := string(readFile(t, root, filepath.Join(".github", "workflows", "ci.yml")))
+	for _, expected := range []string{
+		"smoke-package.ps1",
+		"smoke-package.sh",
+		"Boot packaged Windows server",
+		"Boot packaged macOS server",
+		"git diff --exit-code -- web/src/generated/api-contract.ts",
+	} {
+		if !strings.Contains(workflow, expected) {
+			t.Errorf("package-smoke CI is missing %q", expected)
+		}
+	}
+	for _, relative := range []string{
+		filepath.Join("scripts", "smoke-package.ps1"),
+		filepath.Join("scripts", "smoke-package.sh"),
+	} {
+		script := string(readFile(t, root, relative))
+		for _, expected := range []string{"/healthz", "/assets/app.js"} {
+			if !strings.Contains(script, expected) {
+				t.Errorf("%s does not probe %q", relative, expected)
+			}
+		}
 	}
 }
 

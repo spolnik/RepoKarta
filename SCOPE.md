@@ -935,6 +935,228 @@ service or resource, in which direction and over which protocol, distinguish
 declared/static architecture from observed runtime traffic, and open the exact
 evidence without treating package imports as distributed-system calls.
 
+### M13: security boundary hardening
+
+Close the gaps found in the 2026-07 full-code review between marketed
+guarantees and actual enforcement, before promoting shared deployment.
+
+- [x] Enforce filesystem-read isolation for provider harnesses: extend the
+  Claude disallowed-tool set with `Read`, `Glob`, `Grep`, and subagent tools
+  (or path-scope reads to the attachment directory when the CLI supports it),
+  and disable Codex shell read access so the authenticated MCP surface is the
+  only capability. Prompt text alone must not carry the exfiltration boundary.
+- [x] Stop passing the Claude MCP bearer token through argv; write the
+  MCP configuration to a 0600 file inside the attachment directory, mirroring
+  the Codex environment-variable approach.
+- [x] Gate `GET /mcp/setup` behind an explicit permission whenever the access
+  mode is not loopback-local, so reader-role and anonymous principals cannot
+  harvest the shared token.
+- [x] Replace the single shared MCP token with per-principal or
+  per-conversation tokens that support revocation and audit attribution.
+- [x] Throttle `/admin/login` with per-source exponential backoff after
+  repeated failures; keep the existing audit events as the alerting signal.
+- [x] Add a baseline security-header middleware (`X-Content-Type-Options:
+  nosniff`, `frame-ancestors 'none'`, and a CSP compatible with the embedded
+  frontend) applied once at the top of the handler chain.
+- [x] Fix the audit filter that drops `since` when `since` equals `until`
+  (query-value-keyed map), and make the audit export loop assert pagination
+  progress instead of trusting `NextBefore`.
+- [x] Fail closed on chat interrupt authorization when the conversation
+  history service is unavailable instead of skipping the ownership check.
+- [x] Replace string-matched error classification (`"required"`, `"unique"`)
+  with sentinel errors across conversation, store, and SCIM handlers, and
+  scrub raw store error text from SCIM responses.
+- [x] Guard the contexts page against successful-but-empty context resolution
+  instead of indexing the first element unconditionally.
+- [x] Render admin/insights notice and error banners from a server-side
+  allowlist instead of reflecting query-parameter text.
+- [x] Remove the dead duplicate loopback Host/Origin validation from the HTTP
+  server so the security manager is the single owner of the boundary logic.
+
+Exit condition: prompt-injected repository content cannot cause a provider to
+read files outside RepoKarta-provided evidence; MCP credentials are not
+visible to lower-privileged principals or the local process list; bootstrap
+login resists online brute force; audit exports are provably bounded and
+correctly filtered.
+
+### M14: index lifecycle and search availability
+
+Fix the lifecycle gaps in the search and indexing pipeline: search must stay
+available while indexing runs, and derived artifacts must not outlive their
+repositories.
+
+- [x] Stop holding the Zoekt adapter lock across the git-shadow fetch and
+  shard build; take the write lock only for the brief searcher close/reopen,
+  and make searcher acquisition honor the request context so queued searches
+  respect their deadline.
+- [x] Add derived-artifact garbage collection: after catalogue sync, diff live
+  repository IDs against Zoekt shards, git-shadow clones, SCIP artifacts, and
+  graph snapshots; delete or reclassify orphans as cleanable in maintenance
+  instead of protected.
+- [x] Stop emitting search matches whose repository cannot be resolved; they
+  currently leak the absolute local path as the repository name for
+  unrestricted viewers.
+- [x] Make catalogue removal survive transient failures: mark repositories
+  missing from one discovery pass as unreachable and delete rows only after
+  repeated confirmed misses, preserving IDs and index state across antivirus
+  or removable-drive glitches.
+- [x] Run `scip-java` builds from the RepoKarta-owned git-shadow clone instead
+  of `git worktree add` against the user's repository, restoring the
+  never-modify-repositories guarantee across crashes.
+- [x] Cache decoded SCIP artifacts per repository and revision with the
+  existing single-flight LRU pattern instead of re-reading and re-decoding
+  every artifact on each reference query.
+- [x] Bound and parallelize commit/diff entity search with a worker pool and a
+  per-request git-invocation cap; parallelize the mixed-search child queries.
+- [x] Storage hygiene: allow a small pool of read connections under WAL while
+  keeping writes on one connection; replace the conversation-read N+1 with
+  joined queries and lazy image loading; preserve `indexed_at` while a
+  previous index still serves; use the case-folded path key in the catalogue
+  delete comparison; synchronize `baseCtx` publication; correct the
+  `GIT_CONFIG_NOSYSTEM` value to match its isolation intent; move the queue
+  status write under the queue critical section.
+
+Exit condition: search remains available and deadline-bound during fleet
+indexing; removed repositories leave no servable or protected debris; a
+reindexing repository is never reported as never indexed.
+
+### M15: provider harness robustness and citation fidelity
+
+Make subprocess lifecycles airtight on Windows and macOS and make the Sources
+list a faithful record of the evidence a turn actually used.
+
+- [x] Register conversations insert-if-absent under the manager lock; on a
+  concurrent-resume conflict, close the losing session instead of leaking a
+  live provider process.
+- [x] Replace the one-shot reader error channel with a done channel plus
+  sticky error so process death is observable to every waiter, and guard the
+  stderr buffer against concurrent reads while the process runs.
+- [x] Kill the full harness process tree: Windows Job Objects and POSIX
+  process groups, so `.cmd` shims cannot orphan the real interpreter.
+- [x] Add a timeout to the CLI `--version`/auth probes and cache their results
+  briefly so a wedged CLI cannot freeze provider status or conversation start.
+- [x] Distinguish user interrupt from client disconnect in the Anthropic
+  adapter; only a deliberate interrupt may persist as `interrupted`.
+- [x] Record `git_log`, `git_diff`, and `list_tree` tool output into the
+  citation tracker; replace the alphabetical 12-source cap with per-tool or
+  recency-weighted selection so one map read cannot evict the file citations
+  an answer relies on; validate model-inline `source_url` links against the
+  tracker and mark unverified links.
+- [x] Converge the three AI tool surfaces: add AST search and named-context
+  selectors to the native Anthropic loop, and wire insights, dependencies, and
+  topology tools into the stdio MCP configuration.
+- [x] Drop stale Codex deltas with empty turn IDs and let reader goroutines
+  exit after session close instead of blocking on full channels.
+- [x] Move the hardcoded MCP tool catalog out of the HTTP layer into the MCP
+  server so the setup page cannot drift from the real tool list.
+
+Exit condition: no orphaned provider process survives an interrupted, resumed,
+or killed conversation on Windows or macOS; every listed source corresponds to
+evidence a tool actually returned during the turn; answer capability does not
+silently depend on which provider transport is in use.
+
+### M16: derived-artifact correctness
+
+Fix the heuristic and pipeline edge cases in topology, documentation, and
+advisories found by the review, favoring the recently hardened areas.
+
+- [x] Resolve bare `host:port` environment values in topology placeholder
+  resolution: detect the `url.Parse` scheme misread and fall through to
+  host/port splitting, with a regression test for `NAME_HOST: service:8080`.
+- [x] Regenerate (or revision-rewrite for unchanged files) the survey when a
+  single stale Wiki page is refreshed, so targeted regeneration cannot burn a
+  provider turn and then fail the citation gate against the old revision.
+- [x] Parse CVSS 4.0 severity vectors (or map provider severity labels) so
+  modern criticals never sort last as `unknown`.
+- [x] Separate stdout from stderr in the docs git runner so git warnings can
+  never contaminate steering-file content or staleness diffs.
+- [x] Harden the Kafka classifier: word-boundary the send/publish verbs,
+  exclude STOMP/WebSocket template markers, and record which marker qualified
+  the file as a Kafka source.
+- [x] Carry protocol through placeholder resolution (broker and database
+  indicators must not render as HTTP call edges) and support Spring-style
+  `${lower.dotted}` placeholders in configuration files.
+- [x] Stop collapsing private corporate FQDNs to their registrable domain when
+  distinct hosts share a private DNS zone.
+- [x] Make advisory refresh resilient: persist a partial snapshot with an
+  explicit partial state on per-advisory failure, stop dispatching after a
+  fatal error, and sort OSV range events with the ecosystem version ordering
+  before evaluation.
+- [x] Bring graph snapshot publishing up to the docs/advisories standard:
+  Windows rename fallback, identity verification on cached reads, lock-safe
+  reads, and garbage collection of superseded snapshot signatures and their
+  per-signature locks.
+- [x] Heuristic polish: hoist hot-path regex compilation; accept relative
+  `@GetMapping` paths and multiple class-level prefixes; extend Go route
+  detection beyond `Handle`/`HandleFunc`; cap topology neighborhoods by
+  usefulness rather than ID order; tighten prerelease substring matching.
+
+Exit condition: literal deployment targets resolve to edges with the correct
+protocol; refreshing one stale page succeeds without wasted provider turns; a
+CVSS-4-only critical advisory ranks by its real severity; topology output on
+Windows survives concurrent refresh and read.
+
+### M17: frontend contract and build integrity
+
+Make the frontend/backend contract mechanical and the packaged asset tree
+exactly reproducible.
+
+- [x] Clean `web/dist/assets` before every build in all build and package
+  scripts so locally packaged binaries never embed superseded hashed chunks.
+- [x] Centralize fetches in one typed API helper that owns headers, error
+  mapping, and minimal runtime shape checks for load-bearing endpoints;
+  generate the TypeScript response types from the Go structs so the hand-
+  mirrored types cannot drift.
+- [x] Verify extracted-module declarations against their implementations:
+  enable checked JavaScript over `src/**/*.mjs` or migrate new extractions to
+  TypeScript.
+- [x] Extract and unit-test the NDJSON chat-event reducer, the Wiki
+  generation orchestration state machine, and a declarative initialization
+  table that derives both element lookups and checks from one source.
+- [x] Harden streaming: skip malformed NDJSON lines instead of aborting the
+  turn, and give the artifact-progress poller bounded retry with backoff
+  instead of halting on one transient error.
+- [x] Add an HTTP(S)-scheme guard for every server-provided link sink (chat
+  sources, evidence links, source-URL fallbacks).
+- [x] Replace full-page reload completion signals with targeted region
+  refreshes so background completion cannot discard in-progress user state.
+- [x] Extend the dependency-policy check to validate `overrides` entries and
+  pass the project npm configuration in the Homebrew formula.
+- [x] Promote a minimal boot smoke (start binary, `GET /`, health, embedded
+  asset) into the package-smoke CI job, which currently packages but never
+  runs the server.
+
+Exit condition: a locally packaged binary contains exactly one generation of
+built assets; a backend response-shape change fails the type check or surfaces
+a visible error instead of silently corrupting the page; one malformed stream
+event costs one event, not the rest of the answer.
+
+### M18: codebase consolidation
+
+Reduce duplication and file size along seams the codebase has already proven,
+with zero behavior change verified by the existing suites.
+
+- [ ] Extract a shared `internal/gitexec` runner (context timeout,
+  `GIT_OPTIONAL_LOCKS=0`, environment hygiene, separated stderr) and adopt it
+  in graph, docs, and insights.
+- [ ] Extract a shared `internal/atomicfile` publish helper with the Windows
+  replace fallback and adopt it in graph, docs, and advisories.
+- [ ] Decompose the HTTP server along the established `admin.go`/
+  `enterprise.go` seams: routes, conversations, search, dependencies, source,
+  and render/middleware files; move source-intelligence domain joining out of
+  the HTTP layer.
+- [ ] Decompose the graph package into per-ecosystem manifest parsers, Spring
+  heuristics, git plumbing, and artifact IO files; collapse the four snapshot
+  fan-out readers into one generic helper.
+- [ ] Continue the frontend extraction cadence established by the existing
+  tested modules, prioritizing the largest untested closures.
+- [ ] Unify duplicated helpers: service-name normalization, kind-resolution,
+  admin form parsing, and topology connection merging each get one owner.
+
+Exit condition: each cross-cutting concern has exactly one implementation; the
+largest backend and frontend files are reduced to focused units without any
+observable behavior change.
+
 ### M19: OpenTelemetry observability
 
 Make RepoKarta operable through vendor-neutral OpenTelemetry signals so an
@@ -1065,7 +1287,7 @@ completion criteria include:
 
 ## Current implementation version
 
-`0.94.0-dev`. M0 through M12 are complete; M19 is also complete. M7 now includes qualified symbol
+`0.95.0-dev`. M0 through M17 are complete; M19 is also complete. M7 now includes qualified symbol
 search, precise optional SCIP data, commit-pinned CODEOWNERS, bounded evidence
 graph queries, saved searches and deterministic monitors, and permission-safe
 Deep Search with visible trace, budgets, retry, and revocable sharing. M9 now
@@ -1160,10 +1382,17 @@ failure-isolated lifecycle. Stable service identity, correlated redacted logs,
 bounded route and operation dimensions, runtime/catalogue/database metrics,
 core job and outbound-call spans, administrator delivery diagnostics, local
 Collector and Datadog examples, and packaged operational guidance are included.
+M17 makes frontend builds reproducible, generates TypeScript API contracts from
+Go response structs, checks extracted JavaScript, isolates Chat and Wiki state
+reducers, recovers from malformed stream events and transient polling failures,
+guards server-provided links, refreshes completed regions without discarding
+page state, validates npm overrides, and boots packaged binaries in CI.
 
 ## Recommended next session
 
-Continue structural framework reachability using explicit, revision-pinned
+Begin M18 consolidation with the shared Git runner and atomic-file publisher,
+then split the established HTTP, graph, and frontend seams without behavior
+changes. Continue structural framework reachability using explicit, revision-pinned
 roots and completeness metadata before making any dead-code classification.
 Preserve the completed permission, revision, ambiguity, registry-routing,
 evidence, privacy, cardinality, and completeness boundaries.

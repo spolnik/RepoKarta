@@ -13,6 +13,7 @@ func TestRoadmapKeepsM7ScopeAndCompletedMilestones(t *testing.T) {
 	scope := normalizeScope(string(readFile(t, root, "SCOPE.md")))
 	m7 := scopeSection(t, scope, "### M7:", "### M8:")
 	m9 := scopeSection(t, scope, "### M9:", "### M10:")
+	m17 := scopeSection(t, scope, "### M17:", "### M18:")
 	m19 := scopeSection(t, scope, "### M19:", "## Definition of quality")
 
 	for _, completed := range []string{
@@ -55,6 +56,9 @@ func TestRoadmapKeepsM7ScopeAndCompletedMilestones(t *testing.T) {
 	if strings.Contains(m9, "- [ ]") {
 		t.Error("M9 still contains unchecked scope")
 	}
+	if strings.Contains(m17, "- [ ]") {
+		t.Error("M17 still contains unchecked scope")
+	}
 	if strings.Contains(m19, "- [ ]") {
 		t.Error("M19 still contains unchecked scope")
 	}
@@ -66,12 +70,13 @@ func TestRoadmapKeepsM7ScopeAndCompletedMilestones(t *testing.T) {
 		"## Recommended next session",
 	)
 	for _, required := range []string{
-		"M0 through M12 are complete",
+		"M0 through M17 are complete",
 		"M7 now includes qualified symbol search",
 		"M9 now includes explicit comparison and distance states",
 		"Linked-worktree discovery deduplication",
 		"M10 enterprise identity and administration are complete",
 		"M19 is also complete",
+		"M17 makes frontend builds reproducible",
 		"OpenTelemetry metrics, structured logs, and traces are available",
 	} {
 		if !strings.Contains(status, required) {

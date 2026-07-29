@@ -21,10 +21,11 @@ class Repokarta < Formula
       grammar_subset_typescript
     ].join(",")
 
-    system "npm", "--prefix", "web", "ci"
-    system "npm", "--prefix", "web", "test"
-    system "npm", "--prefix", "web", "run", "typecheck"
-    system "npm", "--prefix", "web", "run", "build"
+    npm_config = buildpath/".npmrc"
+    system "npm", "--userconfig", npm_config, "--prefix", "web", "ci"
+    system "npm", "--userconfig", npm_config, "--prefix", "web", "test"
+    system "npm", "--userconfig", npm_config, "--prefix", "web", "run", "typecheck"
+    system "npm", "--userconfig", npm_config, "--prefix", "web", "run", "build"
     system "go", "build", "-tags", grammar_tags, "-trimpath", *std_go_args(output: bin/"repokarta"), "./cmd/repokarta"
 
     (share/"repokarta/licenses").install "third_party/zoekt/LICENSE" => "zoekt-Apache-2.0.txt"

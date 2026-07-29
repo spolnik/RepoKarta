@@ -35,6 +35,7 @@ jobs:
         run: |
           npm --prefix web test
           npm --prefix web run typecheck
+          git diff --exit-code -- web/src/generated/api-contract.ts
           npm --prefix web run build
       - name: Test Go application
         run: go test -tags "grammar_subset,grammar_subset_bash,grammar_subset_go,grammar_subset_groovy,grammar_subset_java,grammar_subset_javascript,grammar_subset_kotlin,grammar_subset_python,grammar_subset_sql,grammar_subset_tsx,grammar_subset_typescript" ./...
@@ -43,6 +44,8 @@ jobs:
 
   package-smoke:
     name: package-${{ matrix.name }}
+    env:
+      PACKAGE_VERSION: 0.95.0-dev
     strategy:
       fail-fast: false
       matrix:
@@ -70,13 +73,21 @@ jobs:
       - name: Package Windows
         if: matrix.name == 'windows-amd64'
         shell: pwsh
-        run: ./scripts/package-release.ps1 -Version 0.59.0-dev -OutputDirectory dist/ci-release -SkipValidation
+        run: ./scripts/package-release.ps1 -Version $env:PACKAGE_VERSION -OutputDirectory dist/ci-release -SkipValidation
       - name: Package macOS
         if: matrix.name == 'macos-arm64'
         shell: bash
         env:
           REPOKARTA_SKIP_VALIDATION: "1"
-        run: ./scripts/package-release.sh 0.59.0-dev dist/ci-release
+        run: ./scripts/package-release.sh "$PACKAGE_VERSION" dist/ci-release
+      - name: Boot packaged Windows server
+        if: matrix.name == 'windows-amd64'
+        shell: pwsh
+        run: ./scripts/smoke-package.ps1 -Version $env:PACKAGE_VERSION -OutputDirectory dist/ci-release
+      - name: Boot packaged macOS server
+        if: matrix.name == 'macos-arm64'
+        shell: bash
+        run: sh ./scripts/smoke-package.sh "$PACKAGE_VERSION" dist/ci-release
 
   homebrew:
     name: homebrew-head

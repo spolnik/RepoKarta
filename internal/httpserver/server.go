@@ -26,6 +26,7 @@ import (
 
 	"github.com/spolnik/RepoKarta/internal/acquisition"
 	"github.com/spolnik/RepoKarta/internal/agent"
+	"github.com/spolnik/RepoKarta/internal/apicontract"
 	"github.com/spolnik/RepoKarta/internal/audit"
 	"github.com/spolnik/RepoKarta/internal/catalog"
 	"github.com/spolnik/RepoKarta/internal/codeintel"
@@ -829,9 +830,8 @@ func writeConversationError(response http.ResponseWriter, err error) {
 }
 
 func (s *Server) providerStatuses(response http.ResponseWriter, request *http.Request) {
-	response.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(response).Encode(map[string]any{
-		"providers": s.agents.Statuses(request.Context()),
+	writeJSON(response, http.StatusOK, apicontract.ProviderStatusesResponse{
+		Providers: s.agents.Statuses(request.Context()),
 	})
 }
 
@@ -3337,10 +3337,9 @@ func (s *Server) events(response http.ResponseWriter, request *http.Request) {
 }
 
 func (s *Server) health(response http.ResponseWriter, _ *http.Request) {
-	response.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(response).Encode(map[string]string{
-		"status":  "ok",
-		"version": s.config.Version,
+	writeJSON(response, http.StatusOK, apicontract.HealthResponse{
+		Status:  "ok",
+		Version: s.config.Version,
 	})
 }
 
@@ -3649,9 +3648,9 @@ func writeCodeIntelligenceError(response http.ResponseWriter, err error) {
 }
 
 func writeAPIError(response http.ResponseWriter, status int, err error) {
-	writeJSON(response, status, map[string]any{
-		"error": map[string]string{
-			"message": err.Error(),
+	writeJSON(response, status, apicontract.ErrorResponse{
+		Error: apicontract.ErrorDetail{
+			Message: err.Error(),
 		},
 	})
 }

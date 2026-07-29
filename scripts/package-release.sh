@@ -60,6 +60,8 @@ cp "$repository_root/docs/dependency-management.md" \
     "$stage_directory/docs/dependency-management.md"
 cp "$repository_root/docs/opentelemetry.md" \
     "$stage_directory/docs/opentelemetry.md"
+cp "$repository_root/docs/frontend-contracts.md" \
+    "$stage_directory/docs/frontend-contracts.md"
 cp -R "$repository_root/deploy/." "$stage_directory/deploy/"
 cp "$repository_root/third_party/zoekt/LICENSE" \
     "$stage_directory/licenses/zoekt-Apache-2.0.txt"
@@ -116,7 +118,14 @@ fi
 
 rm -f "$archive_path" "$checksum_path"
 tar -C "$temporary_root" -czf "$archive_path" "$package_name"
-hash=$(shasum -a 256 "$archive_path" | awk '{print $1}')
+if command -v shasum >/dev/null 2>&1; then
+    hash=$(shasum -a 256 "$archive_path" | awk '{print $1}')
+elif command -v sha256sum >/dev/null 2>&1; then
+    hash=$(sha256sum "$archive_path" | awk '{print $1}')
+else
+    printf 'neither shasum nor sha256sum is available\n' >&2
+    exit 1
+fi
 printf '%s  %s\n' "$hash" "$package_name.tar.gz" > "$checksum_path"
 
 mkdir -p "$verify_directory"
@@ -136,6 +145,7 @@ test -f "$verify_directory/$package_name/docs/ast-search.md"
 test -f "$verify_directory/$package_name/docs/advanced-search.md"
 test -f "$verify_directory/$package_name/docs/dependency-management.md"
 test -f "$verify_directory/$package_name/docs/opentelemetry.md"
+test -f "$verify_directory/$package_name/docs/frontend-contracts.md"
 test -f "$verify_directory/$package_name/deploy/repokarta.env.example"
 test -f "$verify_directory/$package_name/deploy/otel/collector-debug.yaml"
 test -f "$verify_directory/$package_name/deploy/otel/collector-datadog.yaml"

@@ -25,6 +25,29 @@ import xml from "highlight.js/lib/languages/xml";
 import yaml from "highlight.js/lib/languages/yaml";
 import DOMPurify from "dompurify";
 import { marked } from "marked";
+import {
+  apiFetch as fetch,
+  getArtifactProgress,
+  getDependencyRefreshProgress,
+  getHealth,
+  getProviderStatuses,
+  getWikiPage,
+  getWikiSite
+} from "./api-client.mjs";
+import {
+  createChatEventReducerState,
+  reduceChatEventChunk
+} from "./chat-event-reducer.mjs";
+import { collectRequiredElements } from "./initialization-contract.mjs";
+import { boundedPollRetry } from "./polling.mjs";
+import { replaceRenderedRegions } from "./region-refresh.mjs";
+import { safeHTTPURL, setSafeHTTPLink } from "./safe-link.mjs";
+import type {
+  ConversationEvent as GeneratedConversationEvent,
+  ProviderStatusesResponse,
+  WikiPageResponse,
+  WikiSiteResponse
+} from "./generated/api-contract";
 import { createFrameBatcher } from "./frame-batcher.mjs";
 import {
   recommendedProviderEffort,
@@ -42,6 +65,13 @@ import {
 } from "./source-intelligence.mjs";
 import { filterTopologyConnections } from "./topology-integrity.mjs";
 import { enhanceWikiArticle } from "./wiki-article.mjs";
+import {
+  createWikiGenerationState,
+  reduceWikiGeneration,
+  wikiGenerationProgress,
+  type WikiRunStageID,
+  type WikiRunStageState
+} from "./wiki-generation-state.mjs";
 import { wikiPrimaryAction } from "./wiki-run-state.mjs";
 import "./styles.css";
 
@@ -904,13 +934,11 @@ function enableSourceIntelligence(): void {
   };
   const resultSourceURL = (match: SourceIntelligenceMatch, line: SourceIntelligenceLine): string => {
     if (match.source_url) {
-      try {
-        const target = new URL(match.source_url, location.origin);
+      const target = safeHTTPURL(match.source_url, location.origin);
+      if (target) {
         target.searchParams.set("focus", `${line.number}-${line.number}`);
         target.hash = `L${line.number}`;
         return target.pathname + target.search + target.hash;
-      } catch {
-        return match.source_url;
       }
     }
     const parameters = new URLSearchParams({
@@ -948,7 +976,7 @@ function enableSourceIntelligence(): void {
       for (const line of lines) {
         const link = document.createElement("a");
         link.className = "source-intelligence-line";
-        link.href = resultSourceURL(match, line);
+        setSafeHTTPLink(link, resultSourceURL(match, line), window.location.href);
         const number = document.createElement("span");
         number.textContent = `L${line.number}`;
         const code = document.createElement("code");
@@ -1131,19 +1159,7 @@ function highlightSearchResults(root: ParentNode = document): void {
   });
 }
 
-type ConversationEvent = {
-  type: "meta" | "activity" | "delta" | "sources" | "images" | "context" | "usage" | "trace" | "interrupted" | "done" | "error";
-  conversation_id?: string;
-  title?: string;
-  activity?: "thinking";
-  segment_id?: string;
-  text?: string;
-  sources?: Array<{ label: string; url: string }>;
-  images?: ConversationImage[];
-  context?: ContextUsage;
-  usage?: TokenUsage;
-  trace?: ConversationTrace;
-};
+type ConversationEvent = GeneratedConversationEvent;
 
 type ConversationTrace = {
   stage: string;
@@ -1159,11 +1175,7 @@ type ContextUsage = {
   model?: string;
 };
 
-type ConversationImage = {
-  name: string;
-  media_type: string;
-  data: string;
-};
+type ConversationImage = NonNullable<ConversationEvent["images"]>[number];
 
 type ContextKind = "repository" | "file" | "directory" | "symbol";
 
@@ -1269,21 +1281,7 @@ type ConversationRecordMessage = {
   created_at: string;
 };
 
-type ProviderStatus = {
-  id: string;
-  name: string;
-  available: boolean;
-  authenticated: boolean;
-  detail?: string;
-  models?: Array<{ id: string; label: string; efforts?: string[] | null }>;
-  efforts?: string[];
-  image_input: boolean;
-  image_output: boolean;
-  interrupt: boolean;
-  context_usage: boolean;
-  token_usage: boolean;
-  token_budget: boolean;
-};
+type ProviderStatus = NonNullable<ProviderStatusesResponse["providers"]>[number];
 
 const providerModelEfforts = (
   status: ProviderStatus | undefined,
@@ -1498,15 +1496,11 @@ async function probeServerHealth(debug: DebugLogger): Promise<void> {
   const started = performance.now();
   debug.add("info", "server.health.probe.started");
   try {
-    const response = await fetch("/healthz", {
-      cache: "no-store",
-      headers: { Accept: "application/json" }
-    });
-    const body = await response.text();
-    debug.add(response.ok ? "info" : "warn", "server.health.probe.completed", {
-      status: response.status,
+    const health = await getHealth();
+    debug.add("info", "server.health.probe.completed", {
+      status: 200,
       duration_ms: Math.round(performance.now() - started),
-      body: body.slice(0, 500)
+      body: JSON.stringify(health).slice(0, 500)
     });
   } catch (error: unknown) {
     debug.add("error", "server.health.probe.failed", {
@@ -1736,7 +1730,7 @@ function downloadMermaidSVG(svg: SVGSVGElement, label: string, debug?: DebugLogg
     { type: "image/svg+xml;charset=utf-8" }
   ));
   const anchor = document.createElement("a");
-  anchor.href = url;
+  setSafeHTTPLink(anchor, url, window.location.href);
   anchor.download = mermaidDownloadName(label);
   document.body.append(anchor);
   anchor.click();
@@ -2326,234 +2320,156 @@ function enableConversations(debug?: DebugLogger): void {
   if (location.pathname !== "/chat" && !document.querySelector("[data-chat-workspace]")) {
     return;
   }
-  const form = document.querySelector<HTMLFormElement>("#conversation-form");
-  const messages = document.querySelector<HTMLElement>("#conversation-messages");
-  const empty = document.querySelector<HTMLElement>("[data-conversation-empty]");
-  const provider = document.querySelector<HTMLSelectElement>("#conversation-provider");
-  const model = document.querySelector<HTMLSelectElement>("#conversation-model");
-  const effort = document.querySelector<HTMLSelectElement>("#conversation-effort");
-  const conversationMode = document.querySelector<HTMLSelectElement>("#conversation-mode");
-  const timeout = document.querySelector<HTMLSelectElement>("#conversation-timeout");
-  const tokenBudget = document.querySelector<HTMLSelectElement>("#conversation-token-budget");
-  const toolCallBudget = document.querySelector<HTMLSelectElement>("#conversation-tool-budget");
-  const tokenBudgetField = document.querySelector<HTMLElement>("[data-token-budget-field]");
-  const input = document.querySelector<HTMLTextAreaElement>("#conversation-message");
-  const imageInput = document.querySelector<HTMLInputElement>("#conversation-image-input");
-  const attachButton = document.querySelector<HTMLButtonElement>("[data-image-attach]");
-  const attachmentTray = document.querySelector<HTMLElement>("#conversation-attachments");
-  const contextTray = document.querySelector<HTMLElement>("#conversation-contexts");
-  const contextError = document.querySelector<HTMLElement>("#conversation-context-error");
-  const contextSuggestions = document.querySelector<HTMLElement>("#conversation-context-suggestions");
-  const contextAdd = document.querySelector<HTMLButtonElement>("[data-context-add]");
-  const namedContextButton = document.querySelector<HTMLButtonElement>("[data-named-contexts]");
-  const namedContextDialog = document.querySelector<HTMLDialogElement>("#named-context-dialog");
-  const namedContextClose = document.querySelector<HTMLButtonElement>("[data-named-context-close]");
-  const namedContextNew = document.querySelector<HTMLButtonElement>("[data-named-context-new]");
-  const namedContextCancel = document.querySelector<HTMLButtonElement>("[data-named-context-cancel]");
-  const namedContextList = document.querySelector<HTMLElement>("[data-named-context-list]");
-  const namedContextFeedback = document.querySelector<HTMLElement>("[data-named-context-feedback]");
-  const namedContextForm = document.querySelector<HTMLFormElement>("[data-named-context-form]");
-  const namedContextEditorTitle = document.querySelector<HTMLElement>("[data-named-context-editor-title]");
-  const namedContextEditorError = document.querySelector<HTMLElement>("[data-named-context-editor-error]");
-  const composerActivity = document.querySelector<HTMLElement>("#conversation-activity");
-  const imageSupportDetail = document.querySelector<HTMLElement>("#image-support-detail");
-  const submit = document.querySelector<HTMLButtonElement>("#conversation-submit");
-  const interrupt = document.querySelector<HTMLButtonElement>("#conversation-interrupt");
-  const runtime = document.querySelector<HTMLElement>("#conversation-runtime");
-  const contextValue = document.querySelector<HTMLElement>("#conversation-context-value");
-  const contextMeter = document.querySelector<HTMLElement>("#conversation-context-meter");
-  const usageValue = document.querySelector<HTMLElement>("#conversation-usage-value");
-  const detail = document.querySelector<HTMLElement>("#provider-detail");
-  const newConversationButtons = Array.from(document.querySelectorAll<HTMLButtonElement>("[data-new-conversation]"));
-  const history = document.querySelector<HTMLOListElement>("#conversation-history");
-  const historyEmpty = document.querySelector<HTMLElement>("[data-conversation-history-empty]");
-  const historyFilter = document.querySelector<HTMLInputElement>("[data-conversation-filter]");
-  const historyScopeButtons = Array.from(
-    document.querySelectorAll<HTMLButtonElement>("[data-conversation-scope]")
-  );
-  const authorFilterField = document.querySelector<HTMLElement>(".conversation-author-filter");
-  const authorFilter = document.querySelector<HTMLSelectElement>("[data-conversation-author-filter]");
-  const workspace = document.querySelector<HTMLElement>("[data-chat-workspace]");
-  const sessionPanel = document.querySelector<HTMLElement>("[data-session-panel]");
-  const sessionPanelOpen = document.querySelector<HTMLButtonElement>("[data-session-panel-open]");
-  const sessionPanelClose = document.querySelector<HTMLButtonElement>("[data-session-panel-close]");
-  const sessionPanelScrim = document.querySelector<HTMLButtonElement>("[data-session-panel-scrim]");
-  const inspector = document.querySelector<HTMLElement>("[data-inspector]");
-  const inspectorToggle = document.querySelector<HTMLButtonElement>("[data-inspector-toggle]");
-  const inspectorClose = document.querySelector<HTMLButtonElement>("[data-inspector-close]");
-  const inspectorScrim = document.querySelector<HTMLButtonElement>("[data-inspector-scrim]");
-  const title = document.querySelector<HTMLElement>("#conversation-title");
-  const titleEdit = document.querySelector<HTMLButtonElement>("[data-conversation-title-edit]");
-  const headerStatus = document.querySelector<HTMLElement>("#conversation-header-status");
-  const providerLabel = document.querySelector<HTMLElement>("#conversation-provider-label");
-  const settings = document.querySelector<HTMLDetailsElement>(".conversation-settings");
-  const evidenceList = document.querySelector<HTMLOListElement>("#conversation-evidence-list");
-  const evidenceEmpty = document.querySelector<HTMLElement>("[data-evidence-empty]");
-  const evidenceCounts = Array.from(document.querySelectorAll<HTMLElement>("[data-evidence-count]"));
-  const traceList = document.querySelector<HTMLOListElement>("#conversation-trace");
-  const traceEmpty = document.querySelector<HTMLElement>("[data-trace-empty]");
-  const retryButton = document.querySelector<HTMLButtonElement>("[data-conversation-retry]");
-  const broadenButton = document.querySelector<HTMLButtonElement>("[data-conversation-broaden]");
-  const shareButton = document.querySelector<HTMLButtonElement>("[data-conversation-share]");
-  const initializationChecks = [
-    { selector: "#conversation-form", expected: "1", actual: Number(Boolean(form)) },
-    { selector: "#conversation-messages", expected: "1", actual: Number(Boolean(messages)) },
-    { selector: "#conversation-provider", expected: "1", actual: Number(Boolean(provider)) },
-    { selector: "#conversation-model", expected: "1", actual: Number(Boolean(model)) },
-    { selector: "#conversation-effort", expected: "1", actual: Number(Boolean(effort)) },
-    { selector: "#conversation-mode", expected: "1", actual: Number(Boolean(conversationMode)) },
-    { selector: "#conversation-timeout", expected: "1", actual: Number(Boolean(timeout)) },
-    { selector: "#conversation-token-budget", expected: "1", actual: Number(Boolean(tokenBudget)) },
-    { selector: "#conversation-tool-budget", expected: "1", actual: Number(Boolean(toolCallBudget)) },
-    { selector: "[data-token-budget-field]", expected: "1", actual: Number(Boolean(tokenBudgetField)) },
-    { selector: "#conversation-message", expected: "1", actual: Number(Boolean(input)) },
-    { selector: "#conversation-image-input", expected: "1", actual: Number(Boolean(imageInput)) },
-    { selector: "[data-image-attach]", expected: "1", actual: Number(Boolean(attachButton)) },
-    { selector: "#conversation-attachments", expected: "1", actual: Number(Boolean(attachmentTray)) },
-    { selector: "#conversation-contexts", expected: "1", actual: Number(Boolean(contextTray)) },
-    { selector: "#conversation-context-error", expected: "1", actual: Number(Boolean(contextError)) },
-    { selector: "#conversation-context-suggestions", expected: "1", actual: Number(Boolean(contextSuggestions)) },
-    { selector: "[data-context-add]", expected: "1", actual: Number(Boolean(contextAdd)) },
-    { selector: "[data-named-contexts]", expected: "1", actual: Number(Boolean(namedContextButton)) },
-    { selector: "#named-context-dialog", expected: "1", actual: Number(Boolean(namedContextDialog)) },
-    { selector: "[data-named-context-close]", expected: "1", actual: Number(Boolean(namedContextClose)) },
-    { selector: "[data-named-context-new]", expected: "1", actual: Number(Boolean(namedContextNew)) },
-    { selector: "[data-named-context-cancel]", expected: "1", actual: Number(Boolean(namedContextCancel)) },
-    { selector: "[data-named-context-list]", expected: "1", actual: Number(Boolean(namedContextList)) },
-    { selector: "[data-named-context-feedback]", expected: "1", actual: Number(Boolean(namedContextFeedback)) },
-    { selector: "[data-named-context-form]", expected: "1", actual: Number(Boolean(namedContextForm)) },
-    { selector: "[data-named-context-editor-title]", expected: "1", actual: Number(Boolean(namedContextEditorTitle)) },
-    { selector: "[data-named-context-editor-error]", expected: "1", actual: Number(Boolean(namedContextEditorError)) },
-    { selector: "#conversation-activity", expected: "1", actual: Number(Boolean(composerActivity)) },
-    { selector: "#image-support-detail", expected: "1", actual: Number(Boolean(imageSupportDetail)) },
-    { selector: "#conversation-submit", expected: "1", actual: Number(Boolean(submit)) },
-    { selector: "#conversation-interrupt", expected: "1", actual: Number(Boolean(interrupt)) },
-    { selector: "#conversation-runtime", expected: "1", actual: Number(Boolean(runtime)) },
-    { selector: "#conversation-context-value", expected: "1", actual: Number(Boolean(contextValue)) },
-    { selector: "#conversation-context-meter", expected: "1", actual: Number(Boolean(contextMeter)) },
-    { selector: "#conversation-usage-value", expected: "1", actual: Number(Boolean(usageValue)) },
-    { selector: "#provider-detail", expected: "1", actual: Number(Boolean(detail)) },
-    { selector: "[data-new-conversation]", expected: "at least 1", actual: newConversationButtons.length },
-    { selector: "#conversation-history", expected: "1", actual: Number(Boolean(history)) },
-    { selector: "[data-conversation-history-empty]", expected: "1", actual: Number(Boolean(historyEmpty)) },
-    { selector: "[data-conversation-filter]", expected: "1", actual: Number(Boolean(historyFilter)) },
-    { selector: "[data-conversation-scope]", expected: "1..2", actual: historyScopeButtons.length },
+  const initialization = collectRequiredElements(document, [
+    { key: "form", selector: "#conversation-form" },
+    { key: "messages", selector: "#conversation-messages" },
+    { key: "empty", selector: "[data-conversation-empty]", min: 0 },
+    { key: "provider", selector: "#conversation-provider" },
+    { key: "model", selector: "#conversation-model" },
+    { key: "effort", selector: "#conversation-effort" },
+    { key: "conversationMode", selector: "#conversation-mode" },
+    { key: "timeout", selector: "#conversation-timeout" },
+    { key: "tokenBudget", selector: "#conversation-token-budget" },
+    { key: "toolCallBudget", selector: "#conversation-tool-budget" },
+    { key: "tokenBudgetField", selector: "[data-token-budget-field]" },
+    { key: "input", selector: "#conversation-message" },
+    { key: "imageInput", selector: "#conversation-image-input" },
+    { key: "attachButton", selector: "[data-image-attach]" },
+    { key: "attachmentTray", selector: "#conversation-attachments" },
+    { key: "contextTray", selector: "#conversation-contexts" },
+    { key: "contextError", selector: "#conversation-context-error" },
+    { key: "contextSuggestions", selector: "#conversation-context-suggestions" },
+    { key: "contextAdd", selector: "[data-context-add]" },
+    { key: "namedContextButton", selector: "[data-named-contexts]" },
+    { key: "namedContextDialog", selector: "#named-context-dialog" },
+    { key: "namedContextClose", selector: "[data-named-context-close]" },
+    { key: "namedContextNew", selector: "[data-named-context-new]" },
+    { key: "namedContextCancel", selector: "[data-named-context-cancel]" },
+    { key: "namedContextList", selector: "[data-named-context-list]" },
+    { key: "namedContextFeedback", selector: "[data-named-context-feedback]" },
+    { key: "namedContextForm", selector: "[data-named-context-form]" },
+    { key: "namedContextEditorTitle", selector: "[data-named-context-editor-title]" },
+    { key: "namedContextEditorError", selector: "[data-named-context-editor-error]" },
+    { key: "composerActivity", selector: "#conversation-activity" },
+    { key: "imageSupportDetail", selector: "#image-support-detail" },
+    { key: "submit", selector: "#conversation-submit" },
+    { key: "interrupt", selector: "#conversation-interrupt" },
+    { key: "runtime", selector: "#conversation-runtime" },
+    { key: "contextValue", selector: "#conversation-context-value" },
+    { key: "contextMeter", selector: "#conversation-context-meter" },
+    { key: "usageValue", selector: "#conversation-usage-value" },
+    { key: "detail", selector: "#provider-detail" },
+    { key: "newConversationButtons", selector: "[data-new-conversation]", all: true, min: 1, max: Infinity },
+    { key: "history", selector: "#conversation-history" },
+    { key: "historyEmpty", selector: "[data-conversation-history-empty]" },
+    { key: "historyFilter", selector: "[data-conversation-filter]" },
+    { key: "historyScopeButtons", selector: "[data-conversation-scope]", all: true, min: 1, max: 2 },
+    { key: "ownScopeButtons", selector: '[data-conversation-scope="own"]', all: true },
     {
-      selector: '[data-conversation-scope="own"]',
-      expected: "1",
-      actual: historyScopeButtons.filter((button) => button.dataset.conversationScope === "own").length
-    },
-    {
+      key: "allScopeButtons",
       selector: '[data-conversation-scope="all"]',
-      expected: historyScopeButtons.length === 2 ? "1" : "0",
-      actual: historyScopeButtons.filter((button) => button.dataset.conversationScope === "all").length
+      all: true,
+      expected: (values) => {
+        const scopes = values.historyScopeButtons;
+        const expected = Array.isArray(scopes) && scopes.length === 2 ? 1 : 0;
+        return { min: expected, max: expected };
+      }
     },
-    { selector: ".conversation-author-filter", expected: "1", actual: Number(Boolean(authorFilterField)) },
-    { selector: "[data-conversation-author-filter]", expected: "1", actual: Number(Boolean(authorFilter)) },
-    { selector: "[data-chat-workspace]", expected: "1", actual: Number(Boolean(workspace)) },
-    { selector: "[data-session-panel]", expected: "1", actual: Number(Boolean(sessionPanel)) },
-    { selector: "[data-session-panel-open]", expected: "1", actual: Number(Boolean(sessionPanelOpen)) },
-    { selector: "[data-session-panel-close]", expected: "1", actual: Number(Boolean(sessionPanelClose)) },
-    { selector: "[data-session-panel-scrim]", expected: "1", actual: Number(Boolean(sessionPanelScrim)) },
-    { selector: "[data-inspector]", expected: "1", actual: Number(Boolean(inspector)) },
-    { selector: "[data-inspector-toggle]", expected: "1", actual: Number(Boolean(inspectorToggle)) },
-    { selector: "[data-inspector-close]", expected: "1", actual: Number(Boolean(inspectorClose)) },
-    { selector: "[data-inspector-scrim]", expected: "1", actual: Number(Boolean(inspectorScrim)) },
-    { selector: "#conversation-title", expected: "1", actual: Number(Boolean(title)) },
-    { selector: "[data-conversation-title-edit]", expected: "1", actual: Number(Boolean(titleEdit)) },
-    { selector: "#conversation-header-status", expected: "1", actual: Number(Boolean(headerStatus)) },
-    { selector: "#conversation-provider-label", expected: "1", actual: Number(Boolean(providerLabel)) },
-    { selector: ".conversation-settings", expected: "1", actual: Number(Boolean(settings)) },
-    { selector: "#conversation-evidence-list", expected: "1", actual: Number(Boolean(evidenceList)) },
-    { selector: "[data-evidence-empty]", expected: "1", actual: Number(Boolean(evidenceEmpty)) },
-    { selector: "[data-evidence-count]", expected: "at least 1", actual: evidenceCounts.length },
-    { selector: "#conversation-trace", expected: "1", actual: Number(Boolean(traceList)) },
-    { selector: "[data-trace-empty]", expected: "1", actual: Number(Boolean(traceEmpty)) },
-    { selector: "[data-conversation-retry]", expected: "1", actual: Number(Boolean(retryButton)) },
-    { selector: "[data-conversation-broaden]", expected: "1", actual: Number(Boolean(broadenButton)) },
-    { selector: "[data-conversation-share]", expected: "1", actual: Number(Boolean(shareButton)) }
-  ];
-  const initializationMismatches = initializationChecks.filter((check) => {
-    if (check.expected === "at least 1") {
-      return check.actual < 1;
-    }
-    if (check.expected === "1..2") {
-      return check.actual < 1 || check.actual > 2;
-    }
-    return check.actual !== Number.parseInt(check.expected, 10);
-  });
-  if (
-    !form ||
-    !messages ||
-    !provider ||
-    !model ||
-    !effort ||
-    !conversationMode ||
-    !timeout ||
-    !tokenBudget ||
-    !toolCallBudget ||
-    !tokenBudgetField ||
-    !input ||
-    !imageInput ||
-    !attachButton ||
-    !attachmentTray ||
-    !contextTray ||
-    !contextError ||
-    !contextSuggestions ||
-    !contextAdd ||
-    !namedContextButton ||
-    !namedContextDialog ||
-    !namedContextClose ||
-    !namedContextNew ||
-    !namedContextCancel ||
-    !namedContextList ||
-    !namedContextFeedback ||
-    !namedContextForm ||
-    !namedContextEditorTitle ||
-    !namedContextEditorError ||
-    !composerActivity ||
-    !imageSupportDetail ||
-    !submit ||
-    !interrupt ||
-    !runtime ||
-    !contextValue ||
-    !contextMeter ||
-    !usageValue ||
-    !traceList ||
-    !traceEmpty ||
-    !retryButton ||
-    !broadenButton ||
-    !shareButton ||
-    !detail ||
-    newConversationButtons.length === 0 ||
-    !history ||
-    !historyEmpty ||
-    !historyFilter ||
-    historyScopeButtons.length < 1 ||
-    historyScopeButtons.length > 2 ||
-    historyScopeButtons.filter((button) => button.dataset.conversationScope === "own").length !== 1 ||
-    historyScopeButtons.filter((button) => button.dataset.conversationScope === "all").length !==
-      (historyScopeButtons.length === 2 ? 1 : 0) ||
-    !authorFilterField ||
-    !authorFilter ||
-    !workspace ||
-    !sessionPanel ||
-    !sessionPanelOpen ||
-    !sessionPanelClose ||
-    !sessionPanelScrim ||
-    !inspector ||
-    !inspectorToggle ||
-    !inspectorClose ||
-    !inspectorScrim ||
-    !title ||
-    !titleEdit ||
-    !headerStatus ||
-    !providerLabel ||
-    !settings ||
-    !evidenceList ||
-    !evidenceEmpty ||
-    evidenceCounts.length === 0
-  ) {
+    { key: "authorFilterField", selector: ".conversation-author-filter" },
+    { key: "authorFilter", selector: "[data-conversation-author-filter]" },
+    { key: "workspace", selector: "[data-chat-workspace]" },
+    { key: "sessionPanel", selector: "[data-session-panel]" },
+    { key: "sessionPanelOpen", selector: "[data-session-panel-open]" },
+    { key: "sessionPanelClose", selector: "[data-session-panel-close]" },
+    { key: "sessionPanelScrim", selector: "[data-session-panel-scrim]" },
+    { key: "inspector", selector: "[data-inspector]" },
+    { key: "inspectorToggle", selector: "[data-inspector-toggle]" },
+    { key: "inspectorClose", selector: "[data-inspector-close]" },
+    { key: "inspectorScrim", selector: "[data-inspector-scrim]" },
+    { key: "title", selector: "#conversation-title" },
+    { key: "titleEdit", selector: "[data-conversation-title-edit]" },
+    { key: "headerStatus", selector: "#conversation-header-status" },
+    { key: "providerLabel", selector: "#conversation-provider-label" },
+    { key: "settings", selector: ".conversation-settings" },
+    { key: "evidenceList", selector: "#conversation-evidence-list" },
+    { key: "evidenceEmpty", selector: "[data-evidence-empty]" },
+    { key: "evidenceCounts", selector: "[data-evidence-count]", all: true, min: 1, max: Infinity },
+    { key: "traceList", selector: "#conversation-trace" },
+    { key: "traceEmpty", selector: "[data-trace-empty]" },
+    { key: "retryButton", selector: "[data-conversation-retry]" },
+    { key: "broadenButton", selector: "[data-conversation-broaden]" },
+    { key: "shareButton", selector: "[data-conversation-share]" }
+  ]);
+  const elements = initialization.values;
+  const form = elements.form as HTMLFormElement;
+  const messages = elements.messages as HTMLElement;
+  const empty = elements.empty as HTMLElement | null;
+  const provider = elements.provider as HTMLSelectElement;
+  const model = elements.model as HTMLSelectElement;
+  const effort = elements.effort as HTMLSelectElement;
+  const conversationMode = elements.conversationMode as HTMLSelectElement;
+  const timeout = elements.timeout as HTMLSelectElement;
+  const tokenBudget = elements.tokenBudget as HTMLSelectElement;
+  const toolCallBudget = elements.toolCallBudget as HTMLSelectElement;
+  const tokenBudgetField = elements.tokenBudgetField as HTMLElement;
+  const input = elements.input as HTMLTextAreaElement;
+  const imageInput = elements.imageInput as HTMLInputElement;
+  const attachButton = elements.attachButton as HTMLButtonElement;
+  const attachmentTray = elements.attachmentTray as HTMLElement;
+  const contextTray = elements.contextTray as HTMLElement;
+  const contextError = elements.contextError as HTMLElement;
+  const contextSuggestions = elements.contextSuggestions as HTMLElement;
+  const contextAdd = elements.contextAdd as HTMLButtonElement;
+  const namedContextButton = elements.namedContextButton as HTMLButtonElement;
+  const namedContextDialog = elements.namedContextDialog as HTMLDialogElement;
+  const namedContextClose = elements.namedContextClose as HTMLButtonElement;
+  const namedContextNew = elements.namedContextNew as HTMLButtonElement;
+  const namedContextCancel = elements.namedContextCancel as HTMLButtonElement;
+  const namedContextList = elements.namedContextList as HTMLElement;
+  const namedContextFeedback = elements.namedContextFeedback as HTMLElement;
+  const namedContextForm = elements.namedContextForm as HTMLFormElement;
+  const namedContextEditorTitle = elements.namedContextEditorTitle as HTMLElement;
+  const namedContextEditorError = elements.namedContextEditorError as HTMLElement;
+  const composerActivity = elements.composerActivity as HTMLElement;
+  const imageSupportDetail = elements.imageSupportDetail as HTMLElement;
+  const submit = elements.submit as HTMLButtonElement;
+  const interrupt = elements.interrupt as HTMLButtonElement;
+  const runtime = elements.runtime as HTMLElement;
+  const contextValue = elements.contextValue as HTMLElement;
+  const contextMeter = elements.contextMeter as HTMLElement;
+  const usageValue = elements.usageValue as HTMLElement;
+  const detail = elements.detail as HTMLElement;
+  const newConversationButtons = elements.newConversationButtons as HTMLButtonElement[];
+  const history = elements.history as HTMLOListElement;
+  const historyEmpty = elements.historyEmpty as HTMLElement;
+  const historyFilter = elements.historyFilter as HTMLInputElement;
+  const historyScopeButtons = elements.historyScopeButtons as HTMLButtonElement[];
+  const authorFilterField = elements.authorFilterField as HTMLElement;
+  const authorFilter = elements.authorFilter as HTMLSelectElement;
+  const workspace = elements.workspace as HTMLElement;
+  const sessionPanel = elements.sessionPanel as HTMLElement;
+  const sessionPanelOpen = elements.sessionPanelOpen as HTMLButtonElement;
+  const sessionPanelClose = elements.sessionPanelClose as HTMLButtonElement;
+  const sessionPanelScrim = elements.sessionPanelScrim as HTMLButtonElement;
+  const inspector = elements.inspector as HTMLElement;
+  const inspectorToggle = elements.inspectorToggle as HTMLButtonElement;
+  const inspectorClose = elements.inspectorClose as HTMLButtonElement;
+  const inspectorScrim = elements.inspectorScrim as HTMLButtonElement;
+  const title = elements.title as HTMLElement;
+  const titleEdit = elements.titleEdit as HTMLButtonElement;
+  const headerStatus = elements.headerStatus as HTMLElement;
+  const providerLabel = elements.providerLabel as HTMLElement;
+  const settings = elements.settings as HTMLDetailsElement;
+  const evidenceList = elements.evidenceList as HTMLOListElement;
+  const evidenceEmpty = elements.evidenceEmpty as HTMLElement;
+  const evidenceCounts = elements.evidenceCounts as HTMLElement[];
+  const traceList = elements.traceList as HTMLOListElement;
+  const traceEmpty = elements.traceEmpty as HTMLElement;
+  const retryButton = elements.retryButton as HTMLButtonElement;
+  const broadenButton = elements.broadenButton as HTMLButtonElement;
+  const shareButton = elements.shareButton as HTMLButtonElement;
+  const initializationMismatches = initialization.mismatches;
+  if (!initialization.valid) {
     debug?.add("error", "chat.initialization.failed", {
       mismatches: initializationMismatches
     });
@@ -2707,7 +2623,7 @@ function enableConversations(debug?: DebugLogger): void {
     for (const source of evidenceSources.values()) {
       const item = document.createElement("li");
       const link = document.createElement("a");
-      link.href = source.url;
+      setSafeHTTPLink(link, source.url, window.location.href);
       link.target = "_blank";
       link.rel = "noreferrer";
       const label = document.createElement("strong");
@@ -2725,8 +2641,9 @@ function enableConversations(debug?: DebugLogger): void {
 
   const addEvidenceSources = (sources: Array<{ label: string; url: string }> = []): void => {
     for (const source of sources) {
-      if (source.url) {
-        evidenceSources.set(source.url, source);
+      const resolved = safeHTTPURL(source.url, window.location.href);
+      if (resolved) {
+        evidenceSources.set(source.url, { ...source, url: resolved.href });
       }
     }
     renderEvidenceSources();
@@ -3019,7 +2936,7 @@ function enableConversations(debug?: DebugLogger): void {
       const label = document.createElement(contextURL ? "a" : "span");
       label.textContent = context.label;
       if (label instanceof HTMLAnchorElement && contextURL) {
-        label.href = contextURL;
+        setSafeHTTPLink(label, contextURL, window.location.href);
         label.target = "_blank";
         label.rel = "noreferrer";
       }
@@ -3062,7 +2979,7 @@ function enableConversations(debug?: DebugLogger): void {
       const label = document.createElement(context.url ? "a" : "span");
       label.textContent = context.label;
       if (label instanceof HTMLAnchorElement && context.url) {
-        label.href = context.url;
+        setSafeHTTPLink(label, context.url, window.location.href);
         label.target = "_blank";
         label.rel = "noreferrer";
       }
@@ -3375,7 +3292,7 @@ function enableConversations(debug?: DebugLogger): void {
       apply.disabled = context.state !== "ready";
       apply.addEventListener("click", () => void applyNamedContext(context));
       const open = document.createElement("a");
-      open.href = context.url;
+      setSafeHTTPLink(open, context.url, window.location.href);
       open.target = "_blank";
       open.rel = "noreferrer";
       open.textContent = "Open";
@@ -3613,7 +3530,7 @@ function enableConversations(debug?: DebugLogger): void {
     container.className = "conversation-sources";
     for (const source of sources) {
       const link = document.createElement("a");
-      link.href = source.url;
+      setSafeHTTPLink(link, source.url, window.location.href);
       link.textContent = source.label;
       link.target = "_blank";
       link.rel = "noreferrer";
@@ -4031,20 +3948,16 @@ function enableConversations(debug?: DebugLogger): void {
   const contextsReady = loadNamedContexts();
 
   debug?.add("info", "providers.request.started", { endpoint: "/api/providers" });
-  void fetch("/api/providers", { headers: { Accept: "application/json" } })
-    .then(async (response) => {
-      debug?.add(response.ok ? "info" : "warn", "providers.response.received", {
-        status: response.status,
-        content_type: response.headers.get("content-type")
+  void getProviderStatuses()
+    .then((result) => {
+      debug?.add("info", "providers.response.received", {
+        status: 200,
+        content_type: "application/json"
       });
-      if (!response.ok) {
-        const body = await response.text();
-        throw new Error(body || `Provider check failed (${response.status})`);
-      }
-      return response.json() as Promise<{ providers: ProviderStatus[] }>;
+      return result;
     })
     .then((result) => {
-      statuses = result.providers;
+      statuses = result.providers ?? [];
       debug?.add("info", "providers.loaded", {
         providers: statuses.map((status) => ({
           id: status.id,
@@ -4385,7 +4298,10 @@ function enableConversations(debug?: DebugLogger): void {
         throw new Error(await responseErrorMessage(response, "Deep Search could not be shared."));
       }
       const result = await response.json() as { url: string };
-      const absolute = new URL(result.url, window.location.href).toString();
+      const absolute = safeHTTPURL(result.url, window.location.href)?.toString();
+      if (!absolute) {
+        throw new Error("Share response contained an unsafe URL");
+      }
       await navigator.clipboard.writeText(absolute);
       headerStatus.textContent = "Permission-safe share URL copied";
     } catch (error: unknown) {
@@ -4513,26 +4429,23 @@ function enableConversations(debug?: DebugLogger): void {
       showContextError();
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
-      let buffer = "";
+      let reducerState = createChatEventReducerState();
       for (;;) {
         const { value, done } = await reader.read();
-        buffer += decoder.decode(value, { stream: !done });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-        for (const line of lines) {
-          if (!line.trim()) {
-            continue;
-          }
-          let message: ConversationEvent;
-          try {
-            message = JSON.parse(line) as ConversationEvent;
-          } catch (error: unknown) {
-            debug?.add("error", "chat.stream.decode-failed", {
-              line_length: line.length,
-              ...describeError(error)
-            });
-            throw error;
-          }
+        const reduced = reduceChatEventChunk(
+          reducerState,
+          decoder.decode(value, { stream: !done }),
+          done
+        );
+        reducerState = reduced.state;
+        for (const malformed of reduced.malformed) {
+          debug?.add("warn", "chat.stream.event-skipped", {
+            line_length: malformed.line.length,
+            reason: malformed.reason,
+            malformed_events: reducerState.malformed
+          });
+        }
+        for (const message of reduced.events) {
           if (message.type === "meta" && message.conversation_id) {
             conversationID = message.conversation_id;
             setConversationURL(conversationID);
@@ -4575,7 +4488,7 @@ function enableConversations(debug?: DebugLogger): void {
             sources.replaceChildren();
             for (const source of message.sources) {
               const link = document.createElement("a");
-              link.href = source.url;
+              setSafeHTTPLink(link, source.url, window.location.href);
               link.textContent = source.label;
               link.target = "_blank";
               link.rel = "noreferrer";
@@ -4911,7 +4824,7 @@ function enableRepositoryMaps(debug?: DebugLogger): void {
     for (const item of evidence) {
       const listItem = document.createElement("li");
       const link = document.createElement("a");
-      link.href = item.url;
+      setSafeHTTPLink(link, item.url, window.location.href);
       link.target = "_blank";
       link.rel = "noopener noreferrer";
       const label = document.createElement("strong");
@@ -5689,65 +5602,8 @@ function enableRepositoryMaps(debug?: DebugLogger): void {
   void loadMap(false);
 }
 
-type WikiPage = {
-  repository_id: number;
-  slug: string;
-  title: string;
-  summary: string;
-  order: number;
-  number: string;
-  parent_slug?: string;
-  depth: number;
-  plan_revision?: string;
-  plan_version: number;
-  plan_provider?: string;
-  plan_model?: string;
-  status: "planned" | "generating" | "ready" | "stale" | "error";
-  revision?: string;
-  provider?: string;
-  model?: string;
-  input_tokens: number;
-  output_tokens: number;
-  started_at?: string;
-  generated_at?: string;
-  error?: string;
-  supporting_files: string[];
-  citations: MapEvidence[];
-  markdown?: string;
-};
-
-type WikiSite = {
-  version: number;
-  repository_id: number;
-  repository: string;
-  revision: string;
-  updated_at: string;
-  /** How the standard pipeline scaled itself: "standard" or "compact". */
-  profile?: string;
-  profile_pages?: string;
-  steering: {
-    title?: string;
-    include?: string[];
-    exclude?: string[];
-    notes?: Record<string, string>;
-  };
-  pages: WikiPage[];
-  survey_ready: boolean;
-  survey_stale: boolean;
-  survey_status?: string;
-  survey_error?: string;
-  /** Survey checkpoint, which carries its own provider token usage. */
-  survey?: { profile?: string; input_tokens?: number; output_tokens?: number };
-  plan_ready: boolean;
-  plan_stale: boolean;
-  plan_revision?: string;
-  plan_provider?: string;
-  plan_model?: string;
-  ready: number;
-  stale: number;
-  pending: number;
-  failed: number;
-};
+type WikiPage = WikiPageResponse;
+type WikiSite = WikiSiteResponse;
 
 function enableRepositoryWiki(debug?: DebugLogger): void {
   const workspace = document.querySelector<HTMLElement>("[data-wiki-workspace]");
@@ -6049,14 +5905,7 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
 
   const loadProviders = async (): Promise<void> => {
     try {
-      const response = await fetch("/api/providers", {
-        cache: "no-store",
-        headers: { Accept: "application/json" }
-      });
-      if (!response.ok) {
-        throw new Error(await response.text() || `Provider request failed (${response.status})`);
-      }
-      providerStatuses = (await response.json() as { providers: ProviderStatus[] }).providers ?? [];
+      providerStatuses = (await getProviderStatuses()).providers ?? [];
       provider.replaceChildren();
       for (const status of providerStatuses) {
         const option = document.createElement("option");
@@ -6105,26 +5954,16 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
    * UI show which stage is live, which were skipped because a checkpoint already
    * existed, and exactly which page is being written.
    */
-  type RunStageID = "survey" | "plan" | "pages";
-  type RunStageState = "pending" | "active" | "done" | "reused" | "failed";
-  interface RunTarget {
-    slug: string;
-    number: string;
-    title: string;
-    state: "queued" | "active" | "done" | "failed";
-  }
-
-  const runTargets: RunTarget[] = [];
+  let generationState = createWikiGenerationState();
   let runStepStartedAt: number | undefined;
 
-  const stageStates: Record<RunStageID, RunStageState> = {
-    survey: "pending",
-    plan: "pending",
-    pages: "pending"
-  };
-
-  const setStageState = (id: RunStageID, state: RunStageState, note = ""): void => {
-    stageStates[id] = state;
+  const setStageState = (id: WikiRunStageID, state: WikiRunStageState, note = ""): void => {
+    generationState = reduceWikiGeneration(generationState, {
+      type: "stage",
+      stage: id,
+      state,
+      note
+    });
     renderRunCounters();
     const row = runPanel.querySelector<HTMLElement>(`[data-stage="${id}"]`);
     if (!row) {
@@ -6143,7 +5982,7 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
     }
   };
 
-  const setStageDetail = (id: RunStageID, detail: string): void => {
+  const setStageDetail = (id: WikiRunStageID, detail: string): void => {
     runPanel.querySelector<HTMLElement>(`[data-stage="${id}"] [data-stage-detail]`)
       ?.replaceChildren(document.createTextNode(detail));
   };
@@ -6155,21 +5994,14 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
    * reused survey legitimately counts as one of three stages already done.
    */
   const renderRunCounters = (): void => {
-    const done = runTargets.filter((target) => target.state === "done").length;
-    if (runTargets.length > 0) {
-      runDone.textContent = `${done} / ${runTargets.length} pages`;
-      runBar.style.width = `${Math.round((done / runTargets.length) * 100)}%`;
-      return;
-    }
-    const settled = (["survey", "plan", "pages"] as RunStageID[])
-      .filter((id) => stageStates[id] === "done" || stageStates[id] === "reused").length;
-    runDone.textContent = `${settled} / 3 stages`;
-    runBar.style.width = `${Math.round((settled / 3) * 100)}%`;
+    const progress = wikiGenerationProgress(generationState);
+    runDone.textContent = `${progress.done} / ${progress.total} ${progress.kind}`;
+    runBar.style.width = `${progress.percentage}%`;
   };
 
   const renderRunTargets = (): void => {
     runPages.replaceChildren();
-    for (const target of runTargets) {
+    for (const target of generationState.targets) {
       const item = document.createElement("li");
       item.dataset.state = target.state;
       item.textContent = target.number || target.slug;
@@ -6211,7 +6043,7 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
     runTokens.textContent = `${formatTokenCount(totals.input)} in · ${formatTokenCount(totals.output)} out`;
   };
 
-  const startRunStep = (id: RunStageID, current: string, note?: string): void => {
+  const startRunStep = (id: WikiRunStageID, current: string, note?: string): void => {
     if (generationTimer !== undefined) {
       window.clearInterval(generationTimer);
     }
@@ -6236,10 +6068,10 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
   };
 
   const beginRun = (): void => {
-    runTargets.length = 0;
+    generationState = reduceWikiGeneration(generationState, { type: "reset" });
     runStartedAt = undefined;
     runStepStartedAt = undefined;
-    for (const id of ["survey", "plan", "pages"] as RunStageID[]) {
+    for (const id of ["survey", "plan", "pages"] as WikiRunStageID[]) {
       setStageState(id, "pending");
     }
     runProgress.hidden = true;
@@ -6382,7 +6214,7 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
     for (const citation of pageCitations) {
       const item = document.createElement("li");
       const link = document.createElement("a");
-      link.href = citation.url;
+      setSafeHTTPLink(link, citation.url, window.location.href);
       link.target = "_blank";
       link.rel = "noopener noreferrer";
       const label = document.createElement("strong");
@@ -6466,14 +6298,7 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
       ? "Changed supporting files are flagged; refresh this page when ready."
       : "Rendering citations and validated diagrams locally.";
     try {
-      const response = await fetch(`/api/wiki/${site.repository_id}/${encodeURIComponent(slug)}`, {
-        cache: "no-store",
-        headers: { Accept: "application/json" }
-      });
-      if (!response.ok) {
-        throw new Error(await response.text() || `Page request failed (${response.status})`);
-      }
-      const loaded = await response.json() as WikiPage;
+      const loaded = await getWikiPage(site.repository_id, slug);
       if (revision !== requestRevision) {
         return;
       }
@@ -6600,21 +6425,27 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
             page.status === "stale" ||
             page.status === "error"
           );
-      runTargets.push(...targets.map((page) => ({
-        slug: page.slug,
-        number: page.number || String(page.order),
-        title: page.title,
-        state: "queued" as const
-      })));
-      runProgress.hidden = runTargets.length === 0;
-      setStageDetail("pages", `${runTargets.length} page${runTargets.length === 1 ? "" : "s"} to write`);
+      generationState = reduceWikiGeneration(generationState, {
+        type: "targets",
+        targets: targets.map((page) => ({
+          slug: page.slug,
+          number: page.number || String(page.order),
+          title: page.title
+        }))
+      });
+      runProgress.hidden = generationState.targets.length === 0;
+      setStageDetail(
+        "pages",
+        `${generationState.targets.length} page${generationState.targets.length === 1 ? "" : "s"} to write`
+      );
       renderRunTargets();
 
       for (const [index, target] of targets.entries()) {
-        const tracked = runTargets[index];
-        if (tracked) {
-          tracked.state = "active";
-        }
+        generationState = reduceWikiGeneration(generationState, {
+          type: "target",
+          index,
+          state: "active"
+        });
         renderRunTargets();
         startRunStep(
           "pages",
@@ -6630,20 +6461,25 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
             slug ? true : refreshAll || target.status !== "planned"
           );
         } catch (pageError: unknown) {
-          if (tracked) {
-            tracked.state = "failed";
-          }
+          generationState = reduceWikiGeneration(generationState, {
+            type: "target",
+            index,
+            state: "failed"
+          });
           renderRunTargets();
           throw pageError;
         }
-        if (tracked) {
-          tracked.state = "done";
-        }
+        generationState = reduceWikiGeneration(generationState, {
+          type: "target",
+          index,
+          state: "done"
+        });
         renderSite(site);
         renderRunTargets();
         renderRunTokens();
       }
-      setStageState("pages", runTargets.length ? "done" : "reused");
+      setStageState("pages", generationState.targets.length ? "done" : "reused");
+      generationState = reduceWikiGeneration(generationState, { type: "complete" });
 
       endGenerationProgress();
       const selected = site.pages.some((page) => page.slug === (slug || activeSlug))
@@ -6662,6 +6498,10 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
       });
     } catch (generationError: unknown) {
       cancelled = generationError instanceof DOMException && generationError.name === "AbortError";
+      generationState = reduceWikiGeneration(
+        generationState,
+        { type: cancelled ? "cancel" : "fail" }
+      );
       if (!cancelled) {
         errorMessage.textContent = generationError instanceof Error ? generationError.message : String(generationError);
         setStage("error");
@@ -6859,14 +6699,7 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
     loading.querySelector("strong")!.textContent = "Planning documentation";
     loading.querySelector("p")!.textContent = "Reading the current structural snapshot and repository steering.";
     try {
-      const response = await fetch(`/api/wiki?repository=${repositoryID}`, {
-        cache: "no-store",
-        headers: { Accept: "application/json" }
-      });
-      if (!response.ok) {
-        throw new Error(await responseErrorMessage(response, `Documentation plan failed (${response.status})`));
-      }
-      const loaded = await response.json() as WikiSite;
+      const loaded = await getWikiSite(repositoryID);
       if (revision !== requestRevision) {
         return;
       }
@@ -7052,6 +6885,21 @@ function enableRepositoryWiki(debug?: DebugLogger): void {
   }
 }
 
+async function refreshRenderedPageRegions(selectors: string[]): Promise<void> {
+  const response = await fetch(window.location.href, {
+    cache: "no-store",
+    headers: { Accept: "text/html" }
+  });
+  if (!response.ok) {
+    throw new Error(await responseErrorMessage(response, `Page refresh failed (${response.status})`));
+  }
+  const fresh = new DOMParser().parseFromString(await response.text(), "text/html");
+  const result = replaceRenderedRegions(document, fresh, selectors);
+  if (result.replaced.length === 0) {
+    throw new Error(`Page refresh did not contain ${selectors.join(", ")}`);
+  }
+}
+
 function enableArtifactProgress(): void {
   const health = document.querySelector<HTMLElement>("[data-index-health]");
   const dependencyPending = document.querySelector<HTMLElement>("[data-dependency-build-pending]");
@@ -7060,21 +6908,11 @@ function enableArtifactProgress(): void {
     return;
   }
   let previousPending = -1;
+  let failureCount = 0;
   const poll = async (): Promise<void> => {
     try {
-      const response = await fetch("/api/artifacts/progress", {
-        cache: "no-store",
-        headers: { Accept: "application/json" }
-      });
-      if (!response.ok) {
-        return;
-      }
-      const progress = await response.json() as {
-        state: string;
-        requested_repositories: number;
-        ready_repositories: number;
-        pending_repositories: number;
-      };
+      const progress = await getArtifactProgress();
+      failureCount = 0;
       const value = health.querySelector<HTMLElement>("[data-artifact-progress]");
       if (value) {
         value.textContent = progress.pending_repositories > 0
@@ -7085,16 +6923,25 @@ function enableArtifactProgress(): void {
         dependencyValue.textContent = `${progress.ready_repositories} of ${progress.requested_repositories}`;
       }
       if (dependencyPending && previousPending > 0 && progress.pending_repositories === 0) {
-        window.location.reload();
+        await refreshRenderedPageRegions(["[data-dependency-inventory-region]"]);
+        enableDependencyRefresh();
         return;
       }
       previousPending = progress.pending_repositories;
       if (progress.pending_repositories > 0) {
         window.setTimeout(() => void poll(), 2000);
       }
-    } catch {
-      // The normal index status remains visible if the progress endpoint is
-      // briefly unavailable during startup or shutdown.
+    } catch (error) {
+      failureCount++;
+      const retry = boundedPollRetry(failureCount);
+      if (retry.retry) {
+        window.setTimeout(() => void poll(), retry.delayMS);
+        return;
+      }
+      health.dataset.progressState = "unavailable";
+      health.title = error instanceof Error
+        ? `Artifact progress unavailable after ${failureCount} attempts: ${error.message}`
+        : `Artifact progress unavailable after ${failureCount} attempts`;
     }
   };
   void poll();
@@ -7108,36 +6955,23 @@ function enableDependencyRefresh(): void {
   }
   let polling = false;
   let watching = false;
+  let failureCount = 0;
   const poll = async (): Promise<void> => {
     if (polling) {
       return;
     }
     polling = true;
     try {
-      const response = await fetch(button.dataset.dependencyProgressUrl || "/api/dependencies/progress", {
-        cache: "no-store",
-        headers: { Accept: "application/json" }
-      });
-      if (!response.ok) {
-        throw new Error(`Progress request failed (${response.status})`);
-      }
-      const progress = await response.json() as {
-        state: string;
-        total: number;
-        completed: number;
-        failed: number;
-        skipped: number;
-        error?: string;
-      };
+      const progress = await getDependencyRefreshProgress(
+        button.dataset.dependencyProgressUrl || "/api/dependencies/progress"
+      );
+      failureCount = 0;
       if (progress.state === "running") {
         watching = true;
         button.disabled = true;
         status.textContent = `Checking ${progress.completed} of ${progress.total} items` +
           (progress.failed > 0 ? ` · ${progress.failed} failed` : "");
-        window.setTimeout(() => {
-          polling = false;
-          void poll();
-        }, 750);
+        window.setTimeout(() => void poll(), 750);
         return;
       }
       button.disabled = false;
@@ -7145,11 +6979,21 @@ function enableDependencyRefresh(): void {
         status.textContent = `Checked ${progress.completed} packages` +
           (progress.failed > 0 ? ` · ${progress.failed} failed` : "") +
           ` · ${progress.skipped} cached or unsupported`;
-        window.location.reload();
+        await refreshRenderedPageRegions(["[data-dependency-inventory-region]"]);
+        enableDependencyRefresh();
+        return;
       } else if (progress.state === "error") {
-        status.textContent = progress.error || "Dependency refresh failed";
+        status.textContent = "Dependency refresh failed";
       }
     } catch (error) {
+      failureCount++;
+      const retry = boundedPollRetry(failureCount);
+      if (watching && retry.retry) {
+        status.textContent =
+          `Dependency progress temporarily unavailable · retrying in ${Math.ceil(retry.delayMS / 1000)}s`;
+        window.setTimeout(() => void poll(), retry.delayMS);
+        return;
+      }
       button.disabled = false;
       status.textContent = error instanceof Error ? error.message : "Dependency refresh failed";
     } finally {
@@ -7345,7 +7189,7 @@ function enableDependencyTopology(debug?: DebugLogger): void {
       const item = document.createElement("li");
       const link = document.createElement("a");
       link.className = "topology-evidence-link";
-      link.href = fact.url;
+      setSafeHTTPLink(link, fact.url, window.location.href);
       link.textContent = `${fact.repository} · ${fact.path}:${fact.line}`;
       link.title = `${fact.label} at ${fact.revision}`;
       item.append(link);
