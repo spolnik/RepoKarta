@@ -1,0 +1,67 @@
+---
+title: Deep Wiki
+description: Plan, generate, inspect, refresh, and export cited living documentation.
+---
+
+import { Aside, Card, CardGrid, Steps } from '@astrojs/starlight/components';
+import Figure from '../../../components/Figure.astro';
+import wikiCapture from '../../../assets/captures/wiki-workspace.png';
+
+Deep Wiki turns a repository’s indexed evidence into a persisted documentation
+set. Generation is a controlled artifact workflow: plan first, generate pages,
+retain citations and provenance, surface progress and failure, then refresh
+when the indexed revision changes.
+
+<Figure
+	image={wikiCapture}
+	alt="RepoKarta Deep Wiki workspace with Spring Petclinic selected."
+	caption="Repository, provider state, plan status, generation progress, pages, evidence, and export share one durable workspace."
+	meta="REAL LOCAL CAPTURE · PROVIDER STATE VISIBLE"
+/>
+
+## Generation lifecycle
+
+<section class="system-flow" aria-label="Deep Wiki generation lifecycle">
+	<article class="system-flow__stage"><span class="system-flow__index">01</span><h3>Plan</h3><p>The provider proposes a bounded page hierarchy for the selected repository.</p><div class="chip-row"><span>slugs</span><span>hierarchy</span></div></article>
+	<article class="system-flow__stage"><span class="system-flow__index">02</span><h3>Research</h3><p>Permission-checked code, map, dependency, and history tools gather cited evidence.</p><div class="chip-row"><span>MCP</span><span>citations</span></div></article>
+	<article class="system-flow__stage"><span class="system-flow__index">03</span><h3>Persist</h3><p>Pages, status, model, revision, evidence, and run progress are stored as an artifact.</p><div class="chip-row"><span>pages</span><span>provenance</span></div></article>
+	<article class="system-flow__stage"><span class="system-flow__index">04</span><h3>Review</h3><p>Read, filter, navigate the outline, inspect evidence, and export the generated set.</p><div class="chip-row"><span>browser</span><span>export</span></div></article>
+</section>
+
+## The Wiki workspace
+
+<CardGrid>
+	<Card title="Repository & revision" icon="git-branch">
+		Generation is attached to one indexed repository revision.
+	</Card>
+	<Card title="Provider & budget" icon="puzzle">
+		Choose an available Wiki-grade model and an explicit output budget.
+	</Card>
+	<Card title="Visible progress" icon="sync">
+		Plan and page-generation status, evidence counts, warnings, and failures
+		remain observable.
+	</Card>
+	<Card title="Document reader" icon="open-book">
+		Page navigation, outline, Mermaid rendering, citations, freshness, and
+		export are part of the stored artifact.
+	</Card>
+</CardGrid>
+
+## Safe operating pattern
+
+<Steps>
+1. Wait for the repository’s Search and map evidence to be ready enough for the
+   intended documentation depth.
+2. Select a provider and review the plan before committing generation budget.
+3. Watch progress and coverage warnings; a completed model call is not the same
+   as complete repository evidence.
+4. Open citations from architectural claims and verify the pinned lines.
+5. Regenerate after a meaningful indexed revision change; do not hide a stale
+   Wiki behind the newest working tree.
+6. Export only through the permission-checked artifact endpoint.
+</Steps>
+
+<Aside type="caution" title="Generated is not authoritative by itself">
+	A Wiki page is a navigable synthesis. Its authority comes from the cited
+	RepoKarta evidence, recorded revision, and visible coverage—not fluent prose.
+</Aside>

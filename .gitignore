@@ -21,3 +21,5 @@ coverage.out
 
 # Local Go build cache overrides
 /.tmp-go-cache/
+/.tmp-gocache-*/
+/repokarta.exe

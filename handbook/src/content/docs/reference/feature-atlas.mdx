@@ -1,0 +1,48 @@
+---
+title: Complete feature atlas
+description: One checklist of the implemented browser, API, MCP, security, and operational surface.
+---
+
+import FeatureAtlas from '../../../components/FeatureAtlas.astro';
+import { Aside } from '@astrojs/starlight/components';
+
+This atlas is the handbook’s coverage ledger. Each entry below maps to current
+application code and is explained in the linked workflow or operations
+chapters. Optional provider or imported-evidence features are implemented even
+when a particular local capture has no external provider configured.
+
+<FeatureAtlas />
+
+## Browser and API surface
+
+| Domain | Browser | Principal API/workflow |
+| --- | --- | --- |
+| Search | `/` | search GET/POST, completion, saved searches, monitors |
+| Contexts | Search/Chat dialogs | suggestions, resolve, named-context CRUD |
+| Repositories | `/repositories`, `/projects/{id}` | list, refresh, tree, file |
+| Source/history | `/source/{id}` | symbol, AST, git log, git diff |
+| Maps | `/maps` | snapshots, graph query, progress, export |
+| Dependencies | `/dependencies` | inventory, topology, observations, refresh, findings, SARIF |
+| Insights | `/insights` | import, derive, compare, thresholds, Sonar |
+| Deep Wiki | `/wiki` | plan/pages, generate, progress, export |
+| Chat | `/chat` | providers, conversation CRUD, interrupt, retry, share |
+| MCP | `/mcp/setup`, `/mcp` | setup plus Streamable HTTP handler |
+| Administration | `/admin` | security, identities, grants, audit, acquisition, maintenance |
+| Provisioning | — | `/scim/v2/` |
+| Operations | `/admin?section=storage` | health, events, cleanup, diagnostics, telemetry status |
+
+## State vocabulary
+
+<div class="state-rail">
+	<div class="ready"><strong>Ready</strong><span>Artifact matches its recorded input revision.</span></div>
+	<div><strong>Building</strong><span>Useful partial work may exist; completion is pending.</span></div>
+	<div class="partial"><strong>Partial</strong><span>A declared bound or provider gap limits coverage.</span></div>
+	<div class="stale"><strong>Stale</strong><span>Stored evidence belongs to an older indexed revision or snapshot.</span></div>
+	<div class="failed"><strong>Failed</strong><span>The attempted operation retains an actionable error state.</span></div>
+</div>
+
+<Aside type="note" title="Implementation and availability are different">
+	Chat, Wiki, SonarQube synchronization, OSV refresh, runtime observations, and
+	Java SCIP have implemented workflows but depend on explicitly configured
+	tools or external evidence. The UI should show that distinction.
+</Aside>

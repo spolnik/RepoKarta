@@ -1,0 +1,61 @@
+---
+const groups = [
+	{
+		code: 'FIND',
+		title: 'Find and read',
+		items: [
+			['Fleet search', 'Zoekt, literal, regex, references, AST and typed entities'],
+			['Context scopes', 'Explicit, reusable personal, published and default repository sets'],
+			['Search workspace', 'Recent queries, saved searches and scheduled monitors'],
+			['Source browser', 'Pinned files, tree, symbols, references, routes and callers'],
+			['Git evidence', 'Bounded log and unified diff across resolved revisions'],
+		],
+	},
+	{
+		code: 'MODEL',
+		title: 'Model the system',
+		items: [
+			['Repository maps', 'Packages, entry points, routes, dependencies and evidence graph'],
+			['Fleet topology', 'HTTP, gRPC, Kafka, database, MCP and runtime observations'],
+			['Dependency inventory', 'Manifests, resolved versions, calls and registries'],
+			['Vulnerability findings', 'OSV snapshots, confidence, pagination and SARIF'],
+			['Code Insights', 'Imported and derived metrics, thresholds, history and comparisons'],
+		],
+	},
+	{
+		code: 'EXPLAIN',
+		title: 'Explain and automate',
+		items: [
+			['Deep Wiki', 'Planned, generated, persisted, cited and exportable documentation'],
+			['Chat', 'Durable conversations, file images, context mentions and citations'],
+			['Deep Search', 'Visible research trace, coverage warnings, retry and interrupt'],
+			['MCP', 'Twenty registered, bounded, read-only tools over HTTP'],
+			['Contextual ask', 'Launch grounded questions from Search, Maps, Source or Wiki'],
+		],
+	},
+	{
+		code: 'RUN',
+		title: 'Share and operate',
+		items: [
+			['Authentication', 'Local, Cloudflare Access, native SAML or explicitly allowed open mode'],
+			['Authorization', 'Reader, maintainer, admin, group mappings and repository grants'],
+			['Provisioning & audit', 'SCIM 2.0, audit search/export and retention'],
+			['Repository acquisition', 'Discover, clone, synchronize and remove GitHub/GitLab sources'],
+			['Storage & operations', 'SQLite default, PostgreSQL opt-in, maintenance, diagnostics and OTel'],
+		],
+	},
+];
+---
+
+<section class="feature-atlas">
+	{groups.map((group) => (
+		<article>
+			<header><span>{group.code}</span><h2>{group.title}</h2></header>
+			<ol>
+				{group.items.map(([title, body], index) => (
+					<li><small>{String(index + 1).padStart(2, '0')}</small><div><strong>{title}</strong><p>{body}</p></div></li>
+				))}
+			</ol>
+		</article>
+	))}
+</section>

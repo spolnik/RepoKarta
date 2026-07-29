@@ -1,0 +1,88 @@
+---
+title: Storage, maintenance & telemetry
+description: Choose SQLite or PostgreSQL, migrate safely, manage artifacts, export diagnostics, and configure OpenTelemetry.
+---
+
+import { Aside, Card, CardGrid, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
+
+RepoKarta separates the metadata database from filesystem artifacts. SQLite is
+the default and requires no server. PostgreSQL is opt-in for deployments that
+need an external metadata store; indexes, maps, generated documents, semantic
+artifacts, logs, and temporary work still use the data directory.
+
+## Storage profiles
+
+<Tabs>
+	<TabItem label="SQLite default">
+		No database environment variable is required. Metadata is stored at
+		`<data-dir>/repokarta.db`.
+	</TabItem>
+	<TabItem label="PostgreSQL">
+		Set `REPOKARTA_DATABASE_URL` or point
+		`REPOKARTA_DATABASE_URL_FILE` at a permission-restricted file. The latter
+		takes precedence when present.
+	</TabItem>
+</Tabs>
+
+## SQLite-to-PostgreSQL migration
+
+```powershell
+repokarta database migrate-sqlite-to-postgres `
+  -data-dir C:\RepoKartaData `
+  -postgres-url-file C:\Secrets\repokarta-postgres-url.txt
+```
+
+The destination must be empty. Migration preserves IDs, copies metadata
+tables, resets PostgreSQL sequences, and verifies row counts. Filesystem
+artifacts stay under the supplied data directory.
+
+<Steps>
+1. Stop writes to the source instance and back up the SQLite database and data
+   directory.
+2. Create an empty PostgreSQL destination.
+3. Store its URL in a permission-restricted file.
+4. Run the explicit migration command and keep its count verification output.
+5. Start `serve` with the same data directory and PostgreSQL URL.
+6. Verify repository, access, conversation, map, Wiki, dependency, and insight
+   metadata before retiring the source backup.
+</Steps>
+
+## Maintenance and diagnostics
+
+The administrative storage page inventories database and filesystem state.
+Cleanup is preview-first and limits selection to stale map snapshots, orphaned
+attachments, logs, and interrupted temporary files. Current indexes, Wiki
+pages, database state, and authentication identities are protected.
+Diagnostics export packages operational evidence for investigation through a
+controlled, audited endpoint.
+
+## Observability
+
+<CardGrid>
+	<Card title="Console logs" icon="document">
+		`REPOKARTA_LOG_FORMAT` accepts `text` or `json`;
+		`REPOKARTA_LOG_LEVEL` sets the structured log threshold.
+	</Card>
+	<Card title="Traces" icon="seti">
+		Standard OpenTelemetry SDK and OTLP environment variables configure
+		trace export.
+	</Card>
+	<Card title="Metrics" icon="chart">
+		OTLP metric export is enabled only when its SDK endpoint/settings are
+		configured.
+	</Card>
+	<Card title="Logs" icon="open-book">
+		OTLP log export can coexist with console output and preserves correlation
+		context.
+	</Card>
+</CardGrid>
+
+The general `OTEL_EXPORTER_OTLP_ENDPOINT` applies across signals; signal-specific
+trace, metric, and log endpoints can override it. Invalid telemetry or log
+configuration fails visibly during startup.
+
+<Aside type="note" title="Back up both planes">
+	A metadata backup without the data directory loses derived artifacts and
+	attachments. A data-directory copy without the database loses identity,
+	provenance, and artifact records. Treat them as one operational unit.
+</Aside>

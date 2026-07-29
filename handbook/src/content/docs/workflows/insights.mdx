@@ -1,0 +1,70 @@
+---
+title: Insights & trends
+description: Normalize imported reports, derive bounded indicators, set thresholds, and compare revisions.
+---
+
+import { Aside, Card, CardGrid, Steps } from '@astrojs/starlight/components';
+import Figure from '../../../components/Figure.astro';
+import insightsCapture from '../../../assets/captures/insights-overview.png';
+
+Insights stores quality evidence at exact repository revisions. It can import
+trusted reports, derive bounded syntax indicators without executing the
+project, read SonarQube Community Build through its Web API, apply thresholds,
+and compare two persisted revisions.
+
+<Figure
+	image={insightsCapture}
+	alt="RepoKarta Code Insights overview for the RepoKarta repository."
+	caption="The overview separates metrics, findings, historical observations, evidence runs, and advisory thresholds."
+	meta="REAL LOCAL CAPTURE · EXACT REVISION"
+/>
+
+## Three evidence sources
+
+<CardGrid>
+	<Card title="Imported reports" icon="upload">
+		Ingest supported coverage or analysis output up to the documented size
+		bound. The run records tool, revision, input type, and provenance.
+	</Card>
+	<Card title="RepoKarta-derived" icon="seti">
+		Compute bounded syntax indicators from committed source. This is not a
+		replacement for a project’s compiler or test suite.
+	</Card>
+	<Card title="SonarQube" icon="link">
+		Configure a repository connection and synchronize read-only Web API
+		results. The external service remains the evidence owner.
+	</Card>
+</CardGrid>
+
+## From run to decision
+
+<Steps>
+1. Choose a repository and confirm the exact revision.
+2. Import a report, derive bounded indicators, or synchronize the configured
+   SonarQube project.
+3. Inspect metrics, findings, tool identity, run status, and evidence time.
+4. Set advisory thresholds for metrics that have a meaningful local policy.
+5. Compare stored revisions to separate introduced, resolved, improved, and
+   regressed evidence.
+</Steps>
+
+| Surface | What it proves | What it does not prove |
+| --- | --- | --- |
+| Metric | recorded numeric value at one revision | causality |
+| Finding | tool-reported issue with location/provenance | runtime impact |
+| Threshold | local policy evaluation | universal severity |
+| Comparison | delta between two persisted revisions | correctness of either tool |
+| Derived indicator | bounded syntax signal | compiled or tested behavior |
+
+## Permissions and failure behavior
+
+Readers can inspect stored results. Artifact maintainers can import and derive
+runs. Administrative access controls thresholds and SonarQube connections.
+Failed or partial evidence runs remain visible in the run history rather than
+disappearing behind the last successful value.
+
+<Aside type="note" title="RepoKarta is the evidence ledger, not every scanner">
+	The feature deliberately normalizes outputs and provenance. It does not
+	quietly execute arbitrary project scanners when you open the page or call
+	the MCP insight tools.
+</Aside>

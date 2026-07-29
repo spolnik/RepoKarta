@@ -1,0 +1,82 @@
+---
+title: How RepoKarta works
+description: The runtime, evidence planes, artifact lifecycle, and trust boundaries.
+---
+
+import { Aside, Card, CardGrid, Steps } from '@astrojs/starlight/components';
+import SystemFlow from '../../../components/SystemFlow.astro';
+
+RepoKarta is one Go process composed around a metadata store and a set of
+independent evidence services. SQLite is the zero-configuration default;
+PostgreSQL is an explicit deployment choice. Large derived artifacts—indexes,
+maps, generated pages, logs, and semantic indexes—live under the data directory.
+
+<SystemFlow />
+
+## Six evidence planes
+
+<CardGrid>
+	<Card title="Text" icon="magnifier">
+		Zoekt indexes committed content for fleet-scale literal, regex, and
+		query-language search.
+	</Card>
+	<Card title="Syntax & symbols" icon="puzzle">
+		Tree-sitter and ctags add structural queries, definitions, and
+		syntax-backed references without running a project.
+	</Card>
+	<Card title="Compiler semantics" icon="approve-check">
+		Optional SCIP indexes improve language-specific definitions,
+		references, and implementations. Java generation is separately managed.
+	</Card>
+	<Card title="Repository structure" icon="seti">
+		Static analysis extracts packages, routes, entry points, dependencies,
+		outbound calls, and deployment clues into revisioned maps.
+	</Card>
+	<Card title="Imported observations" icon="download">
+		Coverage, scanner reports, SonarQube reads, and runtime topology
+		observations supplement static evidence without replacing it.
+	</Card>
+	<Card title="Generated knowledge" icon="open-book">
+		Wiki and Chat use permission-checked MCP reads, persist their output, and
+		attach citations and coverage warnings.
+	</Card>
+</CardGrid>
+
+## Artifact lifecycle
+
+<Steps>
+1. **Discover.** The local catalogue sees Git repositories below the configured
+   root; administrators can also acquire managed repositories from GitHub or
+   GitLab.
+2. **Pin.** RepoKarta resolves the committed revision. Dirty working-tree
+   content is not silently substituted for the indexed snapshot.
+3. **Build independently.** Search may be ready while maps, SCIP, Wiki, or
+   advisory snapshots are still building. Each artifact reports its own state.
+4. **Persist provenance.** Artifacts carry repository IDs, revisions,
+   timestamps, providers, and source citations.
+5. **Serve through policy.** Browser pages, JSON endpoints, exports, Chat, and
+   MCP apply the same repository access rules in shared mode.
+6. **Refresh deliberately.** New commits queue affected indexes and artifacts;
+   stale output remains identifiable until replacement evidence is ready.
+</Steps>
+
+## Data path
+
+```text
+repository root / acquired clones
+        │
+        ├── Zoekt indexes ──────────────┐
+        ├── AST + ctags ────────────────┤
+        ├── optional SCIP ──────────────┤
+        ├── maps + topology ────────────┼── browser / JSON / Chat / MCP
+        ├── dependency + OSV evidence ──┤
+        └── insights + Wiki ────────────┘
+                         │
+               SQLite or PostgreSQL
+```
+
+<Aside type="note" title="RepoKarta does not execute arbitrary project builds">
+	Ordinary indexing and derived insights inspect committed files. The optional
+	Java SCIP subsystem is the deliberate exception: it can invoke `scip-java`
+	with a bounded timeout, concurrency, and selected JDK.
+</Aside>

@@ -1,0 +1,49 @@
+---
+title: MCP tool catalog
+description: The nineteen read-only tools exposed by RepoKarta’s configured HTTP MCP server.
+---
+
+All tools are read-only. Tool inputs use stable repository IDs, exact or
+resolved revisions, bounded limits, and explicit filters; outputs preserve
+citations and completeness metadata where applicable.
+
+| Tool | Purpose |
+| --- | --- |
+| `list_repositories` | indexed repositories, stable IDs, pinned commits |
+| `list_named_contexts` | permitted personal and published reusable scopes |
+| `resolve_effective_contexts` | explicit, named, and default scope with provenance |
+| `search_code` | literal, regex, Zoekt, or AST-reference search |
+| `find_symbol` | Zoekt/ctags symbol definitions |
+| `find_references` | SCIP references with labelled AST fallback |
+| `search_ast` | bounded Tree-sitter structural query |
+| `get_file` | bounded source read and citation URLs |
+| `list_tree` | paginated repository tree |
+| `git_log` | newest-first history with truncation metadata |
+| `git_diff` | bounded unified patch between resolved revisions |
+| `read_repository_map` | structure, routes, entry points, dependencies, edges |
+| `query_evidence_graph` | filtered graph neighborhood and citations |
+| `read_dependency_inventory` | manifests, versions, outbound HTTP calls |
+| `read_system_topology` | component-level protocol relationships |
+| `read_dependency_findings` | OSV findings and advisory-snapshot evidence |
+| `list_deep_wiki_pages` | stored Wiki plan, pages, state, provenance |
+| `read_generated_document` | generated page content and evidence |
+| `read_code_insights` | metrics, findings, history, thresholds |
+| `compare_code_insights` | deltas and introduced/resolved findings |
+
+`query_evidence_graph` is registered alongside map tools but is not currently
+listed by the compact UI catalog; the HTTP server therefore exposes twenty
+registered read tools while the setup page’s user-facing catalog enumerates
+nineteen. Agents should rely on MCP capability negotiation from the running
+server.
+
+## Recommended tool sequence
+
+```text
+list_repositories
+  → resolve_effective_contexts
+  → search_code / search_ast
+  → get_file / find_references
+  → read_repository_map / read_system_topology
+  → git_log / git_diff
+  → cite canonical evidence URLs
+```

@@ -20,10 +20,16 @@ export default defineConfig({
 	},
 	integrations: [
 		starlight({
-			title: 'RepoKarta Handbook',
+			title: 'RepoKarta Field Guide',
 			description:
-				'A visual, evidence-backed guide to searching, exploring, mapping, and documenting software with RepoKarta.',
+				'The complete visual field guide to RepoKarta: code intelligence with evidence, from one repository to a software fleet.',
 			favicon: '/favicon-32.png',
+			head: [
+				{ tag: 'meta', attrs: { property: 'og:image', content: '/og.png' } },
+				{ tag: 'meta', attrs: { property: 'og:image:width', content: '1200' } },
+				{ tag: 'meta', attrs: { property: 'og:image:height', content: '630' } },
+				{ tag: 'meta', attrs: { name: 'twitter:card', content: 'summary_large_image' } },
+			],
 			logo: {
 				src: './src/assets/repokarta-mark.png',
 				alt: 'RepoKarta',
@@ -42,33 +48,47 @@ export default defineConfig({
 			],
 			sidebar: [
 				{
-					label: 'Start here',
+					label: '00 · Orient',
 					items: [
-						{ label: 'Welcome', slug: 'index' },
-						{ label: 'The demo workspace', slug: 'start/demo-workspace' },
-						{ label: 'Evidence and completeness', slug: 'start/evidence-and-completeness' },
+						{ label: 'Field guide', slug: 'index' },
+						{ label: 'Three-system laboratory', slug: 'start/demo-workspace' },
+						{ label: 'How RepoKarta works', slug: 'start/how-it-works' },
+						{ label: 'Evidence contract', slug: 'start/evidence-and-completeness' },
 					],
 				},
 				{
-					label: 'Everyday workflows',
+					label: '01 · Investigate',
 					items: [
-						{ label: 'Search', slug: 'workflows/search' },
-						{ label: 'Source browser', slug: 'workflows/source-browser' },
-						{ label: 'Repository maps', slug: 'workflows/maps' },
+						{ label: 'Search, contexts & monitors', slug: 'workflows/search' },
+						{ label: 'Source, symbols & history', slug: 'workflows/source-browser' },
+						{ label: 'Maps & system topology', slug: 'workflows/maps' },
+						{ label: 'Dependencies & advisories', slug: 'workflows/dependencies' },
+						{ label: 'Insights & trends', slug: 'workflows/insights' },
 					],
 				},
 				{
-					label: 'Configuration',
+					label: '02 · Explain',
 					items: [
-						{ label: 'Local launch profiles', slug: 'configuration/local-launch' },
-						{ label: 'Command-line reference', slug: 'configuration/command-line' },
+						{ label: 'Deep Wiki', slug: 'workflows/wiki' },
+						{ label: 'Chat & Deep Search', slug: 'workflows/chat' },
+						{ label: 'MCP for coding agents', slug: 'workflows/mcp' },
 					],
 				},
 				{
-					label: 'Coming next',
+					label: '03 · Operate',
+					items: [
+						{ label: 'Local launch & providers', slug: 'configuration/local-launch' },
+						{ label: 'Shared deployment & access', slug: 'configuration/shared-deployment' },
+						{ label: 'Storage, maintenance & telemetry', slug: 'configuration/operations' },
+					],
+				},
+				{
+					label: '04 · Reference',
 					collapsed: true,
 					items: [
-						{ label: 'Handbook roadmap', slug: 'reference/roadmap' },
+						{ label: 'Complete feature atlas', slug: 'reference/feature-atlas' },
+						{ label: 'CLI & environment', slug: 'configuration/command-line' },
+						{ label: 'MCP tool catalog', slug: 'reference/mcp-tools' },
 					],
 				},
 			],

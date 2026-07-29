@@ -1,0 +1,81 @@
+---
+interface Step {
+	time: string;
+	title: string;
+	body: string;
+}
+interface Props {
+	src: string;
+	poster: string;
+	label: string;
+	title: string;
+	duration: string;
+	steps: Step[];
+}
+const { src, poster, label, title, duration, steps } = Astro.props;
+const videoId = `walkthrough-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')}`;
+---
+
+<section class="walkthrough" data-walkthrough>
+	<div class="walkthrough__screen">
+		<div class="walkthrough__bar">
+			<div>
+				<span>LOCAL · 1080P</span>
+				<strong>{title}</strong>
+			</div>
+			<div class="walkthrough__actions">
+				<small>{duration}</small>
+				<button type="button" data-video-fullscreen aria-controls={videoId}>
+					Full screen <span aria-hidden="true">↗</span>
+				</button>
+			</div>
+		</div>
+		<video id={videoId} aria-label={label} controls muted playsinline preload="metadata" poster={poster}>
+			<source src={src} type="video/webm" />
+			Your browser does not support embedded WebM video.
+		</video>
+	</div>
+	<ol class="walkthrough__chapters">
+		{steps.map((step, index) => (
+			<li>
+				<button
+					type="button"
+					data-video-time={step.time}
+					aria-label={`Jump to ${step.time}: ${step.title}`}
+				>
+					<span class="walkthrough__chapter-index">{String(index + 1).padStart(2, '0')}</span>
+					<time>{step.time}</time>
+					<strong>{step.title}</strong>
+					<span>{step.body}</span>
+				</button>
+			</li>
+		))}
+	</ol>
+	<p class="walkthrough__hint">Select a chapter to jump to that moment. Use full screen for source code and map labels.</p>
+</section>
+
+<script>
+	function parseChapterTime(value) {
+		const [minutes, seconds] = value.split(':').map(Number);
+		return (minutes * 60) + seconds;
+	}
+
+	document.querySelectorAll('[data-walkthrough]').forEach((walkthrough) => {
+		if (!(walkthrough instanceof HTMLElement) || walkthrough.dataset.ready === 'true') return;
+		const video = walkthrough.querySelector('video');
+		if (!(video instanceof HTMLVideoElement)) return;
+		walkthrough.dataset.ready = 'true';
+
+		walkthrough.querySelectorAll('[data-video-time]').forEach((control) => {
+			control.addEventListener('click', () => {
+				if (!(control instanceof HTMLButtonElement)) return;
+				video.currentTime = parseChapterTime(control.dataset.videoTime ?? '00:00');
+				void video.play();
+			});
+		});
+
+		walkthrough.querySelector('[data-video-fullscreen]')?.addEventListener('click', () => {
+			if (video.requestFullscreen) void video.requestFullscreen();
+		});
+	});
+</script>

@@ -1,63 +1,84 @@
 ---
-title: Source browser
-description: Inspect the committed file, follow symbols, and keep every citation revision pinned.
+title: Source, symbols & history
+description: Read committed files, navigate code intelligence, and inspect revision history.
+tableOfContents: false
 ---
 
 import { Aside, Card, CardGrid, Steps } from '@astrojs/starlight/components';
-import Figure from '../../../components/Figure.astro';
-import VideoFrame from '../../../components/VideoFrame.astro';
+import Walkthrough from '../../../components/Walkthrough.astro';
 import sourceBrowser from '../../../assets/captures/source-browser.png';
 
-The source browser opens the committed file associated with a result. It does
-not silently substitute an uncommitted working-tree version.
+The source browser reads the file at RepoKarta’s indexed commit. It combines a
+bounded repository tree, focused line ranges, symbol intelligence, detected
+routes, and Git history while keeping a copyable citation visible. This
+demonstration opens the Java controller at its matching lines and keeps the
+repository tree, route facts, and revision in view.
 
-<Figure
-	image={sourceBrowser}
-	alt="RepoKarta source browser focused on the Spring Petclinic OwnerResource Java class."
-	caption="The focused line range preserves its surrounding file tree, detected routes, and exact committed source."
-	meta="RepoKarta c9ec132 · Spring Petclinic 305a1f1"
-/>
-
-<VideoFrame
+<Walkthrough
 	src="/media/captures/source-browser.webm"
 	poster={sourceBrowser.src}
-	label="Silent walkthrough of opening the commit-pinned OwnerResource Java source."
-	caption="Silent walkthrough: open a pinned Java file at the relevant declaration and line range."
-	meta="Automated local Chromium capture"
+	label="Walkthrough of reading OwnerResource, focusing its declaration, and using source intelligence."
+	title="READ A PINNED FILE"
+	duration="~16 SEC"
+	steps={[
+		{ time: '00:00', title: 'Land on evidence', body: 'The file opens at the matching lines.' },
+		{ time: '00:06', title: 'Orient', body: 'Read path, commit, tree, and routes.' },
+		{ time: '00:11', title: 'Choose a symbol', body: 'Ask for definitions or references.' },
+		{ time: '00:15', title: 'Keep the citation', body: 'Copy the revision-pinned URL.' },
+	]}
 />
 
-## From result to investigation
-
-<Steps>
-1. Open a search result at the matching line.
-2. Select or enter an identifier in the source-intelligence panel.
-3. Choose definitions, references, implementations, routes, or callers.
-4. Follow a result while keeping the repository and indexed revision visible.
-5. Copy the citation when you need to share the exact evidence.
-</Steps>
-
-## Precision is explicit
+## What can be read
 
 <CardGrid>
-	<Card title="Text and syntax" icon="document">
-		Available during ordinary indexing and useful across all supported source
-		languages.
+	<Card title="Tree & file" icon="document">
+		Paginated committed trees and bounded file reads. Large files expose the
+		returned line window instead of pretending to be complete.
 	</Card>
-	<Card title="SCIP" icon="puzzle">
-		Optional compiler-produced indexes can improve Java definitions,
-		references, and implementations.
+	<Card title="Definitions" icon="puzzle">
+		Zoekt/ctags symbol definitions, anchored to the indexed revision.
 	</Card>
-	<Card title="Route evidence" icon="seti">
-		Framework routes and client paths connect code navigation to an HTTP
-		investigation.
+	<Card title="References" icon="link">
+		Compiler-precise SCIP references when available, otherwise an explicit
+		syntax-backed AST result.
 	</Card>
-	<Card title="History" icon="git-branch">
-		Commit and diff reads stay separate from the working tree and accept an
-		explicit revision.
+	<Card title="Structural search" icon="seti">
+		Bounded Tree-sitter queries for references and implementations, with
+		artifact readiness and pagination.
+	</Card>
+	<Card title="Routes & callers" icon="globe">
+		Framework route facts and syntax-backed caller evidence connect a file to
+		the surrounding application.
+	</Card>
+	<Card title="History & diff" icon="git-branch">
+		Newest-first Git log and bounded unified patches after resolving exact
+		revisions.
 	</Card>
 </CardGrid>
 
-<Aside type="caution" title="An unreferenced symbol is not automatically dead">
-	Framework injection, profiles, reflection, configuration, generated code,
-	and missing compiler coverage can all hide a valid reachability edge.
+## Investigation pattern
+
+<Steps>
+1. Open the matching source range from Search, Maps, Dependencies, or a citation.
+2. Confirm repository, commit, path, and line range before reading the code.
+3. Enter an identifier and choose the evidence class you need: definition,
+   references, implementations, routes, or callers.
+4. Read the provider label. `SCIP` and `syntax-backed` are materially different.
+5. Use Git history to ask when and why the code changed; use diff to inspect the
+   actual patch between resolved revisions.
+6. Copy the citation only after the relevant line is in focus.
+</Steps>
+
+## Java SCIP
+
+Java semantic indexing is optional background work. `off` disables generation,
+`auto` preserves ordinary indexing when generation cannot run, and `required`
+makes missing or failed compiler support a hard configuration failure.
+RepoKarta records readiness, chosen JDK, failure category, and retry state; it
+does not silently label AST fallback as compiler precision.
+
+<Aside type="caution" title="No references is not proof of dead code">
+	Dependency injection, reflection, framework configuration, generated code,
+	profiles, and incomplete compiler coverage can hide valid reachability. Treat
+	an empty result in the context of provider and completeness metadata.
 </Aside>

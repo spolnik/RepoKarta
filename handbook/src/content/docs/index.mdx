@@ -1,52 +1,59 @@
 ---
-title: RepoKarta Handbook
-description: A visual, evidence-backed guide to understanding the code you already have.
+title: RepoKarta Field Guide
+description: The complete visual guide to evidence-backed code intelligence.
 template: splash
-hero:
-  tagline: Search, explore, map, and document real software systems from one local workspace.
-  image:
-    file: ../../assets/repokarta-mark.png
-  actions:
-    - text: Build the demo workspace
-      link: /start/demo-workspace/
-      icon: rocket
-    - text: Take the visual tour
-      link: /workflows/search/
-      icon: right-arrow
-      variant: minimal
+head:
+  - tag: meta
+    attrs:
+      property: og:title
+      content: RepoKarta Field Guide
+  - tag: meta
+    attrs:
+      property: og:description
+      content: Read the system. Keep the evidence.
 ---
 
-import { Card, CardGrid } from '@astrojs/starlight/components';
+import Cover from '../../components/Cover.astro';
+import SystemFlow from '../../components/SystemFlow.astro';
+import DemoTriad from '../../components/DemoTriad.astro';
+import FeatureAtlas from '../../components/FeatureAtlas.astro';
 
-RepoKarta keeps its answers attached to the exact repository, revision, path,
-and line that produced them. This handbook teaches the product through three
-real systems: RepoKarta itself, Spring Petclinic Microservices, and Bank of
-Anthos.
+<Cover />
 
-<CardGrid stagger>
-	<Card title="Search with context" icon="magnifier">
-		Move from an ordinary phrase to exact symbols, routes, commits, and
-		references without memorizing a query language.
-	</Card>
-	<Card title="Read the indexed revision" icon="document">
-		Browse committed source, follow usages, inspect history, and copy a
-		revision-pinned citation.
-	</Card>
-	<Card title="See the system" icon="seti">
-		Explore packages, entry points, routes, dependencies, and distributed
-		service connections with source evidence.
-	</Card>
-	<Card title="Trust the boundary" icon="shield-check">
-		Learn how RepoKarta reports building, stale, partial, unresolved, and
-		truncated results instead of guessing.
-	</Card>
-</CardGrid>
+## One system of evidence, four ways to work
 
-## Three ways to read
+RepoKarta is a local-first code-intelligence application. It searches a
+repository fleet, reads exact revisions, assembles structural and distributed
+maps, tracks dependency and quality evidence, generates living documentation,
+and exposes the same facts to coding agents. The important part is not the
+number of features—it is that every surface shares the same evidence contract.
 
-**First hour** follows a practical path from launch to the first useful search.
-**Feature chapters** explain each workflow in depth. **Configuration pages**
-collect exact launch profiles, defaults, and operational trade-offs.
+<SystemFlow />
 
-Every visual is captured from a local RepoKarta process against a recorded Git
-commit. No product screen in this handbook is a mock-up.
+## A laboratory, not a toy repository
+
+The examples deliberately mix three real systems. A single sample cannot show
+the difference between package dependencies, service communication, runtime
+observations, compiler-backed navigation, and cross-language investigation.
+
+<DemoTriad />
+
+## The complete product surface
+
+This edition covers functionality that exists in the current RepoKarta code.
+Generated answers, imported evidence, and optional providers are labelled as
+such; the guide does not turn an unavailable integration into a screenshot
+mock-up.
+
+<FeatureAtlas />
+
+## Choose a trail
+
+| If you need to… | Start here | Continue with |
+| --- | --- | --- |
+| understand an unfamiliar service | [Search](/workflows/search/) | [Source](/workflows/source-browser/) → [Maps](/workflows/maps/) |
+| investigate a fleet relationship | [Maps & topology](/workflows/maps/) | [Dependencies](/workflows/dependencies/) |
+| assess change or risk | [Insights](/workflows/insights/) | [Advisories](/workflows/dependencies/#advisories-and-sarif) |
+| explain the system to people | [Deep Wiki](/workflows/wiki/) | [Chat & Deep Search](/workflows/chat/) |
+| ground a coding agent | [MCP](/workflows/mcp/) | [Tool catalog](/reference/mcp-tools/) |
+| run RepoKarta for a team | [Shared deployment](/configuration/shared-deployment/) | [Operations](/configuration/operations/) |

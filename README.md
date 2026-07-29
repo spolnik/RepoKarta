@@ -387,6 +387,7 @@ $version = go run ./cmd/repokarta version
 
 ## Further reading
 
+- [Visual RepoKarta Field Guide](./handbook/)
 - [Product scope, decisions, and roadmap](./SCOPE.md)
 - [Shared deployment operations](./docs/shared-deployment.md)
 - [PostgreSQL backend and SQLite migration](./docs/postgresql.md)

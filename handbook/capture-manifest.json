@@ -1,15 +1,38 @@
 ﻿{
-    "captured_at":  "2026-07-28T15:23:50.8465443+00:00",
-    "repokarta":  "c9ec132a4f50e5aaf12bed0f9639f544cd735e6e",
+    "captured_at":  "2026-07-29T08:11:56.1696149+00:00",
+    "repokarta":  "cf4aa6381f5b08cb9c84c45217a27f8b346bfb94",
     "repositories":  {
                          "spring-petclinic-microservices":  "305a1f13e4f961001d4e6cb50a9db51dc3fc5967",
                          "bank-of-anthos":  "1e40564f9ff572a28281198903e19da93e506770"
                      },
-    "viewport":  "1440x900",
-    "browser":  "Playwright Chromium",
+    "viewport":  "1600x900 at 1.2x device scale",
+    "media":  {
+                  "walkthroughs":  "1920x1080 VP9 WebM, CRF 20",
+                  "stills":  "1440x900 PNG"
+              },
+    "browser":  "Playwright Chromium; walkthrough frames encoded with FFmpeg",
+    "walkthroughs":  [
+                         "search-overview",
+                         "source-browser",
+                         "repository-map"
+                     ],
+    "stills":  [
+                   "dependencies-topology",
+                   "dependency-inventory",
+                   "insights-overview",
+                   "wiki-workspace",
+                   "chat-workspace",
+                   "mcp-setup"
+               ],
     "captures":  [
                      "search-overview",
                      "source-browser",
-                     "repository-map"
+                     "repository-map",
+                     "dependencies-topology",
+                     "dependency-inventory",
+                     "insights-overview",
+                     "wiki-workspace",
+                     "chat-workspace",
+                     "mcp-setup"
                  ]
 }

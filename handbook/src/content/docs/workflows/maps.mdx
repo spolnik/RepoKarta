@@ -1,64 +1,93 @@
 ---
-title: Repository maps
-description: Explore structural and distributed relationships without losing the source evidence.
+title: Maps & system topology
+description: Move from repository structure to evidence-backed service relationships.
+tableOfContents: false
 ---
 
 import { Aside, Card, CardGrid, Steps } from '@astrojs/starlight/components';
-import Figure from '../../../components/Figure.astro';
-import VideoFrame from '../../../components/VideoFrame.astro';
+import Walkthrough from '../../../components/Walkthrough.astro';
 import repositoryMap from '../../../assets/captures/repository-map.png';
 
-Maps turn indexed facts into a navigable system view. The graph is an
-investigation surface, not an illustration: selecting a fact opens its
-repository, path, layer, and supporting citations.
+Maps answer two different questions. A **repository map** describes static
+structure inside a codebase. **System topology** assembles deployable
+components and directed communication across repositories. Keeping those
+models separate prevents an import from becoming an invented service call. The
+demonstration below moves through the structural lenses and finishes on the
+HTTP route evidence.
 
-<Figure
-	image={repositoryMap}
-	alt="RepoKarta route map for Spring Petclinic microservices with controllers and HTTP routes."
-	caption="The Routes view separates controller and endpoint facts while keeping the evidence snapshot visible."
-	meta="81 facts · 157 relationships · snapshot 7b7c6838"
-/>
-
-<VideoFrame
+<Walkthrough
 	src="/media/captures/repository-map.webm"
 	poster={repositoryMap.src}
-	label="Silent walkthrough of loading the Spring Petclinic repository map and choosing the Routes view."
-	caption="Silent walkthrough: wait for the structural artifact, then isolate route evidence."
-	meta="Automated local Chromium capture"
+	label="Walkthrough of switching repository-map lenses and inspecting route evidence."
+	title="STRUCTURE TO ROUTE"
+	duration="~17 SEC"
+	steps={[
+		{ time: '00:00', title: 'Load snapshot', body: 'Confirm repository and revision.' },
+		{ time: '00:06', title: 'Change lens', body: 'Compare System, Packages, and Dependencies.' },
+		{ time: '00:12', title: 'Isolate routes', body: 'Reduce the map to HTTP evidence.' },
+		{ time: '00:16', title: 'Inspect a fact', body: 'Open its evidence and neighbors.' },
+	]}
 />
 
-## Four useful views
+## Repository-map lenses
 
 <CardGrid>
-	<Card title="System" icon="seti">
-		Repositories, packages, entry points, routes, and dependencies in one
-		bounded structural view.
-	</Card>
-	<Card title="Packages" icon="puzzle">
-		Focus on source organization and the strongest package relationships.
-	</Card>
-	<Card title="Dependencies" icon="link">
-		Inspect declared packages separately from deployable service
-		communication.
-	</Card>
-	<Card title="Routes" icon="globe">
-		Find served endpoints and connect them back to the source declaration.
-	</Card>
+	<Card title="System" icon="seti">Packages, entry points, routes, dependencies, and strongest edges.</Card>
+	<Card title="Packages" icon="puzzle">Source organization and high-signal package relationships.</Card>
+	<Card title="Dependencies" icon="link">Declared packages and dependency facts, not runtime ownership.</Card>
+	<Card title="Routes" icon="globe">Served endpoints connected to their controller or handler source.</Card>
 </CardGrid>
 
-## Read a map deliberately
+Each map can be searched, filtered, switched to exact list view, exported by a
+permissioned endpoint, and queried as an evidence graph. **Focus neighbors**
+creates a bounded local investigation without changing the underlying snapshot.
+
+## Fleet topology
+
+```text
+static source + manifests + deployment configuration
+                         │
+                         ▼
+       component ── directed relationship ── component
+          │             HTTP / gRPC / Kafka / DB / MCP
+          └──────── evidence + resolution status ────────┘
+                         ▲
+                         │
+             optional runtime observations
+```
+
+Topology first composes fleet evidence, then applies repository scope. That
+ordering preserves inbound callers from repositories outside the selected
+component’s codebase.
+
+| Relationship state | Meaning |
+| --- | --- |
+| resolved static | source/configuration identifies a component target |
+| runtime observed | imported observation corroborates or adds an environment/provider edge |
+| unresolved | a call exists but ownership cannot be safely assigned |
+| suppressed | deployment-only or invalid source evidence was deliberately excluded |
+| rejected component | candidate failed component validation and is reported diagnostically |
+
+Topology supports component-level HTTP, gRPC, Kafka, database, and MCP
+relationships; filters include repository, protocol, origin, provider,
+environment, `static_only`, direction, and bounded neighborhood depth.
+
+## Read topology without inventing ownership
 
 <Steps>
-1. Choose one repository before moving to the broader fleet view.
-2. Search for a package, route, entry point, or dependency by name.
-3. Select the node and open the evidence drawer.
-4. Use **Focus neighbors** to reduce visual noise.
-5. Switch to list view when exact inventory is more useful than spatial
-   relationships.
+1. Begin with one component and both inbound and outbound directions.
+2. Set depth to one for direct relationships; expand to two only when the first
+   neighborhood suggests a transitive path.
+3. Inspect relationship protocol, origin, environment, resolution tier, and
+   every evidence citation.
+4. Keep unresolved targets unresolved until configuration or runtime evidence
+   identifies their owner.
+5. Use repository maps to explain internal structure and topology to explain
+   deployed communication; do not merge the claims.
 </Steps>
 
-<Aside type="note" title="Package use is not a service call">
-	The repository map and package inventory answer structural questions.
-	Distributed topology separately models HTTP, gRPC, Kafka, database, and MCP
-	communication between running components.
+<Aside type="note" title="Runtime evidence supplements static evidence">
+	Observation import records provider and environment and can corroborate a
+	static relationship. It does not erase the original source/configuration
+	evidence or silently convert uncertainty into certainty.
 </Aside>

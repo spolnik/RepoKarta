@@ -1,0 +1,81 @@
+---
+title: Dependencies & advisories
+description: Inspect manifests, resolved versions, outbound calls, OSV findings, and SARIF.
+---
+
+import { Aside, Card, CardGrid, Steps } from '@astrojs/starlight/components';
+import Figure from '../../../components/Figure.astro';
+import topologyCapture from '../../../assets/captures/dependencies-topology.png';
+import inventoryCapture from '../../../assets/captures/dependency-inventory.png';
+
+Dependencies combines a revision-pinned software inventory with service-call
+evidence and a separately refreshed advisory snapshot. It answers “what is
+declared?”, “what version was resolved?”, “where is it declared?”, and “what
+did the last OSV snapshot say?” without executing the project.
+
+<Figure
+	image={topologyCapture}
+	alt="RepoKarta distributed dependency topology for the Spring Petclinic system."
+	caption="Component topology keeps protocol, direction, environment, and static-versus-runtime evidence available as filters."
+	meta="REAL LOCAL CAPTURE · TOPOLOGY"
+/>
+
+## Evidence pipeline
+
+<section class="system-flow" aria-label="Dependency evidence pipeline">
+	<article class="system-flow__stage"><span class="system-flow__index">01</span><h3>Discover</h3><p>Find Go, Maven, Gradle, npm, Python and other supported manifest and lock files.</p><div class="chip-row"><span>manifest</span><span>lockfile</span></div></article>
+	<article class="system-flow__stage"><span class="system-flow__index">02</span><h3>Resolve</h3><p>Normalize ecosystem, package coordinate, declared constraint, and resolved version with a source citation.</p><div class="chip-row"><span>package</span><span>version</span></div></article>
+	<article class="system-flow__stage"><span class="system-flow__index">03</span><h3>Snapshot</h3><p>Refresh advisory data under administrative control and record snapshot version, age, and check state.</p><div class="chip-row"><span>OSV</span><span>confidence</span></div></article>
+	<article class="system-flow__stage"><span class="system-flow__index">04</span><h3>Export</h3><p>Review grouped findings in the browser or export permission-checked SARIF for downstream tooling.</p><div class="chip-row"><span>browser</span><span>SARIF</span></div></article>
+</section>
+
+## Inventory and call evidence
+
+<Figure
+	image={inventoryCapture}
+	alt="RepoKarta dependency inventory for Spring Petclinic."
+	caption="Manifest declarations, resolved versions, usage, relationship, and registry-check state stay attached to repository evidence."
+	meta="REAL LOCAL CAPTURE · MAVEN"
+/>
+
+<CardGrid>
+	<Card title="Manifest inventory" icon="document">
+		Package coordinates, constraints, resolved versions, manifest paths, and
+		line-level evidence.
+	</Card>
+	<Card title="Outbound HTTP" icon="globe">
+		Client paths and configuration targets connect dependency inventory to a
+		service investigation without claiming ownership too early.
+	</Card>
+	<Card title="Private registries" icon="lock">
+		Registry configuration can name a token environment variable. Secrets
+		remain in the process environment, not the metadata store.
+	</Card>
+	<Card title="Artifact state" icon="sync">
+		Package refresh and advisory refresh have separate progress and failure
+		states.
+	</Card>
+</CardGrid>
+
+## Advisories and SARIF
+
+<Steps>
+1. Select one repository or a permission-checked context.
+2. Confirm the dependency snapshot is ready and inspect unresolved-versus-
+   declared version confidence.
+3. Check advisory snapshot state and age before treating “no findings” as
+   current.
+4. Filter by ecosystem, package, advisory, or severity and open the cited
+   manifest line.
+5. Export SARIF when another review surface needs the same finding set.
+</Steps>
+
+Findings are de-duplicated by advisory, repository, package, and resolved
+version. A resolved lockfile version takes precedence. A declared-only match is
+retained with lower confidence rather than discarded or presented as exact.
+
+<Aside type="caution" title="Unavailable is not clean">
+	If the advisory snapshot is unavailable or stale, the correct conclusion is
+	that vulnerability status is unknown for that snapshot—not that the
+	dependency is safe.
+</Aside>

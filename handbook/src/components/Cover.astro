@@ -1,0 +1,40 @@
+---
+const stats = [
+	['03', 'real systems'],
+	['20', 'registered MCP tools'],
+	['06', 'evidence planes'],
+	['01', 'pinned revision'],
+];
+---
+
+<section class="field-cover">
+	<div class="field-cover__copy">
+		<p class="eyebrow">LOCAL CODE INTELLIGENCE · FIELD GUIDE / 2026</p>
+		<h1>Read the system.<br /><em>Keep the evidence.</em></h1>
+		<p class="field-cover__dek">
+			A complete, visual guide to RepoKarta—from the first cross-repository
+			search to topology, living documentation, coding-agent tools, and
+			shared operations.
+		</p>
+		<div class="field-cover__actions">
+			<a class="field-button field-button--primary" href="/start/demo-workspace/">Build the laboratory <span>→</span></a>
+			<a class="field-button" href="/reference/feature-atlas/">See every feature</a>
+		</div>
+	</div>
+	<div class="field-cover__plate" aria-label="RepoKarta evidence pipeline">
+		<div class="plate-orbit plate-orbit--one"></div>
+		<div class="plate-orbit plate-orbit--two"></div>
+		<div class="plate-core">
+			<span>RK</span>
+			<strong>RepoKarta</strong>
+			<small>evidence engine</small>
+		</div>
+		<div class="plate-node plate-node--repo">REPOSITORIES<br /><b>Go · Java · Python</b></div>
+		<div class="plate-node plate-node--index">INDEXES<br /><b>Zoekt · AST · SCIP</b></div>
+		<div class="plate-node plate-node--artifact">ARTIFACTS<br /><b>Maps · Wiki · Insights</b></div>
+		<div class="plate-node plate-node--answer">ANSWERS<br /><b>UI · API · MCP</b></div>
+	</div>
+	<div class="field-cover__stats">
+		{stats.map(([value, label]) => <div><strong>{value}</strong><span>{label}</span></div>)}
+	</div>
+</section>

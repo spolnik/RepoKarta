@@ -1,75 +1,113 @@
 ---
-title: The demo workspace
-description: Build a varied, reproducible local workspace for every handbook example.
+title: Three-system laboratory
+description: Build the reproducible Go, Java, and Python workspace used throughout the field guide.
 ---
 
-import { Aside, Card, CardGrid, Steps } from '@astrojs/starlight/components';
+import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
+import DemoTriad from '../../../components/DemoTriad.astro';
+import TerminalWorkspace from '../../../components/TerminalWorkspace.astro';
 
-The handbook uses three sibling repositories. Together they cover Go, Java,
-Python, JavaScript, SQL, Docker Compose, Kubernetes, HTTP, databases, Spring,
-MCP, and code-intelligence workflows without relying on private source code.
+The field guide uses three sibling repositories so the screenshots and
+walkthroughs can demonstrate a real fleet rather than a contrived hello-world.
+Together they cover Go, Java, Python, JavaScript, SQL, Maven, Kubernetes,
+Docker Compose, HTTP, messaging, service discovery, PostgreSQL, SQLite, and MCP.
 
-<CardGrid>
-	<Card title="RepoKarta" icon="open-book">
-		The Go application we are learning: HTTP, MCP, SQLite/PostgreSQL,
-		indexing, maps, generated documentation, and a substantial browser UI.
-	</Card>
-	<Card title="Spring Petclinic Microservices" icon="puzzle">
-		Eight Java 17 and Spring Boot services with Maven, REST, service
-		discovery, configuration, resilience, tracing, and Docker Compose.
-	</Card>
-	<Card title="Bank of Anthos" icon="building">
-		A Python-led banking system connected to Java ledger services and
-		PostgreSQL through HTTP and Kubernetes configuration.
-	</Card>
-</CardGrid>
+<DemoTriad />
 
-## Expected layout
+<TerminalWorkspace />
+
+## Reproducible layout
 
 ```text
-C:\Users\jacek\Documents\GitHub\
-├── RepoKarta\
-├── spring-petclinic-microservices\
-└── bank-of-anthos\
+~/Developer/
+├── RepoKarta/
+├── spring-petclinic-microservices/
+└── bank-of-anthos/
 ```
 
-The handbook capture manifest currently pins:
+| System | Role in the guide | Captured revision |
+| --- | --- | --- |
+| RepoKarta | Go product, browser UI, MCP, storage, indexing | recorded by `capture-manifest.json` |
+| Spring Petclinic Microservices | Java service discovery, REST, Maven, Compose | `305a1f13e4f961001d4e6cb50a9db51dc3fc5967` |
+| Bank of Anthos | Python + Java + Kubernetes + PostgreSQL | `1e40564f9ff572a28281198903e19da93e506770` |
 
-| Repository | Demonstration revision |
-| --- | --- |
-| RepoKarta | recorded at capture time |
-| Spring Petclinic Microservices | `305a1f13e4f961001d4e6cb50a9db51dc3fc5967` |
-| Bank of Anthos | `1e40564f9ff572a28281198903e19da93e506770` |
-
-<Aside type="note" title="Why full clones?">
-	Full Git history lets RepoKarta demonstrate commit search, history, diffs,
-	and revision-pinned browsing. Shallow clones hide much of that story.
-</Aside>
-
-## Start the local catalogue
+## Start the catalogue
 
 <Steps>
-1. Build RepoKarta’s browser assets.
+1. Clone the three systems into one workspace.
 
-   ```powershell
-   npm --userconfig .npmrc --prefix web ci
-   npm --prefix web run build
-   ```
+   <Tabs>
+     <TabItem label="macOS / Linux">
+       ```sh
+       mkdir -p "$HOME/Developer"
+       cd "$HOME/Developer"
+       git clone https://github.com/spolnik/RepoKarta.git
+       git clone https://github.com/spring-petclinic/spring-petclinic-microservices.git
+       git clone https://github.com/GoogleCloudPlatform/bank-of-anthos.git
+       ```
+     </TabItem>
+     <TabItem label="Windows PowerShell">
+       ```powershell
+       New-Item -ItemType Directory -Force "$HOME\Developer" | Out-Null
+       Set-Location "$HOME\Developer"
+       git clone https://github.com/spolnik/RepoKarta.git
+       git clone https://github.com/spring-petclinic/spring-petclinic-microservices.git
+       git clone https://github.com/GoogleCloudPlatform/bank-of-anthos.git
+       ```
+     </TabItem>
+   </Tabs>
 
-2. Start RepoKarta against the parent workspace.
+2. Build RepoKarta’s browser assets.
 
-   ```powershell
-   go run ./cmd/repokarta serve -open=false C:\Users\jacek\Documents\GitHub
-   ```
+   <Tabs>
+     <TabItem label="macOS / Linux">
+       ```sh
+       cd "$HOME/Developer/RepoKarta"
+       npm --userconfig .npmrc --prefix web ci
+       npm --prefix web run build
+       ```
+     </TabItem>
+     <TabItem label="Windows PowerShell">
+       ```powershell
+       Set-Location "$HOME\Developer\RepoKarta"
+       npm --userconfig .npmrc --prefix web ci
+       npm --prefix web run build
+       ```
+     </TabItem>
+   </Tabs>
 
-3. Open `http://127.0.0.1:7331` and watch the repository drawer. Repositories
-   become useful independently; you do not need to wait for the entire fleet.
+3. Launch RepoKarta against the workspace, not a user-specific absolute path.
+
+   <Tabs>
+     <TabItem label="macOS / Linux">
+       ```sh
+       go run ./cmd/repokarta serve -open=false "$HOME/Developer"
+       ```
+     </TabItem>
+     <TabItem label="Windows PowerShell">
+       ```powershell
+       go run ./cmd/repokarta serve -open=false "$HOME\Developer"
+       ```
+     </TabItem>
+   </Tabs>
+
+4. Open `http://127.0.0.1:7331`. The repository drawer reports indexing state
+   per repository; Search can become useful before every secondary artifact is
+   complete.
 </Steps>
 
-## What we will investigate
+## Why these examples matter
 
-- trace a Spring controller from search result to source and callers;
-- compare Python authentication code with Java transaction handling;
-- inspect cross-language service and database relationships;
-- explain which topology edges are confirmed, inferred, or unresolved;
-- compare dependency evidence across Maven, Python, npm, and Go modules.
+| Question | Best example |
+| --- | --- |
+| Where is a Spring endpoint implemented and who calls it? | `OwnerResource` in Petclinic |
+| Does a package import imply a running service call? | compare Petclinic maps with topology |
+| How does configuration resolve a service target? | Bank of Anthos Kubernetes environment |
+| What is compiler-precise versus syntax-backed? | Petclinic with and without Java SCIP |
+| How are browser and agent answers kept consistent? | RepoKarta’s HTTP, Chat, and MCP layers |
+
+<Aside type="note" title="Every product visual is a real local capture">
+	The capture command builds an isolated RepoKarta binary, uses a separate data
+	directory, verifies the three pinned repositories, and records Chromium. No
+	product screen is redrawn for the handbook.
+</Aside>

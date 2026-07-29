@@ -154,12 +154,35 @@ try {
             "spring-petclinic-microservices" = "305a1f13e4f961001d4e6cb50a9db51dc3fc5967"
             "bank-of-anthos" = "1e40564f9ff572a28281198903e19da93e506770"
         }
-        viewport = "1440x900"
-        browser = "Playwright Chromium"
-        captures = @(
+        viewport = "1600x900 at 1.2x device scale"
+        media = [ordered]@{
+            walkthroughs = "1920x1080 VP9 WebM, CRF 20"
+            stills = "1440x900 PNG"
+        }
+        browser = "Playwright Chromium; walkthrough frames encoded with FFmpeg"
+        walkthroughs = @(
             "search-overview",
             "source-browser",
             "repository-map"
+        )
+        stills = @(
+            "dependencies-topology",
+            "dependency-inventory",
+            "insights-overview",
+            "wiki-workspace",
+            "chat-workspace",
+            "mcp-setup"
+        )
+        captures = @(
+            "search-overview",
+            "source-browser",
+            "repository-map",
+            "dependencies-topology",
+            "dependency-inventory",
+            "insights-overview",
+            "wiki-workspace",
+            "chat-workspace",
+            "mcp-setup"
         )
     }
     $manifest |

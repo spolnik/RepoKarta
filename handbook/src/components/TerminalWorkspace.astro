@@ -1,0 +1,51 @@
+---
+const repositories = [
+	['RepoKarta', 'Go · HTTP · MCP', 'ready'],
+	['spring-petclinic-microservices', 'Java · Spring · Maven', 'ready'],
+	['bank-of-anthos', 'Python · Java · Kubernetes', 'ready'],
+];
+---
+
+<section class="terminal-lab" aria-label="Create the demo workspace and watch RepoKarta index it">
+	<div class="terminal-lab__window">
+		<header>
+			<span class="terminal-dot terminal-dot--red"></span>
+			<span class="terminal-dot terminal-dot--amber"></span>
+			<span class="terminal-dot terminal-dot--green"></span>
+			<strong>zsh · ~/Developer</strong>
+		</header>
+		<div class="terminal-lab__body">
+			<p><b>$</b> mkdir -p ~/Developer &amp;&amp; cd ~/Developer</p>
+			<p><b>$</b> git clone https://github.com/spolnik/RepoKarta.git</p>
+			<p><b>$</b> git clone https://github.com/spring-petclinic/spring-petclinic-microservices.git</p>
+			<p><b>$</b> git clone https://github.com/GoogleCloudPlatform/bank-of-anthos.git</p>
+			<p class="terminal-command"><b>$</b> ls -1</p>
+			<p class="terminal-output">bank-of-anthos/</p>
+			<p class="terminal-output">RepoKarta/</p>
+			<p class="terminal-output">spring-petclinic-microservices/</p>
+			<p class="terminal-command"><b>$</b> cd RepoKarta &amp;&amp; go run ./cmd/repokarta serve ~/Developer</p>
+		</div>
+	</div>
+	<div class="terminal-lab__catalogue">
+		<header>
+			<span>REPOKARTA / LOCAL CATALOGUE</span>
+			<strong>3 indexed</strong>
+		</header>
+		<div class="terminal-lab__event">
+			<span class="catalogue-pulse"></span>
+			<div><small>DISCOVERY</small><strong>Scanning ~/Developer</strong></div>
+			<time>00:00</time>
+		</div>
+		{repositories.map(([name, detail, state], index) => (
+			<div class="terminal-lab__repo">
+				<span class="catalogue-check">✓</span>
+				<div><strong>{name}</strong><small>{detail}</small></div>
+				<div class="terminal-lab__state"><span>{state}</span><time>00:0{index + 2}</time></div>
+			</div>
+		))}
+		<footer>
+			<span>Each repository becomes useful independently.</span>
+			<strong>SEARCH READY</strong>
+		</footer>
+	</div>
+</section>

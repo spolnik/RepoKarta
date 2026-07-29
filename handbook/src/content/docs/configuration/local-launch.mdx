@@ -1,60 +1,117 @@
 ---
-title: Local launch profiles
-description: Start RepoKarta with deliberate data, provider, indexing, and browser behavior.
+title: Local launch & providers
+description: Start RepoKarta with deliberate repository, data, AI, and Java-semantic profiles.
 ---
 
-import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
 
-## Everyday local workspace
+`repokarta serve` starts the catalogue, indexing services, browser UI, JSON API,
+Chat providers, HTTP MCP endpoint, and background artifact workers in one
+process. The final positional argument is the repository root; RepoKarta
+discovers Git repositories below it.
+
+## Everyday profile
 
 <Tabs>
-	<TabItem label="Windows">
-		```powershell
-		go run ./cmd/repokarta serve `
-		  -open=false `
-		  -data-dir C:\RepoKartaData `
-		  C:\Users\jacek\Documents\GitHub
-		```
-	</TabItem>
-	<TabItem label="macOS or Linux">
+	<TabItem label="macOS / Linux">
 		```sh
 		go run ./cmd/repokarta serve \
 		  -open=false \
-		  -data-dir /var/tmp/repokarta-data \
-		  /path/to/repositories
+		  -data-dir "$HOME/.cache/repokarta" \
+		  "$HOME/Developer"
+		```
+	</TabItem>
+	<TabItem label="Windows PowerShell">
+		```powershell
+		go run ./cmd/repokarta serve `
+		  -open=false `
+		  -data-dir "$HOME\RepoKartaData" `
+		  "$HOME\Developer"
 		```
 	</TabItem>
 </Tabs>
 
-## Java navigation profile
+The defaults are `127.0.0.1:7331`, the current directory as repository root,
+the operating-system user cache under `RepoKarta`, and browser opening enabled.
+Repeat `-exclude` for directory names that should not enter discovery.
 
-```powershell
-go run ./cmd/repokarta serve `
-  -scip-java-mode=auto `
-  -scip-java-command C:\Tools\scip-java.exe `
-  -scip-java-concurrency=1 `
-  C:\Users\jacek\Documents\GitHub
-```
+## AI provider profile
 
-`auto` keeps ordinary indexing available if compiler-backed generation cannot
-run. `required` turns an unavailable or invalid `scip-java` configuration into
-a startup failure.
+<Tabs>
+	<TabItem label="macOS / Linux">
+		```sh
+		go run ./cmd/repokarta serve \
+		  -codex-command "$(command -v codex)" \
+		  -claude-command "$(command -v claude)" \
+		  "$HOME/Developer"
+		```
+	</TabItem>
+	<TabItem label="Windows PowerShell">
+		```powershell
+		go run ./cmd/repokarta serve `
+		  -codex-command (Get-Command codex).Source `
+		  -claude-command (Get-Command claude).Source `
+		  "$HOME\Developer"
+		```
+	</TabItem>
+</Tabs>
 
-## Local AI providers
+Codex and Claude Code use their existing CLI login state. Direct Anthropic
+access uses `ANTHROPIC_API_KEY` from the process environment. Provider status
+is visible through `/api/providers`; an unavailable provider remains an
+explicit UI state.
 
-```powershell
-go run ./cmd/repokarta serve `
-  -codex-command C:\Tools\codex.exe `
-  -claude-command C:\Tools\claude.exe `
-  C:\Users\jacek\Documents\GitHub
-```
+## Java semantic profile
 
-RepoKarta uses the existing CLI login sessions. Direct Anthropic API use reads
-`ANTHROPIC_API_KEY` from the launch environment and does not persist it in the
-metadata database.
+<Tabs>
+	<TabItem label="macOS">
+		```sh
+		export REPOKARTA_SCIP_JAVA_JDK_HOMES="17=$(/usr/libexec/java_home -v 17);21=$(/usr/libexec/java_home -v 21)"
+		go run ./cmd/repokarta serve \
+		  -scip-java-mode=auto \
+		  -scip-java-command "$HOME/.local/bin/scip-java" \
+		  -scip-java-timeout=20m \
+		  -scip-java-concurrency=1 \
+		  "$HOME/Developer"
+		```
+	</TabItem>
+	<TabItem label="Windows PowerShell">
+		```powershell
+		$env:REPOKARTA_SCIP_JAVA_JDK_HOMES = "17=$HOME\Java\jdk-17;21=$HOME\Java\jdk-21"
+		go run ./cmd/repokarta serve `
+		  -scip-java-mode=auto `
+		  -scip-java-command "$HOME\Tools\scip-java.exe" `
+		  -scip-java-timeout=20m `
+		  -scip-java-concurrency=1 `
+		  "$HOME\Developer"
+		```
+	</TabItem>
+</Tabs>
 
-<Aside type="caution" title="Do not publish local capture state">
-	The handbook capture profile uses an isolated data directory and synthetic
-	repositories. Tokens, provider attachments, databases, and indexes stay out
-	of the committed handbook.
+| Mode | Behavior |
+| --- | --- |
+| `off` | do not generate Java SCIP |
+| `auto` | try generation; preserve ordinary indexing when unavailable or failed |
+| `required` | treat invalid/unavailable Java SCIP configuration as a hard requirement |
+
+`-scip-java-jdk-home` forces one JDK. `REPOKARTA_SCIP_JAVA_JDK_HOMES` supplies a
+major-version map for wrapper-aware selection. Concurrency is limited to 1–4.
+
+## First-run checklist
+
+<Steps>
+1. Open `/healthz` and confirm the HTTP process is ready.
+2. Watch repository index states; each repository becomes searchable
+   independently.
+3. Verify provider availability only if you need Chat or Wiki.
+4. Open Maps or Dependencies and wait for their own artifact state instead of
+   assuming Search readiness covers every surface.
+5. Open `/mcp/setup` before configuring an external client so endpoint and
+   mode-specific restrictions are current.
+</Steps>
+
+<Aside type="caution" title="Keep the data directory private">
+	It contains metadata, access state, generated artifacts, indexes, logs, and
+	provider-related attachments. Do not commit or publish it. The handbook
+	capture uses a separate `.capture-data` directory for exactly this reason.
 </Aside>

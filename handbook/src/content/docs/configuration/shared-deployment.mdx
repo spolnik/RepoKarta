@@ -1,0 +1,71 @@
+---
+title: Shared deployment & access
+description: Configure authentication, least privilege, repository grants, SCIM, audit, and acquisition.
+---
+
+import { Aside, Card, CardGrid, Steps } from '@astrojs/starlight/components';
+
+Shared mode is more than binding to a public address. RepoKarta applies
+authentication, role permissions, and repository visibility to browser pages,
+JSON APIs, exports, Chat’s internal MCP calls, Maps, Wiki, Dependencies, and
+direct evidence reads.
+
+## Authentication modes
+
+| Mode | Identity source | Intended use |
+| --- | --- | --- |
+| `local` | local administrator/session | one machine or trusted local network |
+| `cloudflare-access` | validated Access identity and groups | deployment behind Cloudflare Access |
+| `saml` | native identity-provider metadata and assertions | direct SAML enterprise integration |
+| `open` | no authentication | only when administrator explicitly permits it with `-allow-open` |
+
+Shared modes require a public HTTPS URL. Cloudflare uses team domain and
+audience. SAML uses metadata URL and an optional explicit service-provider
+entity ID.
+
+## Least privilege
+
+<CardGrid>
+	<Card title="Reader" icon="open-book">
+		Read permitted repositories and their derived evidence.
+	</Card>
+	<Card title="Knowledge maintainer" icon="edit">
+		Manage generation/import artifact workflows in addition to reading.
+	</Card>
+	<Card title="Administrator" icon="shield-check">
+		Manage security, identities, grants, acquisition, storage, and audit.
+	</Card>
+</CardGrid>
+
+Private repositories are visible to their owner plus explicit user or
+identity-provider group grants. Shared visibility is a deliberate
+instance-wide grant. Role mappings and repository grants are separate: a broad
+role does not implicitly reveal every private repository.
+
+## Provisioning and audit
+
+- SCIM 2.0 is mounted at `/scim/v2/` when a bearer token is configured.
+- Users and groups can be provisioned, mapped to roles, and used in repository
+  access rules.
+- Audit events can be filtered, exported, and governed by retention settings.
+- Security-setting changes, controlled artifact operations, access decisions,
+  repository acquisition, and exports retain an audit surface.
+
+## Managed repositories
+
+<Steps>
+1. Configure allowed GitHub or GitLab API base URLs and HTTPS Git hosts.
+2. Discover repositories through the administrative acquisition surface.
+3. Acquire the chosen repository into RepoKarta-owned storage; credentials are
+   used for Git operations and are not embedded in captured handbook data.
+4. Synchronize manually or configure `-repository-sync-interval`.
+5. Review access grants before exposing the repository-derived artifacts.
+6. Remove a managed repository through the administrative workflow when it is
+   no longer in scope.
+</Steps>
+
+<Aside type="caution" title="MCP changes in shared mode">
+	Direct bearer-token and local stdio MCP access are disabled because they
+	could bypass per-user repository grants. Chat instead creates a
+	conversation-scoped identity carrying the author and captured groups.
+</Aside>

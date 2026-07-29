@@ -1,0 +1,73 @@
+---
+title: MCP for coding agents
+description: Connect read-only RepoKarta evidence to agents over HTTP or local stdio.
+---
+
+import { Aside, Card, CardGrid, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
+import Figure from '../../../components/Figure.astro';
+import mcpCapture from '../../../assets/captures/mcp-setup.png';
+
+RepoKarta’s Model Context Protocol surface exposes the same pinned search,
+source, map, dependency, Wiki, topology, and insight evidence used by the
+browser. The configured HTTP server registers twenty read-only tools; the
+compact setup-page catalog currently lists nineteen of them.
+
+<Figure
+	image={mcpCapture}
+	alt="RepoKarta MCP setup page with Streamable HTTP and local stdio configuration."
+	caption="The live page generates endpoint, secret, client configuration, stdio adapter, and the exact read-only tool catalog."
+	meta="REAL LOCAL CAPTURE · SECRET REDACTED"
+/>
+
+## Two connection modes
+
+<Tabs>
+	<TabItem label="Streamable HTTP">
+		Use the `/mcp` endpoint and the bearer token shown on `/mcp/setup`. This
+		is the complete tool surface, including maps, Wiki, topology,
+		dependencies, and insights.
+	</TabItem>
+	<TabItem label="Local stdio">
+		Run `repokarta mcp -url http://127.0.0.1:7331`. The adapter delegates
+		code-intelligence reads to a running RepoKarta process; use HTTP when you
+		need the complete artifact surface.
+	</TabItem>
+	<TabItem label="Shared mode">
+		Direct bearer-token and stdio connections are disabled. Chat creates a
+		conversation-scoped MCP identity so repository policy remains enforced.
+	</TabItem>
+</Tabs>
+
+## Agent investigation loop
+
+<section class="system-flow" aria-label="MCP agent investigation loop">
+	<article class="system-flow__stage"><span class="system-flow__index">01</span><h3>Scope</h3><p>List repositories and resolve named, explicit, and default contexts with provenance.</p><div class="chip-row"><span>repositories</span><span>contexts</span></div></article>
+	<article class="system-flow__stage"><span class="system-flow__index">02</span><h3>Locate</h3><p>Search text or structure and find symbols and references with completeness metadata.</p><div class="chip-row"><span>search</span><span>AST</span></div></article>
+	<article class="system-flow__stage"><span class="system-flow__index">03</span><h3>Read</h3><p>Open bounded source, tree, history, diff, maps, topology, findings, insights, and Wiki pages.</p><div class="chip-row"><span>evidence</span><span>revision</span></div></article>
+	<article class="system-flow__stage"><span class="system-flow__index">04</span><h3>Cite</h3><p>Return canonical URLs and line evidence, preserving partial, stale, and unresolved states.</p><div class="chip-row"><span>URL</span><span>coverage</span></div></article>
+</section>
+
+## Safety contract
+
+<CardGrid>
+	<Card title="Read only" icon="lock">The catalog has no repository or artifact mutation tools.</Card>
+	<Card title="Bounded" icon="stopwatch">Inputs, result sizes, traversal depth, and tool-call budgets are explicit.</Card>
+	<Card title="Pinned" icon="git-branch">Repository IDs and revisions are part of source and artifact reads.</Card>
+	<Card title="Permission checked" icon="shield-check">Shared access applies repository grants to browser and agent reads alike.</Card>
+</CardGrid>
+
+<Steps>
+1. Start RepoKarta and open `/mcp/setup`.
+2. Choose HTTP for the full surface or stdio for a local adapter.
+3. Copy the generated client configuration; keep the bearer token out of source
+   control and logs.
+4. Test with `list_repositories`, then resolve context before broader searches.
+5. Require the agent to include citation URLs and completeness caveats in its
+   final result.
+</Steps>
+
+<Aside type="tip" title="Use tools in layers">
+	An efficient agent scopes first, locates with Search, reads only the relevant
+	file or artifact, and expands topology depth or Git history only when the
+	first evidence justifies it.
+</Aside>

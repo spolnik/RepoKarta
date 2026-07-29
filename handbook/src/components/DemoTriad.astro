@@ -1,0 +1,39 @@
+---
+const systems = [
+	{
+		code: 'GO',
+		name: 'RepoKarta',
+		role: 'The intelligence engine',
+		color: 'mint',
+		facts: ['Go HTTP + MCP', 'SQLite / PostgreSQL', 'Astro handbook'],
+	},
+	{
+		code: 'JVM',
+		name: 'Spring Petclinic',
+		role: 'The service fleet',
+		color: 'acid',
+		facts: ['8 Spring services', 'REST + discovery', 'Maven + Compose'],
+	},
+	{
+		code: 'PY',
+		name: 'Bank of Anthos',
+		role: 'The polyglot system',
+		color: 'blue',
+		facts: ['Python frontends', 'Java ledger', 'Kubernetes + PostgreSQL'],
+	},
+];
+---
+
+<section class="demo-triad" aria-label="The three handbook example systems">
+	{systems.map((system, index) => (
+		<article class={`demo-system demo-system--${system.color}`}>
+			<div class="demo-system__top">
+				<span>{system.code}</span>
+				<small>0{index + 1}</small>
+			</div>
+			<h3>{system.name}</h3>
+			<p>{system.role}</p>
+			<ul>{system.facts.map((fact) => <li>{fact}</li>)}</ul>
+		</article>
+	))}
+</section>

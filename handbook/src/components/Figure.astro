@@ -13,13 +13,22 @@ const { image, alt, caption, meta } = Astro.props;
 ---
 
 <figure class="visual-frame">
-	<Image
-		src={image}
-		alt={alt}
-		widths={[720, 1080, 1440]}
-		sizes="(max-width: 50rem) 100vw, 1080px"
-		loading="lazy"
-	/>
+	<a
+		class="visual-frame__zoom"
+		href={image.src}
+		target="_blank"
+		rel="noreferrer"
+		aria-label={`Open full-resolution image: ${alt}`}
+	>
+		<Image
+			src={image}
+			alt={alt}
+			widths={[720, 1080, 1440]}
+			sizes="(max-width: 50rem) 100vw, 1080px"
+			loading="lazy"
+		/>
+		<span>Open full resolution ↗</span>
+	</a>
 	<figcaption>
 		<span>{caption}</span>
 		<span>{meta}</span>

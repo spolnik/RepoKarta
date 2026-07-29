@@ -1,43 +1,78 @@
 ---
-title: Command-line reference
-description: The current serve, MCP, database, and SCIP configuration surface.
+title: CLI & environment
+description: Current commands, serve flags, database settings, Java SCIP controls, security, and telemetry variables.
 ---
 
-This page is initially generated from the current command definitions. The
-handbook build will eventually verify it against `repokarta help` so new flags
-cannot land without appearing here.
+This reference is transcribed from the current command and configuration code.
+Run `repokarta help` from the exact binary you deploy when defaults or version
+drift matter.
 
-## `repokarta serve`
+## Commands
 
-| Option | Purpose |
+```text
+repokarta serve [options] [repository-root]
+repokarta mcp [options]
+repokarta scip import [options] index.scip
+repokarta database migrate-sqlite-to-postgres [options]
+repokarta version
+```
+
+## `serve` flags
+
+| Flag | Meaning |
 | --- | --- |
-| `-listen` | HTTP listen address |
-| `-data-dir` | RepoKarta-owned database, index, map, and generated-artifact directory |
-| `-open` | Open the dashboard in the default browser |
-| `-exclude` | Directory name to skip; repeat for multiple names |
-| `-codex-command` | Codex CLI executable name or absolute path |
-| `-claude-command` | Claude Code executable name or absolute path |
-| `-scip-java-mode` | Java SCIP generation: `off`, `auto`, or `required` |
-| `-scip-java-command` | `scip-java` executable name or absolute path |
-| `-scip-java-timeout` | Maximum time for one compiler-backed Java build |
-| `-scip-java-concurrency` | Concurrent Java SCIP builds, from 1 through 4 |
-| `-scip-java-jdk-home` | JDK home forced for every Java SCIP build |
+| `-listen` | HTTP listen address; default `127.0.0.1:7331` |
+| `-data-dir` | RepoKarta-owned metadata/artifact directory |
+| `-open` | open the dashboard; default `true` |
+| `-exclude` | directory to exclude; repeatable |
+| `-codex-command`, `-claude-command` | provider executable name or absolute path |
 | `-auth-mode` | `local`, `cloudflare-access`, `saml`, or `open` |
-| `-public-url` | Public HTTPS URL for shared authentication |
-| `-admin-user` | Bootstrap administrator username |
-| `-admin-password-file` | File containing the bootstrap administrator password |
-| `-scim-token-file` | File containing the SCIM bearer token |
-| `-repository-sync-interval` | Managed-repository synchronization interval |
-| `-github-api`, `-gitlab-api` | Repository-discovery API base URLs |
-| `-github-host`, `-gitlab-host` | Allowed HTTPS Git hosts |
+| `-public-url` | public HTTPS URL for shared modes |
+| `-allow-open` | allow administrator-controlled unauthenticated mode |
+| `-admin-user`, `-admin-password-file` | bootstrap administrator credentials |
+| `-scim-token-file` | SCIM 2.0 bearer-token file |
+| `-cloudflare-team-domain`, `-cloudflare-audience` | Cloudflare Access validation |
+| `-saml-metadata-url`, `-saml-entity-id` | native SAML configuration |
+| `-repository-sync-interval` | managed repository sync cadence; zero disables |
+| `-github-api`, `-gitlab-api` | discovery API base URLs |
+| `-github-host`, `-gitlab-host` | allowed HTTPS Git hosts |
+| `-scip-java-mode` | `off`, `auto`, or `required` |
+| `-scip-java-command` | `scip-java` executable |
+| `-scip-java-timeout` | maximum time for one build; default `20m` |
+| `-scip-java-concurrency` | concurrent builds, 1–4; default 1 |
+| `-scip-java-jdk-home` | JDK forced for every Java SCIP build |
 
-## Other commands
+## Other command flags
 
-- `repokarta mcp` starts the stdio adapter for a running RepoKarta server.
-- `repokarta scip import` imports an external SCIP index for an exact repository
-  revision.
-- `repokarta database migrate-sqlite-to-postgres` performs the explicit
-  metadata migration workflow.
+| Command | Flags |
+| --- | --- |
+| `mcp` | `-url` running RepoKarta URL; default `http://127.0.0.1:7331` |
+| `scip import` | `-data-dir`, `-repository-id`, `-revision`, `-root` |
+| `database migrate-sqlite-to-postgres` | `-data-dir`, `-sqlite-path`, `-postgres-url-file` |
 
-Use `repokarta help` as the executable source of truth while the product is in
-pre-release development.
+## RepoKarta environment
+
+| Variable | Purpose |
+| --- | --- |
+| `REPOKARTA_DATABASE_URL` | opt into PostgreSQL |
+| `REPOKARTA_DATABASE_URL_FILE` | read PostgreSQL URL from a file |
+| `REPOKARTA_ADMIN_USER` | bootstrap administrator username |
+| `REPOKARTA_ADMIN_PASSWORD_FILE` | default administrator password-file flag |
+| `REPOKARTA_SCIM_TOKEN_FILE` | default SCIM token-file flag |
+| `REPOKARTA_AUTH_MODE`, `REPOKARTA_PUBLIC_URL` | shared security defaults |
+| `REPOKARTA_CF_TEAM_DOMAIN`, `REPOKARTA_CF_AUDIENCE` | Cloudflare Access |
+| `REPOKARTA_SAML_METADATA_URL`, `REPOKARTA_SAML_ENTITY_ID` | SAML |
+| `REPOKARTA_ALLOW_OPEN` | allow open-mode administration |
+| `REPOKARTA_GITHUB_API`, `REPOKARTA_GITLAB_API` | acquisition APIs |
+| `REPOKARTA_GITHUB_HOST`, `REPOKARTA_GITLAB_HOST` | allowed Git hosts |
+| `REPOKARTA_DEPENDENCY_REGISTRIES` | dependency registry configuration |
+| `REPOKARTA_SCIP_JAVA_MODE`, `REPOKARTA_SCIP_JAVA_COMMAND` | Java semantic mode/tool |
+| `REPOKARTA_SCIP_JAVA_TIMEOUT`, `REPOKARTA_SCIP_JAVA_CONCURRENCY` | Java build bounds |
+| `REPOKARTA_SCIP_JAVA_JDK_HOME` | one forced JDK |
+| `REPOKARTA_SCIP_JAVA_JDK_HOMES` | map Java major versions to JDK homes |
+| `REPOKARTA_LOG_FORMAT`, `REPOKARTA_LOG_LEVEL` | console log output |
+| `ANTHROPIC_API_KEY` | optional direct Anthropic provider |
+
+Standard OpenTelemetry SDK variables—including
+`OTEL_EXPORTER_OTLP_ENDPOINT` and signal-specific trace, metric, and log
+endpoints—configure telemetry export.

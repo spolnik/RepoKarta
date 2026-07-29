@@ -1,0 +1,87 @@
+---
+title: Chat & Deep Search
+description: Ask grounded questions, inspect the research trace, and manage durable conversations.
+---
+
+import { Aside, Card, CardGrid, Steps } from '@astrojs/starlight/components';
+import Figure from '../../../components/Figure.astro';
+import chatCapture from '../../../assets/captures/chat-workspace.png';
+
+Chat uses RepoKarta’s code-intelligence tools inside a durable conversation.
+Ordinary Chat answers a scoped question; Deep Search runs a broader,
+multi-stage evidence investigation and exposes its stages, counts, citations,
+and coverage warnings without exposing hidden model reasoning.
+
+<Figure
+	image={chatCapture}
+	alt="RepoKarta Chat workspace with conversations, grounded context, composer, and evidence inspector."
+	caption="Conversation history, scope, provider controls, Deep Search, evidence, and visible research trace stay in one workspace."
+	meta="REAL LOCAL CAPTURE · LOCAL PROVIDERS"
+/>
+
+## Conversation anatomy
+
+```text
+author + permitted repositories + named/explicit context
+                         │
+                         ▼
+provider session ── conversation-scoped MCP identity
+                         │
+              read-only evidence tools
+                         │
+                         ▼
+answer + citations + attachments + visible research trace
+```
+
+<CardGrid>
+	<Card title="Durable history" icon="open-book">
+		List, open, rename, search, retry, and delete your conversations.
+	</Card>
+	<Card title="Grounded context" icon="puzzle">
+		Use explicit repositories, named contexts, file mentions, and contextual
+		launches from Search, Maps, Source, or Wiki.
+	</Card>
+	<Card title="Attachments" icon="paperclip">
+		Conversation messages can preserve referenced images and supporting
+		context.
+	</Card>
+	<Card title="Control" icon="stopwatch">
+		Interrupt an active generation, retry a failed turn, and inspect provider
+		and session state.
+	</Card>
+	<Card title="Deep Search trace" icon="seti">
+		Visible stages, evidence counts, tool coverage, and warnings explain the
+		investigation process.
+	</Card>
+	<Card title="Scoped sharing" icon="link">
+		Create and revoke a Deep Search share token where sharing is configured;
+		the shared view is a bounded persisted result.
+	</Card>
+</CardGrid>
+
+## Question pattern
+
+<Steps>
+1. Define the repository context before asking the question.
+2. State the desired evidence boundary: source lines, topology, history,
+   dependency findings, insights, or generated pages.
+3. Use ordinary Chat for a focused read and Deep Search when the question
+   requires multiple evidence planes or repositories.
+4. Open citations and read coverage warnings before acting on the answer.
+5. Broaden the context explicitly when evidence suggests an external caller or
+   target; do not let the model silently search everything.
+</Steps>
+
+## Providers
+
+RepoKarta can start Codex CLI and Claude Code sessions from locally configured
+commands and can use direct Anthropic access when `ANTHROPIC_API_KEY` exists in
+the launch environment. Provider availability is reported by the API and UI.
+RepoKarta uses the existing CLI authentication sessions; it does not persist
+the Anthropic API key in its metadata store.
+
+<Aside type="note" title="Conversation access is owner scoped">
+	The history API returns the current author’s conversations. In shared mode,
+	internal MCP calls carry the conversation author and captured identity groups
+	so Chat cannot bypass repository grants.
+</Aside>

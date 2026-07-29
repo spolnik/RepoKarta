@@ -1,0 +1,39 @@
+---
+const layers = [
+	{
+		index: '01',
+		title: 'Observe',
+		body: 'Git repositories are discovered locally or acquired from GitHub and GitLab. Every read is anchored to an indexed commit.',
+		chips: ['source', 'history', 'manifests', 'deployment config'],
+	},
+	{
+		index: '02',
+		title: 'Index',
+		body: 'Text, symbols, syntax trees, optional compiler data, and structural facts are built independently and expose their state.',
+		chips: ['Zoekt', 'Tree-sitter', 'ctags', 'SCIP'],
+	},
+	{
+		index: '03',
+		title: 'Assemble',
+		body: 'Maps, topology, dependency findings, metrics, and documentation preserve provenance instead of flattening uncertainty.',
+		chips: ['maps', 'topology', 'OSV', 'insights', 'wiki'],
+	},
+	{
+		index: '04',
+		title: 'Consume',
+		body: 'People and agents use the same permission-checked facts through the browser, JSON APIs, Chat, and twenty registered MCP tools.',
+		chips: ['browser', 'API', 'Chat', 'MCP'],
+	},
+];
+---
+
+<section class="system-flow" aria-label="How RepoKarta transforms repositories into answers">
+	{layers.map((layer) => (
+		<article class="system-flow__stage">
+			<span class="system-flow__index">{layer.index}</span>
+			<h3>{layer.title}</h3>
+			<p>{layer.body}</p>
+			<div class="chip-row">{layer.chips.map((chip) => <span>{chip}</span>)}</div>
+		</article>
+	))}
+</section>
