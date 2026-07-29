@@ -3,8 +3,8 @@
 ## Product statement
 
 RepoKarta is a local-first workspace for understanding a collection of Git
-repositories already present on a developer's laptop, especially repositories
-downloaded with ghorg.
+repositories from existing local roots, including ghorg directories, and from
+explicitly approved GitHub or GitLab acquisitions.
 
 It combines four capabilities:
 
@@ -13,24 +13,27 @@ It combines four capabilities:
 3. Interactive architecture and dependency maps.
 4. Commit-aware, automatically generated repository documentation.
 
-RepoKarta runs on `127.0.0.1`, treats source repositories as read-only, and
-stores all indexes, metadata, generated documents, and settings outside those
+RepoKarta binds to `127.0.0.1` by default and can be configured for an
+authenticated shared deployment. User-owned source repositories remain
+read-only. RepoKarta may clone and synchronize only checkouts that it owns, and
+stores indexes, metadata, generated documents, and settings outside source
 repositories.
 
-The intended first users are individual developers working with private
-repositories on managed Windows and Apple Silicon macOS laptops.
+The intended users are individual developers and engineering teams working with
+private repositories on managed Windows and Apple Silicon macOS systems.
 
 ## Product principles
 
-- **Local first:** repository contents and indexes remain on the user's laptop.
+- **Local first:** repository contents and indexes remain in the
+  operator-controlled RepoKarta deployment; there is no hosted control plane.
 - **One command:** pointing RepoKarta at a ghorg directory should be enough to
   discover and index its repositories.
 - **Search is foundational:** deterministic code search should work without an
   AI provider or API key.
 - **Evidence over confidence:** AI answers, diagrams, and documentation must
   link to the exact source files and revisions that support them.
-- **Read-only by default:** RepoKarta explains code; it does not edit source
-  repositories or execute repository code.
+- **Read-only by default:** RepoKarta explains code; it does not edit
+  user-owned source repositories or execute repository code.
 - **Incremental work:** unchanged repositories, files, and documentation pages
   should not be recomputed.
 - **Native and portable:** Windows amd64 and macOS arm64 are first-class release
@@ -38,12 +41,13 @@ repositories on managed Windows and Apple Silicon macOS laptops.
 - **Replaceable integrations:** Zoekt and AI providers are hidden behind
   RepoKarta-owned interfaces.
 
-## MVP user journey
+## Core user journey
 
 1. The user downloads or builds the RepoKarta executable.
 2. The user runs `repokarta serve <repository-root>`.
 3. RepoKarta discovers all Git repositories below that root.
-4. RepoKarta incrementally indexes the default revision of each repository.
+4. RepoKarta incrementally indexes the current checked-out revision of each
+   repository.
 5. The browser opens a local dashboard showing indexing state.
 6. The user searches all repositories or limits a query by repository,
    language, path, or file.
@@ -73,26 +77,26 @@ repositories on managed Windows and Apple Silicon macOS laptops.
   repositories.
 - Disambiguate repositories that share a name in every picker using a stable
   path or identity suffix.
-- Never fetch, pull, checkout, reset, clean, or otherwise modify repositories.
-- Detect updates manually and, later, with a filesystem watcher.
+- Never fetch, pull, checkout, reset, clean, or otherwise modify user-owned
+  repositories. Remote synchronization is limited to RepoKarta-owned
+  acquisition checkouts.
+- Detect updates manually. Filesystem watching remains planned.
 
 ### Code search
 
 - Use Zoekt as the search engine and pin the exact upstream revision.
 - Wrap Zoekt behind internal RepoKarta interfaces because Zoekt does not publish
   a stable v1 module.
-- Resolve native Windows support before selecting the final integration shape.
-  The upstream revision tested on 2026-07-24 does not compile its indexing
-  package for Windows: its memory-mapped index file is restricted to Unix build
-  tags and its builder calls `unix.Umask`. Preferred resolution order:
-  1. contribute or maintain a small, reviewable Windows portability patch;
-  2. use a RepoKarta-managed Zoekt helper process;
-  3. use WSL or Docker only as an opt-in fallback, not the default product.
+- Maintain the small, reviewable RepoKarta Windows portability delta over the
+  pinned upstream Zoekt revision. Keep the exact upstream commit, modification
+  notices, Apache-2.0 license, and packaged attribution synchronized.
 - Store Zoekt shards outside source repositories.
-- Incrementally index default revisions.
+- Incrementally index current checked-out revisions. Resolving and indexing a
+  configured default branch when it differs from the checkout remains planned.
 - Support substring, regular-expression, boolean, repository, language, path,
   file, and symbol queries exposed by Zoekt.
-- Stream large result sets to the browser.
+- Return bounded result sets with explicit completeness metadata. Incremental
+  streaming of large search responses to the browser remains planned.
 - Accept an explicit bounded result limit and report returned files, matching
   files, skipped candidates/shards, truncation, and whether totals are exact.
 - Never turn an unavailable search capability into a silent empty result.
@@ -307,25 +311,21 @@ repositories on managed Windows and Apple Silicon macOS laptops.
 - Add macOS signing, notarization, and a Homebrew formula after the product
   stabilizes.
 
-## Explicit non-goals for the MVP
+## Enduring non-goals and boundaries
 
 - A hosted SaaS or cloud control plane.
-- Multiple users, organizations, SSO, or repository permission synchronization.
-- Shared or team deployment. RepoKarta binds to loopback with no authentication
-  because it is a single-user local product. A configurable bind address,
-  authentication, and shared deployment are deliberately deferred to M6 and are
-  not implemented.
-- Scheduled ghorg synchronization. RepoKarta never fetches or updates
-  repositories.
-- Compiler-precise Sourcegraph or SCIP parity. Structural extraction is
-  regex-and-manifest based: it is evidence-backed and commit-pinned, but it is
-  not a compiler front end and does not resolve every reference.
-- GitHub, GitLab, or Bitbucket repository cloning and synchronization. ghorg or
-  the user remains responsible for local repository acquisition and updates.
+- Mutation of user-owned local repositories. Fetching and synchronization are
+  restricted to RepoKarta-owned acquisition checkouts; repository hooks and
+  repository code are never executed.
+- Compiler-precise Sourcegraph or SCIP parity for every language. RepoKarta
+  combines deterministic structural analysis with optional Java SCIP indexes,
+  reports incomplete precision explicitly, and does not claim framework
+  reachability or dead-code proof.
+- General hosted-forge coverage beyond the explicitly configured GitHub and
+  GitLab acquisition adapters.
 - Searching every historical commit or every branch.
 - Editing code, applying patches, executing builds, or running arbitrary shell
   commands through the AI.
-- Compiler-precise cross-repository navigation for every language.
 - A general-purpose IDE.
 - Automatic publication of generated documentation.
 - Mobile support.
@@ -1262,32 +1262,39 @@ completion criteria include:
 
 - Name: RepoKarta.
 - Backend and application host: Go.
-- Search engine: Zoekt behind a RepoKarta adapter. A direct pinned dependency is
-  preferred, contingent on resolving native Windows compilation.
+- Search engine: a pinned Zoekt revision behind a RepoKarta adapter, with a
+  maintained native-Windows portability delta and complete upstream
+  attribution.
 - Metadata database: SQLite with a pure-Go driver by default; PostgreSQL 18+
   is an operator-selected shared-deployment backend with schema-compatible,
   backend-specific migrations and an explicit SQLite migration command.
 - Primary interface: server-rendered Go templates and HTMX.
 - Frontend build and styling: Vite and Tailwind CSS.
-- Visualization: a focused TypeScript island, not a full SPA.
+- Visualization: Cytoscape in a focused TypeScript island, not a full SPA.
 - Default deployment: a local native executable.
-- Primary repository source: existing local Git repositories, including ghorg
-  directories.
+- Repository sources: existing local Git repositories, including ghorg
+  directories, plus explicitly approved GitHub and GitLab acquisitions.
 - AI providers: local Codex and Claude Code harnesses using the user's existing
   login, plus an optional Anthropic API adapter using the user's API key.
 - AI retrieval: iterative deterministic search and file tools before embeddings.
 - Default source access: read-only.
 
+## Remaining planned scope
+
+- Add revision-pinned framework entry roots, dependency-injection edges, and
+  explicit completeness metadata before offering any reachability or dead-code
+  classification.
+- Add filesystem-backed update detection for user-owned local repositories
+  without mutating them.
+- Stream large bounded search responses incrementally to the browser while
+  preserving cancellation, limits, and completeness metadata.
+- Decide and implement configured-default-branch indexing when it differs from
+  the current checkout.
+- Add Linux amd64 and arm64 release packages when the support and validation
+  cost is justified.
+
 ## Open questions
 
-- Whether to index only `HEAD` initially or resolve and index each repository's
-  configured default branch when it differs from the current checkout.
-- Whether the repository catalogue should support multiple roots in M1 or after
-  search is complete.
-- Which graph library offers the best balance of large-graph performance,
-  accessibility, layout quality, and bundle size.
-- Which repositories and cross-file questions justify adding optional SCIP
-  indexes after measuring the syntax-tree layer's coverage and cost.
 - Whether generated Markdown should live only in RepoKarta storage or optionally
   export to a user-selected directory automatically.
 - Whether an optional Claude Agent SDK helper materially improves Q&A enough to
