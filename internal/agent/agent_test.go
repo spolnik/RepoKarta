@@ -694,6 +694,9 @@ func (s *memoryConversationStore) ListConversations(_ context.Context, filter Co
 		if conversation.Author.ID != filter.AuthorID {
 			continue
 		}
+		if filter.Code != nil && conversation.Code != *filter.Code {
+			continue
+		}
 		result = append(result, conversation)
 	}
 	return result, nil
@@ -756,6 +759,30 @@ func TestManagerEnforcesConversationAuthorWhenContinuing(t *testing.T) {
 	}, func(Event) error { return nil })
 	if !errors.Is(err, ErrConversationForbidden) {
 		t.Fatalf("administrator continuation error = %v, want ErrConversationForbidden", err)
+	}
+}
+
+func TestManagerDoesNotResumeDurableCodeConversationAsChat(t *testing.T) {
+	store := &memoryConversationStore{conversations: map[string]Conversation{
+		"code-saved": {
+			ID: "code-saved", Title: "Isolated change", Provider: "test", Code: true,
+			Author: ConversationAuthor{ID: "saml:alice", Provider: "saml"},
+		},
+	}}
+	adapter := &fakeAdapter{id: "test"}
+	manager := NewManager("", "", "", adapter).UsePersistence(store)
+	defer manager.Close()
+
+	err := manager.Send(context.Background(), TurnRequest{
+		ConversationID: "code-saved",
+		Message:        "Continue through ordinary Chat",
+		Author:         ConversationAuthor{ID: "saml:alice", Provider: "saml"},
+	}, func(Event) error { return nil })
+	if !errors.Is(err, ErrInvalidInput) || !strings.Contains(err.Error(), "coding mode") {
+		t.Fatalf("ordinary Chat continuation error = %v, want coding-mode rejection", err)
+	}
+	if adapter.started != 0 {
+		t.Fatalf("provider started %d times for a Code conversation opened as Chat", adapter.started)
 	}
 }
 

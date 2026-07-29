@@ -106,7 +106,10 @@ func (s *Server) requirePermission(response http.ResponseWriter, request *http.R
 }
 
 func requestTarget(request *http.Request) string {
-	for _, name := range []string{"conversationID", "repositoryID", "repository", "page", "userID", "groupID", "mappingID"} {
+	for _, name := range []string{
+		"conversationID", "sessionID", "approvalID", "repositoryID",
+		"repository", "page", "userID", "groupID", "mappingID",
+	} {
 		if value := strings.TrimSpace(request.PathValue(name)); value != "" {
 			return value
 		}

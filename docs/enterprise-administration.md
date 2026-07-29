@@ -41,6 +41,10 @@ read.
 
 `knowledge-maintainer` adds AI chat and Wiki generation.
 
+`developer` adds isolated Code worktrees for repositories where an
+administrator has explicitly enabled Code. It includes knowledge-maintainer
+capabilities. Code sessions and transcripts remain owner-only.
+
 `administrator` adds repository refresh and acquisition, security
 configuration, direct and group role management, audit
 search/export/retention, and destructive administration of RepoKarta-owned

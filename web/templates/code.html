@@ -1,0 +1,144 @@
+{{define "code"}}
+<!doctype html>
+<html lang="en" class="h-full bg-surface-base">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Run coding agents in isolated RepoKarta-owned Git worktrees and review every diff.">
+    <meta name="theme-color" content="#090b0f">
+    <link rel="icon" href="/assets/favicon.ico" sizes="any">
+    <title>RepoKarta · Code</title>
+    <link rel="stylesheet" href="/assets/app.css">
+    <script type="module" src="/assets/app.js"></script>
+  </head>
+  <body class="h-full overflow-hidden bg-surface-base text-ink-strong antialiased">
+    <a class="skip-link" href="#code-message">Skip to the coding request</a>
+    {{template "app-header" .}}
+
+    <main class="code-workspace" data-code-workspace>
+      <aside class="code-sidebar" aria-labelledby="code-sessions-title">
+        <header>
+          <p class="code-kicker">Isolated worktrees</p>
+          <h1 id="code-sessions-title">Code sessions</h1>
+          <p>Agents edit a RepoKarta-owned shadow worktree. Your registered checkout is never modified.</p>
+        </header>
+
+        <button class="primary-button w-full" type="button" data-code-new>New Code session</button>
+        <ol class="code-session-list" data-code-sessions>
+          {{range .Sessions}}
+          <li>
+            <button type="button" data-code-session="{{.ID}}" data-code-state="{{.State}}">
+              <strong>{{.Repository}}</strong>
+              <span>{{.State}} · {{shortCommit .Baseline}}</span>
+            </button>
+          </li>
+          {{end}}
+        </ol>
+        <p class="code-empty-note" data-code-sessions-empty {{if .Sessions}}hidden{{end}}>No Code sessions yet.</p>
+      </aside>
+
+      <section class="code-main">
+        <header class="code-toolbar">
+          <div>
+            <p class="code-kicker">Developer workspace</p>
+            <h2 data-code-title>Start an isolated coding session</h2>
+            <p data-code-status>Choose a repository and provider. The baseline is pinned to its indexed commit.</p>
+          </div>
+          <div class="code-toolbar-actions">
+            <button class="secondary-button" type="button" data-code-refresh disabled>Refresh diff</button>
+            <button class="secondary-button" type="button" data-code-interrupt disabled>Interrupt</button>
+            <button class="secondary-button" type="button" data-code-finish disabled>Finish</button>
+            <button class="code-danger-button" type="button" data-code-discard disabled>Discard</button>
+          </div>
+        </header>
+
+        <section class="code-new-panel" data-code-new-panel>
+          {{if not .CodeRepositories}}
+          <div class="code-callout" role="status">
+            <strong>No repositories are enabled for Code.</strong>
+            <span>An administrator must enable isolated Code worktrees in Repository access.</span>
+          </div>
+          {{else if not .Providers}}
+          <div class="code-callout" role="status">
+            <strong>No coding provider is configured.</strong>
+            <span>Configure Codex or Claude Code, then return to this page.</span>
+          </div>
+          {{else}}
+          <form class="code-new-form" data-code-create>
+            <label>
+              <span>Repository</span>
+              <select name="repository_id" required>
+                {{range .CodeRepositories}}
+                <option value="{{.ID}}">{{index $.RepositoryLabels .ID}}</option>
+                {{end}}
+              </select>
+            </label>
+            <label>
+              <span>Provider</span>
+              <select name="provider" data-code-provider required>
+                {{range .Providers}}
+                <option value="{{.ID}}" data-available="{{.Available}}" data-authenticated="{{.Authenticated}}" {{if not (and .Available .Authenticated)}}disabled{{end}}>{{.Name}}{{if not .Available}} · unavailable{{else if not .Authenticated}} · sign-in required{{end}}</option>
+                {{end}}
+              </select>
+            </label>
+            <label>
+              <span>Model</span>
+              <select name="model" data-code-model required>
+                {{range .Providers}}{{$provider := .}}{{range .Models}}
+                <option value="{{.ID}}" data-provider="{{$provider.ID}}" data-efforts="{{range $index, $effort := .Efforts}}{{if $index}},{{end}}{{$effort}}{{end}}">{{.Label}}</option>
+                {{end}}{{end}}
+              </select>
+            </label>
+            <label>
+              <span>Reasoning effort</span>
+              <select name="effort" data-code-effort><option value="">Provider default</option></select>
+            </label>
+            <label class="code-baseline-field">
+              <span>Baseline override <small>optional exact commit</small></span>
+              <input name="baseline" placeholder="Uses the indexed commit">
+            </label>
+            <button class="primary-button" type="submit">Create worktree</button>
+          </form>
+          {{end}}
+        </section>
+
+        <div class="code-columns" data-code-session-panel hidden>
+          <section class="code-conversation" aria-label="Coding conversation">
+            <div class="code-messages" data-code-messages aria-live="polite"></div>
+            <div class="code-approvals" data-code-approvals aria-live="assertive"></div>
+            <details class="code-actions">
+              <summary>Agent actions <span data-code-action-count>0</span></summary>
+              <ol data-code-actions></ol>
+            </details>
+            <form class="code-composer" data-code-turn>
+              <label for="code-message" class="sr-only">Describe the code change</label>
+              <textarea id="code-message" name="message" rows="4" required placeholder="Describe the change, constraints, and verification you want the coding agent to perform."></textarea>
+              <div>
+                <span>Edits remain isolated until you finish the session.</span>
+                <button class="primary-button" type="submit">Run agent</button>
+              </div>
+            </form>
+          </section>
+
+          <aside class="code-diff" aria-labelledby="code-diff-title">
+            <header>
+              <div>
+                <p class="code-kicker">Baseline → workspace</p>
+                <h3 id="code-diff-title">Diff</h3>
+              </div>
+              <span data-code-diff-summary>No changes</span>
+            </header>
+            <div class="code-file-list" data-code-files></div>
+            <div class="code-file-toolbar" data-code-file-toolbar hidden>
+              <strong data-code-file-title></strong>
+              <button class="code-danger-link" type="button" data-code-discard-file>Discard file changes</button>
+            </div>
+            <pre class="code-patch" data-code-patch aria-label="Unified diff">No workspace changes yet.</pre>
+          </aside>
+        </div>
+        <p class="code-feedback" data-code-feedback role="status" aria-live="polite"></p>
+      </section>
+    </main>
+  </body>
+</html>
+{{end}}

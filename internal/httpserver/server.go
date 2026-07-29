@@ -11,6 +11,7 @@ import (
 	"github.com/spolnik/RepoKarta/internal/audit"
 	"github.com/spolnik/RepoKarta/internal/catalog"
 	"github.com/spolnik/RepoKarta/internal/codeintel"
+	"github.com/spolnik/RepoKarta/internal/codework"
 	"github.com/spolnik/RepoKarta/internal/contextscope"
 	"github.com/spolnik/RepoKarta/internal/dependencies"
 	"github.com/spolnik/RepoKarta/internal/docs"
@@ -55,6 +56,31 @@ type ConversationService interface {
 
 type ConversationRetryService interface {
 	Retry(context.Context, agent.RetryRequest, func(agent.Event) error) error
+}
+
+type ConversationApprovalService interface {
+	ResolveApproval(context.Context, string, string, string) error
+}
+
+// CodeService owns persistent isolated coding worktrees and their lifecycle.
+type CodeService interface {
+	Create(context.Context, codework.CreateSessionRequest) (codework.Session, error)
+	Session(context.Context, string, string) (codework.Session, error)
+	List(context.Context, string) ([]codework.Session, error)
+	RepositoryEnabled(context.Context, int64) (bool, error)
+	Actions(context.Context, string, string) ([]codework.Action, error)
+	Approvals(context.Context, string, string) ([]codework.Approval, error)
+	Diff(context.Context, string, string, int) (codework.Diff, error)
+	ReadFile(context.Context, string, string, string) (codework.File, error)
+	WorkspacePath(context.Context, string, string) (string, error)
+	AttachConversation(context.Context, string, string, string) (codework.Session, error)
+	SetState(context.Context, string, string, string, string) (codework.Session, error)
+	RecordAction(context.Context, codework.Action) (codework.Action, error)
+	RecordApproval(context.Context, codework.Approval) error
+	ResolveApproval(context.Context, string, string, string, string) (codework.Approval, error)
+	DiscardFile(context.Context, string, string, string, string) (codework.Diff, error)
+	Finish(context.Context, string, string, string, string) (codework.Session, error)
+	Discard(context.Context, string, string) error
 }
 
 // ConversationHistoryService supplies durable titled transcripts.
@@ -157,6 +183,7 @@ type Config struct {
 	Dependencies          DependencyService
 	SCIPJava              SCIPJavaService
 	Telemetry             *telemetry.System
+	Code                  CodeService
 }
 
 // Server hosts RepoKarta's loopback interface.
@@ -180,6 +207,7 @@ type Server struct {
 	dependencies          DependencyService
 	scipJava              SCIPJavaService
 	telemetry             *telemetry.System
+	code                  CodeService
 }
 
 type pageData struct {
@@ -201,12 +229,14 @@ type pageData struct {
 	DependenciesEnabled bool
 	MCPEnabled          bool
 	InsightsEnabled     bool
+	CodeEnabled         bool
 	Search              searchData
 	AuthMode            string
 	UserLabel           string
 	AdminEnabled        bool
 	CanAdminister       bool
 	CanManageArtifacts  bool
+	CanCode             bool
 	MCP                 mcpPageData
 	SCIPJava            scipjava.ProviderStatus
 	SCIPJavaEnabled     bool
@@ -346,6 +376,13 @@ type dependencyPageData struct {
 	LastRow              int
 	RefreshProgress      dependencies.RefreshProgress
 	AdvisoryProgress     dependencies.AdvisoryRefreshProgress
+}
+
+type codePageData struct {
+	pageData
+	Sessions         []codework.Session
+	Providers        []agent.Status
+	CodeRepositories []catalog.Repository
 }
 
 type conversationViewer struct {

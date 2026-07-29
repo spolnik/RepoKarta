@@ -16,7 +16,8 @@ func TestRoadmapKeepsM7ScopeAndCompletedMilestones(t *testing.T) {
 	m17 := scopeSection(t, scope, "### M17:", "### M18:")
 	m18 := scopeSection(t, scope, "### M18:", "### M19:")
 	m19 := scopeSection(t, scope, "### M19:", "### M20:")
-	m20 := scopeSection(t, scope, "### M20:", "## Definition of quality")
+	m20 := scopeSection(t, scope, "### M20:", "### M21:")
+	m21 := scopeSection(t, scope, "### M21:", "## Definition of quality")
 
 	for _, completed := range []string{
 		"- [x] Add permission-aware Chat autocomplete for `@repository` and `@file`",
@@ -70,6 +71,9 @@ func TestRoadmapKeepsM7ScopeAndCompletedMilestones(t *testing.T) {
 	if strings.Contains(m20, "- [ ]") {
 		t.Error("M20 still contains unchecked scope")
 	}
+	if strings.Contains(m21, "- [ ]") {
+		t.Error("M21 still contains unchecked scope")
+	}
 	for _, completed := range []string{
 		"- [x] Derive revision-pinned framework and executable reachability roots",
 		"- [x] Watch bounded Git metadata",
@@ -89,7 +93,8 @@ func TestRoadmapKeepsM7ScopeAndCompletedMilestones(t *testing.T) {
 		"## Recommended next session",
 	)
 	for _, required := range []string{
-		"M0 through M20 are complete",
+		"M0 through M21 are complete",
+		"M21 adds the separately authorized Code tab",
 		"M7 now includes qualified symbol search",
 		"M9 now includes explicit comparison and distance states",
 		"Linked-worktree discovery deduplication",

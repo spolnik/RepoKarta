@@ -4,12 +4,14 @@ package codex
 import (
 	"bufio"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,6 +33,16 @@ Use git_log and git_diff for history questions, then open relevant historical so
 Every material code claim must cite the source_url returned by a RepoKarta tool.
 Never use shell commands, direct filesystem access beyond supplied image attachments, network search, or code mutation.
 If the indexed evidence is insufficient, say so plainly.`
+
+const codingPermissionProfile = "repokarta-code-workspace"
+
+const codingInstructions = `You are RepoKarta's coding agent.
+Work only inside the isolated Code worktree supplied as your current directory.
+Use RepoKarta's read-only MCP tools for commit-pinned fleet evidence and the worktree filesystem for the change being implemented.
+Make the smallest complete change that satisfies the request, preserve unrelated work, and keep every file mutation reviewable through Git.
+Do not access paths outside the worktree. Do not fetch, pull, push, publish, open pull requests, or change remotes.
+Network access is disabled. Ask for approval before commands when the sandbox requires it.
+Explain what changed, what validation ran, and any remaining uncertainty.`
 
 // Adapter starts local Codex app-server sessions.
 type Adapter struct {
@@ -68,6 +80,7 @@ func (a *Adapter) probeStatus(ctx context.Context) agent.Status {
 		Interrupt:    true,
 		ContextUsage: true,
 		TokenUsage:   true,
+		Code:         true,
 	}
 	command, err := localcommand.Resolve(a.Command, "codex")
 	if err != nil {
@@ -111,25 +124,30 @@ func (a *Adapter) Start(ctx context.Context, config agent.SessionConfig) (agent.
 }
 
 type session struct {
-	command       *exec.Cmd
-	processGroup  *processgroup.Group
-	stdin         io.WriteCloser
-	nextID        atomic.Int64
-	writeMu       sync.Mutex
-	pendingMu     sync.Mutex
-	pending       map[string]chan rpcMessage
-	notifications chan rpcMessage
-	readDone      chan struct{}
-	readErrMu     sync.Mutex
-	readErr       error
-	closed        chan struct{}
-	threadID      string
-	effort        string
-	attachments   *agent.AttachmentStore
-	activeMu      sync.RWMutex
-	activeTurnID  string
-	restored      bool
-	closeOnce     sync.Once
+	command        *exec.Cmd
+	processGroup   *processgroup.Group
+	stdin          io.WriteCloser
+	nextID         atomic.Int64
+	writeMu        sync.Mutex
+	pendingMu      sync.Mutex
+	pending        map[string]chan rpcMessage
+	notifications  chan rpcMessage
+	serverRequests chan rpcMessage
+	readDone       chan struct{}
+	readErrMu      sync.Mutex
+	readErr        error
+	closed         chan struct{}
+	threadID       string
+	effort         string
+	attachments    *agent.AttachmentStore
+	activeMu       sync.RWMutex
+	activeTurnID   string
+	restored       bool
+	coding         bool
+	workspaceRoot  string
+	approvalsMu    sync.Mutex
+	approvals      map[string]json.RawMessage
+	closeOnce      sync.Once
 }
 
 type rpcMessage struct {
@@ -153,9 +171,10 @@ func startSession(ctx context.Context, command string, config agent.SessionConfi
 	arguments := codexCommandArguments(config, attachments.Directory())
 	process := exec.CommandContext(context.WithoutCancel(ctx), command, arguments...)
 	processgroup.Configure(process)
-	// Keep the harness outside every indexed repository. RepoKarta source is
-	// available only through the authenticated read-only MCP surface.
 	process.Dir = attachments.Directory()
+	if config.Coding {
+		process.Dir = config.RepositoryRoot
+	}
 	process.Env = append(os.Environ(), "REPOKARTA_MCP_BEARER_TOKEN="+config.MCPToken)
 	stdin, err := process.StdinPipe()
 	if err != nil {
@@ -185,15 +204,19 @@ func startSession(ctx context.Context, command string, config agent.SessionConfi
 	}
 
 	s := &session{
-		command:       process,
-		processGroup:  group,
-		stdin:         stdin,
-		pending:       make(map[string]chan rpcMessage),
-		notifications: make(chan rpcMessage, 128),
-		readDone:      make(chan struct{}),
-		closed:        make(chan struct{}),
-		effort:        config.Effort,
-		attachments:   attachments,
+		command:        process,
+		processGroup:   group,
+		stdin:          stdin,
+		pending:        make(map[string]chan rpcMessage),
+		notifications:  make(chan rpcMessage, 128),
+		serverRequests: make(chan rpcMessage, 32),
+		readDone:       make(chan struct{}),
+		closed:         make(chan struct{}),
+		effort:         config.Effort,
+		attachments:    attachments,
+		coding:         config.Coding,
+		workspaceRoot:  config.RepositoryRoot,
+		approvals:      make(map[string]json.RawMessage),
 	}
 	go s.read(stdout)
 
@@ -220,6 +243,13 @@ func startSession(ctx context.Context, command string, config agent.SessionConfi
 		"cwd":                   attachments.Directory(),
 		"approvalPolicy":        "never",
 		"developerInstructions": providerInstructions,
+	}
+	if config.Coding {
+		params["cwd"] = config.RepositoryRoot
+		params["approvalPolicy"] = "on-request"
+		params["permissions"] = codingPermissionProfile
+		params["runtimeWorkspaceRoots"] = []string{config.RepositoryRoot}
+		params["developerInstructions"] = codingInstructions
 	}
 	if config.Model != "" {
 		params["model"] = config.Model
@@ -262,18 +292,32 @@ func startSession(ctx context.Context, command string, config agent.SessionConfi
 }
 
 func codexCommandArguments(config agent.SessionConfig, attachmentDirectory string) []string {
-	return []string{
+	arguments := []string{
 		"app-server",
 		"--stdio",
 		"-c", "mcp_servers.repokarta.url=" + config.MCPURL,
 		"-c", `mcp_servers.repokarta.bearer_token_env_var="REPOKARTA_MCP_BEARER_TOKEN"`,
 		"-c", "tools.web_search=false",
+	}
+	if config.Coding {
+		return append(arguments,
+			"-c", `approval_policy="on-request"`,
+			"-c", `default_permissions="`+codingPermissionProfile+`"`,
+			"-c", `permissions.`+codingPermissionProfile+`.extends=":workspace"`,
+			"-c", `permissions.`+codingPermissionProfile+`.filesystem.:root="deny"`,
+			"-c", `permissions.`+codingPermissionProfile+`.filesystem.:minimal="read"`,
+			"-c", `permissions.`+codingPermissionProfile+`.filesystem.:tmpdir="deny"`,
+			"-c", `permissions.`+codingPermissionProfile+`.filesystem.:slash_tmp="deny"`,
+			"-c", `permissions.`+codingPermissionProfile+`.network.enabled=false`,
+		)
+	}
+	return append(arguments,
 		"-c", `default_permissions="repokarta-mcp-only"`,
 		"-c", `permissions.repokarta-mcp-only.extends=":read-only"`,
 		"-c", `permissions.repokarta-mcp-only.filesystem.":root"="deny"`,
 		"-c", `permissions.repokarta-mcp-only.filesystem.":minimal"="read"`,
-		"-c", "permissions.repokarta-mcp-only.filesystem." + strconv.Quote(attachmentDirectory) + `="read"`,
-	}
+		"-c", "permissions.repokarta-mcp-only.filesystem."+strconv.Quote(attachmentDirectory)+`="read"`,
+	)
 }
 
 func (s *session) ResumeCursor() string { return s.threadID }
@@ -297,7 +341,7 @@ func (s *session) Send(ctx context.Context, turn agent.Turn, emit func(agent.Eve
 			ID string `json:"id"`
 		} `json:"turn"`
 	}
-	if err := s.call(ctx, "turn/start", turnStartParams(s.threadID, turn, imagePaths, s.effort), &started); err != nil {
+	if err := s.call(ctx, "turn/start", s.turnStartParams(turn, imagePaths), &started); err != nil {
 		return fmt.Errorf("start Codex turn: %w", err)
 	}
 	turnID := started.Turn.ID
@@ -325,6 +369,29 @@ func (s *session) Send(ctx context.Context, turn agent.Turn, emit func(agent.Eve
 				}
 				if json.Unmarshal(message.Params, &delta) == nil && delta.TurnID == turnID && delta.Delta != "" {
 					if err := emit(agent.Event{Type: agent.EventDelta, SegmentID: delta.ItemID, Text: delta.Delta}); err != nil {
+						return err
+					}
+				}
+			case "item/started":
+				action, ok := codeActionFromItem(message.Params)
+				if ok {
+					if err := emit(agent.Event{Type: agent.EventCodeAction, CodeAction: &action}); err != nil {
+						return err
+					}
+				}
+			case "item/commandExecution/outputDelta":
+				var output struct {
+					ItemID string `json:"itemId"`
+					TurnID string `json:"turnId"`
+					Delta  string `json:"delta"`
+				}
+				if json.Unmarshal(message.Params, &output) == nil &&
+					output.TurnID == turnID && output.Delta != "" {
+					action := agent.CodeAction{
+						ID: output.ItemID, Kind: "commandExecution",
+						Status: "running", Output: output.Delta,
+					}
+					if err := emit(agent.Event{Type: agent.EventCodeAction, CodeAction: &action}); err != nil {
 						return err
 					}
 				}
@@ -359,6 +426,14 @@ func (s *session) Send(ctx context.Context, turn agent.Turn, emit func(agent.Eve
 						return fmt.Errorf("load Codex generated image: %w", err)
 					}
 					if err := emit(agent.Event{Type: agent.EventImages, Images: []agent.Image{image}}); err != nil {
+						return err
+					}
+				case "commandExecution", "fileChange":
+					action := agent.CodeAction{
+						ID: completed.Item.ID, Kind: completed.Item.Type,
+						Status: completed.Item.Status,
+					}
+					if err := emit(agent.Event{Type: agent.EventCodeAction, CodeAction: &action}); err != nil {
 						return err
 					}
 				}
@@ -396,6 +471,14 @@ func (s *session) Send(ctx context.Context, turn agent.Turn, emit func(agent.Eve
 					return agent.ErrInterrupted
 				}
 				return nil
+			}
+		case request := <-s.serverRequests:
+			approval, ok := s.registerApproval(request, turnID)
+			if !ok {
+				continue
+			}
+			if err := emit(agent.Event{Type: agent.EventApproval, Approval: &approval}); err != nil {
+				return err
 			}
 		}
 	}
@@ -489,7 +572,7 @@ func (s *session) clearActiveTurn(turnID string) {
 	s.activeMu.Unlock()
 }
 
-func turnStartParams(threadID string, turn agent.Turn, imagePaths []string, effort string) map[string]any {
+func (s *session) turnStartParams(turn agent.Turn, imagePaths []string) map[string]any {
 	input := make([]map[string]any, 0, 1+len(imagePaths))
 	message := agent.PromptWithHistory(turn)
 	if message != "" {
@@ -506,13 +589,46 @@ func turnStartParams(threadID string, turn agent.Turn, imagePaths []string, effo
 		})
 	}
 	params := map[string]any{
-		"threadId": threadID,
+		"threadId": s.threadID,
 		"input":    input,
 	}
-	if effort != "" {
-		params["effort"] = effort
+	if s.effort != "" {
+		params["effort"] = s.effort
+	}
+	if s.coding {
+		params["cwd"] = s.workspaceRoot
+		params["approvalPolicy"] = "on-request"
+		params["permissions"] = codingPermissionProfile
 	}
 	return params
+}
+
+// turnStartParams preserves the read-only adapter contract used by focused
+// protocol tests; coding sessions use the session-bound variant above.
+func turnStartParams(threadID string, turn agent.Turn, imagePaths []string, effort string) map[string]any {
+	return (&session{threadID: threadID, effort: effort}).turnStartParams(turn, imagePaths)
+}
+
+// ResolveApproval answers one server-initiated app-server request.
+func (s *session) ResolveApproval(_ context.Context, id, decision string) error {
+	switch decision {
+	case "accept", "acceptForSession", "decline", "cancel":
+	default:
+		return errors.New("invalid Codex approval decision")
+	}
+	s.approvalsMu.Lock()
+	rawID := s.approvals[id]
+	if len(rawID) > 0 {
+		delete(s.approvals, id)
+	}
+	s.approvalsMu.Unlock()
+	if len(rawID) == 0 {
+		return errors.New("Codex approval is no longer pending")
+	}
+	return s.write(map[string]any{
+		"id":     rawID,
+		"result": map[string]any{"decision": decision},
+	})
 }
 
 func (s *session) call(ctx context.Context, method string, params any, result any) error {
@@ -574,6 +690,14 @@ func (s *session) read(reader io.Reader) {
 			continue
 		}
 		if len(message.ID) > 0 && message.Method != "" {
+			if s.coding {
+				select {
+				case s.serverRequests <- message:
+				case <-s.closed:
+					return
+				}
+				continue
+			}
 			_ = s.write(map[string]any{
 				"id": message.ID,
 				"error": map[string]any{
@@ -613,6 +737,111 @@ func (s *session) read(reader io.Reader) {
 	s.readErr = err
 	s.readErrMu.Unlock()
 	close(s.readDone)
+}
+
+func (s *session) registerApproval(message rpcMessage, turnID string) (agent.Approval, bool) {
+	var params struct {
+		ThreadID           string          `json:"threadId"`
+		TurnID             string          `json:"turnId"`
+		ItemID             string          `json:"itemId"`
+		Reason             string          `json:"reason"`
+		Command            json.RawMessage `json:"command"`
+		CWD                string          `json:"cwd"`
+		GrantRoot          string          `json:"grantRoot"`
+		AvailableDecisions []string        `json:"availableDecisions"`
+	}
+	if json.Unmarshal(message.Params, &params) != nil ||
+		(params.TurnID != "" && params.TurnID != turnID) {
+		return agent.Approval{}, false
+	}
+	kind := ""
+	switch message.Method {
+	case "item/commandExecution/requestApproval":
+		kind = "command"
+	case "item/fileChange/requestApproval":
+		kind = "file_change"
+	default:
+		_ = s.write(map[string]any{
+			"id": message.ID, "result": map[string]any{"decision": "decline"},
+		})
+		return agent.Approval{}, false
+	}
+	id := "codex-" + hex.EncodeToString(message.ID)
+	s.approvalsMu.Lock()
+	s.approvals[id] = append(json.RawMessage(nil), message.ID...)
+	s.approvalsMu.Unlock()
+	decisions := params.AvailableDecisions
+	if len(decisions) == 0 {
+		decisions = []string{"accept", "decline", "cancel"}
+	}
+	directory := relativeCodeDirectory(s.workspaceRoot, params.CWD)
+	return agent.Approval{
+		ID: id, Kind: kind, Reason: params.Reason,
+		Command: commandText(params.Command), Directory: directory,
+		AvailableDecisions: decisions,
+	}, true
+}
+
+func codeActionFromItem(raw json.RawMessage) (agent.CodeAction, bool) {
+	var event struct {
+		TurnID string `json:"turnId"`
+		Item   struct {
+			ID      string          `json:"id"`
+			Type    string          `json:"type"`
+			Status  string          `json:"status"`
+			Command json.RawMessage `json:"command"`
+			Changes []struct {
+				Path string `json:"path"`
+				Kind string `json:"kind"`
+			} `json:"changes"`
+		} `json:"item"`
+	}
+	if json.Unmarshal(raw, &event) != nil {
+		return agent.CodeAction{}, false
+	}
+	if event.Item.Type != "commandExecution" && event.Item.Type != "fileChange" {
+		return agent.CodeAction{}, false
+	}
+	summary := ""
+	if event.Item.Type == "fileChange" && len(event.Item.Changes) > 0 {
+		summary = fmt.Sprintf("%d file change(s)", len(event.Item.Changes))
+	}
+	return agent.CodeAction{
+		ID: event.Item.ID, Kind: event.Item.Type, Status: event.Item.Status,
+		Summary: summary, Command: commandText(event.Item.Command),
+	}, true
+}
+
+func commandText(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var text string
+	if json.Unmarshal(raw, &text) == nil {
+		return text
+	}
+	var arguments []string
+	if json.Unmarshal(raw, &arguments) == nil {
+		return strings.Join(arguments, " ")
+	}
+	if len(raw) > 4096 {
+		raw = raw[:4096]
+	}
+	return strings.TrimSpace(string(raw))
+}
+
+func relativeCodeDirectory(root, directory string) string {
+	if strings.TrimSpace(root) == "" || strings.TrimSpace(directory) == "" {
+		return ""
+	}
+	relative, err := filepath.Rel(root, directory)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(os.PathSeparator)) {
+		return ""
+	}
+	if relative == "." {
+		return "."
+	}
+	return filepath.ToSlash(relative)
 }
 
 func (s *session) readFailure() error {

@@ -24,6 +24,7 @@ type Conversation struct {
 	Model        string             `json:"model,omitempty"`
 	Effort       string             `json:"effort,omitempty"`
 	Mode         string             `json:"mode"`
+	Code         bool               `json:"code"`
 	Author       ConversationAuthor `json:"author"`
 	ResumeCursor string             `json:"-"`
 	CreatedAt    time.Time          `json:"created_at"`
@@ -48,6 +49,7 @@ type ConversationAuthor struct {
 // author. Cross-author chat access is intentionally unsupported.
 type ConversationFilter struct {
 	AuthorID string
+	Code     *bool
 }
 
 // ConversationShare is a revocable unguessable URL capability. Reading it

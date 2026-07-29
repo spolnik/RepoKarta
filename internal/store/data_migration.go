@@ -43,6 +43,9 @@ var migrationTables = []string{
 	"saved_searches",
 	"search_monitors",
 	"search_monitor_runs",
+	"code_sessions",
+	"code_actions",
+	"code_approvals",
 }
 
 var identityTables = []string{
@@ -60,6 +63,7 @@ var identityTables = []string{
 	"runtime_topology_observations",
 	"search_history",
 	"search_monitor_runs",
+	"code_actions",
 }
 
 // MigrateSQLiteToPostgres upgrades the SQLite source, requires an empty

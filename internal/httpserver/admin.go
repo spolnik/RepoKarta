@@ -253,6 +253,7 @@ func (s *Server) updateRepositoryAccess(response http.ResponseWriter, request *h
 		RepositoryID: repositoryID,
 		OwnerID:      request.FormValue("owner_id"),
 		Visibility:   request.FormValue("visibility"),
+		CodeEnabled:  request.FormValue("code_enabled") == "enabled",
 		Users:        splitAccessSubjects(request.FormValue("users")),
 		Groups:       splitAccessSubjects(request.FormValue("groups")),
 	}
@@ -267,10 +268,11 @@ func (s *Server) updateRepositoryAccess(response http.ResponseWriter, request *h
 	}
 	s.recordAdminEvent(request, "repository.access.update", "repository", strconv.FormatInt(repositoryID, 10), "success", map[string]string{
 		"owner": policy.OwnerID, "visibility": policy.Visibility,
+		"code_enabled": strconv.FormatBool(policy.CodeEnabled),
 	})
 	data := s.adminData(request.Context(), csrf)
 	data.Section = "access"
-	data.Notice = "Repository access saved. Source and every derived artifact now use this policy."
+	data.Notice = "Repository access and Code worktree policy saved."
 	s.renderAdmin(response, data)
 }
 

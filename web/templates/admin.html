@@ -147,7 +147,7 @@
                   <span class="rounded-full border px-2 py-0.5 text-xs {{if .Active}}border-emerald-400/25 text-emerald-300{{else}}border-red-400/25 text-red-300{{end}}">{{if .Active}}active{{else}}suspended{{end}}</span>
                 </div>
                 <div class="mt-3 flex gap-3">
-                  <select name="role" class="min-w-0 flex-1"><option value="reader" {{if eq .Role "reader"}}selected{{end}}>Reader</option><option value="knowledge-maintainer" {{if eq .Role "knowledge-maintainer"}}selected{{end}}>Knowledge maintainer</option><option value="administrator" {{if eq .Role "administrator"}}selected{{end}}>Administrator</option></select>
+                  <select name="role" class="min-w-0 flex-1"><option value="reader" {{if eq .Role "reader"}}selected{{end}}>Reader</option><option value="knowledge-maintainer" {{if eq .Role "knowledge-maintainer"}}selected{{end}}>Knowledge maintainer</option><option value="developer" {{if eq .Role "developer"}}selected{{end}}>Developer</option><option value="administrator" {{if eq .Role "administrator"}}selected{{end}}>Administrator</option></select>
                   <button class="secondary-button" type="submit">Save role</button>
                 </div>
               </form>
@@ -166,7 +166,7 @@
                 <div class="font-semibold text-white">{{.DisplayName}}</div>
                 <div class="mt-1 font-mono text-xs text-ink-faint">{{len .Members}} members · {{.ID}}</div>
                 <div class="mt-3 flex gap-3">
-                  <select name="role" class="min-w-0 flex-1"><option value="reader" {{if eq .Role "reader"}}selected{{end}}>Reader</option><option value="knowledge-maintainer" {{if eq .Role "knowledge-maintainer"}}selected{{end}}>Knowledge maintainer</option><option value="administrator" {{if eq .Role "administrator"}}selected{{end}}>Administrator</option></select>
+                  <select name="role" class="min-w-0 flex-1"><option value="reader" {{if eq .Role "reader"}}selected{{end}}>Reader</option><option value="knowledge-maintainer" {{if eq .Role "knowledge-maintainer"}}selected{{end}}>Knowledge maintainer</option><option value="developer" {{if eq .Role "developer"}}selected{{end}}>Developer</option><option value="administrator" {{if eq .Role "administrator"}}selected{{end}}>Administrator</option></select>
                   <button class="secondary-button" type="submit">Save role</button>
                 </div>
               </form>
@@ -191,7 +191,7 @@
             <input type="hidden" name="csrf" value="{{.CSRFToken}}">
             <label class="filter-field"><span>Provider</span><select name="provider"><option value="cloudflare-access">Cloudflare Access</option><option value="saml">SAML</option></select></label>
             <label class="filter-field md:col-span-2"><span>Exact group claim</span><input name="group" required placeholder="engineering"></label>
-            <label class="filter-field"><span>Role</span><select name="role"><option value="reader">Reader</option><option value="knowledge-maintainer">Knowledge maintainer</option><option value="administrator">Administrator</option></select></label>
+            <label class="filter-field"><span>Role</span><select name="role"><option value="reader">Reader</option><option value="knowledge-maintainer">Knowledge maintainer</option><option value="developer">Developer</option><option value="administrator">Administrator</option></select></label>
             <div class="md:col-span-4 flex justify-end"><button class="secondary-button" type="submit">Add mapping</button></div>
           </form>
         </section>
@@ -350,7 +350,7 @@
       {{if eq .Section "access"}}
       <section class="mt-8 rounded-2xl border border-white/[0.08] bg-white/[0.025] p-6">
         <h2 class="text-lg font-semibold text-white">Repository and artifact access</h2>
-        <p class="mt-2 text-sm leading-6 text-ink-soft">A private repository is visible only to its owner and explicit user or identity-provider group grants. Shared visibility is an explicit instance-wide grant. Maps, Wiki pages, dependency facts, source exports, and MCP reads inherit the same policy.</p>
+        <p class="mt-2 text-sm leading-6 text-ink-soft">A private repository is visible only to its owner and explicit user or identity-provider group grants. Shared visibility is an explicit instance-wide grant. Code access is a separate per-repository opt-in and still requires the developer role.</p>
         {{if .RepositoryAccessError}}
         <p class="mt-4 rounded-lg border border-red-400/30 bg-red-400/10 px-4 py-3 text-sm text-red-200">{{.RepositoryAccessError}}</p>
         {{else if not .RepositoryAccess}}
@@ -371,6 +371,10 @@
               <label class="filter-field"><span>User grants</span><textarea name="users" rows="3" placeholder="provider:stable-subject-id">{{range $index, $value := .Users}}{{if $index}}, {{end}}{{$value}}{{end}}</textarea></label>
               <label class="filter-field"><span>Group grants</span><textarea name="groups" rows="3" placeholder="engineering">{{range $index, $value := .Groups}}{{if $index}}, {{end}}{{$value}}{{end}}</textarea></label>
             </div>
+            <label class="mt-4 flex items-start gap-3 rounded-lg border border-amber-300/20 bg-amber-300/[0.05] px-4 py-3 text-sm text-ink-soft">
+              <input class="mt-1" type="checkbox" name="code_enabled" value="enabled" {{if .CodeEnabled}}checked{{end}}>
+              <span><strong class="block text-white">Enable isolated Code worktrees</strong>Allow developer-role users with repository read access to create agent-owned shadow worktrees. This never edits the registered source checkout.</span>
+            </label>
             <div class="mt-4 flex justify-end"><button class="secondary-button" type="submit">Save access</button></div>
           </form>
           {{end}}

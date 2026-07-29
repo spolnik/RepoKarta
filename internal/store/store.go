@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	currentSchemaVersion = 24
+	currentSchemaVersion = 25
 
 	schemaV1 = `
 CREATE TABLE IF NOT EXISTS repositories (
@@ -637,6 +637,235 @@ SET index_revision = CASE
         ELSE 'HEAD'
     END,
     index_commit = head_commit;`
+
+	// Version 25 adds the developer authorization role, explicit per-repository
+	// coding policy, and durable Code session/action/approval metadata. Source
+	// state remains in owned Git worktrees rather than the relational database.
+	schemaV25SQLite = `
+PRAGMA defer_foreign_keys = ON;
+
+DROP TABLE IF EXISTS identity_group_members_v25;
+DROP TABLE IF EXISTS identity_role_mappings_v25;
+DROP TABLE IF EXISTS identity_groups_v25;
+DROP TABLE IF EXISTS identities_v25;
+
+CREATE TABLE identities_v25 (
+    id TEXT PRIMARY KEY,
+    external_id TEXT NOT NULL DEFAULT '',
+    user_name TEXT NOT NULL,
+    display_name TEXT NOT NULL DEFAULT '',
+    email TEXT NOT NULL DEFAULT '',
+    auth_provider TEXT NOT NULL DEFAULT '',
+    auth_subject TEXT NOT NULL DEFAULT '',
+    active INTEGER NOT NULL DEFAULT 1,
+    role TEXT NOT NULL DEFAULT 'reader'
+        CHECK(role IN ('reader', 'knowledge-maintainer', 'developer', 'administrator')),
+    scim_managed INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+INSERT INTO identities_v25
+SELECT id, external_id, user_name, display_name, email, auth_provider,
+       auth_subject, active, role, scim_managed, created_at, updated_at
+FROM identities;
+
+CREATE TABLE identity_groups_v25 (
+    id TEXT PRIMARY KEY,
+    external_id TEXT NOT NULL DEFAULT '',
+    display_name TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'reader'
+        CHECK(role IN ('reader', 'knowledge-maintainer', 'developer', 'administrator')),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+INSERT INTO identity_groups_v25
+SELECT id, external_id, display_name, role, created_at, updated_at
+FROM identity_groups;
+
+CREATE TABLE identity_group_members_v25 (
+    group_id TEXT NOT NULL REFERENCES identity_groups_v25(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES identities_v25(id) ON DELETE CASCADE,
+    PRIMARY KEY(group_id, user_id)
+);
+INSERT INTO identity_group_members_v25
+SELECT group_id, user_id FROM identity_group_members;
+
+CREATE TABLE identity_role_mappings_v25 (
+    id INTEGER PRIMARY KEY,
+    provider TEXT NOT NULL,
+    group_value TEXT NOT NULL,
+    role TEXT NOT NULL
+        CHECK(role IN ('reader', 'knowledge-maintainer', 'developer', 'administrator')),
+    updated_at TEXT NOT NULL,
+    UNIQUE(provider, group_value COLLATE NOCASE)
+);
+INSERT INTO identity_role_mappings_v25
+SELECT id, provider, group_value, role, updated_at
+FROM identity_role_mappings;
+
+DROP TABLE identity_group_members;
+DROP TABLE identity_role_mappings;
+DROP TABLE identity_groups;
+DROP TABLE identities;
+ALTER TABLE identities_v25 RENAME TO identities;
+ALTER TABLE identity_groups_v25 RENAME TO identity_groups;
+ALTER TABLE identity_group_members_v25 RENAME TO identity_group_members;
+ALTER TABLE identity_role_mappings_v25 RENAME TO identity_role_mappings;
+
+CREATE UNIQUE INDEX identities_external_id_unique
+ON identities(external_id) WHERE external_id <> '';
+CREATE UNIQUE INDEX identities_auth_unique
+ON identities(auth_provider, auth_subject)
+WHERE auth_provider <> '' AND auth_subject <> '';
+CREATE UNIQUE INDEX identities_username_unique
+ON identities(user_name COLLATE NOCASE);
+CREATE INDEX identities_email_index
+ON identities(email COLLATE NOCASE);
+CREATE UNIQUE INDEX identity_groups_external_id_unique
+ON identity_groups(external_id) WHERE external_id <> '';
+CREATE UNIQUE INDEX identity_groups_name_unique
+ON identity_groups(display_name COLLATE NOCASE);
+CREATE INDEX identity_group_members_user_index
+ON identity_group_members(user_id, group_id);
+CREATE UNIQUE INDEX identity_role_mappings_provider_group_nocase
+ON identity_role_mappings(provider, lower(group_value));
+
+ALTER TABLE repository_access
+ADD COLUMN code_enabled INTEGER NOT NULL DEFAULT 0;
+
+ALTER TABLE conversations
+ADD COLUMN code_mode INTEGER NOT NULL DEFAULT 0;
+
+CREATE TABLE code_sessions (
+    id TEXT PRIMARY KEY,
+    repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+    repository_name TEXT NOT NULL,
+    conversation_id TEXT NOT NULL DEFAULT '',
+    author_id TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL DEFAULT '',
+    effort TEXT NOT NULL DEFAULT '',
+    baseline TEXT NOT NULL,
+    branch TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN (
+        'creating', 'ready', 'running', 'awaiting_approval', 'interrupted',
+        'finishing', 'finished', 'discarding', 'discarded', 'failed'
+    )),
+    version INTEGER NOT NULL DEFAULT 1,
+    error TEXT NOT NULL DEFAULT '',
+    finished_commit TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    finished_at TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX code_sessions_author_updated_index
+ON code_sessions(author_id, updated_at DESC);
+CREATE INDEX code_sessions_repository_index
+ON code_sessions(repository_id, updated_at DESC);
+
+CREATE TABLE code_actions (
+    id INTEGER PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES code_sessions(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    status TEXT NOT NULL,
+    summary TEXT NOT NULL DEFAULT '',
+    command TEXT NOT NULL DEFAULT '',
+    output TEXT NOT NULL DEFAULT '',
+    exit_code INTEGER,
+    approval_id TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX code_actions_session_index
+ON code_actions(session_id, id);
+
+CREATE TABLE code_approvals (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES code_sessions(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    reason TEXT NOT NULL DEFAULT '',
+    command TEXT NOT NULL DEFAULT '',
+    directory TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL CHECK(status IN ('pending', 'resolved')),
+    decision TEXT NOT NULL DEFAULT '',
+    requested_at TEXT NOT NULL,
+    resolved_at TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX code_approvals_session_index
+ON code_approvals(session_id, requested_at DESC);`
+
+	schemaV25Postgres = `
+ALTER TABLE identities DROP CONSTRAINT IF EXISTS identities_role_check;
+ALTER TABLE identities ADD CONSTRAINT identities_role_check
+CHECK(role IN ('reader', 'knowledge-maintainer', 'developer', 'administrator'));
+ALTER TABLE identity_groups DROP CONSTRAINT IF EXISTS identity_groups_role_check;
+ALTER TABLE identity_groups ADD CONSTRAINT identity_groups_role_check
+CHECK(role IN ('reader', 'knowledge-maintainer', 'developer', 'administrator'));
+ALTER TABLE identity_role_mappings DROP CONSTRAINT IF EXISTS identity_role_mappings_role_check;
+ALTER TABLE identity_role_mappings ADD CONSTRAINT identity_role_mappings_role_check
+CHECK(role IN ('reader', 'knowledge-maintainer', 'developer', 'administrator'));
+
+ALTER TABLE repository_access
+ADD COLUMN code_enabled BIGINT NOT NULL DEFAULT 0;
+
+ALTER TABLE conversations
+ADD COLUMN code_mode BIGINT NOT NULL DEFAULT 0;
+
+CREATE TABLE code_sessions (
+    id TEXT PRIMARY KEY,
+    repository_id BIGINT NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+    repository_name TEXT NOT NULL,
+    conversation_id TEXT NOT NULL DEFAULT '',
+    author_id TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL DEFAULT '',
+    effort TEXT NOT NULL DEFAULT '',
+    baseline TEXT NOT NULL,
+    branch TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN (
+        'creating', 'ready', 'running', 'awaiting_approval', 'interrupted',
+        'finishing', 'finished', 'discarding', 'discarded', 'failed'
+    )),
+    version BIGINT NOT NULL DEFAULT 1,
+    error TEXT NOT NULL DEFAULT '',
+    finished_commit TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    finished_at TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX code_sessions_author_updated_index
+ON code_sessions(author_id, updated_at DESC);
+CREATE INDEX code_sessions_repository_index
+ON code_sessions(repository_id, updated_at DESC);
+
+CREATE TABLE code_actions (
+    id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES code_sessions(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    status TEXT NOT NULL,
+    summary TEXT NOT NULL DEFAULT '',
+    command TEXT NOT NULL DEFAULT '',
+    output TEXT NOT NULL DEFAULT '',
+    exit_code BIGINT,
+    approval_id TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX code_actions_session_index
+ON code_actions(session_id, id);
+
+CREATE TABLE code_approvals (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES code_sessions(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    reason TEXT NOT NULL DEFAULT '',
+    command TEXT NOT NULL DEFAULT '',
+    directory TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL CHECK(status IN ('pending', 'resolved')),
+    decision TEXT NOT NULL DEFAULT '',
+    requested_at TEXT NOT NULL,
+    resolved_at TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX code_approvals_session_index
+ON code_approvals(session_id, requested_at DESC);`
 )
 
 // SchemaVersion is the current durable metadata format for every supported
@@ -1061,6 +1290,7 @@ type RepositoryAccess struct {
 	RepositoryPath string
 	OwnerID        string
 	Visibility     string
+	CodeEnabled    bool
 	Users          []string
 	Groups         []string
 	UpdatedAt      time.Time
@@ -1069,7 +1299,7 @@ type RepositoryAccess struct {
 // ListRepositoryAccess returns every policy for the protected admin surface.
 func (s *Store) ListRepositoryAccess(ctx context.Context) ([]RepositoryAccess, error) {
 	rows, err := s.db.QueryContext(ctx, `
-SELECT r.id, r.name, r.path, a.owner_id, a.visibility, a.updated_at
+SELECT r.id, r.name, r.path, a.owner_id, a.visibility, a.code_enabled, a.updated_at
 FROM repositories r
 JOIN repository_access a ON a.repository_id = r.id
 ORDER BY r.name COLLATE NOCASE, r.path COLLATE NOCASE`)
@@ -1081,7 +1311,10 @@ ORDER BY r.name COLLATE NOCASE, r.path COLLATE NOCASE`)
 	for rows.Next() {
 		var policy RepositoryAccess
 		var updated string
-		if err := rows.Scan(&policy.RepositoryID, &policy.Repository, &policy.RepositoryPath, &policy.OwnerID, &policy.Visibility, &updated); err != nil {
+		if err := rows.Scan(
+			&policy.RepositoryID, &policy.Repository, &policy.RepositoryPath,
+			&policy.OwnerID, &policy.Visibility, &policy.CodeEnabled, &updated,
+		); err != nil {
 			return nil, err
 		}
 		policy.UpdatedAt = parseTime(updated)
@@ -1117,9 +1350,10 @@ func (s *Store) SetRepositoryAccess(ctx context.Context, policy RepositoryAccess
 	defer tx.Rollback()
 	result, err := tx.ExecContext(ctx, `
 UPDATE repository_access
-SET owner_id = ?, visibility = ?, updated_at = ?
+SET owner_id = ?, visibility = ?, code_enabled = ?, updated_at = ?
 WHERE repository_id = ?`,
-		policy.OwnerID, policy.Visibility, formatTime(time.Now().UTC()), policy.RepositoryID)
+		policy.OwnerID, policy.Visibility, policy.CodeEnabled,
+		formatTime(time.Now().UTC()), policy.RepositoryID)
 	if err != nil {
 		return err
 	}
@@ -1411,16 +1645,17 @@ func (s *Store) CreateConversation(ctx context.Context, conversation agent.Conve
 	}
 	_, err = s.db.ExecContext(ctx, `
 INSERT INTO conversations (
-    id, title, provider, model, effort, mode,
+    id, title, provider, model, effort, mode, code_mode,
     author_id, author_name, author_email, author_provider, author_groups,
     resume_cursor, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		conversation.ID,
 		strings.TrimSpace(conversation.Title),
 		strings.TrimSpace(conversation.Provider),
 		strings.TrimSpace(conversation.Model),
 		strings.TrimSpace(conversation.Effort),
 		strings.TrimSpace(conversation.Mode),
+		conversation.Code,
 		strings.TrimSpace(conversation.Author.ID),
 		strings.TrimSpace(conversation.Author.Name),
 		strings.TrimSpace(conversation.Author.Email),
@@ -1469,18 +1704,25 @@ WHERE id = ? AND author_id = ?`,
 
 // ListConversations returns newest-first durable chat summaries.
 func (s *Store) ListConversations(ctx context.Context, filter agent.ConversationFilter) ([]agent.Conversation, error) {
+	codeFilter := ""
+	arguments := []any{strings.TrimSpace(filter.AuthorID)}
+	if filter.Code != nil {
+		codeFilter = " AND c.code_mode = ?"
+		arguments = append(arguments, *filter.Code)
+	}
 	query := `
 SELECT
-    c.id, c.title, c.provider, c.model, c.effort, c.mode, c.resume_cursor,
+    c.id, c.title, c.provider, c.model, c.effort, c.mode, c.code_mode, c.resume_cursor,
     c.author_id, c.author_name, c.author_email, c.author_provider, c.author_groups,
     c.created_at, c.updated_at, c.input_tokens, c.output_tokens,
     COUNT(m.id)
 FROM conversations c
 LEFT JOIN conversation_messages m ON m.conversation_id = c.id
 WHERE c.author_id = ?
+` + codeFilter + `
 GROUP BY c.id
 ORDER BY c.updated_at DESC, c.id DESC`
-	rows, err := s.db.QueryContext(ctx, query, strings.TrimSpace(filter.AuthorID))
+	rows, err := s.db.QueryContext(ctx, query, arguments...)
 	if err != nil {
 		return nil, err
 	}
@@ -1497,6 +1739,7 @@ ORDER BY c.updated_at DESC, c.id DESC`
 			&conversation.Model,
 			&conversation.Effort,
 			&conversation.Mode,
+			&conversation.Code,
 			&conversation.ResumeCursor,
 			&conversation.Author.ID,
 			&conversation.Author.Name,
@@ -1525,7 +1768,7 @@ func (s *Store) GetConversation(ctx context.Context, id string) (agent.Conversat
 	var createdAt, updatedAt string
 	row := s.db.QueryRowContext(ctx, `
 SELECT
-    id, title, provider, model, effort, mode, resume_cursor,
+    id, title, provider, model, effort, mode, code_mode, resume_cursor,
     author_id, author_name, author_email, author_provider, author_groups,
     created_at, updated_at,
     input_tokens, output_tokens
@@ -1539,6 +1782,7 @@ WHERE id = ?`, id)
 		&conversation.Model,
 		&conversation.Effort,
 		&conversation.Mode,
+		&conversation.Code,
 		&conversation.ResumeCursor,
 		&conversation.Author.ID,
 		&conversation.Author.Name,

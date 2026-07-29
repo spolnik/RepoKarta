@@ -11,6 +11,7 @@ import (
 	"github.com/spolnik/RepoKarta/internal/acquisition"
 	"github.com/spolnik/RepoKarta/internal/agent"
 	"github.com/spolnik/RepoKarta/internal/catalog"
+	"github.com/spolnik/RepoKarta/internal/codework"
 	"github.com/spolnik/RepoKarta/internal/identity"
 )
 
@@ -164,6 +165,7 @@ func TestPostgresBackendLifecycle(t *testing.T) {
 		ID:       "postgres-conversation",
 		Title:    "PostgreSQL",
 		Provider: "codex",
+		Code:     true,
 		Author:   agent.ConversationAuthor{ID: "local:admin"},
 	}
 	if err := storage.CreateConversation(ctx, conversation); err != nil {
@@ -178,8 +180,37 @@ func TestPostgresBackendLifecycle(t *testing.T) {
 		t.Fatalf("message = %#v, %v", message, err)
 	}
 	loaded, err := storage.GetConversation(ctx, conversation.ID)
-	if err != nil || len(loaded.Messages) != 1 || loaded.Messages[0].Text != "persist me" {
+	if err != nil || !loaded.Code || len(loaded.Messages) != 1 || loaded.Messages[0].Text != "persist me" {
 		t.Fatalf("conversation = %#v, %v", loaded, err)
+	}
+	if err := storage.SetRepositoryAccess(ctx, RepositoryAccess{
+		RepositoryID: repositories[0].ID, OwnerID: "local:admin",
+		Visibility: "private", CodeEnabled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if enabled, err := storage.RepositoryCodingEnabled(ctx, repositories[0].ID); err != nil || !enabled {
+		t.Fatalf("PostgreSQL Code policy = %v, error = %v", enabled, err)
+	}
+	codeSession := codework.Session{
+		ID: "code-fedcba9876543210", RepositoryID: repositories[0].ID,
+		Repository: repositories[0].Name, AuthorID: "local:admin", Provider: "codex",
+		Baseline: strings.Repeat("a", 40), Branch: "repokarta/code/fedcba9876543210",
+		State: codework.StateReady, Version: 1, CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	}
+	if err := storage.CreateCodeSession(ctx, codeSession); err != nil {
+		t.Fatal(err)
+	}
+	if err := storage.CreateCodeApproval(ctx, codework.Approval{
+		ID: "postgres-approval", SessionID: codeSession.ID, Kind: "command",
+		Directory: "internal/store", Status: "pending", RequestedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	approvals, err := storage.CodeApprovals(ctx, codeSession.ID)
+	if err != nil || len(approvals) != 1 || approvals[0].Directory != "internal/store" {
+		t.Fatalf("PostgreSQL Code approvals = %#v, error = %v", approvals, err)
 	}
 	var version int
 	if err := storage.db.QueryRow(

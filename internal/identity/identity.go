@@ -13,6 +13,7 @@ type Role string
 const (
 	RoleReader     Role = "reader"
 	RoleMaintainer Role = "knowledge-maintainer"
+	RoleDeveloper  Role = "developer"
 	RoleAdmin      Role = "administrator"
 )
 
@@ -20,6 +21,7 @@ type Permission string
 
 const (
 	PermissionReadRepositories     Permission = "repositories.read"
+	PermissionWriteRepositories    Permission = "repositories.write"
 	PermissionGenerateAI           Permission = "ai.generate"
 	PermissionManageArtifacts      Permission = "artifacts.manage"
 	PermissionExportArtifacts      Permission = "artifacts.export"
@@ -109,6 +111,8 @@ func NormalizeRole(role Role) Role {
 	switch Role(strings.ToLower(strings.TrimSpace(string(role)))) {
 	case RoleAdmin:
 		return RoleAdmin
+	case RoleDeveloper:
+		return RoleDeveloper
 	case RoleMaintainer:
 		return RoleMaintainer
 	default:
@@ -118,12 +122,15 @@ func NormalizeRole(role Role) Role {
 
 func ValidRole(role Role) bool {
 	role = Role(strings.ToLower(strings.TrimSpace(string(role))))
-	return role == RoleReader || role == RoleMaintainer || role == RoleAdmin
+	return role == RoleReader || role == RoleMaintainer ||
+		role == RoleDeveloper || role == RoleAdmin
 }
 
 func RoleRank(role Role) int {
 	switch NormalizeRole(role) {
 	case RoleAdmin:
+		return 4
+	case RoleDeveloper:
 		return 3
 	case RoleMaintainer:
 		return 2
@@ -145,8 +152,10 @@ func Allows(role Role, permission Permission) bool {
 	switch permission {
 	case PermissionReadRepositories, PermissionExportArtifacts:
 		return true
+	case PermissionWriteRepositories:
+		return role == RoleDeveloper || role == RoleAdmin
 	case PermissionGenerateAI, PermissionManageArtifacts:
-		return role == RoleMaintainer || role == RoleAdmin
+		return role == RoleMaintainer || role == RoleDeveloper || role == RoleAdmin
 	case PermissionAcquireRepositories,
 		PermissionManageSecurity, PermissionManageRoles, PermissionViewAudit,
 		PermissionManageAuditRetention, PermissionDestructiveOwnedData:
@@ -160,6 +169,7 @@ func Allows(role Role, permission Permission) bool {
 func Permissions(role Role) []Permission {
 	all := []Permission{
 		PermissionReadRepositories,
+		PermissionWriteRepositories,
 		PermissionGenerateAI,
 		PermissionManageArtifacts,
 		PermissionExportArtifacts,

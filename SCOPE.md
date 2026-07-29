@@ -451,7 +451,9 @@ local storage.
 - Ignore `.git` internals, secrets, credentials, dependency caches, build
   outputs, and user-configured patterns during AI context collection.
 - Search indexing and AI context inclusion are separate policy decisions.
-- AI tools are read-only and enforce file-size, result-count, and time limits.
+- Chat, Wiki, and retrieval AI tools are read-only and enforce file-size,
+  result-count, and time limits. The separately authorized Code workspace may
+  write only inside a RepoKarta-owned isolated worktree.
 - Repository content is untrusted input and cannot redefine RepoKarta's agent
   instructions or tool permissions.
 - Destructive cleanup actions must identify exact RepoKarta-owned paths.
@@ -1277,6 +1279,26 @@ Exit condition: the five previously planned local-product gaps have
 evidence-backed API/UI/MCP or operational surfaces, repeatable tests, and
 release validation without weakening read-only or completeness boundaries.
 
+### M21: isolated agent coding workspace
+
+- [x] Add the developer role, repository-write permission, and explicit
+  per-repository Code opt-in.
+- [x] Create exact-commit, shadow-backed Git worktrees without registering or
+  mutating the source repository.
+- [x] Add durable owner-scoped Code sessions, transcript bindings, actions,
+  approvals, lifecycle state, and isolated finish commits.
+- [x] Add separate Codex workspace-write and Claude edit-only provider
+  profiles while preserving the existing read-only Chat profiles.
+- [x] Add the Code tab, session history, streamed turns, visible actions,
+  single-use approvals, bounded Git diffs and previews, per-file discard,
+  interrupt, finish, and full discard.
+- [x] Document the complete boundary and acceptance evidence in
+  `CODE_SCOPE.md`.
+
+Exit condition: a developer can ask an agent to implement a change, review the
+Git-derived result, and finish or discard it without the registered repository
+changing and without granting Chat or another user write access.
+
 ## Definition of quality
 
 A capability is not complete merely because its happy path renders. Relevant
@@ -1329,7 +1351,10 @@ silently expanding the roadmap.
 
 ## Current implementation version
 
-`0.99.0-dev`. M0 through M20 are complete. M4 now includes administrator-
+`0.101.0-dev`. M0 through M21 are complete. M21 adds the separately authorized
+Code tab, exact-commit shadow worktrees, durable coding transcripts/actions/
+approvals, provider-specific write profiles, bounded Git review, and isolated
+finish/discard lifecycles without mutating registered repositories. M4 now includes administrator-
 selected batch Deep Wiki generation with per-repository outcomes and resumable
 checkpoints. M7 now includes qualified symbol
 search, precise optional SCIP data, commit-pinned CODEOWNERS, bounded evidence

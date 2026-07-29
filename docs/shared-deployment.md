@@ -37,11 +37,14 @@ does not turn RepoKarta into a Git host or allow repository mutation.
    copy its exact `id` or `groups` value. Upgraded and newly discovered
    repositories start private to `local:admin`; no shared user receives
    implicit access.
-6. Assign reader, knowledge-maintainer, and administrator roles directly or
+6. Assign reader, knowledge-maintainer, developer, and administrator roles directly or
    through SCIM/provider groups. Verify `GET /api/whoami` reports the expected
    effective role and permissions.
-7. Verify the same identity can see only the expected repositories in Search,
-   Maps, Wiki, Chat, exports, and `/api/repositories`.
+7. Enable isolated Code worktrees only on repositories intended for agent
+   changes. Verify a developer can create a Code session there but not on an
+   otherwise readable repository where the Code flag remains disabled.
+8. Verify the same identity can see only the expected repositories in Search,
+   Maps, Wiki, Chat, Code, exports, and `/api/repositories`.
 
 `shared` visibility is an explicit instance-wide grant. Prefer private
 visibility plus group grants for team repositories.

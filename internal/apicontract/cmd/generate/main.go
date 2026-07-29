@@ -30,6 +30,13 @@ func main() {
 	types := []namedType{
 		{name: "APIErrorResponse", value: apicontract.ErrorResponse{}},
 		{name: "ArtifactProgressResponse", value: apicontract.ArtifactProgress{}},
+		{name: "CodeActionResponse", value: apicontract.CodeAction{}},
+		{name: "CodeApprovalResponse", value: apicontract.CodeApproval{}},
+		{name: "CodeDiffResponse", value: apicontract.CodeDiff{}},
+		{name: "CodeFileResponse", value: apicontract.CodeFile{}},
+		{name: "CodeSessionDetailResponse", value: apicontract.CodeSessionDetailResponse{}},
+		{name: "CodeSessionResponse", value: apicontract.CodeSession{}},
+		{name: "CodeSessionsResponse", value: apicontract.CodeSessionsResponse{}},
 		{name: "ConversationEvent", value: apicontract.ConversationEvent{}},
 		{name: "DependencyRefreshProgressResponse", value: apicontract.DependencyRefreshProgress{}},
 		{name: "HealthResponse", value: apicontract.HealthResponse{}},

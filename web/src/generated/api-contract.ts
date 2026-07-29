@@ -14,6 +14,237 @@ export type ArtifactProgressResponse = {
   pending_repositories: number;
 };
 
+export type CodeActionResponse = {
+  id: number;
+  session_id: string;
+  kind: string;
+  status: string;
+  summary?: string;
+  command?: string;
+  output?: string;
+  exit_code?: number | null;
+  approval_id?: string;
+  created_at: string;
+};
+
+export type CodeApprovalResponse = {
+  id: string;
+  session_id: string;
+  kind: string;
+  reason?: string;
+  command?: string;
+  directory?: string;
+  status: string;
+  decision?: string;
+  requested_at: string;
+  resolved_at?: string;
+};
+
+export type CodeDiffResponse = {
+  baseline: string;
+  head: string;
+  version: string;
+  files: Array<{
+    path: string;
+    old_path?: string;
+    status: string;
+    binary?: boolean;
+    insertions?: number;
+    deletions?: number;
+  }>;
+  files_changed: number;
+  insertions: number;
+  deletions: number;
+  patch: string;
+  truncated: boolean;
+  returned_bytes: number;
+  maximum_bytes: number;
+  context_lines: number;
+};
+
+export type CodeFileResponse = {
+  path: string;
+  content?: string;
+  binary: boolean;
+  truncated: boolean;
+  returned_bytes: number;
+  maximum_bytes: number;
+};
+
+export type CodeSessionDetailResponse = {
+  session: {
+    id: string;
+    repository_id: number;
+    repository: string;
+    conversation_id?: string;
+    author_id: string;
+    provider: string;
+    model?: string;
+    effort?: string;
+    baseline: string;
+    branch: string;
+    state: string;
+    version: number;
+    error?: string;
+    finished_commit?: string;
+    created_at: string;
+    updated_at: string;
+    finished_at?: string;
+  };
+  conversation?: {
+    id: string;
+    title: string;
+    provider: string;
+    model?: string;
+    effort?: string;
+    mode: string;
+    code: boolean;
+    author: {
+      id: string;
+      name?: string;
+      email?: string;
+      provider: string;
+    };
+    created_at: string;
+    updated_at: string;
+    message_count: number;
+    input_tokens: number;
+    output_tokens: number;
+    messages?: Array<{
+      id: number;
+      conversation_id: string;
+      role: string;
+      text?: string;
+      images?: Array<{
+        name: string;
+        media_type: string;
+        data: string;
+      }>;
+      sources?: Array<{
+        label: string;
+        url: string;
+      }>;
+      contexts?: Array<{
+        kind: string;
+        repository_id: number;
+        repository: string;
+        revision: string;
+        path?: string;
+        symbol?: string;
+        symbol_kind?: string;
+        line?: number;
+        start_line?: number;
+        end_line?: number;
+        label: string;
+        url: string;
+        sources?: Array<{
+          kind: string;
+          id?: string;
+          title?: string;
+        }>;
+      }>;
+      status?: string;
+      error?: string;
+      input_tokens?: number;
+      output_tokens?: number;
+      trace?: Array<{
+        stage: string;
+        detail?: string;
+        elapsed_ms: number;
+        coverage_warning?: string;
+      }>;
+      created_at: string;
+    }>;
+  } | null;
+  actions: Array<{
+    id: number;
+    session_id: string;
+    kind: string;
+    status: string;
+    summary?: string;
+    command?: string;
+    output?: string;
+    exit_code?: number | null;
+    approval_id?: string;
+    created_at: string;
+  }>;
+  approvals: Array<{
+    id: string;
+    session_id: string;
+    kind: string;
+    reason?: string;
+    command?: string;
+    directory?: string;
+    status: string;
+    decision?: string;
+    requested_at: string;
+    resolved_at?: string;
+  }>;
+  diff?: {
+    baseline: string;
+    head: string;
+    version: string;
+    files: Array<{
+      path: string;
+      old_path?: string;
+      status: string;
+      binary?: boolean;
+      insertions?: number;
+      deletions?: number;
+    }>;
+    files_changed: number;
+    insertions: number;
+    deletions: number;
+    patch: string;
+    truncated: boolean;
+    returned_bytes: number;
+    maximum_bytes: number;
+    context_lines: number;
+  } | null;
+};
+
+export type CodeSessionResponse = {
+  id: string;
+  repository_id: number;
+  repository: string;
+  conversation_id?: string;
+  author_id: string;
+  provider: string;
+  model?: string;
+  effort?: string;
+  baseline: string;
+  branch: string;
+  state: string;
+  version: number;
+  error?: string;
+  finished_commit?: string;
+  created_at: string;
+  updated_at: string;
+  finished_at?: string;
+};
+
+export type CodeSessionsResponse = {
+  sessions: Array<{
+    id: string;
+    repository_id: number;
+    repository: string;
+    conversation_id?: string;
+    author_id: string;
+    provider: string;
+    model?: string;
+    effort?: string;
+    baseline: string;
+    branch: string;
+    state: string;
+    version: number;
+    error?: string;
+    finished_commit?: string;
+    created_at: string;
+    updated_at: string;
+    finished_at?: string;
+  }>;
+};
+
 export type ConversationEvent = {
   type: string;
   conversation_id?: string;
@@ -47,6 +278,23 @@ export type ConversationEvent = {
     detail?: string;
     elapsed_ms: number;
     coverage_warning?: string;
+  } | null;
+  code_action?: {
+    id: string;
+    kind: string;
+    status: string;
+    summary?: string;
+    command?: string;
+    output?: string;
+    exit_code?: number | null;
+  } | null;
+  approval?: {
+    id: string;
+    kind: string;
+    reason?: string;
+    command?: string;
+    directory?: string;
+    available_decisions?: Array<string>;
   } | null;
 };
 
@@ -84,6 +332,7 @@ export type ProviderStatusesResponse = {
     context_usage: boolean;
     token_usage: boolean;
     token_budget: boolean;
+    code: boolean;
   }>;
 };
 

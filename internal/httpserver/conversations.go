@@ -19,8 +19,10 @@ import (
 
 func (s *Server) listConversations(response http.ResponseWriter, request *http.Request) {
 	viewer := s.conversationViewer(request.Context())
+	code := false
 	conversations, err := s.history.ListConversations(request.Context(), agent.ConversationFilter{
 		AuthorID: viewer.Author.ID,
+		Code:     &code,
 	})
 	if err != nil {
 		writeAPIError(response, http.StatusInternalServerError, err)
@@ -465,6 +467,9 @@ func (s *Server) conversationViewer(ctx context.Context) conversationViewer {
 }
 
 func (s *Server) authorizeConversation(ctx context.Context, conversation agent.Conversation) error {
+	if conversation.Code {
+		return agent.ErrConversationNotFound
+	}
 	viewer := s.conversationViewer(ctx)
 	if conversation.Author.ID == viewer.Author.ID {
 		return nil

@@ -64,10 +64,16 @@ func migration(version int, backend Backend) (string, error) {
 		statement = schemaV23
 	case 24:
 		statement = schemaV24
+	case 25:
+		if backend == BackendPostgres {
+			statement = schemaV25Postgres
+		} else {
+			statement = schemaV25SQLite
+		}
 	default:
 		return "", fmt.Errorf("missing migration for schema version %d", version)
 	}
-	if backend == BackendPostgres {
+	if backend == BackendPostgres && version != 25 {
 		statement = postgresMigration(version, statement)
 	}
 	return statement, nil
@@ -129,6 +135,24 @@ WHERE type = 'table' AND name = 'repositories'`).Scan(&repositoryTableCount); er
 				return fmt.Errorf("inspect repository table before migration 24: %w", err)
 			}
 			if repositoryTableCount == 0 {
+				statement = "SELECT 1;"
+			}
+		}
+		if next == 25 {
+			var requiredTables int
+			if err := db.QueryRow(`
+SELECT COUNT(*) FROM sqlite_master
+WHERE type = 'table'
+  AND name IN ('identities', 'identity_groups', 'identity_group_members',
+               'identity_role_mappings', 'repositories', 'repository_access',
+               'conversations')`,
+			).Scan(&requiredTables); err != nil {
+				return fmt.Errorf("inspect code-workspace migration prerequisites: %w", err)
+			}
+			if requiredTables != 7 {
+				// Preserve the established support for sparse historical
+				// development databases that recorded a schema version without
+				// creating the corresponding product tables.
 				statement = "SELECT 1;"
 			}
 		}
